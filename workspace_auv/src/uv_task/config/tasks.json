@@ -2,16 +2,18 @@
   "tasks": [
     {"name": "start", "params": {}},
     {"name": "wait", "params": {"duration": 0}},
-    {"name": "setz", "params": {"z": 0.0}},
-    {"name": "setrz", "params": {"rz": 50}},
+    {"name": "setz", "params": {"z": 0.1}},
+
+    {"name": "wtravelxy", "params": {"x": 0.5, "y": 0.0}},
+    {"name": "setrz", "params": {"rz": 60.0}},
 
     {"name": "follow_line", "params": {
       "timeout": 240.0,
-      "triangle_class_id": 5,
-      "square_class_id": 6,
+      "triangle_class_id": 7,
+      "square_class_id": 5,
       "marker_class_ids": [7],
       "stop_when_marker": true,
-      "forward_step": 0.30
+      "forward_step": 0.10
     }}
   ]
 }

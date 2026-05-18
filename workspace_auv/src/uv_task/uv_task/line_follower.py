@@ -160,6 +160,9 @@ class LineFollower:
         self._triangle_count = 0           # 已完成三角形任务数（下潜）
         self._square_count = 0             # 已完成正方形任务数（旋转）
 
+        self._last_mark_x = 0.0             # 上一次标记任务完成时的 odom x
+        self._last_mark_y = 0.0             # 上一次标记任务完成时的 odom y
+
         self._logger.info(
             f'LineFollower created: timeout={params.get("timeout", 120)}s')
 
@@ -270,11 +273,13 @@ class LineFollower:
                         'image_height',
                         self._node.get_parameter('down_image_height').value))
                     if self._triangle_approached:
-                        if bbox_center_y < height / 3.0:
+                        dist = math.sqrt(
+                            (self._node._cmd_x - self._last_mark_x)**2 +
+                            (self._node._cmd_y - self._last_mark_y)**2)
+                        if bbox_center_y < height / 5.0 and dist > 0.3:
                             self._triangle_approached = False
                             self._logger.info(
-                                'LineFollower: triangle in upper 1/3, '
-                                'flag reset to 0')
+                                f'LineFollower: triangle flag reset (in upper 1/5 and dist > 0.3m)')
 
                     if (not self._triangle_approached
                             and bbox_center_y > height / 5.0):
@@ -308,6 +313,8 @@ class LineFollower:
                             # 3. 标记已处理
                             self._triangle_approached = True
                             self._triangle_count += 1
+                            self._last_mark_x = self._node._cmd_x
+                            self._last_mark_y = self._node._cmd_y
                             total = self._triangle_count + self._square_count
                             self._logger.info(
                                 f'LineFollower: triangle handled, '
@@ -323,11 +330,13 @@ class LineFollower:
                         'image_height',
                         self._node.get_parameter('down_image_height').value))
                     if self._square_approached:
-                        if bbox_center_y < height / 3.0:
+                        dist = math.sqrt(
+                            (self._node._cmd_x - self._last_mark_x)**2 +
+                            (self._node._cmd_y - self._last_mark_y)**2)
+                        if bbox_center_y < height / 3.0 and dist > 0.3:
                             self._square_approached = False
                             self._logger.info(
-                                'LineFollower: square in upper 1/3, '
-                                'flag reset to 0')
+                                f'LineFollower: square flag reset (in upper 1/3 and dist > 0.3m)')
 
                     if (not self._square_approached
                             and bbox_center_y > height / 5.0):
@@ -347,10 +356,10 @@ class LineFollower:
                                 self._logger.info(
                                     f'🟢 LineFollower: GREEN LIGHT #{flash+1} '
                                     f'— square marker!')
-                                time.sleep(0.5)
+                                time.sleep(2)
                                 # 关灯
                                 self._node.light_off()
-                                time.sleep(0.5)
+                                time.sleep(2)
                             # 2. 自转 360°（3 × 120° BMOVE rz）
                             self._logger.info(
                                 'LineFollower: rotating 360° (3×120°)')
@@ -365,6 +374,8 @@ class LineFollower:
                             # 3. 标记已处理
                             self._square_approached = True
                             self._square_count += 1
+                            self._last_mark_x = self._node._cmd_x
+                            self._last_mark_y = self._node._cmd_y
                             total = self._triangle_count + self._square_count
                             self._logger.info(
                                 f'LineFollower: square handled, '
@@ -519,19 +530,19 @@ class LineFollower:
             prev_err_attr='_head_prev_err',
             integral_attr='_head_integral',
             last_t_attr='_head_last_t',
-            pid_p=self._params.get('heading_pid_p', 0.15),
+            pid_p=self._params.get('heading_pid_p', 1.5),
             pid_i=self._params.get('heading_pid_i', 0.005),
             pid_d=self._params.get('heading_pid_d', 0.02),
-            output_limit=self._params.get('heading_pid_output_limit', 6.0),
+            output_limit=self._params.get('heading_pid_output_limit', 12.0),
             reset_dt=self._params.get('heading_pid_reset_dt', 1.5),
             integral_limit_px=self._params.get('heading_integral_limit', 60.0),
         )
         yaw_sign = float(self._params.get('line_yaw_sign', 1.0))
-        max_yaw = abs(float(self._params.get('max_yaw_step', 3.0)))
+        max_yaw = abs(float(self._params.get('max_yaw_step', 12.0)))
         dyaw = _clamp(yaw_sign * dyaw, -max_yaw, max_yaw)
 
         # ── 前进步长：修正量越大越慢 ──────────────────────────────────
-        forward_base = float(self._params.get('forward_step', 0.10))
+        forward_base = float(self._params.get('forward_step', 0.05))
         min_forward = max(0.0, float(self._params.get('min_forward_step', 0.02)))
         total_correction = abs(dy / max(max_lateral, 0.001)) + abs(dyaw / max(max_yaw, 0.001))
         speed_ratio = max(0.25, 1.0 - 0.5 * total_correction)

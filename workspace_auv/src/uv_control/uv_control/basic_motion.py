@@ -669,11 +669,11 @@ class BasicMotionNode(Node):
 
     def bmovexyzrz(self, dx: float, dy: float, dz: float, drz: float,
                    timeout: float = 60.0) -> bool:
-        p, _, _ = self.get_state()
-        off = p.body_to_world(dx, dy)
+        _, t, _ = self.get_state()
+        off = t.body_to_world(dx, dy)
         return self._step_move_world(
-            p.x + off.x, p.y + off.y, p.z + dz,
-            p.rz + drz, timeout)
+            t.x + off.x, t.y + off.y, t.z + dz,
+            t.rz + drz, timeout)
 
     def bmovexyz(self, dx: float, dy: float, dz: float,
                  timeout: float = 60.0) -> bool:

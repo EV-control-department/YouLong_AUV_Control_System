@@ -68,7 +68,7 @@ DOWN_CAMERA_MATRIX = (
 )
 DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
-CONFIDENCE = 0.6
+CONFIDENCE = 0.8
 
 ENABLE_UNDISTORT = True              # 是否执行相机去畸变
 ENABLE_GORTC = True                 # 启动 go2rtc 转发客户端视频
