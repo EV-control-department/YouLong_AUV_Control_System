@@ -1,7 +1,7 @@
 task: 26rb_hit_balls
 
 params:
-  order: [impact_ball_blue] # 可配置红蓝顺序：[impact_ball_blue, impact_ball_red]。
+  order: [impact_ball_red] # 可配置红蓝顺序：[impact_ball_blue, impact_ball_red]。
   targets:
     # 世界 odom 坐标 [x,y,z]。按用户要求两球暂用同一位置，实际场地分别修改。
     # z 只描述球的位置，不用于中途深度修正；靠近半径只检查 XY。
@@ -53,3 +53,4 @@ params:
     start_timeout: 30.0 # 等待首次正向速度反馈的最长时间。
     accept_timeout: 5.0
   between_balls_pause: 0.5
+

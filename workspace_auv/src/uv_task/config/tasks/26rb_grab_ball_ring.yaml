@@ -7,7 +7,7 @@ params:
   depth:
     timeout: 30.0 # 进入作业深度的SET动作超时，单位：秒。
   # 使用 robotcup20260901.yaml 中的 canonical detector class name。
-  golf_color: pink_golf # 可选 pink_golf / yellow_golf。
+  golf_color: yellow_golf # 可选 pink_golf / yellow_golf。
   collection_frame_class: collection_frame_down
   # 可配置组合抓取顺序： [golf, ring] 或 [ring, golf]。
   pickup:
@@ -16,7 +16,7 @@ params:
 
   # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
   # 初始值需按实际场地填写；不会从定位器覆盖。
-  collection_frame_position: [0.401, 5.1, 0.65]
+  collection_frame_position: [0.401, 4.6, 0.65]
   search:
     timeout: 60.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时，重新发线不清零。
     near_radius_m: 0.5 # 到预设 [x,y] 的二维水平距离，不考虑深度差。
