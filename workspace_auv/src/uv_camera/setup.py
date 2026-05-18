@@ -28,7 +28,7 @@ setup(
     packages=[package_name],
     data_files=data_files,
     # Keep cv_bridge and NumPy on the same (1.x) ABI used by ROS 2 Jazzy.
-    install_requires=['setuptools', 'numpy==1.26.4'],
+    install_requires=['setuptools', 'numpy<1.25; python_version < "3.9"', 'numpy==1.26.4; python_version >= "3.9"'],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',

@@ -5,6 +5,8 @@ The task runner is the single source of truth for commanded position,
 tracked locally (not from external topics).
 """
 
+from __future__ import annotations
+
 from importlib import import_module
 import json
 import math

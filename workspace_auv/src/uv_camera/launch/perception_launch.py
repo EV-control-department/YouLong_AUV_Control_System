@@ -57,7 +57,6 @@ def generate_launch_description():
                 condition=IfCondition(enable_ai),
                 respawn=True,
                 respawn_delay=1.0,
-                respawn_max_retries=3,
             ),
             Node(
                 package="uv_camera",
@@ -69,7 +68,6 @@ def generate_launch_description():
                 condition=IfCondition(enable_ai),
                 respawn=True,
                 respawn_delay=1.0,
-                respawn_max_retries=3,
             ),
         ]
 
