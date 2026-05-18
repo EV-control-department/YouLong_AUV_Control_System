@@ -634,15 +634,15 @@ class BasicMotionNode(Node):
                    timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
-            p.x + dx, p.y + dy, p.z + dz,
-            p.rz + drz, timeout)
+            dx, dy, dz,
+            drz, timeout)
 
     def wmovexyz(self, dx: float, dy: float, dz: float,
                  timeout: float = 60.0) -> bool:
-        p, _, _ = self.get_state()
+        _, t, _ = self.get_state()
         return self._step_move_world(
-            p.x + dx, p.y + dy, p.z + dz,
-            p.rz, timeout)
+            dx, dy, dz,
+            t.rz, timeout)
 
     def wmovexy(self, dx: float, dy: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
@@ -856,7 +856,7 @@ class BasicMotionNode(Node):
 
         x, y, z, yaw = req.target
         timeout = req.timeout if req.timeout > 0 else 60.0
-        p, _, _ = self.get_state()
+        p, t, _ = self.get_state()
 
         # ── 派发运动类型 ──────────────────────────────────────
         type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL'}
@@ -869,12 +869,24 @@ class BasicMotionNode(Node):
             f'timeout={timeout:.1f}s')
 
         if req.cmd_type == BasicMotion.Goal.SET:
-            self._action_target = {'x': x, 'y': y, 'z': z, 'yaw': yaw}
-            success = self.setxyzrz(x, y, z, yaw, timeout=timeout)
+            axes = req.axes or 'xyzrz'
+            tx, ty, tz, tyaw = t.x, t.y, t.z, t.rz
+            if 'x' in axes: tx = x
+            if 'y' in axes: ty = y
+            if 'z' in axes.replace('rz', ''): tz = z
+            if 'rz' in axes: tyaw = yaw
+            self._action_target = {'x': tx, 'y': ty, 'z': tz, 'yaw': tyaw}
+            success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.WMOVE:
-            self._action_target = {'x': p.x + x, 'y': p.y + y,
-                                   'z': p.z + z, 'yaw': p.rz + yaw}
-            success = self.wmovexyzrz(x, y, z, yaw, timeout=timeout)
+            axes = req.axes or 'xyzrz'
+            dx, dy, dz, drz = 0.0, 0.0, 0.0, 0.0
+            if 'x' in axes: dx = x
+            if 'y' in axes: dy = y
+            if 'z' in axes.replace('rz', ''): dz = z
+            if 'rz' in axes: drz = yaw
+            self._action_target = {'x': p.x + dx, 'y': p.y + dy,
+                                   'z': p.z + dz, 'yaw': p.rz + drz}
+            success = self.wmovexyzrz(dx, dy, dz, drz, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.BMOVE:
             off = p.body_to_world(x, y)
             self._action_target = {'x': p.x + off.x, 'y': p.y + off.y,
@@ -885,11 +897,17 @@ class BasicMotionNode(Node):
                 f'当前yaw={p.rz:.1f}°')
             success = self.bmovexyzrz(x, y, z, yaw, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.WTRAVEL:
-            self._action_target = {'x': p.x + x, 'y': p.y + y, 'z': p.z + z, 'yaw': p.rz}
+            axes = req.axes or 'xyzrz'
+            dx, dy, dz = 0.0, 0.0, 0.0
+            if 'x' in axes: dx = x
+            if 'y' in axes: dy = y
+            if 'z' in axes.replace('rz', ''): dz = z
+            self._action_target = {'x': dx, 'y': dy,
+                                   'z': dz, 'yaw': p.rz}
             self.get_logger().info(
-                f'WTRAVEL: 偏移=({x:.2f}, {y:.2f}, {z:.2f}), '
-                f'方向角={math.degrees(math.atan2(y, x)):.1f}°')
-            success = self._travel_world(x, y, z, timeout=timeout)
+                f'WTRAVEL: 偏移=({dx:.2f}, {dy:.2f}, {dz:.2f}), '
+                f'方向角={math.degrees(math.atan2(dy, dx)):.1f}°')
+            success = self._travel_world(dx, dy, dz, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.BTRAVEL:
             off = p.body_to_world(x, y)
             self._action_target = {'x': p.x + off.x, 'y': p.y + off.y,
