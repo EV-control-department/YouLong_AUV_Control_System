@@ -330,7 +330,7 @@ def test_shared_pickup_snapshots_reset_without_changing_bias():
 
 @pytest.mark.parametrize('params', [{'golf_max_attempts': 0}, {'ring_max_attempts': 1.5},
     {'max_grab_retries': 3}, {'work_depth_m': -0.1}, {'work_depth_m': True},
-    {'work_depth_m': float('nan')}, {'work_depth_m': float('inf')}, {'ring_open_angle_deg': 181.}, {'ring_orientation_timeout': float('nan')}, {'verification_timeout': float('inf')}])
+    {'work_depth_m': float('nan')}, {'work_depth_m': float('inf')}, {'ring_open_angle_deg': 271.}, {'ring_open_angle_deg': -1.}, {'ring_close_angle_deg': 271.}, {'ring_close_angle_deg': -1.}, {'ring_orientation_timeout': float('nan')}, {'verification_timeout': float('inf')}])
 def test_invalid_combined_parameters_rejected_at_load_and_runtime(params):
     with pytest.raises(ValueError):
         mod.validate_combined_params(params)
@@ -572,3 +572,10 @@ def test_partial_work_depth_override_validates_against_merged_grab_depths():
     assert params['work_depth_m'] == .6
     with pytest.raises(ConfigError, match='不小于work_depth_m'):
         _validate_params('26rb_grab_ball_ring', override, complete=True)
+
+
+@pytest.mark.parametrize('key', ['ring_open_angle_deg', 'ring_close_angle_deg'])
+@pytest.mark.parametrize('angle', [0., 180., 181., 270.])
+def test_ring_servo_full_angle_range(key, angle):
+    mod.validate_combined_params({key: angle})
+    _validate_params('26rb_grab_ball_ring', {key: angle})

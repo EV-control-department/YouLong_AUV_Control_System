@@ -26,6 +26,7 @@ from auv_protocol.topics import (
     MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, PERCEPTION_HEALTH,
     PLANNING_STATUS, STATE_HEALTH,
     STATE_ODOM, TRACKS, ZIT6_HEARTBEAT_STATE, ZIT6_STATUS,
+    ZIT6_ODOM, ZIT6_SET_ORIGIN,
 )
 from rcl_interfaces.msg import Parameter as ParameterMsg
 from rcl_interfaces.srv import GetParameters
@@ -46,7 +47,8 @@ from uv_msgs.msg import (
     DetectionArray, ModelClassMapping, ObjectTrackArray, PoseInfo,
     SensorHealth,
 )
-from zit6_interfaces.msg import ZitStatus
+from zit6_interfaces.msg import ZitOdom, ZitStatus
+from zit6_interfaces.srv import SetOrigin
 
 
 class StartupBlocked(RuntimeError):
@@ -100,6 +102,12 @@ class RealStartupManager(Node):
         self.startup_blocked = False
         self._last_dashboard = 0.0
         self._last_monitor = 0.0
+        self._origin_pose = None
+        self._raw_odom = None
+        self._raw_odom_at = 0.0
+        self._raw_progress_at = 0.0
+        self._raw_progress_samples = 0
+        self._ins_ready_since = None
         self._last_odom = 0.0
         self._odom_samples = 0
         self._localization_ok = False
@@ -125,6 +133,9 @@ class RealStartupManager(Node):
         self._nav_health = None
         self._nav_health_at = 0.0
 
+        self._origin_client = self.create_client(SetOrigin, ZIT6_SET_ORIGIN)
+        self.create_subscription(ZitOdom, ZIT6_ODOM, self._raw_odom_cb,
+                                 qos_profile_sensor_data)
         self.create_subscription(PoseInfo, STATE_ODOM, self._odom_cb,
                                  qos_profile_sensor_data)
         self.create_subscription(SensorHealth, STATE_HEALTH, self._localization_cb, 10)
@@ -166,6 +177,7 @@ class RealStartupManager(Node):
     def _odom_cb(self, msg):
         values = (msg.robot_x, msg.robot_y, msg.robot_z, msg.robot_yaw)
         if all(math.isfinite(float(value)) for value in values):
+            self._origin_pose = msg
             self._odom_samples += 1
             self._last_odom = time.monotonic()
 
@@ -177,6 +189,35 @@ class RealStartupManager(Node):
     def _mcu_cb(self, msg):
         self._mcu_status = msg
         self._mcu_status_at = time.monotonic()
+        if not self._origin_navigation_ready():
+            self._ins_ready_since = None
+
+    def _raw_odom_cb(self, msg):
+        if (len(msg.pose_odom) != 6 or len(msg.twist_body) != 6
+                or not all(math.isfinite(float(v))
+                           for v in (*msg.pose_odom, *msg.twist_body))):
+            self._raw_progress_samples = 0
+            self._ins_ready_since = None
+            return
+        now = time.monotonic()
+        previous = self._raw_odom
+        delta = (0 if previous is None else
+                 (int(msg.nav_timestamp_ms) - int(previous.nav_timestamp_ms))
+                 & 0xffffffff)
+        if previous is None or delta >= 0x80000000:
+            self._raw_progress_samples = 1
+            self._raw_progress_at = now
+            self._ins_ready_since = None
+        elif delta > 0:
+            if now - self._raw_progress_at > self.max_age:
+                self._raw_progress_samples = 0
+                self._ins_ready_since = None
+            self._raw_progress_samples += 1
+            self._raw_progress_at = now
+        self._raw_odom = msg
+        self._raw_odom_at = now
+        if not self._origin_navigation_ready():
+            self._ins_ready_since = None
 
     def _heartbeat_cb(self, msg):
         if self._heartbeat is None or int(msg.data) != self._heartbeat:
@@ -648,6 +689,98 @@ class RealStartupManager(Node):
                 'SKIPPED (check_backend_health=false)')
             self._dashboard()
 
+    def _origin_navigation_ready(self):
+        now = time.monotonic()
+        status, odom = self._mcu_status, self._raw_odom
+        return bool(
+            status is not None and now - self._mcu_status_at <= self.max_age
+            and int(status.ins_state) in (3, 4)
+            and status.navigation_ready and not status.is_armed
+            and int(status.error_flags) == 0
+            and odom is not None and odom.nav_valid
+            and self._raw_progress_samples >= 2
+            and now - self._raw_odom_at <= self.max_age
+            and now - self._raw_progress_at <= self.max_age)
+
+    def _origin_initialized(self, generation=None, nav_timestamp=None):
+        now = time.monotonic()
+        raw, pose = self._raw_odom, self._origin_pose
+        if (raw is None or pose is None or not raw.origin_initialized
+                or not pose.origin_initialized
+                or int(raw.origin_generation) == 0
+                or int(raw.origin_generation) != int(pose.origin_generation)
+                or now - self._raw_odom_at > self.max_age
+                or now - self._raw_progress_at > self.max_age
+                or now - self._last_odom > self.max_age):
+            return False
+        return (generation is None or (
+            int(raw.origin_generation) == generation
+            and ((int(raw.nav_timestamp_ms) - nav_timestamp) & 0xffffffff)
+            < 0x80000000))
+
+    def _origin_ready_to_set(self):
+        # A separately initialized origin always wins over an automatic reset.
+        if (self._raw_odom is not None and self._raw_odom.origin_initialized
+                and time.monotonic() - self._raw_odom_at <= self.max_age
+                and time.monotonic() - self._raw_progress_at <= self.max_age):
+            return True
+        if not self._origin_navigation_ready():
+            self._ins_ready_since = None
+            return False
+        now = time.monotonic()
+        if self._ins_ready_since is None:
+            self._ins_ready_since = now
+        return (now - self._ins_ready_since >= 1.0
+                and self._origin_client.service_is_ready())
+
+    def _initialize_origin(self):
+        if not self.args.auto_setorigin or self.args.startup_mode == 'adopt':
+            self.component_state['origin'] = 'SKIPPED (automatic setorigin disabled)'
+            return
+        self._phase('origin', self._origin_ready_to_set,
+                    'INS state 3/4, navigation_ready, disarmed, no errors, '
+                    'fresh advancing valid MCU odom for 1s and setorigin service')
+        if self._origin_initialized():
+            self.component_state['origin'] = 'REUSED (existing MCU origin)'
+            self.get_logger().info('Keeping the initialized MCU origin')
+            return
+        # An existing raw origin may still be propagating through localization.
+        # Never reset it just because the adapted pose has not caught up yet.
+        if self._raw_odom.origin_initialized:
+            self._phase('origin', self._origin_initialized,
+                        'existing MCU origin to reach localization')
+            self.component_state['origin'] = 'REUSED (existing MCU origin)'
+            return
+        if not self._origin_navigation_ready():
+            raise StartupBlocked('INS readiness changed before setorigin')
+        baseline = int(self._raw_odom.origin_generation)
+        self.get_logger().info('INS ready and disarmed; calling MCU setorigin once')
+        future = self._origin_client.call_async(SetOrigin.Request())
+        try:
+            self._wait_for(future.done, 'setorigin service response',
+                           duration=min(5.0, self.timeout))
+            response = future.result()
+        except Exception as error:
+            if not future.done():
+                self._origin_client.remove_pending_request(future)
+                future.cancel()
+            if isinstance(error, ShutdownRequested):
+                raise
+            raise StartupBlocked(f'setorigin did not complete: {error}') from error
+        if response is None or not response.success:
+            detail = response.message if response is not None else 'no response'
+            raise StartupBlocked(f'setorigin rejected: {detail}')
+        generation = int(response.origin_generation)
+        advance = (generation - baseline) & 0xffffffff
+        if (generation == 0 or not 0 < advance < 0x80000000
+                or len(response.origin_nav) != 6
+                or not all(math.isfinite(float(v)) for v in response.origin_nav)):
+            raise StartupBlocked('setorigin returned invalid origin/version')
+        self._phase('origin', lambda: self._origin_initialized(
+            generation, int(response.nav_timestamp_ms)),
+            f'MCU and localization confirming origin generation {generation}')
+        self.get_logger().info(f'MCU origin initialized: generation={generation}')
+
     def _start_motion_component(self):
         if not self.args.enable_motion:
             self.component_state['basic_motion'] = 'SKIPPED'
@@ -966,8 +1099,8 @@ class RealStartupManager(Node):
             f'record={self.args.record_session}; '
             f'detected nodes={sorted(self._node_names())}')
         self._start_core()
-        # START must be available before odom-dependent perception/navigation
-        # readiness. The operator manages origin initialization independently.
+        self._initialize_origin()
+        # Initialize the odom frame before starting motion and perception nodes.
         self._start_motion_component()
         self._start_camera_perception()
         self._start_navigation()
@@ -1087,7 +1220,7 @@ def _parse_args(argv=None):
     parser.add_argument('--max-age', type=float, default=2.0)
     for name, default in (
         ('enable_hardware', True), ('enable_motion', True),
-        ('check_backend_health', False),
+        ('check_backend_health', False), ('auto_setorigin', True),
         ('enable_camera', False), ('enable_ai', True),
         ('enable_perception_gate', False), ('enable_nav', False),
         ('enable_stream', True),
@@ -1111,6 +1244,7 @@ def _parse_args(argv=None):
     parser.add_argument('--preview-port', default='1984')
     args, ros_args = parser.parse_known_args(argv)
     for name in ('enable_hardware', 'enable_motion', 'check_backend_health',
+                 'auto_setorigin',
                  'enable_camera', 'enable_ai', 'enable_perception_gate',
                  'enable_nav',
                  'enable_stream',

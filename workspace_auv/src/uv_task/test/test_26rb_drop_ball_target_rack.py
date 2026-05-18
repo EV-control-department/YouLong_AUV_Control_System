@@ -303,7 +303,7 @@ def test_failed_ring_alignment_or_cancellation_prevents_further_release(rig, mon
 
 
 @pytest.mark.parametrize('params', [{'ring_release_angle_deg': float('nan')},
-    {'ring_release_angle_deg': 181.}, {'ring_release_repeat_count': 0},
+    {'ring_release_angle_deg': 271.}, {'ring_release_angle_deg': -1.}, {'release_angle_deg': 271.}, {'release_angle_deg': -1.}, {'ring_release_repeat_count': 0},
     {'ring_release_repeat_count': True}, {'ring_release_repeat_period': -.1},
     {'ring_release_settle_seconds': float('inf')}])
 def test_invalid_ring_release_settings_rejected_at_runtime_and_yaml(rig, params):
@@ -321,3 +321,21 @@ def test_ring_release_yaml_defaults():
     assert params['ring_release_repeat_count'] == 3
     assert params['ring_release_repeat_period'] == .1
     assert params['ring_release_settle_seconds'] == 1.
+
+
+@pytest.mark.parametrize('key', ['release_angle_deg', 'ring_release_angle_deg'])
+@pytest.mark.parametrize('angle', [0., 180., 181., 270.])
+def test_release_servos_full_angle_range(rig, key, angle):
+    task = mod.RB26DropBallTargetRackTask(rig.node, {key: angle})
+    field = '_release_angle_deg' if key == 'release_angle_deg' else '_ring_release_angle_deg'
+    assert getattr(task, field) == angle
+    _validate_params('26rb_drop_ball_target_rack', {key: angle})
+
+
+@pytest.mark.parametrize('servo_id', [1, 2])
+def test_servo_270_reaches_publisher(rig, servo_id):
+    task = mod.RB26DropBallTargetRackTask(rig.node, {
+        'release_angle_deg': 270., 'ring_release_angle_deg': 270.})
+    release = task._release_ball if servo_id == 1 else task._release_ring
+    assert release()
+    assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(servo_id, 270.)]*3

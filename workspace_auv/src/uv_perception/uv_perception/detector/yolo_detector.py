@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import threading
+
+# CUDA synchronization can block Python while another camera owns GPU work.
+# Serialize inference across independent model instances, including CPU copies.
+_INFERENCE_LOCK = threading.Lock()
+
 
 class YoloDetector:
     def __init__(self, model_path: str, confidence: float = 0.5, device: str = ''):
@@ -28,6 +34,10 @@ class YoloDetector:
 
     def detect_with_masks(self, image):
         """Return (box detections, aligned optional segmentation polygons)."""
+        with _INFERENCE_LOCK:
+            return self._detect_with_masks_locked(image)
+
+    def _detect_with_masks_locked(self, image):
         kwargs = {'source': image, 'conf': self.confidence, 'verbose': False}
         if self.device:
             kwargs['device'] = self.device

@@ -61,8 +61,8 @@ def validate_combined_params(params, *, complete=True):
             raise ValueError(f'{key} 必须是有限非负数')
     for key, default in (('ring_open_angle_deg', 0.0), ('ring_close_angle_deg', 90.0)):
         value = params.get(key, default)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > 180:
-            raise ValueError(f'{key} 必须是[-180,180]范围内的度数')
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 270:
+            raise ValueError(f'{key} 必须是[0,270]范围内的度数')
     quality = params.get('ring_orientation_min_quality', .8)
     if isinstance(quality, bool) or not isinstance(quality, (int, float)) or not math.isfinite(quality) or not 0 <= quality <= 1:
         raise ValueError('ring_orientation_min_quality 必须在[0,1]范围内')

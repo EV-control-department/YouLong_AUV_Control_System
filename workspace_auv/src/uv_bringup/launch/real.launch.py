@@ -1,5 +1,8 @@
 """Staged real-vehicle bringup entry point."""
 
+from pathlib import Path
+from ament_index_python.packages import get_package_share_directory
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -13,6 +16,7 @@ from uv_bringup.launch_common import (
 
 
 def generate_launch_description():
+    weights_dir = Path(get_package_share_directory('uv_perception')) / 'weights'
     profile_actions = declare_profile(
         'real', 'uv_bringup', choices=('default', 'record', 'debug', 'task'))
     features = declare_feature_arguments(
@@ -37,6 +41,9 @@ def generate_launch_description():
             description=(
                 'Display MCU/localization/odom readiness during startup. '
                 'Health checks never block component startup.')),
+        DeclareLaunchArgument(
+            'auto_setorigin', default_value='true',
+            description='Initialize an unset MCU origin after INS is ready and disarmed; preserve existing origins.'),
         DeclareLaunchArgument('enable_hardware', default_value='true'),
         DeclareLaunchArgument(
             'enable_camera', default_value='false',
@@ -50,8 +57,8 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_stream', default_value='true'),
         DeclareLaunchArgument('enable_perception_gui', default_value='false'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
-        DeclareLaunchArgument('front_model_path', default_value='/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ6_aug.pt'),
-        DeclareLaunchArgument('down_model_path', default_value='/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ7_aug.pt'),
+        DeclareLaunchArgument('front_model_path', default_value=str(weights_dir / 'HQQ6_aug.pt')),
+        DeclareLaunchArgument('down_model_path', default_value=str(weights_dir / 'HQQ7_aug.pt')),
     ]
 
     manager_arguments = [
@@ -60,6 +67,7 @@ def generate_launch_description():
         '--ready-timeout', LaunchConfiguration('ready_timeout'),
         '--max-age', LaunchConfiguration('readiness_max_age'),
         '--check-backend-health', LaunchConfiguration('check_backend_health'),
+        '--auto-setorigin', LaunchConfiguration('auto_setorigin'),
         '--enable-hardware', LaunchConfiguration('enable_hardware'),
         '--enable-motion', LaunchConfiguration('enable_motion'),
         '--enable-camera', LaunchConfiguration('enable_camera'),

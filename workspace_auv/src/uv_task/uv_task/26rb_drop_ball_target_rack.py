@@ -17,10 +17,11 @@ from uv_task.down_camera_servo import (
 
 
 def validate_ring_release_params(params):
-    angle = params.get('ring_release_angle_deg', 0.0)
-    if (isinstance(angle, bool) or not isinstance(angle, (int, float))
-            or not math.isfinite(angle) or abs(angle) > 180.0):
-        raise ValueError('ring_release.angle_deg 必须为[-180,180]范围内的有限度数')
+    for key, default in (('release_angle_deg', 90.0), ('ring_release_angle_deg', 0.0)):
+        angle = params.get(key, default)
+        if (isinstance(angle, bool) or not isinstance(angle, (int, float))
+                or not math.isfinite(angle) or not 0 <= angle <= 270.0):
+            raise ValueError(f'{key} 必须为[0,270]范围内的有限度数')
     count = params.get('ring_release_repeat_count', 3)
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         raise ValueError('ring_release.repeat_count 必须为至少1的整数')
@@ -76,8 +77,8 @@ class RB26DropBallTargetRackTask:
             0.0, float(params.get('alignment_settle_seconds', 0.5)))
         self._release_angle_deg = float(params.get('release_angle_deg', 90.0))
         if (not math.isfinite(self._release_angle_deg)
-                or abs(self._release_angle_deg) > 180.0):
-            raise ValueError('释放舵机角度必须是 [-180, 180] 范围内的度数')
+                or not 0 <= self._release_angle_deg <= 270.0):
+            raise ValueError('释放舵机角度必须是 [0, 270] 范围内的度数')
         self._release_repeat_count = max(
             1, int(params.get('release_repeat_count', 3)))
         self._release_repeat_period = max(

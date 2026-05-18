@@ -77,7 +77,8 @@ def test_real_startup_contract_is_staged_and_task_control_is_external():
             "BASIC_MOTION_SAFE_STOP", "send_goal_async", "task_launch.py",
             "enable_task"):
         assert control_or_task not in startup
-    assert "origin reset" not in startup
+    assert "self._initialize_origin()" in startup
+    assert startup.index("self._initialize_origin()") < startup.index("self._start_motion_component()")
     assert "sigterm_timeout='22'" in _source("real.launch.py")
     assert "auto_start" in task_launch
     assert '"auto_start", default_value="true"' in task_launch

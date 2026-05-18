@@ -1,5 +1,8 @@
 """Launch detector, per-view ray localizer, and static ray estimator."""
 
+from pathlib import Path
+from ament_index_python.packages import get_package_share_directory
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -8,13 +11,14 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    weights_dir = Path(get_package_share_directory('uv_perception')) / 'weights'
     return LaunchDescription([
         DeclareLaunchArgument('enable_detector', default_value='true'),
         DeclareLaunchArgument('enable_localizer', default_value='true'),
         DeclareLaunchArgument('enable_estimator', default_value='true'),
         DeclareLaunchArgument('model_path', default_value=''),
-        DeclareLaunchArgument('front_model_path', default_value='/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ6_aug.pt'),
-        DeclareLaunchArgument('down_model_path', default_value='/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ7_aug.pt'),
+        DeclareLaunchArgument('front_model_path', default_value=str(weights_dir / 'HQQ6_aug.pt')),
+        DeclareLaunchArgument('down_model_path', default_value=str(weights_dir / 'HQQ7_aug.pt')),
         DeclareLaunchArgument('confidence', default_value='0.5'),
         DeclareLaunchArgument('world_frame', default_value='odom'),
         DeclareLaunchArgument('edge_margin_px', default_value='8.0'),
