@@ -1,11 +1,17 @@
 {
   "tasks": [
     {"name": "start", "params": {}},
-    {"name": "setz", "params": {"z": 0.4}},
-    {"name": "wtravelxy", "params": {"dx": 5.0, "dy": 0.0}},
-    {"name": "wait", "params": {"duration": 2.0}},
-    {"name": "setrz", "params": {"rz": 50.0}},
-    {"name": "bmovex", "params": {"dx": 2.0}},
-    {"name": "wait", "params": {"duration": 1.0}}
+    {"name": "wait", "params": {"duration": 0}},
+    {"name": "setz", "params": {"z": 0.0}},
+    {"name": "setrz", "params": {"rz": 50}},
+
+    {"name": "follow_line", "params": {
+      "timeout": 240.0,
+      "triangle_class_id": 5,
+      "square_class_id": 6,
+      "marker_class_ids": [7],
+      "stop_when_marker": true,
+      "forward_step": 0.30
+    }}
   ]
 }

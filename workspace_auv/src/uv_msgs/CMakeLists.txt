@@ -22,8 +22,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/WaypointPath.msg"
   "msg/TaskStatus.msg"
   "msg/PoseInfo.msg"
+  "msg/LineState.msg"
   "srv/RunTask.srv"
   "srv/GetState.srv"
+  "srv/ExecTask.srv"
   "action/BasicMotion.action"
   DEPENDENCIES std_msgs sensor_msgs action_msgs builtin_interfaces
 )

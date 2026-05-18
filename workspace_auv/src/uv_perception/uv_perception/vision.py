@@ -8,13 +8,14 @@ Stitched stereo images are split into left/right halves, YOLO runs on each
 independently. Output: 4 detection channels + 4 debug image channels.
 
 Parameters:
-    model_path (str): Path to YOLO model .pt file.
+    model_path (str): Path to YOLO segmentation model .pt file.
     publish_images (bool): Whether to forward split images (default: false).
     sim_mode (bool): true=ROS images, false=V4L2 capture (default: true).
     front_cam_path (str): V4L2 device path for front camera (real mode only).
     down_cam_path (str): V4L2 device path for down camera (real mode only).
 """
 
+import math
 import os
 import shutil
 import subprocess
@@ -28,8 +29,9 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from std_msgs.msg import Int32MultiArray
 
-from uv_msgs.msg import Detection, DetectionArray
+from uv_msgs.msg import Detection, DetectionArray, LineState
 
 CvBridge = None
 
@@ -66,6 +68,8 @@ DOWN_CAMERA_MATRIX = (
 )
 DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
+CONFIDENCE = 0.6
+
 ENABLE_UNDISTORT = True              # 是否执行相机去畸变
 ENABLE_GORTC = True                 # 启动 go2rtc 转发客户端视频
 GORTC_HTTP_PORT = 1984               # go2rtc 对外 HTTP/WebRTC API 端口
@@ -74,17 +78,52 @@ GORTC_EXECUTABLE = 'go2rtc'
 
 # ROS 参数默认值。
 PUBLISH_IMAGES = False               # 发布拆分后的左右原图
-PUBLISH_ANNOTATED = False             # 发布带检测框的图像
+PUBLISH_ANNOTATED = True             # 发布带检测框的图像
 SIM_MODE = False                      # False=V4L2，True=ROS stitched 话题
 SAVE_DATASET = False                  # 是否保存训练数据帧
 DATASET_DIR = ''                      # 空字符串=自动使用工程下的 img/
 
+
+class _ScalarKalman:
+    """不依赖第三方库的一维 Kalman 滤波器 (用于平滑管道中心和角度)。"""
+    def __init__(self, initial_value, process_noise=1.0, measurement_noise=3.0):
+        self.x = float(initial_value)
+        self.p = 100.0
+        self.q = max(1e-6, float(process_noise))
+        self.r = max(1e-6, float(measurement_noise))
+
+    def predict(self):
+        self.p += self.q
+        return self.x
+
+    def update(self, measurement):
+        gain = self.p / (self.p + self.r)
+        self.x += gain * (float(measurement) - self.x)
+        self.p = (1.0 - gain) * self.p
+        return self.x
+
+
+class _LineFilterState:
+    """保存单个相机的图像宽度和中心/方向滤波器。"""
+    def __init__(self, image_width, process_noise, measurement_noise):
+        self.image_width = int(image_width)
+        self.kalman_center = _ScalarKalman(
+            self.image_width / 2.0,
+            process_noise,
+            measurement_noise,
+        )
+        self.kalman_heading = _ScalarKalman(
+            0.0,
+            max(1e-6, process_noise * 0.5),
+            max(1e-6, measurement_noise * 0.5),
+        )
+
+
 class _MjpegHandler(BaseHTTPRequestHandler):
     """Very small MJPEG source used by go2rtc (and directly by a browser)."""
-
     node = None
 
-    def do_GET(self):  # noqa: N802 - required by BaseHTTPRequestHandler
+    def do_GET(self):
         camera = self.path.strip('/').split('?', 1)[0]
         if camera not in ('front', 'down'):
             self.send_error(404, 'use /front or /down')
@@ -127,7 +166,7 @@ def _import_cv_bridge():
 
 
 class VisionNode(Node):
-    """Vision node: YOLO detection on stitched camera images, split into L/R."""
+    """Vision node: YOLO segmentation detection on stitched camera images, split into L/R."""
 
     def __init__(self):
         super().__init__('vision')
@@ -146,18 +185,24 @@ class VisionNode(Node):
 
         self.declare_parameter('enable_front_camera', ENABLE_FRONT_CAMERA)
         self.declare_parameter('enable_down_camera', ENABLE_DOWN_CAMERA)
-        self._enable_front_camera = self.get_parameter(
-            'enable_front_camera').get_parameter_value().bool_value
-        self._enable_down_camera = self.get_parameter(
-            'enable_down_camera').get_parameter_value().bool_value
+        self._enable_front_camera = self.get_parameter('enable_front_camera').get_parameter_value().bool_value
+        self._enable_down_camera = self.get_parameter('enable_down_camera').get_parameter_value().bool_value
+
+        # --- 巡线参数 (来自仿真节点) ---
+        self.declare_parameter('line_contour_min_area', 200)
+        self._line_contour_min_area = int(self.get_parameter('line_contour_min_area').value)
+        self.declare_parameter('line_filter_process_noise', 1.0)
+        self._line_filter_process_noise = float(self.get_parameter('line_filter_process_noise').value)
+        self.declare_parameter('line_filter_measurement_noise', 3.0)
+        self._line_filter_measurement_noise = float(self.get_parameter('line_filter_measurement_noise').value)
+        self._line_filters = {}
 
         self.declare_parameter('save_dataset', SAVE_DATASET)
         self._save_dataset = self.get_parameter('save_dataset').get_parameter_value().bool_value
         self._dataset_dir = DATASET_DIR
-        self._dataset_last_s = {}  # channel -> last save time (second bucket)
-        self._dataset_count_s = {}  # channel -> count in current second
+        self._dataset_last_s = {}  
+        self._dataset_count_s = {} 
         if self._save_dataset:
-            # img/ at same level as src/
             if not self._dataset_dir:
                 self._dataset_dir = os.path.join(
                     os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'img')
@@ -166,7 +211,7 @@ class VisionNode(Node):
 
         self.bridge = None
         self._model = None
-        self._confidence = 0.9
+        self._confidence = CONFIDENCE
         self._model_loaded = False
         self._cv_bridge_ok = False
         self._front_cap = None
@@ -174,8 +219,7 @@ class VisionNode(Node):
         self._gortc_process = None
         self._gortc_config = None
 
-        # ROS 回调只负责收图；前、下相机各自占用一个视觉工作线程，
-        # 避免一个相机的 YOLO 推理阻塞另一个相机和客户端视频流。
+        # 线程锁及流媒体相关
         self._vision_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='vision')
         self._processing_lock = threading.Lock()
         self._processing = {'front': False, 'down': False}
@@ -187,13 +231,10 @@ class VisionNode(Node):
         self._capture_stop = threading.Event()
         self._capture_threads = []
 
-        # 本地 MJPEG 源由 go2rtc 拉取；即使 go2rtc 不存在，原 ROS 功能仍可用。
-        self._mjpeg_server = None
         if ENABLE_GORTC:
             self._start_mjpeg_server()
             self._start_gortc()
 
-        # Try to import cv_bridge
         try:
             _import_cv_bridge()
             self.bridge = CvBridge()
@@ -201,10 +242,7 @@ class VisionNode(Node):
         except Exception as e:
             self.get_logger().warn(f'cv_bridge not available: {e}')
 
-        # Distortion correction — per camera pair (applied to each half after split)
         self._init_undistort()
-
-        # Load YOLO model
         self._load_model()
 
         # Image source: ROS topics (sim) or V4L2 devices (real)
@@ -223,25 +261,17 @@ class VisionNode(Node):
             if self._enable_front_camera:
                 self._front_cap = cv2.VideoCapture(front_path)
                 self._front_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                self._front_cap.set(
-                    cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                self._front_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
                 self._front_cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRONT_CAPTURE_RESOLUTION[0])
                 self._front_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRONT_CAPTURE_RESOLUTION[1])
             if self._enable_down_camera:
                 self._down_cap = cv2.VideoCapture(down_path)
                 self._down_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                self._down_cap.set(
-                    cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                self._down_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
                 self._down_cap.set(cv2.CAP_PROP_FRAME_WIDTH, DOWN_CAPTURE_RESOLUTION[0])
                 self._down_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, DOWN_CAPTURE_RESOLUTION[1])
-            if self._enable_front_camera and not self._front_cap.isOpened():
-                self.get_logger().error(f'Failed to open front camera: {front_path}')
-            if self._enable_down_camera and not self._down_cap.isOpened():
-                self.get_logger().error(f'Failed to open down camera: {down_path}')
 
-            # 独立连续采集线程始终读取最新帧，避免 10Hz timer 造成 V4L2 缓冲积压。
-            for cap, camera in (
-                    (self._front_cap, 'front'), (self._down_cap, 'down')):
+            for cap, camera in ((self._front_cap, 'front'), (self._down_cap, 'down')):
                 if cap is not None and cap.isOpened():
                     thread = threading.Thread(
                         target=self._capture_camera_loop,
@@ -249,10 +279,9 @@ class VisionNode(Node):
                         name=f'capture-{camera}', daemon=True)
                     self._capture_threads.append(thread)
                     thread.start()
-            self.get_logger().info(
-                f'Vision node started (real mode: front={front_path}, down={down_path})')
+            self.get_logger().info(f'Vision node started (real mode: front={front_path}, down={down_path})')
 
-        # Publishers — 4 detection + 4 image (common to both modes)
+        # Publishers
         self.pub_det = {
             'front_left':  self.create_publisher(DetectionArray, '/perception/detection/front_left', 10),
             'front_right': self.create_publisher(DetectionArray, '/perception/detection/front_right', 10),
@@ -271,28 +300,54 @@ class VisionNode(Node):
             'down_left':   self.create_publisher(Image, '/perception/annotated/down_left', 10),
             'down_right':  self.create_publisher(Image, '/perception/annotated/down_right', 10),
         }
+        # 新增巡线状态 Publisher
+        self.pub_line = {
+            name: self.create_publisher(LineState, f'/perception/line/{name}', 10)
+            for name in self.pub_det
+        }
+
+        # ── ArUco detection (迁移自仿真节点) ─────────────────────────────────────────
+        self._aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
+        self._aruco_params = cv2.aruco.DetectorParameters()
+        self._aruco_detector = cv2.aruco.ArucoDetector(self._aruco_dict, self._aruco_params)
+        self._aruco_pub = self.create_publisher(Int32MultiArray, '/perception/aruco/ids', 10)
+        self._aruco_lock = threading.Lock()
+        self._aruco_frames = None  # (left_img, right_img) for ArUco thread
+        self._aruco_thread = threading.Thread(target=self._aruco_loop, daemon=True)
+        self._aruco_thread.start()
+
+    def _aruco_loop(self):
+        """Background thread: detect ArUco markers on front camera halves."""
+        while rclpy.ok():
+            with self._aruco_lock:
+                frames = self._aruco_frames
+                self._aruco_frames = None
+            if frames is not None:
+                try:
+                    all_ids = set()
+                    for img in frames:
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        _, ids, _ = self._aruco_detector.detectMarkers(gray)
+                        if ids is not None:
+                            all_ids.update(int(m) for m in ids.flatten() if 1 <= int(m) <= 6)
+                    msg = Int32MultiArray()
+                    msg.data = sorted(all_ids)
+                    self._aruco_pub.publish(msg)
+                except Exception as e:
+                    self.get_logger().warn(f'ArUco detection error: {e}')
+            time.sleep(0.05)  # ~20 Hz
 
     def _start_mjpeg_server(self):
-        """Open a local MJPEG port for the optional go2rtc bridge."""
         try:
             _MjpegHandler.node = self
-            self._mjpeg_server = ThreadingHTTPServer(
-                ('0.0.0.0', VISION_MJPEG_PORT), _MjpegHandler)
-            threading.Thread(
-                target=self._mjpeg_server.serve_forever,
-                name='vision-mjpeg', daemon=True).start()
-            self.get_logger().info(
-                f'MJPEG source opened: http://0.0.0.0:{VISION_MJPEG_PORT}/front|down')
+            self._mjpeg_server = ThreadingHTTPServer(('0.0.0.0', VISION_MJPEG_PORT), _MjpegHandler)
+            threading.Thread(target=self._mjpeg_server.serve_forever, name='vision-mjpeg', daemon=True).start()
         except OSError as e:
             self.get_logger().error(f'Cannot open MJPEG port {VISION_MJPEG_PORT}: {e}')
 
     def _start_gortc(self):
-        """Start go2rtc and expose front/down streams on its HTTP/WebRTC port."""
         executable = self._find_gortc()
         if executable is None:
-            self.get_logger().warn(
-                'go2rtc not found; local MJPEG source remains available. '
-                'Run third_party/go2rtc/download_go2rtc.sh or set GO2RTC_BIN.')
             return
 
         port = self.get_parameter('gortc_http_port').get_parameter_value().integer_value
@@ -307,48 +362,30 @@ class VisionNode(Node):
         try:
             with open(self._gortc_config, 'w', encoding='utf-8') as config_file:
                 config_file.write(config)
-            self._gortc_process = subprocess.Popen(
-                [executable, '-config', self._gortc_config],
-                stdout=None, stderr=None)
-            self.get_logger().info(
-                f'go2rtc started on port {port}; '
-                f'web UI: /stream.html?src=front or /stream.html?src=down')
+            self._gortc_process = subprocess.Popen([executable, '-config', self._gortc_config], stdout=None, stderr=None)
         except (OSError, ValueError) as e:
             self.get_logger().error(f'Failed to start go2rtc: {e}')
 
     def _find_gortc(self):
-        """Find a deployable go2rtc binary without assuming a user's home path."""
-        configured = self.get_parameter(
-            'gortc_executable').get_parameter_value().string_value.strip()
-        candidates = []
-        if os.environ.get('GO2RTC_BIN'):
-            candidates.append(os.environ['GO2RTC_BIN'])
-        if configured:
-            candidates.append(configured)
-
-        # Installed package: share/uv_perception/bin/go2rtc.
+        configured = self.get_parameter('gortc_executable').get_parameter_value().string_value.strip()
+        candidates = [os.environ.get('GO2RTC_BIN'), configured]
         try:
             from ament_index_python.packages import get_package_share_directory
-            share_dir = get_package_share_directory('uv_perception')
-            candidates.append(os.path.join(share_dir, 'bin', 'go2rtc'))
+            candidates.append(os.path.join(get_package_share_directory('uv_perception'), 'bin', 'go2rtc'))
         except Exception:
             pass
-
-        # Source checkout: repository third_party/go2rtc/go2rtc.
-        package_dir = os.path.dirname(os.path.dirname(__file__))
-        repo_dir = os.path.abspath(os.path.join(package_dir, '..', '..', '..'))
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', '..', '..'))
         candidates.append(os.path.join(repo_dir, 'third_party', 'go2rtc', 'go2rtc'))
         candidates.append('go2rtc')
 
         for candidate in candidates:
-            resolved = shutil.which(candidate)
-            if resolved and os.path.isfile(resolved) and os.access(resolved, os.X_OK):
-                self.get_logger().info(f'Using go2rtc: {resolved}')
-                return resolved
+            if candidate:
+                resolved = shutil.which(candidate)
+                if resolved and os.path.isfile(resolved) and os.access(resolved, os.X_OK):
+                    return resolved
         return None
 
     def destroy_node(self):
-        """Stop workers, camera devices, MJPEG server and optional go2rtc."""
         if self._mjpeg_server is not None:
             self._mjpeg_server.shutdown()
             self._mjpeg_server.server_close()
@@ -361,10 +398,6 @@ class VisionNode(Node):
                 cap.release()
         if self._gortc_process is not None and self._gortc_process.poll() is None:
             self._gortc_process.terminate()
-            try:
-                self._gortc_process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                self._gortc_process.kill()
         if self._gortc_config:
             try:
                 os.unlink(self._gortc_config)
@@ -373,45 +406,27 @@ class VisionNode(Node):
         super().destroy_node()
 
     def _init_undistort(self):
-        """Load camera matrix and distortion coefficients from parameters.
-
-        Each camera pair (front/down) has a 3x3 camera matrix and distortion
-        coefficients (k1,k2,p1,p2,k3).  Applied to each half after splitting.
-        Defaults: constants defined at the top of this file.
-        """
-        # 常量是默认配置；ROS 参数仍可覆盖，方便不改代码时加载标定文件。
         self.declare_parameter('front_camera_matrix', list(FRONT_CAMERA_MATRIX))
         self.declare_parameter('front_dist_coeffs', list(FRONT_DIST_COEFFS))
         self.declare_parameter('down_camera_matrix', list(DOWN_CAMERA_MATRIX))
         self.declare_parameter('down_dist_coeffs', list(DOWN_DIST_COEFFS))
 
         def _load_calib(prefix):
-            K = np.array(self.get_parameter(f'{prefix}_camera_matrix')
-                         .get_parameter_value().double_array_value,
-                         dtype=np.float32).reshape(3, 3)
-            D = np.array(self.get_parameter(f'{prefix}_dist_coeffs')
-                         .get_parameter_value().double_array_value,
-                         dtype=np.float32)
+            K = np.array(self.get_parameter(f'{prefix}_camera_matrix').get_parameter_value().double_array_value, dtype=np.float32).reshape(3, 3)
+            D = np.array(self.get_parameter(f'{prefix}_dist_coeffs').get_parameter_value().double_array_value, dtype=np.float32)
             return K, D
 
         self._front_K, self._front_D = _load_calib('front')
         self._down_K, self._down_D = _load_calib('down')
 
-        self.get_logger().info(
-            f'Undistort: front K={self._front_K.tolist()}, D={self._front_D.tolist()}')
-
     def _load_model(self):
-        """Load YOLO model from parameter path or default locations."""
         try:
             from ultralytics import YOLO
-
-            self.declare_parameter('model_path', '')
+            self.declare_parameter('model_path', '/home/nvidia/YouLong_AUV_Control_System/workspace_auv/src/datas/WUURC2026REAL11nano--001.pt')
             model_path = self.get_parameter('model_path').get_parameter_value().string_value
 
             if not model_path:
-                for candidate in [
-                    os.path.expanduser('~/YouLong_AUV_Control_System/workspace_auv/src/datas/WUURC2026_sim_719.pt'),
-                ]:
+                for candidate in [os.path.expanduser('~/YouLong_AUV_Control_System/workspace_auv/src/datas/WUURC2026REAL11nano--001.pt')]:
                     if os.path.exists(candidate):
                         model_path = candidate
                         break
@@ -432,7 +447,6 @@ class VisionNode(Node):
         self._submit_image(msg, 'down')
 
     def _submit_image(self, msg: Image, camera: str):
-        """Submit at most one frame per camera, keeping ROS callbacks responsive."""
         with self._processing_lock:
             if self._processing[camera]:
                 return
@@ -448,25 +462,19 @@ class VisionNode(Node):
         self._vision_pool.submit(worker)
 
     def _process_image(self, msg: Image, camera: str):
-        """Split stitched image into left/right halves, run YOLO on each."""
         if not self._cv_bridge_ok:
             return
-
         try:
             cv_img = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         except Exception as e:
-            self.get_logger().error(f'Image conversion failed: {e}')
             return
 
-        # 给客户端缓存最新 JPEG，不依赖 YOLO 是否加载成功。
-        ok, encoded = cv2.imencode(
-            '.jpg', cv_img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        ok, encoded = cv2.imencode('.jpg', cv_img, [cv2.IMWRITE_JPEG_QUALITY, 80])
         with self._stream_lock:
             self._stream_frames[camera] = cv_img
             if ok:
                 self._stream_jpegs[camera] = encoded.tobytes()
 
-        # 即使没有加载模型，也继续提供客户端视频，但不发布检测结果。
         if not self._model_loaded:
             return
 
@@ -482,64 +490,73 @@ class VisionNode(Node):
             left_img = cv_img[:, :mid]
             right_img = cv_img[:, mid:]
 
+        # 提供给 ArUco 线程
+        if camera == 'front':
+            with self._aruco_lock:
+                self._aruco_frames = (left_img.copy(), right_img.copy())
+
         left_name = f'{camera}_left'
         right_name = f'{camera}_right'
 
-        # Save dataset frames (5 per second per channel)
         if self._save_dataset:
             self._save_frame(left_img, left_name)
             self._save_frame(right_img, right_name)
 
-        # Run detection on left half
-        det_left = self._detect(msg.header, left_name, left_img)
+        # Run detection & filtering on left half
+        det_left, polys_left, line_left, debug_info_left = self._detect(msg.header, left_name, left_img)
         self.pub_det[left_name].publish(det_left)
+        self.pub_line[left_name].publish(line_left)
         if self._publish_images:
             self.pub_img[left_name].publish(self.bridge.cv2_to_imgmsg(left_img, 'bgr8'))
         if self._publish_annotated:
-            annotated = self._draw_boxes(left_img, det_left)
+            annotated = self._draw_boxes(left_img, det_left, polys_left, line_left, debug_info_left)
             self.pub_annotated[left_name].publish(self.bridge.cv2_to_imgmsg(annotated, 'bgr8'))
 
-        # Run detection on right half
-        det_right = self._detect(msg.header, right_name, right_img)
+        # Run detection & filtering on right half
+        det_right, polys_right, line_right, debug_info_right = self._detect(msg.header, right_name, right_img)
         self.pub_det[right_name].publish(det_right)
+        self.pub_line[right_name].publish(line_right)
         if self._publish_images:
             self.pub_img[right_name].publish(self.bridge.cv2_to_imgmsg(right_img, 'bgr8'))
         if self._publish_annotated:
-            annotated = self._draw_boxes(right_img, det_right)
+            annotated = self._draw_boxes(right_img, det_right, polys_right, line_right, debug_info_right)
             self.pub_annotated[right_name].publish(self.bridge.cv2_to_imgmsg(annotated, 'bgr8'))
 
-    def _draw_boxes(self, cv_img, det_array: DetectionArray):
-        """Draw YOLO detection boxes and labels on image."""
-        annotated = cv_img.copy()
-        for det in det_array.detections:
-            x1, y1 = int(det.bbox_x1), int(det.bbox_y1)
-            x2, y2 = int(det.bbox_x2), int(det.bbox_y2)
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f'{det.class_id}:{det.confidence:.2f}'
-            cv2.putText(annotated, label, (x1, max(y1 - 5, 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        return annotated
-
-    def _detect(self, header, camera_name: str, cv_img) -> DetectionArray:
-        """Run YOLO on a single image, return DetectionArray."""
+    def _detect(self, header, camera_name: str, cv_img) -> tuple:
+        """运行 YOLO 并在同一模型上提取 LineState 及调试信息。"""
         det_array = DetectionArray()
         det_array.header = header
         det_array.camera_name = camera_name
+        
+        line_state = LineState()
+        line_state.stamp = header.stamp
+        line_state.camera_name = camera_name
+        line_state.detected = False
+        
+        polygons = []
+        debug_info = {}
 
         try:
             results = self._model(cv_img, conf=self._confidence, verbose=False)
         except Exception as e:
             self.get_logger().error(f'YOLO inference failed ({camera_name}): {e}')
-            return det_array
+            return det_array, polygons, line_state, debug_info
+
+        best_pipe_poly = None
+        max_pipe_area = 0.0
 
         for result in results:
             if result.boxes is None:
                 continue
-            for box in result.boxes:
+            
+            boxes = result.boxes
+            masks = getattr(result, 'masks', None)
+
+            for i in range(len(boxes)):
                 det = Detection()
-                det.class_id = int(box.cls[0])
-                det.confidence = float(box.conf[0])
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                det.class_id = int(boxes.cls[i])
+                det.confidence = float(boxes.conf[i])
+                x1, y1, x2, y2 = boxes.xyxy[i].tolist()
                 det.bbox_x1 = x1
                 det.bbox_y1 = y1
                 det.bbox_x2 = x2
@@ -548,16 +565,124 @@ class VisionNode(Node):
                 det.pixel_y = (y1 + y2) / 2.0
                 det_array.detections.append(det)
 
-        return det_array
+                if det.class_id == 3 and masks is not None and len(masks.xy) > i:
+                    poly = masks.xy[i].astype(np.float32)
+                    polygons.append(poly)
+                    
+                    # 寻找面积最大的 pipe contour 作为主导巡线目标
+                    area = cv2.contourArea(poly)
+                    if area > max_pipe_area and area >= self._line_contour_min_area:
+                        max_pipe_area = area
+                        best_pipe_poly = poly
+                else:
+                    polygons.append(None)
 
+        # ── 管道状态数学提取及 Kalman 滤波 (迁移自仿真) ──
+        height, width = cv_img.shape[:2]
+        
+        if best_pipe_poly is not None:
+            # 1. 轮廓重心矩 (moments)
+            M = cv2.moments(best_pipe_poly)
+            if M['m00'] > 0:
+                measured_center = float(M['m10'] / M['m00'])
+                cx, cy = int(measured_center), int(M['m01'] / M['m00'])
+                debug_info['centroid'] = (cx, cy)
+            else:
+                measured_center = None
+
+            # 2. 最小外接矩形 (minAreaRect)
+            rect_center, rect_size, angle = cv2.minAreaRect(best_pipe_poly)
+            rw, rh = rect_size
+            debug_info['box_pts'] = cv2.boxPoints((rect_center, rect_size, angle)).astype(np.int32)
+            
+            measured_heading = None
+            if max(rw, rh) > 2.0:
+                if rh > rw:
+                    long_deg = angle + 90.0
+                else:
+                    long_deg = angle
+                measured_heading = long_deg - 90.0
+                measured_heading = (measured_heading + 90.0) % 180.0 - 90.0
+
+            # 3. 一维 Kalman 滤波
+            filter_state = self._line_filters.get(camera_name)
+            if filter_state is None or filter_state.image_width != width:
+                filter_state = _LineFilterState(
+                    width, self._line_filter_process_noise, self._line_filter_measurement_noise)
+                self._line_filters[camera_name] = filter_state
+
+            filtered_center = filter_state.kalman_center.predict()
+            filtered_heading = filter_state.kalman_heading.predict()
+            
+            if measured_center is not None:
+                filtered_center = filter_state.kalman_center.update(measured_center)
+            if measured_heading is not None:
+                filtered_heading = filter_state.kalman_heading.update(measured_heading)
+
+            # 4. 生成 LineState
+            line_state.detected = True
+            line_state.center_error = float(np.clip((filtered_center - (width / 2.0)) / (width / 2.0), -1.0, 1.0))
+            line_state.heading_error_deg = float(filtered_heading)
+            line_state.area_ratio = float(max_pipe_area / (height * width))
+
+        return det_array, polygons, line_state, debug_info
+
+    def _draw_boxes(self, cv_img, det_array: DetectionArray, polygons: list, line_state: LineState, debug_info: dict):
+        """混合绘制：检测框 + 分割掩码 + 滤波巡线状态。"""
+        annotated = cv_img.copy()
+        overlay = cv_img.copy()
+        height, width = cv_img.shape[:2]
+
+        for i, det in enumerate(det_array.detections):
+            x1, y1 = int(det.bbox_x1), int(det.bbox_y1)
+            x2, y2 = int(det.bbox_x2), int(det.bbox_y2)
+            color = (0, 165, 255) if det.class_id == 3 else (0, 255, 0)
+
+            if det.class_id == 3 and polygons and i < len(polygons) and polygons[i] is not None:
+                poly = polygons[i].astype(np.int32)
+                cv2.fillPoly(overlay, [poly], color)
+                cv2.polylines(annotated, [poly], isClosed=True, color=color, thickness=2)
+            else:
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+
+            label = f'{det.class_id}:{det.confidence:.2f}'
+            cv2.putText(annotated, label, (x1, max(y1 - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        cv2.addWeighted(overlay, 0.4, annotated, 0.6, 0, annotated)
+
+        # ── 绘制巡线状态 (迁移自仿真) ──
+        cv2.line(annotated, (width // 2, 0), (width // 2, height), (255, 255, 255), 1)
+        
+        if line_state.detected:
+            if 'box_pts' in debug_info:
+                cv2.polylines(annotated, [debug_info['box_pts']], isClosed=True, color=(255, 128, 0), thickness=2)
+            if 'centroid' in debug_info:
+                cv2.circle(annotated, debug_info['centroid'], 7, (0, 0, 255), -1)
+
+            center_x = int((0.5 + 0.5 * line_state.center_error) * width)
+            draw_y = debug_info.get('centroid', (0, height // 2))[1]
+            angle = math.radians(line_state.heading_error_deg)
+            half_length = height // 4
+            dx = int(math.sin(angle) * half_length)
+            dy = int(math.cos(angle) * half_length)
+            cv2.line(annotated, (center_x - dx, draw_y + dy), (center_x + dx, draw_y - dy), (0, 0, 255), 3)
+            
+            line_text = (
+                f'pipe center={line_state.center_error:+.3f} '
+                f'heading={line_state.heading_error_deg:+.1f}deg '
+                f'area={line_state.area_ratio:.4f}')
+        else:
+            line_text = 'pipe not detected'
+            
+        cv2.putText(annotated, line_text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2, cv2.LINE_AA)
+
+        return annotated
 
     def _save_frame(self, img, channel: str):
-        """Save a dataset frame at up to 5 FPS per channel."""
         now_s = int(time.time())
         count = self._dataset_count_s.get(channel, 0)
         last_s = self._dataset_last_s.get(channel, 0)
 
-        # Reset counter on new second
         if now_s != last_s:
             self._dataset_count_s[channel] = 0
             self._dataset_last_s[channel] = now_s
@@ -572,17 +697,13 @@ class VisionNode(Node):
         cv2.imwrite(fname, img)
 
     def _capture_camera_loop(self, cap, camera: str):
-        """Continuously capture one V4L2 camera and keep only its newest frame."""
         while not self._capture_stop.is_set():
             ret, frame = cap.read()
             if not ret:
-                self.get_logger().warn(
-                    f'{camera} camera read failed', throttle_duration_sec=5.0)
                 time.sleep(0.01)
                 continue
 
-            ok, encoded = cv2.imencode(
-                '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             with self._stream_lock:
                 self._stream_frames[camera] = frame
                 if ok:
@@ -592,9 +713,7 @@ class VisionNode(Node):
 
             if not self._capture_frame_logged[camera]:
                 self._capture_frame_logged[camera] = True
-                self.get_logger().info(
-                    f'{camera} camera frame received: shape={frame.shape}, '
-                    f'dtype={frame.dtype}, stream_frames={frame_count}')
+                self.get_logger().info(f'{camera} camera frame received: shape={frame.shape}, stream_frames={frame_count}')
 
             if self._cv_bridge_ok:
                 img_msg = self.bridge.cv2_to_imgmsg(frame, 'bgr8')
@@ -612,7 +731,6 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()

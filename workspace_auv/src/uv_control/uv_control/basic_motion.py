@@ -123,6 +123,7 @@ class BasicMotionNode(Node):
         self.status = ZitStatus()
         self.pose = Coordinate()        # 当前位置 (odom 系)
         self._target = Coordinate()     # 当前目标 (odom 系)
+        self._map_pose = Coordinate()   # 原始 map 系位置（ZIT6 上报，未经 odom 转换）
         self._origin = None             # odom 原点 (map 系 Coordinate)，start() 时设置
         self._origin_warned = False     # 防止 _pos_cb 重复打印警告
         self._state_lock = threading.Lock()
@@ -223,6 +224,7 @@ class BasicMotionNode(Node):
                     x=msg.data[0], y=msg.data[1], z=msg.data[2],
                     rz=math.degrees(msg.data[3]),   # 弧度→度
                 )
+            self._map_pose = map_pos   # 始终保存原始 map 坐标，供 start() 使用
             if self._origin is not None:
                 self.pose = self._map_to_odom(map_pos)
             else:
@@ -254,15 +256,15 @@ class BasicMotionNode(Node):
         """
         with self._state_lock:
             if self._origin is not None:
-                self.get_logger().info('odom origin already set. update it to current pose. ')
-                self.get_logger().warning('It might be an incorrect motion.')
-                
+                self.get_logger().info(
+                    'odom origin already set, updating to current map pose')
             self._origin = Coordinate(
-                x=self.pose.x, y=self.pose.y, z=0.0, rz=self.pose.rz)
+                x=self._map_pose.x, y=self._map_pose.y,
+                z=0.0, rz=self._map_pose.rz)
             self.get_logger().info(
-                f'DEBUG pose before zero: x={self.pose.x:.4f}, y={self.pose.y:.4f}, '
-                f'z={self.pose.z:.4f}, rz={self.pose.rz:.4f}')
-            # 将当前 pose 全部置零成为 odom 原点
+                f'DEBUG map pose: x={self._map_pose.x:.4f}, '
+                f'y={self._map_pose.y:.4f}, z={self._map_pose.z:.4f}, '
+                f'rz={self._map_pose.rz:.4f}')
             self.pose.x = 0.0
             self.pose.y = 0.0
             self.pose.z = 0.0
@@ -625,8 +627,7 @@ class BasicMotionNode(Node):
 
     def sety(self, y: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(p.x, y, p.z, p.rz,
-                                  AX_Y, timeout=timeout)
+        return self._cmd_and_wait(p.x, y, p.z, p.rz, timeout=timeout)
 
     # --- WMOVE 系列 (世界系步进) --------------------------------------------
 
@@ -848,7 +849,7 @@ class BasicMotionNode(Node):
             success = self.bmovexyzrz(x, y, z, yaw, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.WTRAVEL:
             axes = req.axes or 'xyzrz'
-            tx, ty, tz = t.x, t.y, t.z
+            tx, ty, tz, trz = t.x, t.y, t.z, t.rz
             if 'x' in axes: tx = x
             if 'y' in axes: ty = y
             if 'z' in axes.replace('rz', ''): tz = z
@@ -869,7 +870,7 @@ class BasicMotionNode(Node):
             self.get_logger().info(
                 f'BTRAVEL: body偏移=({x:.2f}, {y:.2f}) '
                 f'→ world偏移=({off.x:.2f}, {off.y:.2f})')
-            success = self._travel_world(tx_w, ty_w, tz_w, timeout=timeout)
+            success = self._travel_world(tx_w, ty_w, tz_w, p.rz, timeout=timeout)
         else:
             self.get_logger().error(f'Action rejected: unknown cmd_type={req.cmd_type}')
             result = BasicMotion.Result()
