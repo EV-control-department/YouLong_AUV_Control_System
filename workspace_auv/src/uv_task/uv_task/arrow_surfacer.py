@@ -121,7 +121,7 @@ class ArrowSurfacer:
         self._servo_reset_angle = float(params.get('servo_reset_angle',
                                                     getattr(node, 'ANGLE_INIT', 0.0)))
         # 投球前下潜/投球后回升量（NED z 正=下）与中间稳定延时
-        self._dive_offset = float(params.get('dive_offset', 0.5))
+        self._dive_offset = float(params.get('dive_offset', 0.3))
         self._drop_settle = float(params.get('drop_settle', 1.0))
 
         # ── 感知订阅 ──
