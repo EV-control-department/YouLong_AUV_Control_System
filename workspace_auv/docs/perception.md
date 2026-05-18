@@ -65,10 +65,9 @@ basic_motion ── /basic_motion/pose_info (30Hz) ─────────�
 | `/perception/detection/front_right` | `DetectionArray` | 前视右目检测结果 |
 | `/perception/detection/down_left` | `DetectionArray` | 下视左目检测结果 |
 | `/perception/detection/down_right` | `DetectionArray` | 下视右目检测结果 |
-| `/perception/image/front_left` | `sensor_msgs/Image` | 前视左目图像 (仅 publish_images:=true) |
-| `/perception/image/front_right` | `sensor_msgs/Image` | 前视右目图像 (仅 publish_images:=true) |
-| `/perception/image/down_left` | `sensor_msgs/Image` | 下视左目图像 (仅 publish_images:=true) |
-| `/perception/image/down_right` | `sensor_msgs/Image` | 下视右目图像 (仅 publish_images:=true) |
+
+vision 不再发布 `/perception/image/*` 或 `/perception/annotated/*` 图像话题。
+实机模式下图像始终留在进程内，通过本地 MJPEG 源交给 go2rtc，避免大图像进入 DDS。
 
 go2rtc 视频流（默认端口 `1984`）：
 
@@ -82,7 +81,10 @@ go2rtc 视频流（默认端口 `1984`）：
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `model_path` | `str` | `""` | YOLO 模型 .pt 文件路径。为空时自动搜索默认路径 |
-| `publish_images` | `bool` | `false` | 是否转发拆分后的原始图像到 `/perception/image/*` |
+| `sim_mode` | `bool` | `false` | `true` 从 `/auv/*/stitched` 取图；`false` 从 V4L2 直接取图 |
+| `enable_gortc` | `bool` | `true` | 启用本地 MJPEG 服务和 go2rtc |
+| `mjpeg_port` | `int` | `8090` | vision 本地 MJPEG 端口 |
+| `gortc_http_port` | `int` | `1984` | go2rtc HTTP/WebRTC 端口 |
 | `stream_annotated` | `bool` | `true` | 是否通过 go2rtc 转发带检测框的视频 |
 
 ### 图像拆分
@@ -263,7 +265,7 @@ ros2 launch uv_bringup sim_bringup.py
 ros2 launch uv_bringup sim_bringup.py enable_ai:=false
 
 # 开启图像转发 (调试用)
-ros2 run uv_perception vision --ros-args -p publish_images:=true
+ros2 run uv_perception vision --ros-args -p stream_annotated:=false
 ```
 
 ---

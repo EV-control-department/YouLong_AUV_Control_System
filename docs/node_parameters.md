@@ -22,7 +22,7 @@
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `sim_mode` | bool | `true` | `true`: 订阅 `/auv/*/stitched` ROS 话题<br>`false`: 使用 V4L2 设备直接采集 |
+| `sim_mode` | bool | `false` | `true`: 订阅 `/auv/*/stitched` ROS 话题<br>`false`: 使用 V4L2 设备直接采集 |
 | `front_cam_path` | str | `/dev/video0` | 前视摄像头 V4L2 设备路径（仅 real 模式） |
 | `down_cam_path` | str | `/dev/video2` | 下视摄像头 V4L2 设备路径（仅 real 模式） |
 
@@ -30,8 +30,9 @@
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `publish_images` | bool | `false` | 发布拆分后的原始图像到 `/perception/image/*` |
-| `publish_annotated` | bool | `false` | 发布带 YOLO 检测框的标注图像到 `/perception/annotated/*` |
+| `enable_gortc` | bool | `true` | 启用本地 MJPEG 源和 go2rtc 子进程 |
+| `mjpeg_port` | int | `8090` | vision 本地 MJPEG 服务端口 |
+| `gortc_http_port` | int | `1984` | go2rtc HTTP/WebRTC 服务端口 |
 | `stream_annotated` | bool | `true` | 通过 go2rtc 提供带检测框的视频流 `front_annotated/down_annotated` |
 
 ### 模型与数据集
@@ -82,11 +83,9 @@
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
 | `scenario_desc` | `wuurc_murc_2026_auv.scn` | Stonefish 场景文件 |
-| `publish_annotated` | `false` | 发布 YOLO 带框标注图像 |
-
 **用法：**
 ```bash
-ros2 launch uv_bringup sim_bringup.py enable_ai:=true publish_annotated:=true
+ros2 launch uv_bringup sim_bringup.py enable_ai:=true
 ```
 
 ### real_bringup.py
@@ -96,11 +95,9 @@ ros2 launch uv_bringup sim_bringup.py enable_ai:=true publish_annotated:=true
 | `enable_ai` | `true` | 启用 vision + position |
 | `enable_nav` | `true` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
-| `publish_annotated` | `false` | 发布 YOLO 带框标注图像 |
-
 **用法：**
 ```bash
-ros2 launch uv_bringup real_bringup.py publish_annotated:=true
+ros2 launch uv_bringup real_bringup.py
 ```
 
 ### hil_bringup.py
@@ -114,22 +111,18 @@ ros2 launch uv_bringup real_bringup.py publish_annotated:=true
 | `scenario` | `underwater_xunyun.scn` | Stonefish 场景文件 |
 | `serial_dev` | `/dev/ttyUSB0` | MCU 串口设备 |
 | `serial_baud` | `921600` | 串口波特率 |
-| `publish_annotated` | `false` | 发布 YOLO 带框标注图像 |
-
 **用法：**
 ```bash
-ros2 launch uv_bringup hil_bringup.py enable_ai:=true publish_annotated:=true
+ros2 launch uv_bringup hil_bringup.py enable_ai:=true
 ```
 
 ### perception_launch.py
 
-| 参数 | 说明 |
-|---|---|
-| `publish_annotated` | 发布 YOLO 带框标注图像（默认 `false`） |
+该启动文件不再提供图像发布参数；视频通过 go2rtc 查看。
 
 **用法：**
 ```bash
-ros2 launch uv_perception perception_launch.py publish_annotated:=true
+ros2 launch uv_perception perception_launch.py
 ```
 
 ## 话题参考
@@ -142,14 +135,8 @@ ros2 launch uv_perception perception_launch.py publish_annotated:=true
 | `/perception/detection/front_right` | `DetectionArray` | 前视右检测结果 |
 | `/perception/detection/down_left` | `DetectionArray` | 下视左检测结果 |
 | `/perception/detection/down_right` | `DetectionArray` | 下视右检测结果 |
-| `/perception/image/front_left` | `Image` | 前视左原始图像（需 enable） |
-| `/perception/image/front_right` | `Image` | 前视右原始图像（需 enable） |
-| `/perception/image/down_left` | `Image` | 下视左原始图像（需 enable） |
-| `/perception/image/down_right` | `Image` | 下视右原始图像（需 enable） |
-| `/perception/annotated/front_left` | `Image` | 前视左带框标注（需 enable） |
-| `/perception/annotated/front_right` | `Image` | 前视右带框标注（需 enable） |
-| `/perception/annotated/down_left` | `Image` | 下视左带框标注（需 enable） |
-| `/perception/annotated/down_right` | `Image` | 下视右带框标注（需 enable） |
+vision 不发布图像 DDS 话题；请通过 go2rtc 的 `front`、`down`、
+`front_annotated`、`down_annotated` 流查看视频。
 
 go2rtc 视频流：
 

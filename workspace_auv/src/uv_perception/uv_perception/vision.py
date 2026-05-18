@@ -1,16 +1,16 @@
-"""Vision node: camera image processing and YOLO detection.
+"""Vision node: camera capture, YOLO detection and go2rtc video streaming.
 
-Two modes (sim_mode parameter):
-  sim_mode=true  (default): subscribe to /auv/*/stitched ROS topics
-  sim_mode=false (real HW): capture from V4L2 devices via OpenCV
+Two input modes are supported:
+  sim_mode=true (default): subscribe to /auv/*/stitched ROS topics.
+  sim_mode=false: capture stitched frames directly from V4L2 with OpenCV.
 
-Stitched stereo images are split into left/right halves, YOLO runs on each
-independently. Output: 4 detection channels + 4 debug image channels.
+The real-hardware path deliberately does not create or publish ROS Image
+messages. Frames stay in-process for detection and are exposed to go2rtc via
+the local MJPEG server. Only detection, line-state and ArUco metadata use ROS.
 
 Parameters:
     model_path (str): Path to YOLO segmentation model .pt file.
-    publish_images (bool): Whether to forward split images (default: false).
-    sim_mode (bool): true=ROS images, false=V4L2 capture (default: true).
+    sim_mode (bool): true=ROS images, false=V4L2 capture (default: false).
     front_cam_path (str): V4L2 device path for front camera (real mode only).
     down_cam_path (str): V4L2 device path for down camera (real mode only).
 """
@@ -29,7 +29,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Header, Int32MultiArray
 
 from uv_msgs.msg import Detection, DetectionArray, LineState
 
@@ -78,11 +78,10 @@ GORTC_EXECUTABLE = 'go2rtc'
 STREAM_ANNOTATED = True              # 通过 go2rtc 额外提供带检测框的视频
 
 # ROS 参数默认值。
-PUBLISH_IMAGES = False               # 发布拆分后的左右原图
-PUBLISH_ANNOTATED = True             # 发布带检测框的图像
 SIM_MODE = False                      # False=V4L2，True=ROS stitched 话题
 SAVE_DATASET = False                  # 是否保存训练数据帧
 DATASET_DIR = ''                      # 空字符串=自动使用工程下的 img/
+DEFAULT_MODEL_FILENAME = 'WUURC2026REAL11nano--001.pt'
 
 
 class _ScalarKalman:
@@ -137,6 +136,9 @@ class _MjpegHandler(BaseHTTPRequestHandler):
                 404, 'use /front, /down, /front_annotated or /down_annotated')
             return
         camera, annotated = valid_streams[stream]
+        if annotated and (self.node is None or not self.node._stream_annotated):
+            self.send_error(404, 'annotated streams are disabled')
+            return
 
         self.send_response(200)
         self.send_header('Cache-Control', 'no-cache, private')
@@ -144,26 +146,31 @@ class _MjpegHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
         self.end_headers()
         try:
+            last_sequence = 0
             while rclpy.ok() and self.node is not None:
-                with self.node._stream_lock:
-                    jpeg_cache = (self.node._stream_annotated_jpegs
-                                  if annotated else self.node._stream_jpegs)
-                    payload = jpeg_cache.get(camera)
-                if payload is None:
-                    time.sleep(0.02)
-                    continue
+                result = self.node._wait_for_stream_frame(
+                    camera, annotated, last_sequence)
+                if result is None:
+                    break
+                payload, last_sequence = result
                 self.wfile.write(
                     b'--frame\r\nContent-Type: image/jpeg\r\n'
                     + f'Content-Length: {len(payload)}\r\n\r\n'.encode('ascii'))
                 self.wfile.write(payload)
                 self.wfile.write(b'\r\n')
                 self.wfile.flush()
-                time.sleep(0.03)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
     def log_message(self, *_args):
         pass
+
+
+class _MjpegServer(ThreadingHTTPServer):
+    """MJPEG server whose client threads cannot keep node shutdown alive."""
+
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 def _import_cv_bridge():
@@ -182,20 +189,26 @@ class VisionNode(Node):
     def __init__(self):
         super().__init__('vision')
 
-        self.declare_parameter('publish_images', PUBLISH_IMAGES)
-        self._publish_images = self.get_parameter('publish_images').get_parameter_value().bool_value
-
-        self.declare_parameter('publish_annotated', PUBLISH_ANNOTATED)
-        self._publish_annotated = self.get_parameter('publish_annotated').get_parameter_value().bool_value
-
         self.declare_parameter('sim_mode', SIM_MODE)
         self._sim_mode = self.get_parameter('sim_mode').get_parameter_value().bool_value
 
+        self.declare_parameter('enable_gortc', ENABLE_GORTC)
+        self._enable_gortc = self.get_parameter(
+            'enable_gortc').get_parameter_value().bool_value
         self.declare_parameter('gortc_executable', GORTC_EXECUTABLE)
         self.declare_parameter('gortc_http_port', GORTC_HTTP_PORT)
+        self.declare_parameter('mjpeg_port', VISION_MJPEG_PORT)
         self.declare_parameter('stream_annotated', STREAM_ANNOTATED)
         self._stream_annotated = self.get_parameter(
             'stream_annotated').get_parameter_value().bool_value
+        self._mjpeg_port = self.get_parameter(
+            'mjpeg_port').get_parameter_value().integer_value
+        gortc_port = self.get_parameter(
+            'gortc_http_port').get_parameter_value().integer_value
+        if not 1 <= self._mjpeg_port <= 65535:
+            raise ValueError(f'mjpeg_port out of range: {self._mjpeg_port}')
+        if not 1 <= gortc_port <= 65535:
+            raise ValueError(f'gortc_http_port out of range: {gortc_port}')
 
         self.declare_parameter('enable_front_camera', ENABLE_FRONT_CAMERA)
         self.declare_parameter('enable_down_camera', ENABLE_DOWN_CAMERA)
@@ -228,34 +241,44 @@ class VisionNode(Node):
         self._confidence = CONFIDENCE
         self._model_loaded = False
         self._cv_bridge_ok = False
+        self._inference_lock = threading.Lock()
         self._front_cap = None
         self._down_cap = None
         self._gortc_process = None
         self._gortc_config = None
+        self._mjpeg_server = None
 
         # 线程锁及流媒体相关
         self._vision_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='vision')
         self._processing_lock = threading.Lock()
         self._processing = {'front': False, 'down': False}
+        # 每个相机只保留最新待处理帧，避免推理慢时积压旧帧。
+        self._pending_work = {'front': None, 'down': None}
         self._stream_lock = threading.Lock()
-        self._stream_frames = {'front': None, 'down': None}
         self._stream_jpegs = {'front': None, 'down': None}
         self._stream_annotated_jpegs = {'front': None, 'down': None}
+        self._stream_sequence = {'front': 0, 'down': 0}
+        self._stream_annotated_sequence = {'front': 0, 'down': 0}
+        self._stream_condition = threading.Condition(self._stream_lock)
+        self._stream_stop = threading.Event()
         self._stream_frame_count = {'front': 0, 'down': 0}
         self._capture_frame_logged = {'front': False, 'down': False}
         self._capture_stop = threading.Event()
         self._capture_threads = []
 
-        if ENABLE_GORTC:
-            self._start_mjpeg_server()
-            self._start_gortc()
+        if self._enable_gortc:
+            if self._start_mjpeg_server():
+                self._start_gortc()
 
-        try:
-            _import_cv_bridge()
-            self.bridge = CvBridge()
-            self._cv_bridge_ok = True
-        except Exception as e:
-            self.get_logger().warn(f'cv_bridge not available: {e}')
+        # Real hardware frames remain as OpenCV arrays. cv_bridge is only
+        # needed when simulation supplies sensor_msgs/Image input.
+        if self._sim_mode:
+            try:
+                _import_cv_bridge()
+                self.bridge = CvBridge()
+                self._cv_bridge_ok = True
+            except Exception as e:
+                self.get_logger().error(f'cv_bridge not available in sim mode: {e}')
 
         self._init_undistort()
         self._load_model()
@@ -294,46 +317,44 @@ class VisionNode(Node):
                         name=f'capture-{camera}', daemon=True)
                     self._capture_threads.append(thread)
                     thread.start()
+                elif cap is not None:
+                    self.get_logger().error(f'Cannot open {camera} camera: {front_path if camera == "front" else down_path}')
             self.get_logger().info(f'Vision node started (real mode: front={front_path}, down={down_path})')
 
-        # Publishers
+        # Detection and state publishers. Image publishers are intentionally
+        # absent: video is served through the local MJPEG endpoint/go2rtc.
         self.pub_det = {
             'front_left':  self.create_publisher(DetectionArray, '/perception/detection/front_left', 10),
             'front_right': self.create_publisher(DetectionArray, '/perception/detection/front_right', 10),
             'down_left':   self.create_publisher(DetectionArray, '/perception/detection/down_left', 10),
             'down_right':  self.create_publisher(DetectionArray, '/perception/detection/down_right', 10),
         }
-        self.pub_img = {
-            'front_left':  self.create_publisher(Image, '/perception/image/front_left', 10),
-            'front_right': self.create_publisher(Image, '/perception/image/front_right', 10),
-            'down_left':   self.create_publisher(Image, '/perception/image/down_left', 10),
-            'down_right':  self.create_publisher(Image, '/perception/image/down_right', 10),
-        }
-        self.pub_annotated = {
-            'front_left':  self.create_publisher(Image, '/perception/annotated/front_left', 10),
-            'front_right': self.create_publisher(Image, '/perception/annotated/front_right', 10),
-            'down_left':   self.create_publisher(Image, '/perception/annotated/down_left', 10),
-            'down_right':  self.create_publisher(Image, '/perception/annotated/down_right', 10),
-        }
-        # 新增巡线状态 Publisher
         self.pub_line = {
             name: self.create_publisher(LineState, f'/perception/line/{name}', 10)
             for name in self.pub_det
         }
 
         # ── ArUco detection (迁移自仿真节点) ─────────────────────────────────────────
-        self._aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-        self._aruco_params = cv2.aruco.DetectorParameters()
-        self._aruco_detector = cv2.aruco.ArucoDetector(self._aruco_dict, self._aruco_params)
+        self._aruco_detector = None
+        try:
+            aruco = getattr(cv2, 'aruco')
+            aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_1000)
+            aruco_params = aruco.DetectorParameters()
+            self._aruco_detector = aruco.ArucoDetector(aruco_dict, aruco_params)
+        except (AttributeError, cv2.error) as e:
+            self.get_logger().warn(f'OpenCV ArUco unavailable, marker detection disabled: {e}')
         self._aruco_pub = self.create_publisher(Int32MultiArray, '/perception/aruco/ids', 10)
         self._aruco_lock = threading.Lock()
         self._aruco_frames = None  # (left_img, right_img) for ArUco thread
-        self._aruco_thread = threading.Thread(target=self._aruco_loop, daemon=True)
-        self._aruco_thread.start()
+        self._aruco_stop = threading.Event()
+        self._aruco_thread = None
+        if self._aruco_detector is not None:
+            self._aruco_thread = threading.Thread(target=self._aruco_loop, daemon=True)
+            self._aruco_thread.start()
 
     def _aruco_loop(self):
         """Background thread: detect ArUco markers on front camera halves."""
-        while rclpy.ok():
+        while rclpy.ok() and not self._aruco_stop.is_set():
             with self._aruco_lock:
                 frames = self._aruco_frames
                 self._aruco_frames = None
@@ -350,19 +371,29 @@ class VisionNode(Node):
                     self._aruco_pub.publish(msg)
                 except Exception as e:
                     self.get_logger().warn(f'ArUco detection error: {e}')
-            time.sleep(0.05)  # ~20 Hz
+            self._aruco_stop.wait(0.05)  # ~20 Hz
 
     def _start_mjpeg_server(self):
         try:
             _MjpegHandler.node = self
-            self._mjpeg_server = ThreadingHTTPServer(('0.0.0.0', VISION_MJPEG_PORT), _MjpegHandler)
-            threading.Thread(target=self._mjpeg_server.serve_forever, name='vision-mjpeg', daemon=True).start()
-        except OSError as e:
-            self.get_logger().error(f'Cannot open MJPEG port {VISION_MJPEG_PORT}: {e}')
+            self._mjpeg_server = _MjpegServer(
+                ('0.0.0.0', self._mjpeg_port), _MjpegHandler)
+            threading.Thread(
+                target=self._mjpeg_server.serve_forever,
+                name='vision-mjpeg', daemon=True).start()
+            self.get_logger().info(f'Local MJPEG server listening on port {self._mjpeg_port}')
+            return True
+        except (OSError, ValueError) as e:
+            self._mjpeg_server = None
+            _MjpegHandler.node = None
+            self.get_logger().error(f'Cannot open MJPEG port {self._mjpeg_port}: {e}')
+            return False
 
     def _start_gortc(self):
         executable = self._find_gortc()
         if executable is None:
+            self.get_logger().warn(
+                'go2rtc executable not found; local MJPEG remains available')
             return
 
         port = self.get_parameter('gortc_http_port').get_parameter_value().integer_value
@@ -371,26 +402,32 @@ class VisionNode(Node):
             'api:\n'
             f'  listen: ":{port}"\n'
             'streams:\n'
-            f'  front: "http://127.0.0.1:{VISION_MJPEG_PORT}/front"\n'
-            f'  down: "http://127.0.0.1:{VISION_MJPEG_PORT}/down"\n'
+            f'  front: "http://127.0.0.1:{self._mjpeg_port}/front"\n'
+            f'  down: "http://127.0.0.1:{self._mjpeg_port}/down"\n'
         )
         if self._stream_annotated:
             config += (
-                f'  front_annotated: "http://127.0.0.1:{VISION_MJPEG_PORT}/front_annotated"\n'
-                f'  down_annotated: "http://127.0.0.1:{VISION_MJPEG_PORT}/down_annotated"\n'
+                f'  front_annotated: "http://127.0.0.1:{self._mjpeg_port}/front_annotated"\n'
+                f'  down_annotated: "http://127.0.0.1:{self._mjpeg_port}/down_annotated"\n'
             )
         try:
             with open(self._gortc_config, 'w', encoding='utf-8') as config_file:
                 config_file.write(config)
             self._gortc_process = subprocess.Popen(
                 [executable, '-config', self._gortc_config],
-                stdout=None, stderr=None)
+                stdin=subprocess.DEVNULL,
+                stdout=None,
+                stderr=None,
+            )
+            if self._gortc_process.poll() is not None:
+                raise RuntimeError(
+                    f'go2rtc exited immediately with code {self._gortc_process.returncode}')
             streams = 'front, down'
             if self._stream_annotated:
                 streams += ', front_annotated, down_annotated'
             self.get_logger().info(
                 f'go2rtc started on port {port}; web UI streams: {streams}')
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, RuntimeError) as e:
             self.get_logger().error(f'Failed to start go2rtc: {e}')
 
     def _find_gortc(self):
@@ -413,18 +450,30 @@ class VisionNode(Node):
         return None
 
     def destroy_node(self):
+        self._stream_stop.set()
+        with self._stream_condition:
+            self._stream_condition.notify_all()
+        _MjpegHandler.node = None
+
         if self._mjpeg_server is not None:
             self._mjpeg_server.shutdown()
             self._mjpeg_server.server_close()
         self._capture_stop.set()
         for thread in self._capture_threads:
             thread.join(timeout=1.0)
+        self._aruco_stop.set()
+        if self._aruco_thread is not None:
+            self._aruco_thread.join(timeout=1.0)
         self._vision_pool.shutdown(wait=True, cancel_futures=True)
         for cap in (self._front_cap, self._down_cap):
             if cap is not None:
                 cap.release()
         if self._gortc_process is not None and self._gortc_process.poll() is None:
             self._gortc_process.terminate()
+            try:
+                self._gortc_process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                self._gortc_process.kill()
         if self._gortc_config:
             try:
                 os.unlink(self._gortc_config)
@@ -439,21 +488,44 @@ class VisionNode(Node):
         self.declare_parameter('down_dist_coeffs', list(DOWN_DIST_COEFFS))
 
         def _load_calib(prefix):
-            K = np.array(self.get_parameter(f'{prefix}_camera_matrix').get_parameter_value().double_array_value, dtype=np.float32).reshape(3, 3)
-            D = np.array(self.get_parameter(f'{prefix}_dist_coeffs').get_parameter_value().double_array_value, dtype=np.float32)
-            return K, D
+            try:
+                k_values = self.get_parameter(
+                    f'{prefix}_camera_matrix').get_parameter_value().double_array_value
+                d_values = self.get_parameter(
+                    f'{prefix}_dist_coeffs').get_parameter_value().double_array_value
+                if len(k_values) != 9:
+                    raise ValueError(f'camera matrix has {len(k_values)} values, expected 9')
+                if len(d_values) not in (4, 5, 8, 12, 14):
+                    raise ValueError(
+                        f'distortion coefficients have {len(d_values)} values')
+                return (
+                    np.array(k_values, dtype=np.float32).reshape(3, 3),
+                    np.array(d_values, dtype=np.float32),
+                )
+            except (TypeError, ValueError) as e:
+                self.get_logger().error(
+                    f'Invalid {prefix} camera calibration ({e}); undistortion disabled for it')
+                return None, None
 
         self._front_K, self._front_D = _load_calib('front')
         self._down_K, self._down_D = _load_calib('down')
 
     def _load_model(self):
+        self.declare_parameter('model_path', '')
+        model_path = self.get_parameter('model_path').get_parameter_value().string_value.strip()
         try:
             from ultralytics import YOLO
-            self.declare_parameter('model_path', '/home/nvidia/YouLong_AUV_Control_System/workspace_auv/src/datas/WUURC2026REAL11nano--001.pt')
-            model_path = self.get_parameter('model_path').get_parameter_value().string_value
-
             if not model_path:
-                for candidate in [os.path.expanduser('~/YouLong_AUV_Control_System/workspace_auv/src/datas/WUURC2026REAL11nano--001.pt')]:
+                repo_dir = os.path.abspath(os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), '..', '..', '..'))
+                candidates = [
+                    os.path.expanduser(
+                        f'~/YouLong_AUV_Control_System/workspace_auv/src/datas/{DEFAULT_MODEL_FILENAME}'),
+                    os.path.join(
+                        repo_dir, 'workspace_auv', 'src', 'datas', DEFAULT_MODEL_FILENAME),
+                    os.path.join(repo_dir, 'datas', DEFAULT_MODEL_FILENAME),
+                ]
+                for candidate in candidates:
                     if os.path.exists(candidate):
                         model_path = candidate
                         break
@@ -466,6 +538,8 @@ class VisionNode(Node):
                 self.get_logger().warn(f'YOLO model not found, detection disabled')
         except ImportError:
             self.get_logger().warn('ultralytics not installed, detection disabled')
+        except Exception as e:
+            self.get_logger().error(f'Failed to load YOLO model, detection disabled: {e}')
 
     def _front_img_cb(self, msg: Image):
         self._submit_image(msg, 'front')
@@ -474,30 +548,93 @@ class VisionNode(Node):
         self._submit_image(msg, 'down')
 
     def _submit_image(self, msg: Image, camera: str):
+        """Queue the latest ROS image without allowing executor backlog."""
+        if not self._cv_bridge_ok:
+            return
+        self._submit_work(camera, ('ros_image', msg))
+
+    def _submit_frame(self, frame, camera: str, stamp=None, raw_streamed=False):
+        """Queue a native OpenCV frame; no ROS Image is created."""
+        self._submit_work(camera, ('opencv', frame, stamp, raw_streamed))
+
+    def _submit_work(self, camera: str, work):
+        if camera not in self._processing:
+            self.get_logger().error(f'Unknown camera source: {camera}')
+            return
+
         with self._processing_lock:
+            self._pending_work[camera] = work
             if self._processing[camera]:
                 return
             self._processing[camera] = True
 
         def worker():
-            try:
-                self._process_image(msg, camera)
-            finally:
+            while True:
                 with self._processing_lock:
-                    self._processing[camera] = False
+                    work_item = self._pending_work[camera]
+                    self._pending_work[camera] = None
+                    if work_item is None:
+                        self._processing[camera] = False
+                        return
+                try:
+                    self._process_work(work_item, camera)
+                except Exception as e:
+                    self.get_logger().error(
+                        f'Frame processing failed ({camera}): {e}')
 
-        self._vision_pool.submit(worker)
-
-    def _process_image(self, msg: Image, camera: str):
-        if not self._cv_bridge_ok:
-            return
         try:
-            cv_img = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-        except Exception as e:
+            self._vision_pool.submit(worker)
+        except RuntimeError as e:
+            with self._processing_lock:
+                self._pending_work[camera] = None
+                self._processing[camera] = False
+            self.get_logger().warn(f'Cannot schedule {camera} frame: {e}')
+
+    def _process_work(self, work, camera: str):
+        source = work[0]
+        if source == 'ros_image':
+            msg = work[1]
+            try:
+                cv_img = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+            except Exception as e:
+                self.get_logger().warn(f'Image conversion failed ({camera}): {e}')
+                return
+            self._process_frame(msg.header, cv_img, camera)
+            return
+
+        if source == 'opencv':
+            frame, stamp, raw_streamed = work[1], work[2], work[3]
+            header = Header()
+            header.stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
+            self._process_frame(header, frame, camera, not raw_streamed)
+            return
+
+        raise ValueError(f'unknown frame source {source!r}')
+
+    @staticmethod
+    def _normalize_frame(frame):
+        if not isinstance(frame, np.ndarray) or frame.size == 0:
+            return None
+        if frame.ndim == 2:
+            return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        if frame.ndim != 3 or frame.shape[2] not in (3, 4):
+            return None
+        if frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        return frame
+
+    def _process_frame(self, header, frame, camera: str, update_raw_stream=True):
+        cv_img = self._normalize_frame(frame)
+        if cv_img is None:
+            self.get_logger().warn(f'Invalid {camera} frame, dropping it')
+            return
+        if cv_img.shape[0] < 2 or cv_img.shape[1] < 2:
+            self.get_logger().warn(f'{camera} frame is too small: {cv_img.shape}')
             return
 
         # 给客户端缓存最新原图，不依赖 YOLO 是否加载成功。
-        self._update_stream_frame(camera, cv_img)
+        if update_raw_stream:
+            self._update_stream_frame(camera, cv_img)
 
         if not self._model_loaded:
             self._update_annotated_stream(camera, cv_img)
@@ -508,7 +645,7 @@ class VisionNode(Node):
 
         h, w = cv_img.shape[:2]
         mid = w // 2
-        if ENABLE_UNDISTORT:
+        if ENABLE_UNDISTORT and K is not None and D is not None:
             left_img = cv2.undistort(cv_img[:, :mid], K, D)
             right_img = cv2.undistort(cv_img[:, mid:], K, D)
         else:
@@ -516,7 +653,7 @@ class VisionNode(Node):
             right_img = cv_img[:, mid:]
 
         # 提供给 ArUco 线程
-        if camera == 'front':
+        if camera == 'front' and self._aruco_detector is not None:
             with self._aruco_lock:
                 self._aruco_frames = (left_img.copy(), right_img.copy())
 
@@ -528,28 +665,18 @@ class VisionNode(Node):
             self._save_frame(right_img, right_name)
 
         # Run detection & filtering on left half
-        det_left, polys_left, line_left, debug_info_left = self._detect(msg.header, left_name, left_img)
+        det_left, polys_left, line_left, debug_info_left = self._detect(header, left_name, left_img)
         self.pub_det[left_name].publish(det_left)
         self.pub_line[left_name].publish(line_left)
         annotated_left = self._draw_boxes(
             left_img, det_left, polys_left, line_left, debug_info_left)
-        if self._publish_images:
-            self.pub_img[left_name].publish(self.bridge.cv2_to_imgmsg(left_img, 'bgr8'))
-        if self._publish_annotated:
-            self.pub_annotated[left_name].publish(
-                self.bridge.cv2_to_imgmsg(annotated_left, 'bgr8'))
 
         # Run detection & filtering on right half
-        det_right, polys_right, line_right, debug_info_right = self._detect(msg.header, right_name, right_img)
+        det_right, polys_right, line_right, debug_info_right = self._detect(header, right_name, right_img)
         self.pub_det[right_name].publish(det_right)
         self.pub_line[right_name].publish(line_right)
         annotated_right = self._draw_boxes(
             right_img, det_right, polys_right, line_right, debug_info_right)
-        if self._publish_images:
-            self.pub_img[right_name].publish(self.bridge.cv2_to_imgmsg(right_img, 'bgr8'))
-        if self._publish_annotated:
-            self.pub_annotated[right_name].publish(
-                self.bridge.cv2_to_imgmsg(annotated_right, 'bgr8'))
 
         # go2rtc 的标注流使用与输入相同的拼接布局。检测完成后再替换
         # 缓存，因此客户端拿到的是“识别+画框”后的帧。
@@ -560,10 +687,13 @@ class VisionNode(Node):
         """Update the raw MJPEG frame cache consumed by go2rtc."""
         ok, encoded = cv2.imencode(
             '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        with self._stream_lock:
-            self._stream_frames[camera] = frame
-            if ok:
-                self._stream_jpegs[camera] = encoded.tobytes()
+        if not ok:
+            self.get_logger().warn(f'JPEG encoding failed for {camera} raw stream')
+            return
+        with self._stream_condition:
+            self._stream_jpegs[camera] = encoded.tobytes()
+            self._stream_sequence[camera] += 1
+            self._stream_condition.notify_all()
 
     def _update_annotated_stream(self, camera: str, frame):
         """Update the annotated MJPEG frame cache consumed by go2rtc."""
@@ -571,9 +701,29 @@ class VisionNode(Node):
             return
         ok, encoded = cv2.imencode(
             '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        with self._stream_lock:
-            if ok:
-                self._stream_annotated_jpegs[camera] = encoded.tobytes()
+        if not ok:
+            self.get_logger().warn(
+                f'JPEG encoding failed for {camera} annotated stream')
+            return
+        with self._stream_condition:
+            self._stream_annotated_jpegs[camera] = encoded.tobytes()
+            self._stream_annotated_sequence[camera] += 1
+            self._stream_condition.notify_all()
+
+    def _wait_for_stream_frame(self, camera: str, annotated: bool, last_sequence: int):
+        """Wait for a newer encoded frame, returning None during shutdown."""
+        sequence_cache = (
+            self._stream_annotated_sequence if annotated else self._stream_sequence)
+        jpeg_cache = (
+            self._stream_annotated_jpegs if annotated else self._stream_jpegs)
+        with self._stream_condition:
+            while not self._stream_stop.is_set():
+                sequence = sequence_cache[camera]
+                payload = jpeg_cache[camera]
+                if payload is not None and sequence != last_sequence:
+                    return payload, sequence
+                self._stream_condition.wait(timeout=0.5)
+        return None
 
     def _detect(self, header, camera_name: str, cv_img) -> tuple:
         """运行 YOLO 并在同一模型上提取 LineState 及调试信息。"""
@@ -590,7 +740,10 @@ class VisionNode(Node):
         debug_info = {}
 
         try:
-            results = self._model(cv_img, conf=self._confidence, verbose=False)
+            # Ultralytics/PyTorch models are shared by the front and down
+            # workers; serialize inference to avoid backend races.
+            with self._inference_lock:
+                results = self._model(cv_img, conf=self._confidence, verbose=False)
         except Exception as e:
             self.get_logger().error(f'YOLO inference failed ({camera_name}): {e}')
             return det_array, polygons, line_state, debug_info
@@ -750,13 +903,22 @@ class VisionNode(Node):
         cv2.imwrite(fname, img)
 
     def _capture_camera_loop(self, cap, camera: str):
+        read_failures = 0
         while not self._capture_stop.is_set():
             ret, frame = cap.read()
             if not ret:
-                time.sleep(0.01)
+                read_failures = min(read_failures + 1, 6)
+                time.sleep(min(0.5, 0.01 * (2 ** read_failures)))
+                continue
+            read_failures = 0
+
+            normalized = self._normalize_frame(frame)
+            if normalized is None:
+                self.get_logger().warn(f'Invalid frame received from {camera} camera')
                 continue
 
-            self._update_stream_frame(camera, frame)
+            # Raw video is updated at capture rate, independently of YOLO speed.
+            self._update_stream_frame(camera, normalized)
             with self._stream_lock:
                 self._stream_frame_count[camera] += 1
                 frame_count = self._stream_frame_count[camera]
@@ -765,10 +927,12 @@ class VisionNode(Node):
                 self._capture_frame_logged[camera] = True
                 self.get_logger().info(f'{camera} camera frame received: shape={frame.shape}, stream_frames={frame_count}')
 
-            if self._cv_bridge_ok:
-                img_msg = self.bridge.cv2_to_imgmsg(frame, 'bgr8')
-                img_msg.header.stamp = self.get_clock().now().to_msg()
-                self._submit_image(img_msg, camera)
+            self._submit_frame(
+                normalized,
+                camera,
+                self.get_clock().now().to_msg(),
+                raw_streamed=True,
+            )
 
 
 def main(args=None):

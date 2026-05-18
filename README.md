@@ -52,6 +52,79 @@ colcon build && source install/setup.bash
 ros2 launch uv_bringup sim_bringup.py
 ```
 
+## 一键部署到 AUV 电脑
+
+项目提供了基于 `rsync` 的部署脚本，默认同步到 `nvidia@192.168.16.10:~/YouLong_AUV_Control_System`：
+
+```bash
+# 首次使用前确认本机和目标机已安装 ssh、rsync，并配置好 SSH 登录
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh
+```
+
+为了真正做到一键执行，建议先配置 SSH 公钥登录；部署脚本不会保存 SSH 密码：
+
+```bash
+ssh-copy-id nvidia@192.168.16.10
+ssh nvidia@192.168.16.10
+```
+
+脚本默认不会同步 `.git`、ROS 2 的 `build/install/log` 和 Python 缓存。建议首次部署先执行预览：
+
+```bash
+./scripts/deploy.sh --dry-run
+```
+
+如果只想按文件内容 checksum 检查并部署指定文件：
+
+```bash
+./scripts/deploy.sh --checksum --dry-run \
+  workspace_auv/src/uv_perception/uv_perception/vision.py
+./scripts/deploy.sh --checksum \
+  workspace_auv/src/uv_perception/uv_perception/vision.py
+```
+
+也可以同时指定多个文件或目录：
+
+```bash
+./scripts/deploy.sh --checksum \
+  workspace_auv/src/uv_perception/uv_perception/vision.py \
+  workspace_auv/src/uv_perception/config
+```
+
+`--checksum` 会让 rsync 读取本地和远端文件内容进行比较，只传输内容不同的文件。
+指定路径时不能同时使用 `--delete`。
+
+也可以直接让 Git 生成部署文件列表。部署当前工作区相对 `HEAD` 的修改：
+
+```bash
+./scripts/deploy.sh --git-changed --checksum --dry-run
+./scripts/deploy.sh --git-changed --checksum
+```
+
+部署某个提交范围内的文件：
+
+```bash
+./scripts/deploy.sh --git-range HEAD~1..HEAD --checksum
+```
+
+Git 删除的文件不会被选择性部署删除；如需删除远端多余文件，请确认后对整个项目使用 `--delete`。
+
+如需让远端目录与本地完全一致，可显式启用删除模式：
+
+```bash
+./scripts/deploy.sh --delete
+```
+
+目标地址、目录、SSH 端口和私钥可通过环境变量覆盖：
+
+```bash
+DEPLOY_HOST=192.168.16.10 \
+DEPLOY_PATH='~/YouLong_AUV_Control_System' \
+SSH_KEY=~/.ssh/auv \
+./scripts/deploy.sh
+```
+
 ## 项目状态
 
 > ⚠️ **本项目处于早期开发阶段。以下内容反映当前已知状态，不完整且可能过时。**
