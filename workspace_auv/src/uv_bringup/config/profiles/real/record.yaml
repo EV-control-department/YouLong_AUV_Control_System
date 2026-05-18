@@ -31,6 +31,9 @@ arguments:
   # 真机相机设备映射：前视 video2，下视 video0；可用 launch 参数覆盖。
   front_camera_device: /dev/video2
   down_camera_device: /dev/video0
+  # NVIDIA 真机模型绝对路径；可用 launch 参数覆盖。
+  front_model_path: /home/nvidia/dev/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ6_aug.pt
+  down_model_path: /home/nvidia/dev/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ7_aug.pt
   enable_nav: false
   enable_stream: false
   record_session: true

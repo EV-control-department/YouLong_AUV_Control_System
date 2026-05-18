@@ -215,10 +215,10 @@ def test_full_drop_sequence_holds_depth_through_release(rig, monkeypatch):
     assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 90.)]*3+[(2, 270.)]*3
     holds = [call for call in rig.calls if call[0] == 'action']
     assert len(holds) == 3
-    # The ball command follows successful arrival of both claws.
+    # Release the ball before moving to the hairpin target, then release the ring.
     events = [call[0] for call in rig.calls if call[0] in ('action', 'servo')]
-    assert events == ['action', 'action', 'action', 'servo', 'servo', 'servo',
-                      'servo', 'servo', 'servo']
+    assert events == ['action', 'action', 'servo', 'servo', 'servo',
+                      'action', 'servo', 'servo', 'servo']
     assert all(call[3] == 'xyzrz' and call[2][2] == .2 for call in holds)
 
 
@@ -302,7 +302,7 @@ def test_failed_ring_alignment_or_cancellation_prevents_further_release(rig, mon
     assert not result
     if failure in ('missing_tf', 'alignment_motion'):
         assert result.failure_code.endswith('.ring_alignment')
-        assert rig.messages == []
+        assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 90.)]*3
     elif failure == 'cancel_ball':
         assert [msg.servo_id for msg in rig.messages] == [1]
     else:

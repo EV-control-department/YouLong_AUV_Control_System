@@ -56,27 +56,27 @@ params:
     command_timeout: 10.0 # 速度伺服结束后的定点保持超时，单位：秒。
 
   # 保存本次相机居中位姿，按相机到disc_claw_link/hairpin_claw_link的TF
-  # 依次计算两个夹爪的SET目标；到点超时后继续，完成两次尝试后仍发送放球指令。
+  # 先圆盘爪SET定位并放球，再发夹爪SET定位并放环；各自到点超时也释放。
   alignment:
-    timeout: 10.0 # 每只夹爪等待到点的上限；到点超时后仍继续尝试并放球。
-    settle_seconds: 0.5 # 确认到点后再稳定这些秒，然后处理下一只爪子。
+    timeout: 10.0 # 每只夹爪等待到点的上限；超时后仍发送该爪子的释放指令。
+    settle_seconds: 0.5 # 每只爪子确认到点后稳定这些秒，再释放该爪子。
 
   # 固定使用 servo 1。本任务 ZitServo.angle 直接发送度数，90° 对应 angle=90.0。
   release:
     angle_deg: 90.0
     repeat_count: 3 # 同一释放角重复发送，降低单条消息丢失影响。
     repeat_period: 0.1 # 重发间隔，单位：秒。
-    settle_seconds: 1.0 # 两只爪子均到位后放球；等待机械动作，再发送放环指令。
+    settle_seconds: 1.0 # 圆盘爪放球后等待机械动作，再开始发夹爪定位。
 
   # 固定使用servo 2。放球后发夹爪对准同一rack点，重复发送松开角度。
   ring_release:
-    angle_deg: 210.0 # 发夹爪servo 2释放角，直接发送angle=270.0。
+    angle_deg: 210.0 # 发夹爪servo 2释放角，直接发送angle=210.0。
     repeat_count: 3
     repeat_period: 0.1
     settle_seconds: 1.0 # 放环后等待机械动作，再闪1次绿灯完成提示。
 
   # 前视观察黄灯，看到目标后 yaw 对准完成闪1次绿灯；未看到前视目标闪1次红灯。
-  # BLINE和外参SETPOINT不亮灯；下视看到rack、伺服成功、放球、放环各闪1次绿灯。
+  # BLINE和外参SET定位不亮灯；下视看到rack、伺服成功、放球、放环各闪1次绿灯。
   light:
     pulse_seconds: 0.35
     gap_seconds: 0.25

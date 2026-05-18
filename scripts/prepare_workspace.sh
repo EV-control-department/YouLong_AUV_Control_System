@@ -122,12 +122,30 @@ ensure_iceoryx_python() {
     flatbuffers_wheel="$(find "${ICEORYX_DIST}" -maxdepth 1 -type f \
         -name 'flatbuffers-25.12.19-*.whl' -print | sort | tail -n 1)"
     if [[ -z "${flatbuffers_wheel}" ]]; then
-        log '缺少离线依赖 flatbuffers==25.12.19，请将对应 wheel 放入 .docker/iceoryx2/dist/'
-        exit 1
+        local flatbuffers_version
+        flatbuffers_version="$("${VENV_PYTHON}" -c \
+            'import importlib.metadata as m; print(m.version("flatbuffers"))' \
+            2>/dev/null || true)"
+        if [[ "${flatbuffers_version}" == '25.12.19' ]]; then
+            log '复用已安装 flatbuffers==25.12.19'
+        else
+            log '本地没有 flatbuffers==25.12.19 wheel，尝试下载到 .docker/iceoryx2/dist/'
+            "${VENV_PYTHON}" -m pip download \
+                --disable-pip-version-check --only-binary=:all: --no-deps \
+                --dest "${ICEORYX_DIST}" 'flatbuffers==25.12.19'
+            flatbuffers_wheel="$(find "${ICEORYX_DIST}" -maxdepth 1 -type f \
+                -name 'flatbuffers-25.12.19-*.whl' -print | sort | tail -n 1)"
+            if [[ -z "${flatbuffers_wheel}" ]]; then
+                log 'flatbuffers==25.12.19 wheel is still missing after download'
+                exit 1
+            fi
+        fi
     fi
-    "${VENV_PYTHON}" -m pip install \
-        --disable-pip-version-check --no-index --force-reinstall \
-        "${flatbuffers_wheel}"
+    if [[ -n "${flatbuffers_wheel}" ]]; then
+        "${VENV_PYTHON}" -m pip install \
+            --disable-pip-version-check --no-index --force-reinstall \
+            "${flatbuffers_wheel}"
+    fi
 
     # The wheel metadata still declares flatbuffers; --no-deps prevents pip
     # from contacting PyPI a second time while installing the local binding.

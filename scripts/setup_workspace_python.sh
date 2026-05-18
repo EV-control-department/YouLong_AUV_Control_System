@@ -38,6 +38,7 @@ then
 fi
 
 "${venv_dir}/bin/python" - <<'PY'
+import platform
 import sys
 import pip
 from pip._vendor.packaging.tags import sys_tags
@@ -45,14 +46,19 @@ from pip._vendor.packaging.tags import sys_tags
 if sys.version_info < (3, 8):
     raise SystemExit(f"Python 3.8 or newer is required, got {sys.version}")
 
-# Tags include the interpreter/ABI prefix, for example:
-# cp38-abi3-manylinux_2_28_x86_64.
+machine = platform.machine().lower()
+if machine not in {"x86_64", "aarch64"}:
+    raise SystemExit(f"unsupported wheel architecture: {machine}")
+
+# Match the target machine as well as the interpreter and ABI. Jetson uses
+# aarch64; desktop/container builds commonly use x86_64.
+required_tag = f"manylinux_2_28_{machine}"
 supported = {str(tag) for tag in sys_tags()}
-if not any("manylinux_2_28_x86_64" in tag for tag in supported):
-    raise SystemExit("pip cannot install manylinux_2_28 x86_64 wheels")
+if not any(required_tag in tag for tag in supported):
+    raise SystemExit(f"pip cannot install {required_tag} wheels")
 
 print(f"workspace pip {pip.__version__}")
-print("manylinux_2_28_x86_64 wheel tag: supported")
+print(f"{required_tag} wheel tag: supported")
 PY
 
 "${venv_dir}/bin/python" -m pip install --disable-pip-version-check \

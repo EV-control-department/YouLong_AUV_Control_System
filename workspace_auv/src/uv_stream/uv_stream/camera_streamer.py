@@ -40,6 +40,10 @@ from .stream_geometry import (
 
 FPS_SAMPLE_FRAMES = 7
 OVERLAY_WINDOW_NS = 300_000_000
+# Give Jetson inference time to finish before encoding annotated frames.
+ANNOTATED_FRAME_DELAY_NS = 600_000_000
+# Hold the last valid boxes through brief gaps in detection, per eye.
+DETECTION_HOLD_NS = 800_000_000
 
 
 @dataclass(frozen=True)
@@ -99,8 +103,10 @@ class DetectionCache:
             self._batches.clear()
 
     def for_frame_batches(self, frame: CachedFrame):
+        """Use each eye's newest valid detection for up to 0.8 source seconds."""
         with self._lock:
             batches = tuple(self._batches)
+
         def compatible(batch):
             if frame.camera and not batch.camera_name.startswith(frame.camera + '_'):
                 return False
@@ -109,18 +115,19 @@ class DetectionCache:
             side = 1 if batch.camera_name.endswith('_right') else 0
             return (frame.image_space == 0
                     or batch.calibration_id == frame.calibration_ids[side])
-        batches = [batch for batch in batches if compatible(batch)]
+
+        # Empty detections neither erase the last valid boxes nor refresh their
+        # lifetime. Source timestamps also prevent overlaying future results on
+        # older video frames still waiting in the encoder queue.
+        batches = [batch for batch in batches
+                   if batch.detections and compatible(batch)
+                   and 0 <= frame.timestamp_ns - batch.timestamp_ns <= DETECTION_HOLD_NS]
         selected = []
         for side in ('left', 'right'):
             candidates = [batch for batch in batches if batch.camera_name.endswith('_' + side)]
-            exact = [batch for batch in candidates if batch.capture_id == frame.capture_id
-                     and batch.stereo_pair_id == frame.stereo_pair_id
-                     and batch.timestamp_ns == frame.timestamp_ns]
-            nearby = exact or [batch for batch in candidates
-                               if batch.stereo_pair_id == frame.stereo_pair_id
-                               and abs(batch.timestamp_ns - frame.timestamp_ns) <= OVERLAY_WINDOW_NS]
-            if nearby:
-                selected.append(min(nearby, key=lambda item: abs(item.timestamp_ns - frame.timestamp_ns)))
+            if candidates:
+                selected.append(max(candidates, key=lambda item: (
+                    item.timestamp_ns, item.capture_id)))
         return tuple(selected)
 
     def for_frame(self, frame: CachedFrame) -> tuple:
@@ -171,7 +178,8 @@ class StreamMetadataBridge:
             if not rclpy.ok():
                 rclpy.init(args=None)
             self.node = rclpy.create_node('camera_streamer_frame_metadata')
-            qos = QoSProfile(depth=8192)
+            # Stay below Foxy's Fast DDS default history resource limit.
+            qos = QoSProfile(depth=256)
             qos.reliability = ReliabilityPolicy.RELIABLE
             self.publisher = self.node.create_publisher(
                 CameraStreamFrameInfo, STREAM_FRAME_INFO, qos)
@@ -454,6 +462,8 @@ def run(camera: str, mode: str, output_fps: float, *, video_output=None) -> int:
         output_sequence = 0
         last_capture_id = int(first_packet.header.capture_id)
         last_info_version = int(first_packet.header.camera_info_version)
+        frame_delay_ns = (ANNOTATED_FRAME_DELAY_NS if mode == 'annotated'
+                          else OVERLAY_WINDOW_NS)
 
         def encode_packet(packet):
             nonlocal newest_arrival_ns, output_sequence
@@ -469,7 +479,7 @@ def run(camera: str, mode: str, output_fps: float, *, video_output=None) -> int:
             cache.append(cached)
             newest_arrival_ns = max(
                 newest_arrival_ns, cached.arrival_monotonic_ns)
-            cutoff = newest_arrival_ns - OVERLAY_WINDOW_NS
+            cutoff = newest_arrival_ns - frame_delay_ns
             while cache and cache[0].arrival_monotonic_ns <= cutoff:
                 ready = cache.popleft()
                 frame = ready.image

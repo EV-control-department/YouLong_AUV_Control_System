@@ -7,11 +7,12 @@ params:
   depth:
     timeout: 15.0 # 进入作业深度的SET动作超时，单位：秒。
   # 使用 robotcup20260901.yaml 中的 canonical detector class name。
-  golf_color: yellow_golf # 可选 pink_golf / yellow_golf。
+  golf_color: pink_golf # 可选 pink_golf / yellow_golf。
   collection_frame_class: collection_frame_down
   # 可配置组合抓取顺序： [golf, ring] 或 [ring, golf]。
   pickup:
-    order: [golf, ring]
+    # order: [golf, ring]
+    order: [ring, golf]
 
   # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
   # 初始值需按实际场地填写；不会从定位器覆盖。
