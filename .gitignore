@@ -39,5 +39,3 @@ venv/
 # Claude Code
 .claude/
 
-# GitHub (keep workflows but ignore local configs)
-.github/
