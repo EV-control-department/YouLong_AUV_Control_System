@@ -39,3 +39,6 @@ venv/
 # Claude Code
 .claude/
 
+.reasonix/
+
+REASONIX.md

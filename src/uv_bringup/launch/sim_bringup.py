@@ -42,20 +42,17 @@ def generate_launch_description():
     stonefish_source_dir = os.path.join(workspace_root, 'src', 'stonefish_ros2')
     simulation_data_dir = os.path.join(stonefish_source_dir, 'Data')
 
-    # Build the stonefish simulator node directly with absolute paths
-    # The simulator expects: simulation_data, scenario_desc, rate, width, height, quality
+    # Build the stonefish simulator node (nogpu version — no NVIDIA GPU available)
+    # The simulator expects: simulation_data, scenario_desc, rate
     stonefish_sim = Node(
         package='stonefish_ros2',
-        executable='stonefish_simulator',
+        executable='stonefish_simulator_nogpu',
         namespace='stonefish_ros2',
-        name='stonefish_simulator',
+        name='stonefish_simulator_nogpu',
         arguments=[
             simulation_data_dir,
             os.path.join(simulation_data_dir, 'underwater_xunyun.scn'),
             '100.0',
-            '1920',
-            '1080',
-            'high',
         ],
         output='screen',
     )

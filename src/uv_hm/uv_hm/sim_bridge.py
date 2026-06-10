@@ -1,478 +1,437 @@
-"""Simulation bridge node: subscribes to Stonefish sensors, runs cascade PID, publishes state.
+"""Simulation bridge: emulates ZIT6 MCU firmware for Stonefish simulation.
 
-This node simulates the MCU firmware behavior for the simulation environment.
-It implements a cascade PID control algorithm:
-  XY plane: position error -> magnitude+angle -> speed PID -> decompose vx/vy -> velocity PIDs -> force
-  Z axis:   position PID -> force (with buoyancy feedforward)
-  Yaw axis: position PID -> yaw rate PID -> torque
+Protocol matches real AUV: ZitSetpoint in → ZitStatus + Float32MultiArray out.
+Cascade PID: pos → yaw-rate cascade, velocity inner loops, direct force mode.
+Thruster mixer: xunyun 6-thruster geometry (direct NED body force → thrusts).
 """
 
 import math
+from dataclasses import dataclass
+
+import cv2
 import numpy as np
-
+from cv_bridge import CvBridge
 import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-
-from std_msgs.msg import Float64MultiArray, Float32MultiArray
-from sensor_msgs.msg import Imu, FluidPressure, Image
 from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from sensor_msgs.msg import FluidPressure, Image, Imu
+from std_msgs.msg import Float64MultiArray, Float32, UInt8, Float32MultiArray
 
-try:
-    from stonefish_ros2.msg import DVL
-except ImportError:
-    DVL = None
-
-from uv_msgs.msg import MotionCommand, AuvState, PidGains, PidState
-
-from uv_hm.pid_controller import PidController, PidGains as _PidGains
-from uv_hm.thrust_mixer import ThrustMixer
+from stonefish_ros2.msg import DVL
+from zit6_interfaces.msg import ZitSetpoint, ZitStatus
 
 
-def _wrap_angle_deg(angle: float) -> float:
-    while angle > 180.0:
-        angle -= 360.0
-    while angle < -180.0:
-        angle += 360.0
-    return angle
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
-def _wrap_angle_rad(angle: float) -> float:
-    while angle > math.pi:
-        angle -= 2.0 * math.pi
-    while angle < -math.pi:
-        angle += 2.0 * math.pi
-    return angle
+@dataclass
+class _Pid:
+    kp: float
+    ki: float
+    kd: float
+    i_limit: float = 0.5
+    z_thrust_ff: float = 0.0
 
+    def __post_init__(self) -> None:
+        self.integral = 0.0
+        self.prev_err = 0.0
 
-def _quat_to_yaw(x: float, y: float, z: float, w: float) -> float:
-    """Convert quaternion to yaw in radians (NED frame)."""
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    return math.atan2(siny_cosp, cosy_cosp)
+    def reset(self) -> None:
+        self.integral = 0.0
+        self.prev_err = 0.0
 
-
-class CascadePidController:
-    """Cascade PID controller for AUV 4-DOF control.
-
-    XY plane: position error (world) -> magnitude + angle -> speed PID
-              -> decompose to vx/vy -> velocity PIDs -> force
-    Z axis:   position PID -> force (with buoyancy feedforward)
-    Yaw axis: position PID -> yaw rate PID -> torque
-    """
-
-    def __init__(self):
-        # Outer loop: error magnitude -> speed magnitude
-        self.pid_speed_mag = PidController(_PidGains(
-            kp=0.5, ki=0.05, kd=0.1, i_limit=2.0, output_limit=2.0
-        ))
-
-        # Inner loop: body-frame velocity
-        self.pid_vx = PidController(_PidGains(
-            kp=300.0, ki=50.0, kd=10.0, i_limit=500.0, output_limit=1000.0
-        ))
-        self.pid_vy = PidController(_PidGains(
-            kp=300.0, ki=50.0, kd=10.0, i_limit=500.0, output_limit=1000.0
-        ))
-
-        # Z axis: position PID with buoyancy feedforward
-        self.pid_z = PidController(_PidGains(
-            kp=600.0, ki=30.0, kd=800.0, i_limit=6200.0,
-            output_limit=1000.0, feedforward=230.0
-        ))
-
-        # Yaw: position -> rate cascade
-        self.pid_yaw = PidController(_PidGains(
-            kp=1.5, ki=1.0, kd=0.1, i_limit=30.0, output_limit=45.0
-        ))
-        self.pid_yaw_rate = PidController(_PidGains(
-            kp=30.0, ki=20.0, kd=1.0, i_limit=600.0, output_limit=1000.0
-        ))
-
-        # Velocity-only PIDs (for velocity control mode)
-        self.pid_vz = PidController(_PidGains(
-            kp=300.0, ki=30.0, kd=50.0, i_limit=500.0,
-            output_limit=1000.0, feedforward=230.0
-        ))
-        self.pid_vyaw = PidController(_PidGains(
-            kp=40.0, ki=20.0, kd=2.0, i_limit=300.0, output_limit=1000.0
-        ))
-
-    def control_position(self, pos: dict, vel: dict, target: dict, dt: float) -> tuple:
-        """Position control mode: cascade PID.
-
-        Args:
-            pos: {'x', 'y', 'z', 'rz'} world NED, rz in degrees
-            vel: {'x', 'y', 'z', 'rz'} body frame, rz in deg/s
-            target: {'x', 'y', 'z', 'rz'} world NED, rz in degrees
-            dt: time step in seconds
-
-        Returns:
-            (Fx, Fy, Fz, Mz) body-frame forces
-        """
-        # === XY Cascade ===
-        ex_world = target['x'] - pos['x']
-        ey_world = target['y'] - pos['y']
-
-        # Polar decomposition
-        error_length = math.sqrt(ex_world ** 2 + ey_world ** 2)
-        error_angle = math.atan2(ey_world, ex_world)
-
-        # Outer loop: error magnitude -> speed setpoint
-        speed_cmd = self.pid_speed_mag.step(error_length, dt)
-
-        # Decompose speed into world-frame velocity
-        vx_world_cmd = speed_cmd * math.cos(error_angle)
-        vy_world_cmd = speed_cmd * math.sin(error_angle)
-
-        # Rotate to body frame
-        yaw_rad = math.radians(pos['rz'])
-        cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-        vx_body_cmd = cy * vx_world_cmd + sy * vy_world_cmd
-        vy_body_cmd = -sy * vx_world_cmd + cy * vy_world_cmd
-
-        # Inner loop: body-frame velocity PID
-        Fx = self.pid_vx.step(vx_body_cmd - vel['x'], dt)
-        Fy = self.pid_vy.step(vy_body_cmd - vel['y'], dt)
-
-        # === Z Axis (single position PID) ===
-        ez = target['z'] - pos['z']
-        Fz = self.pid_z.step(ez, dt)
-
-        # === Yaw Cascade ===
-        eyaw = _wrap_angle_deg(target['rz'] - pos['rz'])
-        yaw_rate_cmd = self.pid_yaw.step(eyaw, dt)
-        yaw_rate_cmd = max(-45.0, min(45.0, yaw_rate_cmd))
-        eyaw_rate = yaw_rate_cmd - vel['rz']
-        Mz = self.pid_yaw_rate.step(eyaw_rate, dt)
-
-        return Fx, Fy, Fz, Mz
-
-    def control_velocity(self, vel: dict, target_vel: dict, dt: float) -> tuple:
-        """Velocity control mode: single-loop body-frame velocity PID.
-
-        Args:
-            vel: {'x', 'y', 'z', 'rz'} body frame
-            target_vel: {'x', 'y', 'z', 'rz'} body frame
-            dt: time step
-
-        Returns:
-            (Fx, Fy, Fz, Mz) body-frame forces
-        """
-        Fx = self.pid_vx.step(target_vel['x'] - vel['x'], dt)
-        Fy = self.pid_vy.step(target_vel['y'] - vel['y'], dt)
-        Fz = self.pid_vz.step(target_vel['z'] - vel['z'], dt)
-        Mz = self.pid_vyaw.step(target_vel['rz'] - vel['rz'], dt)
-        return Fx, Fy, Fz, Mz
-
-    def reset(self):
-        self.pid_speed_mag.reset()
-        self.pid_vx.reset()
-        self.pid_vy.reset()
-        self.pid_z.reset()
-        self.pid_yaw.reset()
-        self.pid_yaw_rate.reset()
-        self.pid_vz.reset()
-        self.pid_vyaw.reset()
+    def step(self, err: float, dt: float) -> float:
+        if dt <= 0.0:
+            return self.kp * err + self.z_thrust_ff
+        self.integral = _clamp(self.integral + err * dt, -self.i_limit, self.i_limit)
+        derivative = (err - self.prev_err) / dt
+        self.prev_err = err
+        return self.kp * err + self.ki * self.integral + self.kd * derivative + self.z_thrust_ff
 
 
 class SimBridgeNode(Node):
-    """ROS2 node: bridges Stonefish sensors to control layer with cascade PID."""
+    def __init__(self) -> None:
+        super().__init__("sim_bridge")
 
-    def __init__(self):
-        super().__init__('sim_bridge')
-
-        # State
-        self.pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}  # world NED, rz in degrees
-        self.vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}  # body frame
-        self.vel_world = {'x': 0.0, 'y': 0.0}  # world frame velocity
+        # Internal state
+        self.pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}     # NED deg
+        self.vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}     # body, deg/s
+        self.vel_world = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
+        self.thrust = [0.0] * 6
         self.target_pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
         self.target_vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
         self.force_4dof = [0.0, 0.0, 0.0, 0.0]
-        self.armed = False
-        self.control_mode = 0  # 0=none, 1=pos, 2=vel, 3=force
-
-        # Controllers
-        self.pid = CascadePidController()
-        self.mixer = ThrustMixer(max_thrust=1000.0)
-
-        # Timing
-        self._last_ctrl_time = self.get_clock().now()
-        self._cycle_time_ms = 0.0
-
-        # QoS for sensor data (best effort, volatile)
-        sensor_qos = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.VOLATILE,
-        )
-
-        # === Subscribers: Stonefish sensors ===
-        self.create_subscription(Odometry, '/auv/odometry', self._odom_cb, sensor_qos)
-        self.create_subscription(Imu, '/auv/imu', self._imu_cb, sensor_qos)
-        if DVL is not None:
-            self.create_subscription(DVL, '/auv/dvl', self._dvl_cb, sensor_qos)
-        self.create_subscription(FluidPressure, '/auv/pressure', self._pressure_cb, sensor_qos)
-
-        # === Subscribers: Camera images ===
-        self.create_subscription(Image, '/sim/front_cam/left/image_color', self._front_left_cb, sensor_qos)
-        self.create_subscription(Image, '/sim/front_cam/right/image_color', self._front_right_cb, sensor_qos)
-        self.create_subscription(Image, '/sim/down_cam/left/image_color', self._down_left_cb, sensor_qos)
-        self.create_subscription(Image, '/sim/down_cam/right/image_color', self._down_right_cb, sensor_qos)
-
-        # === Subscriber: Motion command from control layer ===
-        self.create_subscription(MotionCommand, '/auv/cmd/motion', self._motion_cmd_cb, 10)
+        self._current_mode = 0  # 0=NONE, 1=POS, 2=VEL, 3=FORCE
+        self.position_ctrl_enabled = False
+        self.vel_ctrl_enabled = False
+        self.current_pose_ready = False
+        self.last_pid_time = self.get_clock().now()
 
         # === Publishers ===
-        self.pub_state = self.create_publisher(AuvState, '/auv/state', 10)
-        self.pub_thrusters = self.create_publisher(Float64MultiArray, '/auv/thrusters_cmd', 10)
-        self.pub_thrust_debug = self.create_publisher(Float32MultiArray, '/auv/thrust_debug', 10)
-        self.pub_pid_debug = self.create_publisher(PidState, '/auv/pid_debug', 10)
+        self.thruster_pub = self.create_publisher(
+            Float64MultiArray, "/auv/thrusters_cmd", 10
+        )
+        self.zit6_status_pub = self.create_publisher(ZitStatus, "/zit6/state/status", 10)
+        self.zit6_pos_pub = self.create_publisher(Float32MultiArray, "/zit6/state/pos", 10)
+        self.zit6_vel_pub = self.create_publisher(Float32MultiArray, "/zit6/state/vel", 10)
+        self.zit6_thr_pub = self.create_publisher(Float32MultiArray, "/zit6/state/thr", 10)
 
         # Camera republishers
-        self.pub_front_left = self.create_publisher(Image, '/auv/front_cam/left', 10)
-        self.pub_front_right = self.create_publisher(Image, '/auv/front_cam/right', 10)
-        self.pub_down_left = self.create_publisher(Image, '/auv/down_cam/left', 10)
-        self.pub_down_right = self.create_publisher(Image, '/auv/down_cam/right', 10)
-        self.pub_front_stitched = self.create_publisher(Image, '/auv/front_cam/stitched', 10)
-        self.pub_down_stitched = self.create_publisher(Image, '/auv/down_cam/stitched', 10)
+        self.front_rect_left_pub = self.create_publisher(Image, "/auv/front_cam/left", 10)
+        self.front_rect_right_pub = self.create_publisher(Image, "/auv/front_cam/right", 10)
+        self.down_rect_left_pub = self.create_publisher(Image, "/auv/down_cam/left", 10)
+        self.down_rect_right_pub = self.create_publisher(Image, "/auv/down_cam/right", 10)
+        self.front_rect_pub = self.create_publisher(Image, "/auv/front_cam/stitched", 10)
+        self.down_rect_pub = self.create_publisher(Image, "/auv/down_cam/stitched", 10)
 
-        # Image buffers (raw republish only, no stitching due to cv_bridge/NumPy ABI issue)
-        self._front_left_img = None
-        self._front_right_img = None
-        self._down_left_img = None
-        self._down_right_img = None
+        # Image stitching
+        self.bridge = CvBridge()
+        self.front_left_img = None
+        self.front_right_img = None
+        self.down_left_img = None
+        self.down_right_img = None
 
-        # Timers
-        self.create_timer(0.05, self._control_step)   # 20Hz control loop
-        self.create_timer(0.05, self._publish_state)   # 20Hz state publish
+        # === PID controllers ===
+        # Position: body-frame error → body force
+        self.pid_x = _Pid(800, 130.0, 200.0, i_limit=1000.0)
+        self.pid_y = _Pid(600.0, 120.0, 150.0, i_limit=1000.0)
+        self.pid_z = _Pid(600.0, 30.0, 800.0, i_limit=6200.0, z_thrust_ff=230.0)
+        self.pid_yaw = _Pid(1.5, 1.0, 0.1, i_limit=30.0)
+        self.pid_yaw_rate = _Pid(30.0, 20.0, 1.0, i_limit=600.0)
 
-        self.get_logger().info('SimBridge node started')
+        # Velocity: body-frame velocity error → body force
+        self.pid_vx = _Pid(300.0, 50.0, 10.0, i_limit=500.0)
+        self.pid_vy = _Pid(300.0, 50.0, 10.0, i_limit=500.0)
+        self.pid_vz = _Pid(300.0, 30.0, 50.0, i_limit=500.0, z_thrust_ff=230.0)
+        self.pid_vyaw = _Pid(40.0, 20.0, 2.0, i_limit=300.0)
 
-    # ========================================================================
-    # Sensor callbacks
-    # ========================================================================
+        # === Subscriptions ===
+        self.create_subscription(ZitSetpoint, "/zit6/cmd/setpoint", self._setpoint_cb, 10)
+        self.create_subscription(Float32, "/zit6/cmd/servo", self._servo_cb, 10)
+        self.create_subscription(UInt8, "/zit6/cmd/light", self._light_cb, 10)
+        self.create_subscription(Odometry, "/auv/odometry", self._odom_cb, 10)
+        self.create_subscription(Imu, "/auv/imu", self._imu_cb, 10)
+        self.create_subscription(DVL, "/auv/dvl", self._dvl_cb, 10)
+        self.create_subscription(FluidPressure, "/auv/pressure", self._pressure_cb, 10)
+        self.create_subscription(Image, "/sim/front_cam/left/image_color", self._front_left_img_cb, 10)
+        self.create_subscription(Image, "/sim/front_cam/right/image_color", self._front_right_img_cb, 10)
+        self.create_subscription(Image, "/sim/down_cam/left/image_color", self._down_left_img_cb, 10)
+        self.create_subscription(Image, "/sim/down_cam/right/image_color", self._down_right_img_cb, 10)
 
-    def _odom_cb(self, msg: Odometry):
-        # Position: direct NED passthrough
+        self.create_timer(0.05, self._publish_state)
+        self.create_timer(0.05, self._control_step)
+        self.get_logger().info("sim_bridge started (ZIT6 protocol, xunyun mixer)")
+
+    # ── ZIT6 setpoint callback ──────────────────────────────────────
+
+    def _setpoint_cb(self, msg: ZitSetpoint) -> None:
+        mode = msg.control_key & 0x03
+        frame = msg.control_key & 0x10       # 0x10 = body
+        incremental = msg.control_key & 0x20  # 0x20 = incremental
+
+        if mode == 2:
+            # Force mode: direct thrust, no PID
+            self.position_ctrl_enabled = False
+            self.vel_ctrl_enabled = False
+            self._current_mode = 3
+            x = msg.x if (msg.type_mask & 0x01) else 0.0
+            y = msg.y if (msg.type_mask & 0x02) else 0.0
+            z = msg.z if (msg.type_mask & 0x04) else 0.0
+            rz = msg.yaw if (msg.type_mask & 0x08) else 0.0
+            self._publish_thrust_from_4dof(x, y, z, rz)
+
+        elif mode == 1:
+            # Velocity mode
+            self.position_ctrl_enabled = False
+            self.vel_ctrl_enabled = True
+            self._current_mode = 2
+            if msg.type_mask & 0x01:
+                self.target_vel['x'] = msg.x
+            if msg.type_mask & 0x02:
+                self.target_vel['y'] = msg.y
+            if msg.type_mask & 0x04:
+                self.target_vel['z'] = msg.z
+            if msg.type_mask & 0x08:
+                self.target_vel['rz'] = math.degrees(msg.yaw)
+            self.last_pid_time = self.get_clock().now()
+            self.pid_vx.reset(); self.pid_vy.reset()
+            self.pid_vz.reset(); self.pid_vyaw.reset()
+
+        elif mode == 0:
+            # Position mode
+            self.vel_ctrl_enabled = False
+            self._current_mode = 1
+            yaw_deg = math.degrees(msg.yaw)
+
+            if incremental:
+                dx = msg.x if (msg.type_mask & 0x01) else 0.0
+                dy = msg.y if (msg.type_mask & 0x02) else 0.0
+                yaw_rad = math.radians(self.pos['rz'])
+                cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+                self.target_pos['x'] += cy * dx - sy * dy
+                self.target_pos['y'] += sy * dx + cy * dy
+                if msg.type_mask & 0x04:
+                    self.target_pos['z'] += msg.z
+                if msg.type_mask & 0x08:
+                    self.target_pos['rz'] += yaw_deg
+            else:
+                if frame:
+                    # Absolute body → world
+                    yaw_rad = math.radians(self.pos['rz'])
+                    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+                    if msg.type_mask & 0x01:
+                        self.target_pos['x'] = self.pos['x'] + cy * msg.x - sy * msg.y
+                    if msg.type_mask & 0x02:
+                        self.target_pos['y'] = self.pos['y'] + sy * msg.x + cy * msg.y
+                else:
+                    # Absolute world
+                    if msg.type_mask & 0x01:
+                        self.target_pos['x'] = msg.x
+                    if msg.type_mask & 0x02:
+                        self.target_pos['y'] = msg.y
+                if msg.type_mask & 0x04:
+                    self.target_pos['z'] = msg.z
+                if msg.type_mask & 0x08:
+                    self.target_pos['rz'] = yaw_deg
+
+            self.position_ctrl_enabled = True
+            self.last_pid_time = self.get_clock().now()
+            self.pid_x.reset(); self.pid_y.reset(); self.pid_z.reset()
+            self.pid_yaw.reset(); self.pid_yaw_rate.reset()
+
+    def _servo_cb(self, msg: Float32) -> None:
+        pass
+
+    def _light_cb(self, msg: UInt8) -> None:
+        pass
+
+    # ── Image callbacks ─────────────────────────────────────────────
+
+    def _front_left_img_cb(self, msg: Image) -> None:
+        self.front_rect_left_pub.publish(msg)
+        self.front_left_img = msg
+        self._publish_stitched_front()
+
+    def _front_right_img_cb(self, msg: Image) -> None:
+        self.front_rect_right_pub.publish(msg)
+        self.front_right_img = msg
+        self._publish_stitched_front()
+
+    def _down_left_img_cb(self, msg: Image) -> None:
+        self.down_rect_left_pub.publish(msg)
+        self.down_left_img = msg
+        self._publish_stitched_down()
+
+    def _down_right_img_cb(self, msg: Image) -> None:
+        self.down_rect_right_pub.publish(msg)
+        self.down_right_img = msg
+        self._publish_stitched_down()
+
+    def _publish_stitched_front(self) -> None:
+        if self.front_left_img and self.front_right_img:
+            try:
+                left = self.bridge.imgmsg_to_cv2(self.front_left_img, "bgr8")
+                right = self.bridge.imgmsg_to_cv2(self.front_right_img, "bgr8")
+                stitched = np.hstack((left, right))
+                out = self.bridge.cv2_to_imgmsg(stitched, "bgr8")
+                out.header = self.front_left_img.header
+                self.front_rect_pub.publish(out)
+            except Exception as e:
+                self.get_logger().error(f"Front stitch failed: {e}")
+
+    def _publish_stitched_down(self) -> None:
+        if self.down_left_img and self.down_right_img:
+            try:
+                left = self.bridge.imgmsg_to_cv2(self.down_left_img, "bgr8")
+                right = self.bridge.imgmsg_to_cv2(self.down_right_img, "bgr8")
+                stitched = np.hstack((left, right))
+                out = self.bridge.cv2_to_imgmsg(stitched, "bgr8")
+                out.header = self.down_left_img.header
+                self.down_rect_pub.publish(out)
+            except Exception as e:
+                self.get_logger().error(f"Down stitch failed: {e}")
+
+    # ── Thruster mixer (xunyun 6-thruster geometry) ────────────────
+
+    def _publish_thrust_from_4dof(self, x: float, y: float, z: float, rz: float) -> None:
+        self.force_4dof = [x, y, z, rz]
+        MAX_T = 1000.0
+
+        # NED body force → 6 thrusters (xunyun geometry)
+        h0 = (x + y + rz * 0.5)     # T0: aft-stbd diagonal
+        h1 = (x - y - rz * 0.5)     # T1: aft-port diagonal
+        h4 = -(x - y + rz * 0.5)    # T4: fwd-stbd diagonal
+        h5 = -(x + y - rz * 0.5)    # T5: fwd-port diagonal
+        h2 = z                        # HeaveBow
+        h3 = z                        # HeaveStern
+
+        raw = [h0, h1, h2, h3, h4, h5]
+        for i in range(len(raw)):
+            raw[i] = _clamp(raw[i] / MAX_T, -1.0, 1.0)
+
+        cmd = Float64MultiArray()
+        cmd.data = raw
+        self.thruster_pub.publish(cmd)
+
+        for i in range(6):
+            self.thrust[i] = float(raw[i])
+
+    # ── Control step ────────────────────────────────────────────────
+
+    def _control_step(self) -> None:
+        if not self.current_pose_ready:
+            return
+
+        now = self.get_clock().now()
+        dt = (now - self.last_pid_time).nanoseconds / 1e9
+        self.last_pid_time = now
+        dt = _clamp(dt, 0.001, 0.2)
+
+        if self.position_ctrl_enabled:
+            self._position_pid_step(dt)
+        elif self.vel_ctrl_enabled:
+            self._velocity_pid_step(dt)
+
+    def _position_pid_step(self, dt: float) -> None:
+        x, y, z, yaw = self.pos['x'], self.pos['y'], self.pos['z'], self.pos['rz']
+
+        ex_w = self.target_pos['x'] - x
+        ey_w = self.target_pos['y'] - y
+
+        yaw_rad = math.radians(yaw)
+        cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+        ex_body = cy * ex_w + sy * ey_w
+        ey_body = -sy * ex_w + cy * ey_w
+
+        ez = self.target_pos['z'] - z
+        eyaw = self._wrap_angle_deg(self.target_pos['rz'] - yaw)
+
+        target_yaw_rate = self.pid_yaw.step(eyaw, dt)
+        target_yaw_rate = _clamp(target_yaw_rate, -45.0, 45.0)
+        eyaw_rate = target_yaw_rate - self.vel['rz']
+
+        cmd_x = float(self.pid_x.step(ex_body, dt))
+        cmd_y = float(self.pid_y.step(ey_body, dt))
+        cmd_z = float(self.pid_z.step(ez, dt))
+        cmd_rz = -float(self.pid_yaw_rate.step(eyaw_rate, dt))
+
+        self._publish_thrust_from_4dof(cmd_x, cmd_y, cmd_z, cmd_rz)
+
+    def _velocity_pid_step(self, dt: float) -> None:
+        evx = self.target_vel['x'] - self.vel['x']
+        evy = self.target_vel['y'] - self.vel['y']
+        evz = self.target_vel['z'] - self.vel['z']
+        evyaw = self.target_vel['rz'] - self.vel['rz']
+
+        cmd_x = float(self.pid_vx.step(evx, dt))
+        cmd_y = float(self.pid_vy.step(evy, dt))
+        cmd_z = float(self.pid_vz.step(evz, dt))
+        cmd_rz = float(self.pid_vyaw.step(evyaw, dt))
+
+        self._publish_thrust_from_4dof(cmd_x, cmd_y, cmd_z, cmd_rz)
+
+    # ── Sensor callbacks ────────────────────────────────────────────
+
+    def _odom_cb(self, msg: Odometry) -> None:
         self.pos['x'] = msg.pose.pose.position.x
         self.pos['y'] = msg.pose.pose.position.y
         self.pos['z'] = msg.pose.pose.position.z
 
-        # Yaw from quaternion
         q = msg.pose.pose.orientation
-        self.pos['rz'] = math.degrees(_quat_to_yaw(q.x, q.y, q.z, q.w))
+        _, _, yaw = self._quat_to_rpy(q.x, q.y, q.z, q.w)
+        self.pos['rz'] = math.degrees(yaw)
 
-        # World-frame velocity (for external use)
-        self.vel_world['x'] = msg.twist.twist.linear.x
-        self.vel_world['y'] = msg.twist.twist.linear.y
-
-        # Rotate world velocity to body frame
-        yaw_rad = math.radians(self.pos['rz'])
-        cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
         vx_w = msg.twist.twist.linear.x
         vy_w = msg.twist.twist.linear.y
-        self.vel['x'] = cy * vx_w + sy * vy_w
-        self.vel['y'] = -sy * vx_w + cy * vy_w
-        self.vel['z'] = msg.twist.twist.linear.z
+        self.vel_world['x'] = vx_w
+        self.vel_world['y'] = vy_w
+        self.vel_world['z'] = msg.twist.twist.linear.z
+        self.vel_world['rz'] = math.degrees(msg.twist.twist.angular.z)
 
-    def _imu_cb(self, msg: Imu):
-        # Override yaw rate with IMU data (higher fidelity)
+        # World → body velocity rotation
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        self.vel['x'] = vx_w * cy + vy_w * sy
+        self.vel['y'] = -vx_w * sy + vy_w * cy
+        self.vel['z'] = msg.twist.twist.linear.z
+        self.vel['rz'] = self.vel_world['rz']
+
+        self.current_pose_ready = True
+
+    def _imu_cb(self, msg: Imu) -> None:
         self.vel['rz'] = math.degrees(msg.angular_velocity.z)
 
-    def _dvl_cb(self, msg):
-        # Override body velocity with DVL data (higher fidelity)
-        if hasattr(msg, 'velocity'):
-            self.vel['x'] = msg.velocity.x
-            self.vel['y'] = msg.velocity.y
-            self.vel['z'] = msg.velocity.z
+    def _dvl_cb(self, msg: DVL) -> None:
+        self.vel['x'] = msg.velocity.x
+        self.vel['y'] = msg.velocity.y
+        self.vel['z'] = msg.velocity.z
 
-    def _pressure_cb(self, msg: FluidPressure):
-        pass  # Depth already from odometry
+    def _pressure_cb(self, msg: FluidPressure) -> None:
+        pass
 
-    # ========================================================================
-    # Image callbacks (republish + stitch)
-    # ========================================================================
+    # ── ZIT6 state publishing (20 Hz) ───────────────────────────────
 
-    def _front_left_cb(self, msg: Image):
-        self._front_left_img = msg
-        self.pub_front_left.publish(msg)
-        # Publish left image as "stitched" fallback (cv_bridge has NumPy ABI issues)
-        self.pub_front_stitched.publish(msg)
+    def _publish_state(self) -> None:
+        status = ZitStatus()
+        status.is_armed = True
+        status.arm_mode = 3
+        status.control_level = self._current_mode
+        status.ins_state = 3
+        status.navigation_ready = True
+        status.forces = [float(self.force_4dof[i]) for i in range(4)]
+        status.cycle_time_ms = 50.0
+        status.battery_voltage = 16.8
+        status.error_flags = 0
+        self.zit6_status_pub.publish(status)
 
-    def _front_right_cb(self, msg: Image):
-        self._front_right_img = msg
-        self.pub_front_right.publish(msg)
+        pos_msg = Float32MultiArray()
+        pos_msg.data = [self.pos['x'], self.pos['y'], self.pos['z'],
+                        math.radians(self.pos['rz'])]
+        self.zit6_pos_pub.publish(pos_msg)
 
-    def _down_left_cb(self, msg: Image):
-        self._down_left_img = msg
-        self.pub_down_left.publish(msg)
-        self.pub_down_stitched.publish(msg)
+        vel_msg = Float32MultiArray()
+        vel_msg.data = [self.vel['x'], self.vel['y'], self.vel['z'],
+                        math.radians(self.vel['rz'])]
+        self.zit6_vel_pub.publish(vel_msg)
 
-    def _down_right_cb(self, msg: Image):
-        self._down_right_img = msg
-        self.pub_down_right.publish(msg)
+        thr_msg = Float32MultiArray()
+        thr_msg.data = [float(self.force_4dof[i]) for i in range(4)]
+        self.zit6_thr_pub.publish(thr_msg)
 
-    # ========================================================================
-    # Motion command callback
-    # ========================================================================
+    # ── Utilities ───────────────────────────────────────────────────
 
-    def _motion_cmd_cb(self, msg: MotionCommand):
-        mode = msg.mode
-        x, y, z, yaw = msg.x, msg.y, msg.z, msg.yaw
-        yaw_deg = math.degrees(yaw)
+    @staticmethod
+    def _quat_to_rpy(x: float, y: float, z: float, w: float):
+        sinr_cosp = 2.0 * (w * x + y * z)
+        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
 
-        if mode == MotionCommand.MODE_POS_WORLD:
-            # Absolute world position
-            self.target_pos = {'x': x, 'y': y, 'z': z, 'rz': yaw_deg}
-            self.control_mode = 1
+        sinp = 2.0 * (w * y - z * x)
+        pitch = math.asin(_clamp(sinp, -1.0, 1.0))
 
-        elif mode == MotionCommand.MODE_POS_BODY:
-            # Body-frame position: rotate offset to world and add to current
-            yaw_rad = math.radians(self.pos['rz'])
-            cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-            self.target_pos['x'] = self.pos['x'] + cy * x - sy * y
-            self.target_pos['y'] = self.pos['y'] + sy * x + cy * y
-            self.target_pos['z'] = self.pos['z'] + z
-            self.target_pos['rz'] = self.pos['rz'] + yaw_deg
-            self.control_mode = 1
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        return roll, pitch, yaw
 
-        elif mode == MotionCommand.MODE_VEL_WORLD:
-            # World-frame velocity: rotate to body
-            yaw_rad = math.radians(self.pos['rz'])
-            cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-            self.target_vel['x'] = cy * x + sy * y
-            self.target_vel['y'] = -sy * x + cy * y
-            self.target_vel['z'] = z
-            self.target_vel['rz'] = yaw_deg
-            self.control_mode = 2
-
-        elif mode == MotionCommand.MODE_VEL_BODY:
-            # Body-frame velocity: direct
-            self.target_vel = {'x': x, 'y': y, 'z': z, 'rz': yaw_deg}
-            self.control_mode = 2
-
-        elif mode == MotionCommand.MODE_FORCE_BODY:
-            # Direct force
-            self.force_4dof = [x, y, z, yaw]
-            self.control_mode = 3
-
-        elif mode == MotionCommand.MODE_POS_WORLD_STEP:
-            # Incremental world position step
-            self.target_pos['x'] += x
-            self.target_pos['y'] += y
-            self.target_pos['z'] += z
-            self.target_pos['rz'] += yaw_deg
-            self.control_mode = 1
-
-        elif mode == MotionCommand.MODE_POS_BODY_STEP:
-            # Incremental body position step: rotate to world
-            yaw_rad = math.radians(self.pos['rz'])
-            cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-            self.target_pos['x'] += cy * x - sy * y
-            self.target_pos['y'] += sy * x + cy * y
-            self.target_pos['z'] += z
-            self.target_pos['rz'] += yaw_deg
-            self.control_mode = 1
-
-        elif mode == MotionCommand.MODE_VEL_WORLD_STEP:
-            # Incremental world velocity step
-            self.target_vel['x'] += x
-            self.target_vel['y'] += y
-            self.target_vel['z'] += z
-            self.target_vel['rz'] += yaw_deg
-            self.control_mode = 2
-
-        elif mode == MotionCommand.MODE_VEL_BODY_STEP:
-            # Incremental body velocity step
-            self.target_vel['x'] += x
-            self.target_vel['y'] += y
-            self.target_vel['z'] += z
-            self.target_vel['rz'] += yaw_deg
-            self.control_mode = 2
-
-    # ========================================================================
-    # Control loop (20Hz)
-    # ========================================================================
-
-    def _control_step(self):
-        now = self.get_clock().now()
-        dt = (now - self._last_ctrl_time).nanoseconds / 1e9
-        self._last_ctrl_time = now
-        self._cycle_time_ms = dt * 1000.0
-
-        if dt <= 0.0 or dt > 1.0:
-            return
-
-        if self.control_mode == 1:
-            # Position control: cascade PID
-            fx, fy, fz, mz = self.pid.control_position(
-                self.pos, self.vel, self.target_pos, dt
-            )
-        elif self.control_mode == 2:
-            # Velocity control
-            fx, fy, fz, mz = self.pid.control_velocity(
-                self.vel, self.target_vel, dt
-            )
-        elif self.control_mode == 3:
-            # Force control: pass-through
-            fx, fy, fz, mz = self.force_4dof
-        else:
-            # No control mode: stop
-            fx, fy, fz, mz = 0.0, 0.0, 0.0, 0.0
-
-        # Thrust mixing
-        thrusters = self.mixer.mix(fx, fy, fz, mz)
-
-        # Publish thruster commands
-        msg = Float64MultiArray()
-        msg.data = [float(t) for t in thrusters]
-        self.pub_thrusters.publish(msg)
-
-        # Debug: thrust forces
-        debug_msg = Float32MultiArray()
-        debug_msg.data = [float(fx), float(fy), float(fz), float(mz)]
-        self.pub_thrust_debug.publish(debug_msg)
-
-    # ========================================================================
-    # State publishing (20Hz)
-    # ========================================================================
-
-    def _publish_state(self):
-        msg = AuvState()
-        msg.pos_x = self.pos['x']
-        msg.pos_y = self.pos['y']
-        msg.pos_z = self.pos['z']
-        msg.yaw = math.radians(self.pos['rz'])
-        msg.vel_x = self.vel['x']
-        msg.vel_y = self.vel['y']
-        msg.vel_z = self.vel['z']
-        msg.yaw_rate = math.radians(self.vel['rz'])
-        msg.vel_world_x = self.vel_world['x']
-        msg.vel_world_y = self.vel_world['y']
-        msg.armed = self.armed
-        msg.control_mode = self.control_mode
-        msg.battery_voltage = 16.8  # Simulated
-        msg.error_flags = 0
-        msg.cycle_time_ms = self._cycle_time_ms
-        msg.target_x = self.target_pos['x']
-        msg.target_y = self.target_pos['y']
-        msg.target_z = self.target_pos['z']
-        msg.target_yaw = math.radians(self.target_pos['rz'])
-        self.pub_state.publish(msg)
+    @staticmethod
+    def _wrap_angle_deg(angle: float) -> float:
+        while angle > 180.0:
+            angle -= 360.0
+        while angle < -180.0:
+            angle += 360.0
+        return angle
 
 
-def main(args=None):
+def main(args=None) -> None:
     rclpy.init(args=args)
     node = SimBridgeNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

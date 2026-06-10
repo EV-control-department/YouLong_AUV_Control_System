@@ -149,8 +149,18 @@ import threading
 import rclpy
 from rclpy.node import Node
 
-from uv_msgs.msg import MotionCommand, AuvState
-from uv_control.coordinate_utils import body_to_world
+from std_msgs.msg import Float32MultiArray
+from zit6_interfaces.msg import ZitSetpoint, ZitStatus
+
+from uv_control.coordinate import Coordinate
+
+# control_key constants
+CK_POS = 0       # position mode
+CK_VEL = 1       # velocity mode
+CK_FORCE = 2     # force mode
+CK_BODY = 0x10   # body frame
+CK_INC = 0x20    # incremental
+
 
 # ============================================================================
 # 轴掩码：用于指定哪些轴参与控制和到达判断
@@ -183,31 +193,40 @@ LATERAL_LAMBDA = 2.0   # 横向误差敏感度（指数衰减参数）
 
 
 class BasicMotionNode(Node):
-    """高级运动控制节点。不直接与硬件通信，通过 MotionCommand 消息控制 AUV。"""
+    """高级运动控制节点。通过 ZIT6 协议控制 AUV。"""
 
     def __init__(self):
         super().__init__('basic_motion')
 
-        # 当前 AUV 状态（位置/速度/目标），由 /auv/state 话题更新
-        self.state = AuvState()
+        # 当前 AUV 状态
+        self.status = ZitStatus()
+        self.pose = Coordinate()              # 当前位置
+        self._target = Coordinate()           # 当前目标
         self._state_lock = threading.Lock()
 
-        # 发布运动指令到 sim_bridge
-        self.pub_motion = self.create_publisher(MotionCommand, '/auv/cmd/motion', 10)
-        # 订阅 AUV 状态
-        self.create_subscription(AuvState, '/auv/state', self._state_cb, 10)
+        # 发布 ZIT6 setpoint 到 sim_bridge
+        self.pub_setpoint = self.create_publisher(ZitSetpoint, '/zit6/cmd/setpoint', 10)
+        # 订阅 ZIT6 状态
+        self.create_subscription(ZitStatus, '/zit6/state/status', self._status_cb, 10)
+        self.create_subscription(Float32MultiArray, '/zit6/state/pos', self._pos_cb, 10)
 
-        self.get_logger().info('BasicMotion node started')
+        self.get_logger().info('BasicMotion node started (ZIT6 protocol)')
 
-    def _state_cb(self, msg: AuvState):
-        """状态回调：更新 AUV 当前状态。"""
+    def _status_cb(self, msg: ZitStatus):
         with self._state_lock:
-            self.state = msg
+            self.status = msg
 
-    def get_state(self) -> AuvState:
-        """获取 AUV 当前状态（线程安全）。"""
+    def _pos_cb(self, msg: Float32MultiArray):
         with self._state_lock:
-            return self.state
+            self.pose = Coordinate.from_zit6_pos(msg.data)
+
+    def get_state(self):
+        """获取 AUV 当前状态（线程安全）。
+
+        Returns: (pose: Coordinate, target: Coordinate, status: ZitStatus)
+        """
+        with self._state_lock:
+            return self.pose.copy(), self._target.copy(), self.status
 
     # ========================================================================
     # 内部工具：发送指令 + 等待到达
@@ -230,14 +249,19 @@ class BasicMotionNode(Node):
         Returns:
             True = 到达目标, False = 超时
         """
-        msg = MotionCommand()
-        msg.mode = mode
+        msg = ZitSetpoint()
+        msg.control_key = mode
         msg.type_mask = 0
-        msg.x = x
-        msg.y = y
-        msg.z = z
-        msg.yaw = yaw
-        self.pub_motion.publish(msg)
+        msg.x = float(x)
+        msg.y = float(y)
+        msg.z = float(z)
+        msg.yaw = float(yaw)
+        msg.seq = 0
+        self.pub_setpoint.publish(msg)
+
+        # Track target for _wait_reached
+        self._target = Coordinate(x=float(x), y=float(y), z=float(z),
+                                   rz=math.degrees(yaw))
 
         return self._wait_reached(axes_mask, tol_x, tol_y, tol_z, tol_rz, timeout)
 
@@ -260,21 +284,21 @@ class BasicMotionNode(Node):
                 self.get_logger().warn('move_wait timeout')
                 return False
 
-            s = self.get_state()
+            p, t, _ = self.get_state()
             reached = True
 
             # 检查各轴误差是否在容差内
             if axes_mask & AX_X:
-                if abs(s.target_x - s.pos_x) > tol_x:
+                if abs(t.x - p.x) > tol_x:
                     reached = False
             if axes_mask & AX_Y:
-                if abs(s.target_y - s.pos_y) > tol_y:
+                if abs(t.y - p.y) > tol_y:
                     reached = False
             if axes_mask & AX_Z:
-                if abs(s.target_z - s.pos_z) > tol_z:
+                if abs(t.z - p.z) > tol_z:
                     reached = False
             if axes_mask & AX_RZ:
-                yaw_err = abs(math.degrees(s.target_yaw - s.yaw))
+                yaw_err = abs(math.degrees(t.yaw_rad - p.yaw_rad))
                 if yaw_err > 180:
                     yaw_err = 360 - yaw_err
                 if yaw_err > tol_rz:
@@ -337,11 +361,11 @@ class BasicMotionNode(Node):
                 rate.sleep()
                 continue
 
-            s = self.get_state()
+            p, t, _ = self.get_state()
 
             # 世界系误差
-            ex_world = s.target_x - s.pos_x
-            ey_world = s.target_y - s.pos_y
+            ex_world = t.x - p.x
+            ey_world = t.y - p.y
 
             # 投影到运动方向坐标系
             e_along = ca * ex_world + sa * ey_world      # 前向误差（剩余距离）
@@ -396,9 +420,9 @@ class BasicMotionNode(Node):
         - 每一步都重新计算，自适应当前状态
         """
         while rclpy.ok():
-            s = self.get_state()
-            ex_world = target_x - s.pos_x  # 世界系 X 误差
-            ey_world = target_y - s.pos_y  # 世界系 Y 误差
+            p, t, _ = self.get_state()
+            ex_world = target_x - p.x  # 世界系 X 误差
+            ey_world = target_y - p.y  # 世界系 Y 误差
             dist_xy = math.sqrt(ex_world**2 + ey_world**2)
 
             # 计算运动方向角和基础步长
@@ -430,27 +454,30 @@ class BasicMotionNode(Node):
 
             # 计算下一步的世界系目标坐标
             frac = step_along / dist_xy if dist_xy > 0.03 else 1.0
-            step_x = s.pos_x + ex_world * frac
-            step_y = s.pos_y + ey_world * frac
+            step_x = p.x + ex_world * frac
+            step_y = p.y + ey_world * frac
             # Z 轴：线性插值到最终目标（按剩余步数均分）
-            dz_total = target_z - s.pos_z
+            dz_total = target_z - p.z
             steps_remaining = max(1, math.ceil(dist_xy / base_step))
-            step_z = s.pos_z + dz_total / steps_remaining
+            step_z = p.z + dz_total / steps_remaining
 
             # 发送这一步的目标位置
-            msg = MotionCommand()
-            msg.mode = MotionCommand.MODE_POS_WORLD
-            msg.x = step_x
-            msg.y = step_y
-            msg.z = step_z
-            msg.yaw = target_yaw_rad
-            self.pub_motion.publish(msg)
+            msg = ZitSetpoint()
+            msg.control_key = CK_POS
+            msg.x = float(step_x)
+            msg.y = float(step_y)
+            msg.z = float(step_z)
+            msg.yaw = float(target_yaw_rad)
+            msg.seq = 0
+            self.pub_setpoint.publish(msg)
+            self._target = {'x': step_x, 'y': step_y, 'z': step_z, 'rz': math.degrees(target_yaw_rad)}
+            self.pub_setpoint.publish(msg)
 
             # 等待收敛（在运动方向坐标系中判断）
             self._wait_step_convergence(move_angle, timeout=timeout)
 
         # 最终：发送精确目标并等待到达
-        return self._cmd_and_wait(MotionCommand.MODE_POS_WORLD,
+        return self._cmd_and_wait(CK_POS,
                                   target_x, target_y, target_z, target_yaw_rad,
                                   axes_mask, timeout=timeout)
 
@@ -464,55 +491,55 @@ class BasicMotionNode(Node):
                  timeout: float = 60.0) -> bool:
         """设置绝对世界系位置 + 偏航角。rz 单位为度。"""
         rz_rad = math.radians(rz)
-        self._cmd_and_wait(MotionCommand.MODE_POS_WORLD, x, y, z, rz_rad, AX_ALL, timeout=timeout)
+        self._cmd_and_wait(CK_POS, x, y, z, rz_rad, AX_ALL, timeout=timeout)
         return True
 
     def setxyz(self, x: float, y: float, z: float, timeout: float = 60.0) -> bool:
         """设置绝对世界系位置（不改变偏航角）。"""
-        s = self.get_state()
-        self._cmd_and_wait(MotionCommand.MODE_POS_WORLD, x, y, z, s.yaw, AX_XYZ, timeout=timeout)
+        p, t, _ = self.get_state()
+        self._cmd_and_wait(CK_POS, x, y, z, p.yaw_rad, AX_XYZ, timeout=timeout)
         return True
 
     def setxy(self, x: float, y: float, timeout: float = 60.0) -> bool:
         """设置绝对世界系 XY 位置（不改变深度和偏航）。"""
-        s = self.get_state()
-        self._cmd_and_wait(MotionCommand.MODE_POS_WORLD, x, y, s.pos_z, s.yaw, AX_XY, timeout=timeout)
+        p, t, _ = self.get_state()
+        self._cmd_and_wait(CK_POS, x, y, p.z, p.yaw_rad, AX_XY, timeout=timeout)
         return True
 
     def setxyrz(self, x: float, y: float, rz: float, timeout: float = 60.0) -> bool:
         """设置绝对世界系 XY 位置 + 偏航角。"""
         rz_rad = math.radians(rz)
-        s = self.get_state()
-        self._cmd_and_wait(MotionCommand.MODE_POS_WORLD, x, y, s.pos_z, rz_rad,
+        p, t, _ = self.get_state()
+        self._cmd_and_wait(CK_POS, x, y, p.z, rz_rad,
                            AX_X | AX_Y | AX_RZ, timeout=timeout)
         return True
 
     def setz(self, z: float, timeout: float = 60.0) -> bool:
         """设置绝对深度。"""
-        s = self.get_state()
-        self._cmd_and_wait(MotionCommand.MODE_POS_WORLD, s.pos_x, s.pos_y, z, s.yaw,
+        p, t, _ = self.get_state()
+        self._cmd_and_wait(CK_POS, p.x, p.y, z, p.yaw_rad,
                            AX_Z, timeout=timeout)
         return True
 
     def setrz(self, rz: float, timeout: float = 60.0) -> bool:
         """设置绝对偏航角（单位：度）。"""
         rz_rad = math.radians(rz)
-        s = self.get_state()
-        self._cmd_and_wait(MotionCommand.MODE_POS_WORLD, s.pos_x, s.pos_y, s.pos_z, rz_rad,
+        p, t, _ = self.get_state()
+        self._cmd_and_wait(CK_POS, p.x, p.y, p.z, rz_rad,
                            AX_RZ, timeout=timeout)
         return True
 
     def setx(self, x: float, timeout: float = 60.0) -> bool:
         """设置绝对 X (北) 位置。"""
-        s = self.get_state()
-        self._cmd_and_wait(MotionCommand.MODE_POS_WORLD, x, s.pos_y, s.pos_z, s.yaw,
+        p, t, _ = self.get_state()
+        self._cmd_and_wait(CK_POS, x, p.y, p.z, p.yaw_rad,
                            AX_X, timeout=timeout)
         return True
 
     def sety(self, y: float, timeout: float = 60.0) -> bool:
         """设置绝对 Y (东) 位置。"""
-        s = self.get_state()
-        self._cmd_and_wait(MotionCommand.MODE_POS_WORLD, s.pos_x, y, s.pos_z, s.yaw,
+        p, t, _ = self.get_state()
+        self._cmd_and_wait(CK_POS, p.x, y, p.z, p.yaw_rad,
                            AX_Y, timeout=timeout)
         return True
 
@@ -526,66 +553,66 @@ class BasicMotionNode(Node):
     def wmovexyzrz(self, dx: float, dy: float, dz: float, drz: float,
                    timeout: float = 60.0) -> bool:
         """世界系步进：移动 (dx, dy, dz) + 旋转 drz 度。"""
-        s = self.get_state()
-        target_x = s.pos_x + dx
-        target_y = s.pos_y + dy
-        target_z = s.pos_z + dz
-        target_rz = s.yaw + math.radians(drz)
+        p, t, _ = self.get_state()
+        target_x = p.x + dx
+        target_y = p.y + dy
+        target_z = p.z + dz
+        target_rz = p.yaw_rad + math.radians(drz)
         return self._step_move_world(target_x, target_y, target_z, target_rz,
                                      AX_ALL, timeout=timeout)
 
     def wmovexyz(self, dx: float, dy: float, dz: float, timeout: float = 60.0) -> bool:
         """世界系步进：移动 (dx, dy, dz)。"""
-        s = self.get_state()
-        target_x = s.pos_x + dx
-        target_y = s.pos_y + dy
-        target_z = s.pos_z + dz
-        return self._step_move_world(target_x, target_y, target_z, s.yaw,
+        p, t, _ = self.get_state()
+        target_x = p.x + dx
+        target_y = p.y + dy
+        target_z = p.z + dz
+        return self._step_move_world(target_x, target_y, target_z, p.yaw_rad,
                                      AX_XYZ, timeout=timeout)
 
     def wmovexy(self, dx: float, dy: float, timeout: float = 60.0) -> bool:
         """世界系步进：XY 平面移动。"""
-        s = self.get_state()
-        target_x = s.pos_x + dx
-        target_y = s.pos_y + dy
-        return self._step_move_world(target_x, target_y, s.pos_z, s.yaw,
+        p, t, _ = self.get_state()
+        target_x = p.x + dx
+        target_y = p.y + dy
+        return self._step_move_world(target_x, target_y, p.z, p.yaw_rad,
                                      AX_XY, timeout=timeout)
 
     def wmovexyrz(self, dx: float, dy: float, drz: float, timeout: float = 60.0) -> bool:
         """世界系步进：XY 移动 + 偏航旋转。"""
-        s = self.get_state()
-        target_x = s.pos_x + dx
-        target_y = s.pos_y + dy
-        target_rz = s.yaw + math.radians(drz)
-        return self._step_move_world(target_x, target_y, s.pos_z, target_rz,
+        p, t, _ = self.get_state()
+        target_x = p.x + dx
+        target_y = p.y + dy
+        target_rz = p.yaw_rad + math.radians(drz)
+        return self._step_move_world(target_x, target_y, p.z, target_rz,
                                      AX_X | AX_Y | AX_RZ, timeout=timeout)
 
     def wmovez(self, dz: float, timeout: float = 60.0) -> bool:
         """世界系步进：改变深度。"""
-        s = self.get_state()
-        target_z = s.pos_z + dz
-        return self._step_move_world(s.pos_x, s.pos_y, target_z, s.yaw,
+        p, t, _ = self.get_state()
+        target_z = p.z + dz
+        return self._step_move_world(p.x, p.y, target_z, p.yaw_rad,
                                      AX_Z, timeout=timeout)
 
     def wmoverz(self, drz: float, timeout: float = 60.0) -> bool:
         """世界系步进：偏航旋转（单位：度）。"""
-        s = self.get_state()
-        target_rz = s.yaw + math.radians(drz)
-        return self._step_move_world(s.pos_x, s.pos_y, s.pos_z, target_rz,
+        p, t, _ = self.get_state()
+        target_rz = p.yaw_rad + math.radians(drz)
+        return self._step_move_world(p.x, p.y, p.z, target_rz,
                                      AX_RZ, timeout=timeout)
 
     def wmovex(self, dx: float, timeout: float = 60.0) -> bool:
         """世界系步进：沿北方向移动。"""
-        s = self.get_state()
-        target_x = s.pos_x + dx
-        return self._step_move_world(target_x, s.pos_y, s.pos_z, s.yaw,
+        p, t, _ = self.get_state()
+        target_x = p.x + dx
+        return self._step_move_world(target_x, p.y, p.z, p.yaw_rad,
                                      AX_X, timeout=timeout)
 
     def wmovey(self, dy: float, timeout: float = 60.0) -> bool:
         """世界系步进：沿东方向移动。"""
-        s = self.get_state()
-        target_y = s.pos_y + dy
-        return self._step_move_world(s.pos_x, target_y, s.pos_z, s.yaw,
+        p, t, _ = self.get_state()
+        target_y = p.y + dy
+        return self._step_move_world(p.x, target_y, p.z, p.yaw_rad,
                                      AX_Y, timeout=timeout)
 
     # ========================================================================
@@ -598,56 +625,56 @@ class BasicMotionNode(Node):
     def bmovexyzrz(self, dx: float, dy: float, dz: float, drz: float,
                    timeout: float = 60.0) -> bool:
         """机体系步进：移动 (dx, dy, dz) + 旋转 drz 度。"""
-        s = self.get_state()
-        dx_w, dy_w = body_to_world(dx, dy, s.yaw)
-        target_x = s.pos_x + dx_w
-        target_y = s.pos_y + dy_w
-        target_z = s.pos_z + dz
-        target_rz = s.yaw + math.radians(drz)
+        p, t, _ = self.get_state()
+        off = p.body_to_world(dx, dy); dx_w, dy_w = off.x, off.y
+        target_x = p.x + dx_w
+        target_y = p.y + dy_w
+        target_z = p.z + dz
+        target_rz = p.yaw_rad + math.radians(drz)
         return self._step_move_world(target_x, target_y, target_z, target_rz,
                                      AX_ALL, timeout=timeout)
 
     def bmovexyz(self, dx: float, dy: float, dz: float, timeout: float = 60.0) -> bool:
         """机体系步进：移动 (dx, dy, dz)。"""
-        s = self.get_state()
-        dx_w, dy_w = body_to_world(dx, dy, s.yaw)
-        target_x = s.pos_x + dx_w
-        target_y = s.pos_y + dy_w
-        target_z = s.pos_z + dz
-        return self._step_move_world(target_x, target_y, target_z, s.yaw,
+        p, t, _ = self.get_state()
+        off = p.body_to_world(dx, dy); dx_w, dy_w = off.x, off.y
+        target_x = p.x + dx_w
+        target_y = p.y + dy_w
+        target_z = p.z + dz
+        return self._step_move_world(target_x, target_y, target_z, p.yaw_rad,
                                      AX_XYZ, timeout=timeout)
 
     def bmovexy(self, dx: float, dy: float, timeout: float = 60.0) -> bool:
         """机体系步进：XY 平面移动（dx=前进, dy=右移）。"""
-        s = self.get_state()
-        dx_w, dy_w = body_to_world(dx, dy, s.yaw)
-        target_x = s.pos_x + dx_w
-        target_y = s.pos_y + dy_w
-        return self._step_move_world(target_x, target_y, s.pos_z, s.yaw,
+        p, t, _ = self.get_state()
+        off = p.body_to_world(dx, dy); dx_w, dy_w = off.x, off.y
+        target_x = p.x + dx_w
+        target_y = p.y + dy_w
+        return self._step_move_world(target_x, target_y, p.z, p.yaw_rad,
                                      AX_XY, timeout=timeout)
 
     def bmovexyrz(self, dx: float, dy: float, drz: float, timeout: float = 60.0) -> bool:
         """机体系步进：XY 移动 + 偏航旋转。"""
-        s = self.get_state()
-        dx_w, dy_w = body_to_world(dx, dy, s.yaw)
-        target_x = s.pos_x + dx_w
-        target_y = s.pos_y + dy_w
-        target_rz = s.yaw + math.radians(drz)
-        return self._step_move_world(target_x, target_y, s.pos_z, target_rz,
+        p, t, _ = self.get_state()
+        off = p.body_to_world(dx, dy); dx_w, dy_w = off.x, off.y
+        target_x = p.x + dx_w
+        target_y = p.y + dy_w
+        target_rz = p.yaw_rad + math.radians(drz)
+        return self._step_move_world(target_x, target_y, p.z, target_rz,
                                      AX_X | AX_Y | AX_RZ, timeout=timeout)
 
     def bmovez(self, dz: float, timeout: float = 60.0) -> bool:
         """机体系步进：改变深度（正=下潜, 负=上浮）。"""
-        s = self.get_state()
-        target_z = s.pos_z + dz
-        return self._step_move_world(s.pos_x, s.pos_y, target_z, s.yaw,
+        p, t, _ = self.get_state()
+        target_z = p.z + dz
+        return self._step_move_world(p.x, p.y, target_z, p.yaw_rad,
                                      AX_Z, timeout=timeout)
 
     def bmoverz(self, drz: float, timeout: float = 60.0) -> bool:
         """机体系步进：偏航旋转（单位：度）。"""
-        s = self.get_state()
-        target_rz = s.yaw + math.radians(drz)
-        return self._step_move_world(s.pos_x, s.pos_y, s.pos_z, target_rz,
+        p, t, _ = self.get_state()
+        target_rz = p.yaw_rad + math.radians(drz)
+        return self._step_move_world(p.x, p.y, p.z, target_rz,
                                      AX_RZ, timeout=timeout)
 
     def bmovex(self, dx: float, timeout: float = 60.0) -> bool:
@@ -685,24 +712,24 @@ class BasicMotionNode(Node):
             dz: Z 轴偏移 (深度)
             timeout: 超时时间 (秒)
         """
-        s = self.get_state()
-        target_x = s.pos_x + dx_w
-        target_y = s.pos_y + dy_w
-        target_z = s.pos_z + dz
+        p, t, _ = self.get_state()
+        target_x = p.x + dx_w
+        target_y = p.y + dy_w
+        target_z = p.z + dz
 
         dist_xy = math.sqrt(dx_w**2 + dy_w**2)
         if dist_xy > 0.03:
             # 计算目标方向角（NED: atan2(东, 北)）
             target_yaw = math.atan2(dy_w, dx_w)
             # 第一步：旋转 AUV 朝向目标
-            self._step_move_world(s.pos_x, s.pos_y, s.pos_z, target_yaw,
+            self._step_move_world(p.x, p.y, p.z, target_yaw,
                                   AX_RZ, timeout=timeout)
             # 第二步：沿 body-X 步进前进（同时调整深度）
             return self._step_move_world(target_x, target_y, target_z, target_yaw,
                                          AX_XY | AX_Z, timeout=timeout)
         else:
             # 纯深度移动（无 XY 偏移）
-            return self._step_move_world(s.pos_x, s.pos_y, target_z, s.yaw,
+            return self._step_move_world(p.x, p.y, target_z, p.yaw_rad,
                                          AX_Z, timeout=timeout)
 
     # --- WTRAVEL: 世界系直线移动 ---
@@ -732,15 +759,15 @@ class BasicMotionNode(Node):
 
     def btravelxy(self, dx: float, dy: float, timeout: float = 60.0) -> bool:
         """机体系直线移动：先转向目标，再沿 body-X 前进。dx=前进, dy=右移。"""
-        s = self.get_state()
-        dx_w, dy_w = body_to_world(dx, dy, s.yaw)
+        p, t, _ = self.get_state()
+        off = p.body_to_world(dx, dy); dx_w, dy_w = off.x, off.y
         return self._travel_world(dx_w, dy_w, 0.0, timeout=timeout)
 
     def btravelxyz(self, dx: float, dy: float, dz: float,
                    timeout: float = 60.0) -> bool:
         """机体系直线移动：先转向目标，沿 body-X 前进 + 调整深度。"""
-        s = self.get_state()
-        dx_w, dy_w = body_to_world(dx, dy, s.yaw)
+        p, t, _ = self.get_state()
+        off = p.body_to_world(dx, dy); dx_w, dy_w = off.x, off.y
         return self._travel_world(dx_w, dy_w, dz, timeout=timeout)
 
     def btravelx(self, dx: float, timeout: float = 60.0) -> bool:
@@ -749,8 +776,8 @@ class BasicMotionNode(Node):
 
     def btravely(self, dy: float, timeout: float = 60.0) -> bool:
         """机体系直线移动：先转向右侧方向，再沿 body-X 前进。"""
-        s = self.get_state()
-        dx_w, dy_w = body_to_world(0.0, dy, s.yaw)
+        p, t, _ = self.get_state()
+        off = p.body_to_world(0.0, dy); dx_w, dy_w = off.x, off.y
         return self._travel_world(dx_w, dy_w, 0.0, timeout=timeout)
 
     def btravelz(self, dz: float, timeout: float = 60.0) -> bool:

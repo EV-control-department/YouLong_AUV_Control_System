@@ -1,14 +1,16 @@
 """Minimal control node: the ONLY node that talks to hardware/sim_bridge.
 
-Provides primitive motion commands:
-- set_world(x, y, z, yaw) — world frame absolute position
-- set_body(x, y, z, yaw) — body frame absolute position
-- set_step(dx, dy, dz, dyaw) — incremental body frame step
-- vel_world(vx, vy, vz, vyaw) — world frame velocity
-- vel_body(vx, vy, vz, vyaw) — body frame velocity
-- vel_step(dvx, dvy, dvz, dvyaw) — incremental body frame velocity
-- arm_control(cmd) — arm/disarm
-- led_control(cmd) — LED control
+Communicates via ZIT6 protocol (same as real AUV MCU):
+  - Publishes ZitSetpoint to /zit6/cmd/setpoint
+  - Subscribes to /zit6/state/status, /zit6/state/pos
+
+Motion primitives:
+- set_world(x, y, z, yaw_deg) — world frame absolute position
+- set_body(x, y, z, yaw_deg) — body frame absolute position
+- set_step(dx, dy, dz, dyaw_deg) — incremental body frame step
+- vel_world(vx, vy, vz, vyaw_rad_s) — world frame velocity
+- vel_body(vx, vy, vz, vyaw_rad_s) — body frame velocity
+- vel_step(dvx, dvy, dvz, dvyaw_rad_s) — incremental body frame velocity
 """
 
 import math
@@ -16,75 +18,84 @@ import threading
 
 import rclpy
 from rclpy.node import Node
-from std_srvs.srv import Trigger
+from std_msgs.msg import Float32MultiArray
 
-from uv_msgs.msg import MotionCommand, AuvState
+from zit6_interfaces.msg import ZitSetpoint, ZitStatus
 
 
 class MinimalControlNode(Node):
-    """Minimal control node: hardware abstraction boundary."""
+    """Minimal control node: hardware abstraction boundary (ZIT6 protocol)."""
+
+    # control_key constants
+    CK_POS = 0       # position mode
+    CK_VEL = 1       # velocity mode
+    CK_FORCE = 2     # force mode
+    CK_BODY = 0x10   # body frame
+    CK_INC = 0x20    # incremental
 
     def __init__(self):
         super().__init__('minimal_control')
 
-        # Current state
-        self.state = AuvState()
-        self._state_lock = threading.Lock()
+        self.state = ZitStatus()
+        self.pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}  # rz in degrees
+        self._lock = threading.Lock()
 
-        # Publisher
-        self.pub_motion = self.create_publisher(MotionCommand, '/auv/cmd/motion', 10)
+        # Publisher: ZIT6 setpoint
+        self.pub_setpoint = self.create_publisher(ZitSetpoint, '/zit6/cmd/setpoint', 10)
 
-        # Subscriber
-        self.create_subscription(AuvState, '/auv/state', self._state_cb, 10)
+        # Subscribers: ZIT6 state
+        self.create_subscription(ZitStatus, '/zit6/state/status', self._status_cb, 10)
+        self.create_subscription(Float32MultiArray, '/zit6/state/pos', self._pos_cb, 10)
 
-        # Services
-        self.create_service(Trigger, '/auv/cmd/arm', self._arm_cb)
+        self.get_logger().info('MinimalControl node started (ZIT6 protocol)')
 
-        self.get_logger().info('MinimalControl node started')
-
-    def _state_cb(self, msg: AuvState):
-        with self._state_lock:
+    def _status_cb(self, msg: ZitStatus):
+        with self._lock:
             self.state = msg
 
-    def get_state(self) -> AuvState:
-        with self._state_lock:
-            return self.state
+    def _pos_cb(self, msg: Float32MultiArray):
+        with self._lock:
+            if len(msg.data) >= 4:
+                self.pos['x'] = msg.data[0]
+                self.pos['y'] = msg.data[1]
+                self.pos['z'] = msg.data[2]
+                self.pos['rz'] = math.degrees(msg.data[3])
+
+    def get_state(self):
+        with self._lock:
+            return self.state, self.pos.copy()
 
     # ========================================================================
-    # Primitive command methods
+    # Primitive commands
     # ========================================================================
 
-    def set_world(self, x: float, y: float, z: float, yaw: float):
-        """Absolute world-frame position command. Yaw in radians."""
-        self._publish_motion(MotionCommand.MODE_POS_WORLD, 0, x, y, z, yaw)
+    def set_world(self, x: float, y: float, z: float, yaw_deg: float):
+        """Absolute world-frame position. yaw in degrees."""
+        self._pub(0, 0x0F, x, y, z, yaw_deg)
 
-    def set_body(self, x: float, y: float, z: float, yaw: float):
-        """Absolute body-frame position command. Yaw in radians."""
-        self._publish_motion(MotionCommand.MODE_POS_BODY, 0, x, y, z, yaw)
+    def set_body(self, x: float, y: float, z: float, yaw_deg: float):
+        """Absolute body-frame position. yaw in degrees."""
+        self._pub(self.CK_BODY, 0x0F, x, y, z, yaw_deg)
 
-    def set_step(self, dx: float, dy: float, dz: float, dyaw: float):
-        """Incremental body-frame position step. Yaw in radians."""
-        self._publish_motion(MotionCommand.MODE_POS_BODY_STEP, 0, dx, dy, dz, dyaw)
+    def set_step(self, dx: float, dy: float, dz: float, dyaw_deg: float):
+        """Incremental body-frame step."""
+        self._pub(self.CK_BODY | self.CK_INC, 0x0F, dx, dy, dz, dyaw_deg)
 
-    def vel_world(self, vx: float, vy: float, vz: float, vyaw: float):
-        """World-frame velocity command. vyaw in rad/s."""
-        self._publish_motion(MotionCommand.MODE_VEL_WORLD, 0, vx, vy, vz, vyaw)
+    def vel_world(self, vx: float, vy: float, vz: float, vyaw_rad_s: float):
+        """World-frame velocity. vyaw in rad/s."""
+        self._pub(self.CK_VEL, 0x0F, vx, vy, vz, math.degrees(vyaw_rad_s))
 
-    def vel_body(self, vx: float, vy: float, vz: float, vyaw: float):
-        """Body-frame velocity command. vyaw in rad/s."""
-        self._publish_motion(MotionCommand.MODE_VEL_BODY, 0, vx, vy, vz, vyaw)
+    def vel_body(self, vx: float, vy: float, vz: float, vyaw_rad_s: float):
+        """Body-frame velocity. vyaw in rad/s."""
+        self._pub(self.CK_VEL | self.CK_BODY, 0x0F, vx, vy, vz, math.degrees(vyaw_rad_s))
 
-    def vel_step(self, dvx: float, dvy: float, dvz: float, dvyaw: float):
+    def vel_step(self, dvx: float, dvy: float, dvz: float, dvyaw_rad_s: float):
         """Incremental body-frame velocity step."""
-        self._publish_motion(MotionCommand.MODE_VEL_BODY_STEP, 0, dvx, dvy, dvz, dvyaw)
+        self._pub(self.CK_VEL | self.CK_BODY | self.CK_INC, 0x0F, dvx, dvy, dvz, math.degrees(dvyaw_rad_s))
 
-    def arm_control(self, arm_cmd: int):
-        """Send arm command."""
-        self.get_logger().info(f'Arm command: {arm_cmd}')
-
-    def led_control(self, led_cmd: int):
-        """Send LED command."""
-        self.get_logger().info(f'LED command: {led_cmd}')
+    def set_force(self, fx: float, fy: float, fz: float, mz: float):
+        """Direct force/torque command."""
+        self._pub(self.CK_FORCE, 0x0F, fx, fy, fz, mz)
 
     # ========================================================================
     # Move wait
@@ -95,14 +106,7 @@ class MinimalControlNode(Node):
                   tol_z: float = 0.1, tol_rz: float = 5.0) -> bool:
         """Block until current position reaches target or timeout.
 
-        Args:
-            axes_mask: Bitmask of axes to check (bit0=x, bit1=y, bit2=z, bit3=yaw)
-            timeout: Maximum wait time in seconds
-            tol_x, tol_y, tol_z: Position tolerance in meters
-            tol_rz: Yaw tolerance in degrees
-
-        Returns:
-            True if reached, False if timeout
+        Returns True if reached, False if timeout.
         """
         rate = self.create_rate(10)
         start = self.get_clock().now()
@@ -113,23 +117,23 @@ class MinimalControlNode(Node):
                 self.get_logger().warn('move_wait timeout')
                 return False
 
-            s = self.get_state()
+            _, pos = self.get_state()
             reached = True
 
             if axes_mask & 0x01:
-                if abs(s.target_x - s.pos_x) > tol_x:
+                if abs(self._target['x'] - pos['x']) > tol_x:
                     reached = False
             if axes_mask & 0x02:
-                if abs(s.target_y - s.pos_y) > tol_y:
+                if abs(self._target['y'] - pos['y']) > tol_y:
                     reached = False
             if axes_mask & 0x04:
-                if abs(s.target_z - s.pos_z) > tol_z:
+                if abs(self._target['z'] - pos['z']) > tol_z:
                     reached = False
             if axes_mask & 0x08:
-                yaw_err = abs(math.degrees(s.target_yaw) - math.degrees(s.yaw))
-                if yaw_err > 180:
-                    yaw_err = 360 - yaw_err
-                if yaw_err > tol_rz:
+                err = abs(self._target['rz'] - pos['rz'])
+                if err > 180:
+                    err = 360 - err
+                if err > tol_rz:
                     reached = False
 
             if reached:
@@ -143,21 +147,36 @@ class MinimalControlNode(Node):
     # Internal
     # ========================================================================
 
-    def _publish_motion(self, mode: int, type_mask: int,
-                        x: float, y: float, z: float, yaw: float):
-        msg = MotionCommand()
-        msg.mode = mode
+    def _pub(self, control_key: int, type_mask: int,
+             x: float, y: float, z: float, yaw_deg: float):
+        msg = ZitSetpoint()
+        msg.control_key = control_key
         msg.type_mask = type_mask
-        msg.x = x
-        msg.y = y
-        msg.z = z
-        msg.yaw = yaw
-        self.pub_motion.publish(msg)
+        msg.x = float(x)
+        msg.y = float(y)
+        msg.z = float(z)
+        msg.yaw = math.radians(yaw_deg)
+        msg.seq = 0
+        self.pub_setpoint.publish(msg)
 
-    def _arm_cb(self, request, response):
-        response.success = True
-        response.message = 'Arm command received'
-        return response
+        # Track target for move_wait
+        mode = control_key & 0x03
+        is_body = bool(control_key & self.CK_BODY)
+        is_inc = bool(control_key & self.CK_INC)
+
+        with self._lock:
+            if mode == 0 and not is_inc:
+                # Absolute position target
+                if is_body:
+                    yaw_rad = math.radians(self.pos['rz'])
+                    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+                    self._target['x'] = self.pos['x'] + cy * x - sy * y
+                    self._target['y'] = self.pos['y'] + sy * x + cy * y
+                else:
+                    self._target['x'] = x
+                    self._target['y'] = y
+                self._target['z'] = z
+                self._target['rz'] = yaw_deg
 
 
 def main(args=None):
