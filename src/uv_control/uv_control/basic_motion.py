@@ -444,12 +444,15 @@ class BasicMotionNode(Node):
             target_world = Coordinate(x=target_x, y=target_y, z=target_z)
             target_body = self._odom_to_body(target_world)
 
+            _, target_odom, _ = self.get_state()
+            target_target = target_odom.to_local_frame(target_world)
+
 
 
             # 机体坐标系误差 → 运动方向坐标系
             ex_body = target_body.x
             ey_body = target_body.y
-            dist_xy = math.sqrt(ex_body**2 + ey_body**2)
+            dist_xy = math.sqrt(target_target.x**2 + target_target.y**2)
 
 
             move_angle = math.atan2(ey_body, ex_body)
@@ -470,14 +473,19 @@ class BasicMotionNode(Node):
 
 
             dz_total = target_z - self.pose.z
+            drz_total = target_yaw_degree - self.pose.rz
             steps_remaining = max(1, math.ceil(dist_xy / base_step))
-            step_z = self.pose.z + dz_total / steps_remaining
+
+            step_z = dz_total / steps_remaining
+            step_rz = drz_total / steps_remaining  
 
             map_pose, _, _ = self.get_state()
 
-            step_map = self._body_to_map(Coordinate(x = ca * step_along, y = sa * step_along, z = step_z))
-            # 步进目标 → map 系 → set_map
-            self.set_step(x = step_map.x, y = step_map.y, z = step_map.z, yaw_deg = target_yaw_degree)
+            vector_body = Coordinate(x = ca * step_along, y = sa * step_along, z = step_z, rz = step_rz)
+
+
+            # 步进目标 = 当前 target + 步进增量
+            self.set_step(dx = vector_body.x, dy = vector_body.y, dz = vector_body.z, dyaw_deg = vector_body.rz)
 
 
             self._wait_step_convergence(move_angle, timeout=timeout)
