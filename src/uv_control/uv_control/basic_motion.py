@@ -185,7 +185,7 @@ class BasicMotionNode(Node):
             else:
                 if not self._origin_warned:
                     self._origin_warned = True
-                    self.get_logger().warn('里程计原点未设置，使用 map 坐标作为 odom 坐标')
+                    self.get_logger().warning('里程计原点未设置，使用 map 坐标作为 odom 坐标')
                 self.pose = map_pos
 
 
@@ -315,7 +315,7 @@ class BasicMotionNode(Node):
         while rclpy.ok():
             elapsed = (self.get_clock().now() - start).microseconds / 1e6
             if elapsed > timeout:
-                self.get_logger().warn('_wait_reached超时')
+                self.get_logger().warning('_wait_reached超时')
                 return False
 
 
@@ -478,8 +478,6 @@ class BasicMotionNode(Node):
 
             step_z = dz_total / steps_remaining
             step_rz = drz_total / steps_remaining  
-
-            map_pose, _, _ = self.get_state()
 
             vector_body = Coordinate(x = ca * step_along, y = sa * step_along, z = step_z, rz = step_rz)
 
