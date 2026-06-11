@@ -40,5 +40,6 @@ venv/
 .claude/
 
 .reasonix/
+.github/
 
 REASONIX.md
