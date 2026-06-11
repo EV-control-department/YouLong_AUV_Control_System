@@ -20,7 +20,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'minimal_control = uv_control.minimal_control:main',
             'basic_motion = uv_control.basic_motion:main',
         ],
     },

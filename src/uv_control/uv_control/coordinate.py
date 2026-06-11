@@ -1,21 +1,41 @@
-"""NED coordinate frame with 3D homogeneous transform support.
+"""NED 坐标系 + 3D 齐次变换支持
 
-A Coordinate represents a 6-DOF pose (x, y, z, rx, ry, rz) in the NED frame
-and supports transform_to / transform_from via 4×4 homogeneous matrices.
+Coordinate 类表示 NED 坐标系下的 6 自由度位姿 (x, y, z, rx, ry, rz)，
+支持通过 4×4 齐次变换矩阵进行坐标系转换（to_local_frame / to_world_frame）。
 
-Units: internally degrees for angles; math functions use radians internally.
-Design based on AUV2026 CoordinateSystem.py.
+角度内部以度为单位存储；数学运算时自动转为弧度。
+设计参考 AUV2026 CoordinateSystem.py。
+
+──── 快速使用 ────────────────────────────────────────────
+
+# 构造位姿
+auv = Coordinate(x=10.0, y=5.0, z=-2.0, rz=45.0)       # NED: (10,5,-2), 朝向45°
+pos = Coordinate.from_zit6_array([1.0, 2.0, 0.0, 0.0])  # 从ZIT6协议数组创建
+
+# 坐标系变换
+target = Coordinate(x=15.0, y=5.0, z=-2.0)              # 世界坐标下的目标
+rel = auv.to_local_frame(target)                         # 目标相对AUV的位姿
+abs_ = auv.to_world_frame(Coordinate(x=1.0, y=0.0))     # "AUV前方1米"的世界坐标
+
+# 2D位移（忽略横滚/俯仰）
+off = auv.body_to_world(1.0, 0.0)                        # "向右1米" → 世界位移
+off = auv.world_to_body(5.0, 0.0)                        # "向北5米" → 机体位移
+
+# 角度归一化
+from uv_control.coordinate import wrap_deg, wrap_rad
+yaw = wrap_deg(450.0)                                    # → 90.0
 """
 
 import math
 from dataclasses import dataclass
 
 PI = math.pi
-DEG2RAD = PI / 180.0
-RAD2DEG = 180.0 / PI
+DEG2RAD = PI / 180.0       # 度 → 弧度
+RAD2DEG = 180.0 / PI       # 弧度 → 度
 
 
-def _wrap_deg(angle: float) -> float:
+def wrap_deg(angle: float) -> float:
+    """将角度归一化到 [-180, 180] 度。"""
     while angle > 180.0:
         angle -= 360.0
     while angle < -180.0:
@@ -23,7 +43,8 @@ def _wrap_deg(angle: float) -> float:
     return angle
 
 
-def _wrap_rad(angle: float) -> float:
+def wrap_rad(angle: float) -> float:
+    """将弧度归一化到 [-π, π]。"""
     while angle > PI:
         angle -= 2.0 * PI
     while angle < -PI:
@@ -32,7 +53,7 @@ def _wrap_rad(angle: float) -> float:
 
 
 def _mat4_mul(a: list, b: list) -> list:
-    """Multiply two 4×4 matrices laid out as flat 16-element lists."""
+    """两个 4×4 矩阵相乘（扁平成 16 元素的列表）。"""
     r = [0.0] * 16
     for i in range(4):
         for j in range(4):
@@ -42,23 +63,32 @@ def _mat4_mul(a: list, b: list) -> list:
 
 @dataclass
 class Coordinate:
-    """NED 6-DOF pose (degrees internally)."""
+    """NED 6 自由度位姿（内部角度以度为单位）。
 
-    x: float = 0.0       # North  (m)
-    y: float = 0.0       # East   (m)
-    z: float = 0.0       # Down   (m)
-    rx: float = 0.0      # Roll   (deg)
-    ry: float = 0.0      # Pitch  (deg)
-    rz: float = 0.0      # Yaw    (deg, 0=N, CW+)
+    字段：
+        x  — 北向位置 (m)
+        y  — 东向位置 (m)
+        z  — 深度 (m, 向下为正)
+        rx — 横滚角 (deg)
+        ry — 俯仰角 (deg)
+        rz — 偏航角 (deg, 0°=北, 顺时针为正)
+    """
 
-    # ── matrix cache ────────────────────────────────────────────────
-    _h: list = None      # 4×4 homogeneous matrix (lazy)
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+    rx: float = 0.0
+    ry: float = 0.0
+    rz: float = 0.0
 
-    # ── constructors ────────────────────────────────────────────────
+    # ── 矩阵缓存 ──────────────────────────────────────────────
+    _h: list = None      # 4×4 齐次变换矩阵（惰性计算）
+
+    # ── 构造器 ────────────────────────────────────────────────
 
     @classmethod
-    def from_zit6_pos(cls, data: list):
-        """From /zit6/state/pos Float32MultiArray [x, y, z, yaw_rad]."""
+    def from_zit6_array(cls, data: list):
+        """从 ZIT6 协议的 Float32MultiArray [x, y, z, yaw_rad] 创建 Coordinate。"""
         if len(data) >= 4:
             return cls(x=data[0], y=data[1], z=data[2],
                        rz=math.degrees(data[3]))
@@ -66,33 +96,35 @@ class Coordinate:
 
     @classmethod
     def from_dict(cls, d: dict):
-        """From dict with keys x, y, z, rx, ry, rz (degrees)."""
+        """从字典创建 Coordinate，键为 x, y, z, rx, ry, rz（角度单位为度）。"""
         return cls(x=d.get('x', 0.0), y=d.get('y', 0.0),
                    z=d.get('z', 0.0), rz=d.get('rz', 0.0))
 
-    # ── serialization ───────────────────────────────────────────────
+    # ── 序列化 ────────────────────────────────────────────────
 
     def to_dict(self) -> dict:
+        """转为字典（角度为度）。"""
         return {'x': self.x, 'y': self.y, 'z': self.z,
                 'rx': self.rx, 'ry': self.ry, 'rz': self.rz}
 
-    def to_zit6_pos(self) -> list:
-        """Float32MultiArray format [x, y, z, yaw_rad]."""
+    def to_zit6_array(self) -> list:
+        """转为 ZIT6 协议 Float32MultiArray 格式 [x, y, z, yaw_rad]。"""
         return [self.x, self.y, self.z, math.radians(self.rz)]
 
-    def copy(self):
-        return Coordinate(self.x, self.y, self.z, self.rx, self.ry, self.rz)
+    # ── 矩阵计算 ──────────────────────────────────────────────
 
-    # ── matrix computation ──────────────────────────────────────────
+    def to_matrix(self):
+        """将当前位姿构建为 4×4 齐次变换矩阵（NED ZYX 旋转约定）。
 
-    def extract(self):
-        """Build 4×4 homogeneous transform matrix (NED ZYX convention)."""
+        矩阵结构：[R(3×3) | t(3×1)]，旋转顺序 Rz(yaw) * Ry(pitch) * Rx(roll)。
+        结果缓存在 self._h 中。
+        """
         sx, cx = math.sin(self.rx * DEG2RAD), math.cos(self.rx * DEG2RAD)
         sy, cy = math.sin(self.ry * DEG2RAD), math.cos(self.ry * DEG2RAD)
         sz, cz = math.sin(self.rz * DEG2RAD), math.cos(self.rz * DEG2RAD)
 
         h = [0.0] * 16
-        # R = Rz(yaw) * Ry(pitch) * Rx(roll)  (ZYX extrinsic = Rz·Ry·Rx)
+        # R = Rz(yaw) * Ry(pitch) * Rx(roll)  （ZYX 外旋 = Rz·Ry·Rx）
         h[0] = cy * cz
         h[1] = sx * sy * cz - cx * sz
         h[2] = cx * sy * cz + sx * sz
@@ -116,8 +148,12 @@ class Coordinate:
         self._h = h
         return h
 
-    def r_extract(self):
-        """Decompose internal h_matrix back to x, y, z, rx, ry, rz."""
+    def from_matrix(self):
+        """从内部 _h 矩阵还原位姿到 x, y, z, rx, ry, rz。
+
+        当 pitch 接近 ±90° 时发生万向锁（gimbal lock），
+        此时只提取 yaw，放弃 roll/pitch 的精确值。
+        """
         if self._h is None:
             return
         h = self._h
@@ -131,35 +167,46 @@ class Coordinate:
             self.rx = math.atan2(h[9] / math.cos(ry), h[10] / math.cos(ry)) * RAD2DEG
             self.rz = math.atan2(h[4] / math.cos(ry), h[0] / math.cos(ry)) * RAD2DEG
         else:
-            # Gimbal lock — give up on roll/pitch, yaw still valid from h[0],h[4]
+            # 万向锁 — 放弃 roll/pitch，yaw 仍可从 h[0], h[4] 获取
             self.rz = math.atan2(h[4], h[0]) * RAD2DEG
 
-    # ── transforms ──────────────────────────────────────────────────
+    # ── 坐标系变换 ────────────────────────────────────────────
 
-    def transform_to(self, target: 'Coordinate') -> 'Coordinate':
-        """Return target expressed in THIS frame (world → self coords)."""
-        self.extract()
-        target.extract()
+    def to_local_frame(self, target: 'Coordinate') -> 'Coordinate':
+        """计算目标位姿相对于当前坐标系的位姿。
+
+        即：将世界坐标下的 target 转换到以 self 为原点的局部坐标系中。
+        等价于：result = inv(self) * target
+        """
+        self.to_matrix()
+        target.to_matrix()
         inv = self._invert_matrix(self._h)
         result = Coordinate()
         result._h = _mat4_mul(inv, target._h)
-        result.r_extract()
+        result.from_matrix()
         return result
 
-    def transform_from(self, local: 'Coordinate') -> 'Coordinate':
-        """Return local (in THIS frame) expressed in world coords (self → world)."""
-        self.extract()
-        local.extract()
+    def to_world_frame(self, local: 'Coordinate') -> 'Coordinate':
+        """将当前坐标系下的局部位姿转换为世界坐标。
+
+        即：如果 local 是相对于 self 的位姿，计算它在世界坐标系下的绝对位姿。
+        等价于：result = self * local
+        """
+        self.to_matrix()
+        local.to_matrix()
         result = Coordinate()
         result._h = _mat4_mul(self._h, local._h)
-        result.r_extract()
+        result.from_matrix()
         return result
 
-    # ── 2D convenience (roll=pitch=0) ───────────────────────────────
+    # ── 2D 位移快捷变换（忽略横滚/俯仰） ──────────────────────
 
     def body_to_world(self, dx_b: float, dy_b: float,
                        dz: float = 0.0) -> 'Coordinate':
-        """Body-frame displacement → world displacement (2D yaw only)."""
+        """机体坐标系位移 → 世界坐标系位移（仅考虑偏航角 yaw）。
+
+        用于：已知 AUV 当前朝向，求"向右 1 米"在世界坐标下朝哪个方向走。
+        """
         yaw_rad = self.rz * DEG2RAD
         cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
         dx_w = cy * dx_b - sy * dy_b
@@ -168,7 +215,10 @@ class Coordinate:
 
     def world_to_body(self, dx_w: float, dy_w: float,
                        dz: float = 0.0) -> 'Coordinate':
-        """World displacement → body-frame displacement (2D yaw only)."""
+        """世界坐标系位移 → 机体坐标系位移（仅考虑偏航角 yaw）。
+
+        用于：已知世界坐标下的目标偏移，求 AUV 自身坐标系下该往哪个方向走。
+        """
         yaw_rad = self.rz * DEG2RAD
         cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
         dx_b = cy * dx_w + sy * dy_w
@@ -177,23 +227,18 @@ class Coordinate:
 
     def offset(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0,
                drx: float = 0.0, dry: float = 0.0, drz: float = 0.0) -> 'Coordinate':
-        """Return a new Coordinate offset from this one (world-frame)."""
+        """在世界坐标系下偏移后生成新的 Coordinate。
+
+        直接对 x/y/z/rx/ry/rz 做加法，不涉及矩阵运算。
+        """
         return Coordinate(x=self.x + dx, y=self.y + dy, z=self.z + dz,
                           rx=self.rx + drx, ry=self.ry + dry, rz=self.rz + drz)
 
-    # ── utilities ───────────────────────────────────────────────────
-
-    @staticmethod
-    def wrap_deg(angle: float) -> float:
-        return _wrap_deg(angle)
-
-    @staticmethod
-    def wrap_rad(angle: float) -> float:
-        return _wrap_rad(angle)
+    # ── 工具函数 ──────────────────────────────────────────────
 
     @staticmethod
     def _invert_matrix(m: list) -> list:
-        """Gauss-Jordan inverse of 4×4 matrix (flat 16)."""
+        """Gauss-Jordan 消元法求 4×4 矩阵的逆（扁平成 16 元素列表）。"""
         aug = [0.0] * 32
         for i in range(4):
             for j in range(4):
@@ -225,6 +270,7 @@ class Coordinate:
 
     @property
     def yaw_rad(self) -> float:
+        """偏航角（弧度）。"""
         return self.rz * DEG2RAD
 
     @yaw_rad.setter
@@ -233,6 +279,7 @@ class Coordinate:
 
     @property
     def yaw_deg(self) -> float:
+        """偏航角（度）。"""
         return self.rz
 
     @yaw_deg.setter
