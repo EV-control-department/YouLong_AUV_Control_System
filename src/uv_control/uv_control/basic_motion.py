@@ -297,11 +297,15 @@ class BasicMotionNode(Node):
     # ═════════════════════════════════════════════════════════════════════════
     # 内部工具： 等待到达
     # ═════════════════════════════════════════════════════════════════════════
-    def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, axes_mask, timeout):
+
+
+    def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, timeout):
         """完成步进移动的最后一步，等待到达目标位置。"""
         self.set_world(target_x, target_y, target_z, target_yaw_degree)
-        return self._wait_reached(axes_mask, timeout=timeout)
-    def _wait_reached(self, axes_mask: int = AX_ALL,
+        return self._wait_reached(timeout=timeout)
+    
+    
+    def _wait_reached(self,
                       tol_x: float = TOL_X, tol_y: float = TOL_Y,
                       tol_z: float = TOL_Z, tol_rz: float = TOL_RZ,
                       timeout: float = 60.0) -> bool:
@@ -323,19 +327,15 @@ class BasicMotionNode(Node):
 
             reached = True
 
-            if axes_mask & AX_X:
-                if abs(body_target.x) > tol_x:
-                    reached = False
-            if axes_mask & AX_Y:
-                if abs(body_target.y) > tol_y:
-                    reached = False
-            if axes_mask & AX_Z:
-                if abs(body_target.z) > tol_z:
-                    reached = False
-            if axes_mask & AX_RZ:
-                yaw_err = abs(wrap_deg(body_target.rz))
-                if yaw_err > tol_rz:
-                    reached = False
+            if abs(body_target.x) > tol_x:
+                reached = False
+            if abs(body_target.y) > tol_y:
+                reached = False
+            if abs(body_target.z) > tol_z:
+                reached = False
+            yaw_err = abs(wrap_deg(body_target.rz))
+            if yaw_err > tol_rz:
+                reached = False
 
             if reached:
                 return True
@@ -423,7 +423,6 @@ class BasicMotionNode(Node):
 
     def _step_move_world(self, target_x: float, target_y: float,
                          target_z: float, target_yaw_degree: float,
-                         axes_mask: int = AX_ALL,
                          timeout: float = 60.0) -> bool:
         """步进移动：odom 系目标，拆成小段逐段发送。
 
@@ -433,7 +432,6 @@ class BasicMotionNode(Node):
         Args:
             target_x, target_y, target_z: 目标位置 (odom 系)
             target_yaw_degree: 目标偏航 (角度)
-            axes_mask: 到达检测轴
             timeout: 超时秒数
 
         Returns:
@@ -491,7 +489,7 @@ class BasicMotionNode(Node):
         # 最终目标
         return self._cmd_and_wait(
             target_x, target_y, target_z, target_yaw_degree,
-            axes_mask, timeout=timeout)
+            timeout=timeout)
 
     # ═════════════════════════════════════════════════════════════════════════
     # Layer 5: 对外高级 API
@@ -503,44 +501,44 @@ class BasicMotionNode(Node):
                  timeout: float = 60.0) -> bool:
         """odom 系绝对位置 + 偏航。rz 单位为度。"""
         return self._cmd_and_wait(x, y, z, rz,
-                                  AX_ALL, timeout=timeout)
+                                  timeout=timeout)
 
     def setxyz(self, x: float, y: float, z: float,
                timeout: float = 60.0) -> bool:
         """odom 系绝对位置（不改变偏航）。"""
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(x, y, z, p.yaw_rad,
-                                  AX_XYZ, timeout=timeout)
+        return self._cmd_and_wait(x, y, z, p.rz,
+                                  timeout=timeout)
 
     def setxy(self, x: float, y: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(x, y, p.z, p.yaw_rad,
-                                  AX_XY, timeout=timeout)
+        return self._cmd_and_wait(x, y, p.z, p.rz,
+                                  timeout=timeout)
 
     def setxyrz(self, x: float, y: float, rz: float,
                 timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(x, y, p.z, math.radians(rz),
-                                  AX_X | AX_Y | AX_RZ, timeout=timeout)
+        return self._cmd_and_wait(x, y, p.z, rz,
+                                  timeout=timeout)
 
     def setz(self, z: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(p.x, p.y, z, p.yaw_rad,
-                                  AX_Z, timeout=timeout)
+        return self._cmd_and_wait(p.x, p.y, z, p.rz,
+                                  timeout=timeout)
 
     def setrz(self, rz: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(p.x, p.y, p.z, math.radians(rz),
-                                  AX_RZ, timeout=timeout)
+        return self._cmd_and_wait(p.x, p.y, p.z, rz,
+                                  timeout=timeout)
 
     def setx(self, x: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(x, p.y, p.z, p.yaw_rad,
-                                  AX_X, timeout=timeout)
+        return self._cmd_and_wait(x, p.y, p.z, p.rz,
+                                  timeout=timeout)
 
     def sety(self, y: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(p.x, y, p.z, p.yaw_rad,
+        return self._cmd_and_wait(p.x, y, p.z, p.rz,
                                   AX_Y, timeout=timeout)
 
     # --- WMOVE 系列 (世界系步进) --------------------------------------------
@@ -550,52 +548,51 @@ class BasicMotionNode(Node):
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x + dx, p.y + dy, p.z + dz,
-            p.yaw_rad + math.radians(drz), AX_ALL, timeout)
+            p.rz + drz, timeout)
 
     def wmovexyz(self, dx: float, dy: float, dz: float,
                  timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x + dx, p.y + dy, p.z + dz,
-            p.yaw_rad, AX_XYZ, timeout)
+            p.rz, timeout)
 
     def wmovexy(self, dx: float, dy: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x + dx, p.y + dy, p.z,
-            p.yaw_rad, AX_XY, timeout)
+            p.rz, timeout)
 
     def wmovexyrz(self, dx: float, dy: float, drz: float,
                   timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x + dx, p.y + dy, p.z,
-            p.yaw_rad + math.radians(drz),
-            AX_X | AX_Y | AX_RZ, timeout)
+            p.rz + drz, timeout)
 
     def wmovez(self, dz: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x, p.y, p.z + dz,
-            p.yaw_rad, AX_Z, timeout)
+            p.rz, timeout)
 
     def wmoverz(self, drz: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x, p.y, p.z,
-            p.yaw_rad + math.radians(drz), AX_RZ, timeout)
+            p.rz + drz, timeout)
 
     def wmovex(self, dx: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x + dx, p.y, p.z,
-            p.yaw_rad, AX_X, timeout)
+            p.rz, timeout)
 
     def wmovey(self, dy: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x, p.y + dy, p.z,
-            p.yaw_rad, AX_Y, timeout)
+            p.rz, timeout)
 
     # --- BMOVE 系列 (机体系步进) --------------------------------------------
 
@@ -605,7 +602,7 @@ class BasicMotionNode(Node):
         off = p.body_to_world(dx, dy)
         return self._step_move_world(
             p.x + off.x, p.y + off.y, p.z + dz,
-            p.yaw_rad + math.radians(drz), AX_ALL, timeout)
+            p.rz + drz, timeout)
 
     def bmovexyz(self, dx: float, dy: float, dz: float,
                  timeout: float = 60.0) -> bool:
@@ -613,14 +610,14 @@ class BasicMotionNode(Node):
         off = p.body_to_world(dx, dy)
         return self._step_move_world(
             p.x + off.x, p.y + off.y, p.z + dz,
-            p.yaw_rad, AX_XYZ, timeout)
+            p.rz, timeout)
 
     def bmovexy(self, dx: float, dy: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         off = p.body_to_world(dx, dy)
         return self._step_move_world(
             p.x + off.x, p.y + off.y, p.z,
-            p.yaw_rad, AX_XY, timeout)
+            p.rz, timeout)
 
     def bmovexyrz(self, dx: float, dy: float, drz: float,
                   timeout: float = 60.0) -> bool:
@@ -628,20 +625,19 @@ class BasicMotionNode(Node):
         off = p.body_to_world(dx, dy)
         return self._step_move_world(
             p.x + off.x, p.y + off.y, p.z,
-            p.yaw_rad + math.radians(drz),
-            AX_X | AX_Y | AX_RZ, timeout)
+            p.rz + drz, timeout)
 
     def bmovez(self, dz: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x, p.y, p.z + dz,
-            p.yaw_rad, AX_Z, timeout)
+            p.rz, timeout)
 
     def bmoverz(self, drz: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
         return self._step_move_world(
             p.x, p.y, p.z,
-            p.yaw_rad + math.radians(drz), AX_RZ, timeout)
+            p.rz + drz, timeout)
 
     def bmovex(self, dx: float, timeout: float = 60.0) -> bool:
         return self.bmovexy(dx, 0.0, timeout=timeout)
@@ -668,18 +664,18 @@ class BasicMotionNode(Node):
 
         dist_xy = math.sqrt(dx_w**2 + dy_w**2)
         if dist_xy > 0.03:
-            target_yaw = math.atan2(dy_w, dx_w)
+            target_yaw = math.degrees(math.atan2(dy_w, dx_w))
             # 第一步：转向目标方向
             self._step_move_world(p.x, p.y, p.z, target_yaw,
-                                  AX_RZ, timeout=timeout)
+                                  timeout=timeout)
             # 第二步：沿 body-X 前进
             return self._step_move_world(
                 target_x, target_y, target_z, target_yaw,
-                AX_XY | AX_Z, timeout=timeout)
+                timeout=timeout)
         else:
             return self._step_move_world(
-                p.x, p.y, target_z, p.yaw_rad,
-                AX_Z, timeout=timeout)
+                p.x, p.y, target_z, p.rz,
+                timeout=timeout)
 
     def wtravelxy(self, dx: float, dy: float, timeout: float = 60.0) -> bool:
         return self._travel_world(dx, dy, 0.0, timeout=timeout)
