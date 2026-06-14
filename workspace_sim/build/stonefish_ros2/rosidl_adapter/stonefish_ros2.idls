@@ -1,0 +1,13 @@
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/Int32Stamped.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/BeaconInfo.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/NEDPose.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/INS.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/DVLBeam.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/DVL.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/ThrusterState.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/DebugPhysics.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/Event.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:msg/EventArray.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:srv/SonarSettings.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:srv/SonarSettings2.idl
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_adapter/stonefish_ros2:srv/Respawn.idl

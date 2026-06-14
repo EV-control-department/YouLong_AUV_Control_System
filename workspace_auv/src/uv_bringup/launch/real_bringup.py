@@ -36,13 +36,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    minimal_control = Node(
-        package='uv_control',
-        executable='minimal_control',
-        name='minimal_control',
-        output='screen',
-    )
-
     basic_motion = Node(
         package='uv_control',
         executable='basic_motion',
@@ -87,7 +80,6 @@ def generate_launch_description():
         declare_enable_nav,
         declare_enable_task,
         hw_manager,
-        minimal_control,
         basic_motion,
         vision,
         position,

@@ -21,7 +21,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'sim_bridge = uv_hm.sim_bridge:main',
             'hw_manager = uv_hm.hw_manager:main',
         ],
     },

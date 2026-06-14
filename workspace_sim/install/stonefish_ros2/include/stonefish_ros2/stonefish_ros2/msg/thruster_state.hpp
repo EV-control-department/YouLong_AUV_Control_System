@@ -1,0 +1,1 @@
+/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_generator_cpp/stonefish_ros2/msg/thruster_state.hpp

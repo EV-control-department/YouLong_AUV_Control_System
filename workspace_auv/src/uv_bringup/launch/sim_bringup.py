@@ -42,33 +42,29 @@ def generate_launch_description():
     stonefish_source_dir = os.path.join(workspace_root, 'src', 'stonefish_ros2')
     simulation_data_dir = os.path.join(stonefish_source_dir, 'Data')
 
-    # Build the stonefish simulator node (nogpu version — no NVIDIA GPU available)
-    # The simulator expects: simulation_data, scenario_desc, rate
+    # Build the stonefish simulator node (GPU version — with rendering window)
+    # The simulator expects: simulation_data, scenario_desc, rate, res_x, res_y, quality
     stonefish_sim = Node(
         package='stonefish_ros2',
-        executable='stonefish_simulator_nogpu',
+        executable='stonefish_simulator',
         namespace='stonefish_ros2',
-        name='stonefish_simulator_nogpu',
+        name='stonefish_simulator',
         arguments=[
             simulation_data_dir,
             os.path.join(simulation_data_dir, 'underwater_xunyun.scn'),
             '100.0',
+            '1280',
+            '720',
+            'high',
         ],
         output='screen',
     )
 
     # Core nodes
     sim_bridge = Node(
-        package='uv_hm',
+        package='uv_sim',
         executable='sim_bridge',
         name='sim_bridge',
-        output='screen',
-    )
-
-    minimal_control = Node(
-        package='uv_control',
-        executable='minimal_control',
-        name='minimal_control',
         output='screen',
     )
 
@@ -123,7 +119,6 @@ def generate_launch_description():
         LogInfo(msg=['Scenario: ', os.path.join(simulation_data_dir, 'underwater_xunyun.scn')]),
         stonefish_sim,
         sim_bridge,
-        minimal_control,
         basic_motion,
         vision,
         position,
