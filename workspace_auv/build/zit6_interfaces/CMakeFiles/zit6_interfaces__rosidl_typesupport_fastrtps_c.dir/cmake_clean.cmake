@@ -1,0 +1,33 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_pid__type_support_c.cpp.o"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_pid__type_support_c.cpp.o.d"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_pid_status__type_support_c.cpp.o"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_pid_status__type_support_c.cpp.o.d"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_setpoint__type_support_c.cpp.o"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_setpoint__type_support_c.cpp.o.d"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_status__type_support_c.cpp.o"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_status__type_support_c.cpp.o.d"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/srv/detail/get_params__type_support_c.cpp.o"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/srv/detail/get_params__type_support_c.cpp.o.d"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/srv/detail/update_params__type_support_c.cpp.o"
+  "CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/zit6_interfaces/srv/detail/update_params__type_support_c.cpp.o.d"
+  "libzit6_interfaces__rosidl_typesupport_fastrtps_c.pdb"
+  "libzit6_interfaces__rosidl_typesupport_fastrtps_c.so"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_pid__rosidl_typesupport_fastrtps_c.h"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_pid__type_support_c.cpp"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_pid_status__rosidl_typesupport_fastrtps_c.h"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_pid_status__type_support_c.cpp"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_setpoint__rosidl_typesupport_fastrtps_c.h"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_setpoint__type_support_c.cpp"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_status__rosidl_typesupport_fastrtps_c.h"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/msg/detail/zit_status__type_support_c.cpp"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/srv/detail/get_params__rosidl_typesupport_fastrtps_c.h"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/srv/detail/get_params__type_support_c.cpp"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/srv/detail/update_params__rosidl_typesupport_fastrtps_c.h"
+  "rosidl_typesupport_fastrtps_c/zit6_interfaces/srv/detail/update_params__type_support_c.cpp"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/zit6_interfaces__rosidl_typesupport_fastrtps_c.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

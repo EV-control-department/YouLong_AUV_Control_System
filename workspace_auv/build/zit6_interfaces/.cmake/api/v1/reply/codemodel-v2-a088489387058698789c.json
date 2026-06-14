@@ -1,0 +1,242 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-66f75e921c11b4d960d3.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.20"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						6,
+						7,
+						8,
+						9,
+						10,
+						11,
+						12,
+						13,
+						14,
+						15,
+						16,
+						17,
+						18
+					]
+				},
+				{
+					"build" : "zit6_interfaces__py",
+					"jsonFile" : "directory-zit6_interfaces__py-132f7408766291c382e1.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.20"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/zit6_interfaces/zit6_interfaces__py",
+					"targetIndexes" : 
+					[
+						5
+					]
+				}
+			],
+			"name" : "",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0,
+						1
+					],
+					"name" : "zit6_interfaces",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6,
+						7,
+						8,
+						9,
+						10,
+						11,
+						12,
+						13,
+						14,
+						15,
+						16,
+						17,
+						18
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "ament_cmake_python_build_zit6_interfaces_egg::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-ament_cmake_python_build_zit6_interfaces_egg-b16d596a49876593d668.json",
+					"name" : "ament_cmake_python_build_zit6_interfaces_egg",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "ament_cmake_python_symlink_zit6_interfaces::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-ament_cmake_python_symlink_zit6_interfaces-976e76e4306827d8b4a6.json",
+					"name" : "ament_cmake_python_symlink_zit6_interfaces",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-uninstall-1fccd3020befc93a3b30.json",
+					"name" : "uninstall",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces-f59e8817af8769a98803.json",
+					"name" : "zit6_interfaces",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__cpp-5ea2dd689e0ca7889f6c.json",
+					"name" : "zit6_interfaces__cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "zit6_interfaces__py::@bb964dc5e4b9074e6c00",
+					"jsonFile" : "target-zit6_interfaces__py-11cf82ec027805824972.json",
+					"name" : "zit6_interfaces__py",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_generator_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_generator_c-cc5e1c7e9c43ef58c982.json",
+					"name" : "zit6_interfaces__rosidl_generator_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_generator_py::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_generator_py-06c4fb6a05d7e80bbae9.json",
+					"name" : "zit6_interfaces__rosidl_generator_py",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_generator_type_description::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_generator_type_description-250204b56f2b6c660089.json",
+					"name" : "zit6_interfaces__rosidl_generator_type_description",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_typesupport_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_typesupport_c-2bb9c8d31e8bf175a8a5.json",
+					"name" : "zit6_interfaces__rosidl_typesupport_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_typesupport_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_typesupport_cpp-29b8f99ff2d5403f7fd5.json",
+					"name" : "zit6_interfaces__rosidl_typesupport_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_typesupport_fastrtps_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_typesupport_fastrtps_c-6b56b9c99acf1ffdaa8b.json",
+					"name" : "zit6_interfaces__rosidl_typesupport_fastrtps_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_typesupport_fastrtps_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_typesupport_fastrtps_cpp-850e7d1e2145f92593c1.json",
+					"name" : "zit6_interfaces__rosidl_typesupport_fastrtps_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_typesupport_introspection_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_typesupport_introspection_c-216ca538a981d84343c3.json",
+					"name" : "zit6_interfaces__rosidl_typesupport_introspection_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces__rosidl_typesupport_introspection_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces__rosidl_typesupport_introspection_cpp-504d974778087ce07e15.json",
+					"name" : "zit6_interfaces__rosidl_typesupport_introspection_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces_s__rosidl_typesupport_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces_s__rosidl_typesupport_c-f9f446149694aa0120b8.json",
+					"name" : "zit6_interfaces_s__rosidl_typesupport_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces_s__rosidl_typesupport_fastrtps_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces_s__rosidl_typesupport_fastrtps_c-31ecaa7fd3dd8f8d7914.json",
+					"name" : "zit6_interfaces_s__rosidl_typesupport_fastrtps_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces_s__rosidl_typesupport_introspection_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces_s__rosidl_typesupport_introspection_c-6c7a538ebd73800aa8c4.json",
+					"name" : "zit6_interfaces_s__rosidl_typesupport_introspection_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "zit6_interfaces_uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-zit6_interfaces_uninstall-3917c1bc425f4201a97d.json",
+					"name" : "zit6_interfaces_uninstall",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/zit6_interfaces",
+		"source" : "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/zit6_interfaces"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 6
+	}
+}

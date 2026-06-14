@@ -1,0 +1,32 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from uv_msgs/msg/Waypoint.msg
+// generated code does not contain a copyright notice
+
+
+module uv_msgs {
+  module msg {
+    @verbatim (language="comment", text=
+      "Single navigation waypoint")
+    struct Waypoint {
+      @verbatim (language="comment", text=
+        "NED North (m)")
+      float x;
+
+      @verbatim (language="comment", text=
+        "NED East (m)")
+      float y;
+
+      @verbatim (language="comment", text=
+        "Depth (m)")
+      float z;
+
+      @verbatim (language="comment", text=
+        "Heading (rad)")
+      float yaw;
+
+      @verbatim (language="comment", text=
+        "Target speed (m/s)")
+      float speed;
+    };
+  };
+};

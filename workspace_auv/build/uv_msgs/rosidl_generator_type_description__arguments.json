@@ -1,0 +1,30 @@
+{
+  "package_name": "uv_msgs",
+  "output_dir": "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_generator_type_description/uv_msgs",
+  "idl_tuples": [
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/MotionCommand.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/AuvState.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/Detection.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/DetectionArray.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/ObjectPosition.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/ObjectPositionArray.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/PidGains.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/PidState.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/DeviceCommand.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/Waypoint.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/WaypointPath.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:msg/TaskStatus.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:srv/RunTask.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:srv/GetState.idl",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_adapter/uv_msgs:action/BasicMotion.idl"
+  ],
+  "include_paths": [
+    "std_msgs:/opt/ros/jazzy/share/std_msgs",
+    "builtin_interfaces:/opt/ros/jazzy/share/builtin_interfaces",
+    "sensor_msgs:/opt/ros/jazzy/share/sensor_msgs",
+    "geometry_msgs:/opt/ros/jazzy/share/geometry_msgs",
+    "service_msgs:/opt/ros/jazzy/share/service_msgs",
+    "action_msgs:/opt/ros/jazzy/share/action_msgs",
+    "unique_identifier_msgs:/opt/ros/jazzy/share/unique_identifier_msgs"
+  ]
+}

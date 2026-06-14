@@ -1,0 +1,4 @@
+from zit6_interfaces.msg._zit_pid import ZitPid  # noqa: F401
+from zit6_interfaces.msg._zit_pid_status import ZitPidStatus  # noqa: F401
+from zit6_interfaces.msg._zit_setpoint import ZitSetpoint  # noqa: F401
+from zit6_interfaces.msg._zit_status import ZitStatus  # noqa: F401

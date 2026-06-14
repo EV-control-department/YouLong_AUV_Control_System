@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "zit6_interfaces__py",
+		"source" : "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/zit6_interfaces/zit6_interfaces__py"
+	}
+}

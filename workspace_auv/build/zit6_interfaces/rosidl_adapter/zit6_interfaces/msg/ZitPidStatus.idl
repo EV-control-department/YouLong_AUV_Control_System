@@ -1,0 +1,35 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from zit6_interfaces/msg/ZitPidStatus.msg
+// generated code does not contain a copyright notice
+
+
+module zit6_interfaces {
+  module msg {
+    typedef float float__4[4];
+    @verbatim (language="comment", text=
+      "全轴 PID 与 规划器状态汇总反馈 (1Hz)")
+    struct ZitPidStatus {
+      @verbatim (language="comment", text=
+        "位置环 P 参数与规划器限值 [X, Y, Z, Yaw]")
+      float__4 pos_kp;
+
+      float__4 pos_max_v;
+
+      float__4 pos_max_a;
+
+      float__4 pos_out_limit;
+
+      @verbatim (language="comment", text=
+        "速度环 PID 参数 [X, Y, Z, Yaw]")
+      float__4 vel_kp;
+
+      float__4 vel_ki;
+
+      float__4 vel_kd;
+
+      float__4 vel_i_limit;
+
+      float__4 vel_out_limit;
+    };
+  };
+};

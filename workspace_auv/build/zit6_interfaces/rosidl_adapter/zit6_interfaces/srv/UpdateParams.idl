@@ -1,0 +1,32 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from zit6_interfaces/srv/UpdateParams.srv
+// generated code does not contain a copyright notice
+
+
+module zit6_interfaces {
+  module srv {
+    @verbatim (language="comment", text=
+      "UpdateParams.srv" "\n"
+      "Request:" "\n"
+      "- `paths`: 点路径数组（例如 \"chassis.pid.pos.kp\"）" "\n"
+      "- `values`: 与 `paths` 对应的字符串化值（服务端负责按现有配置推断类型）" "\n"
+      "注意：`trigger_replan` / `persist` 字段已移除，由 MCU 服务端决定处理方式" "\n"
+      "可选：`json` 字段优先解析（服务端会优先处理 `json`，否则按 `paths`/`values` 逐项处理）")
+    struct UpdateParams_Request {
+      string json;
+
+      sequence<string> paths;
+
+      sequence<string> values;
+    };
+    @verbatim (language="comment", text=
+      "Response:" "\n"
+      "- `success`: 操作是否成功" "\n"
+      "- `message`: 可读的错误或信息说明")
+    struct UpdateParams_Response {
+      boolean success;
+
+      string message;
+    };
+  };
+};

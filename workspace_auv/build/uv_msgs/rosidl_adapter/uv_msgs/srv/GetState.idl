@@ -1,0 +1,18 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from uv_msgs/srv/GetState.srv
+// generated code does not contain a copyright notice
+
+#include "uv_msgs/msg/AuvState.idl"
+
+module uv_msgs {
+  module srv {
+    @verbatim (language="comment", text=
+      "Query current robot state")
+    struct GetState_Request {
+      uint8 structure_needs_at_least_one_member;
+    };
+    struct GetState_Response {
+      uv_msgs::msg::AuvState state;
+    };
+  };
+};

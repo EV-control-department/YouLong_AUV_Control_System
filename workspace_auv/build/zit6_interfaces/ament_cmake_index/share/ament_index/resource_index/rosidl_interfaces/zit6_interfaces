@@ -1,0 +1,12 @@
+msg/ZitPid.idl
+msg/ZitPid.msg
+msg/ZitPidStatus.idl
+msg/ZitPidStatus.msg
+msg/ZitSetpoint.idl
+msg/ZitSetpoint.msg
+msg/ZitStatus.idl
+msg/ZitStatus.msg
+srv/GetParams.idl
+srv/GetParams.srv
+srv/UpdateParams.idl
+srv/UpdateParams.srv

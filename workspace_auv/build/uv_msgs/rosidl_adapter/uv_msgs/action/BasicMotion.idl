@@ -1,0 +1,41 @@
+// generated from rosidl_adapter/resource/action.idl.em
+// with input from uv_msgs/action/BasicMotion.action
+// generated code does not contain a copyright notice
+
+
+module uv_msgs {
+  module action {
+    module BasicMotion_Goal_Constants {
+      @verbatim (language="comment", text=
+        "世界系步进, target=[dx, dy, dz, drz]")
+      const uint8 WMOVE = 1;
+      @verbatim (language="comment", text=
+        "机体系步进, target=[dx, dy, dz, drz]")
+      const uint8 BMOVE = 2;
+      @verbatim (language="comment", text=
+        "绝对定位, target=[x, y, z, yaw]")
+      const uint8 SET = 3;
+    };
+    @verbatim (language="comment", text=
+      "Request (Goal)")
+    struct BasicMotion_Goal {
+      uint8 cmd_type;
+
+      @verbatim (language="comment", text=
+        "[x, y, z, yaw]")
+      sequence<float> target;
+    };
+    @verbatim (language="comment", text=
+      "Result")
+    struct BasicMotion_Result {
+      boolean success;
+
+      string message;
+    };
+    @verbatim (language="comment", text=
+      "Feedback")
+    struct BasicMotion_Feedback {
+      float distance_remaining;
+    };
+  };
+};

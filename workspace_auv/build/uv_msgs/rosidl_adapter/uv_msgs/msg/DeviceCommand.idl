@@ -1,0 +1,27 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from uv_msgs/msg/DeviceCommand.msg
+// generated code does not contain a copyright notice
+
+
+module uv_msgs {
+  module msg {
+    module DeviceCommand_Constants {
+      const uint8 DEVICE_LED = 0;
+      const uint8 DEVICE_ARM = 1;
+      const uint8 DEVICE_SERVO = 2;
+    };
+    @verbatim (language="comment", text=
+      "Device command for LED, arm, servo, etc.")
+    struct DeviceCommand {
+      uint8 device_type;
+
+      @verbatim (language="comment", text=
+        "Device-specific command code")
+      uint8 command;
+
+      @verbatim (language="comment", text=
+        "Device-specific value")
+      float value;
+    };
+  };
+};

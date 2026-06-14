@@ -1,0 +1,11 @@
+{
+  "package_name": "zit6_interfaces",
+  "non_idl_tuples": [
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/zit6_interfaces:msg/ZitSetpoint.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/zit6_interfaces:msg/ZitStatus.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/zit6_interfaces:msg/ZitPid.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/zit6_interfaces:msg/ZitPidStatus.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/zit6_interfaces:srv/UpdateParams.srv",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/zit6_interfaces:srv/GetParams.srv"
+  ]
+}

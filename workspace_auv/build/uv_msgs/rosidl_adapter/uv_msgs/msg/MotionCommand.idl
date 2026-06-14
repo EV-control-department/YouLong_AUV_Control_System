@@ -1,0 +1,60 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from uv_msgs/msg/MotionCommand.msg
+// generated code does not contain a copyright notice
+
+
+module uv_msgs {
+  module msg {
+    module MotionCommand_Constants {
+      @verbatim (language="comment", text=
+        "Absolute world NED position")
+      const uint8 MODE_POS_WORLD = 0;
+      @verbatim (language="comment", text=
+        "Absolute body-frame position")
+      const uint8 MODE_POS_BODY = 1;
+      @verbatim (language="comment", text=
+        "World-frame velocity")
+      const uint8 MODE_VEL_WORLD = 2;
+      @verbatim (language="comment", text=
+        "Body-frame velocity")
+      const uint8 MODE_VEL_BODY = 3;
+      @verbatim (language="comment", text=
+        "Direct body-frame force")
+      const uint8 MODE_FORCE_BODY = 4;
+      @verbatim (language="comment", text=
+        "Incremental world position step")
+      const uint8 MODE_POS_WORLD_STEP = 5;
+      @verbatim (language="comment", text=
+        "Incremental body position step")
+      const uint8 MODE_POS_BODY_STEP = 6;
+      @verbatim (language="comment", text=
+        "Incremental world velocity step")
+      const uint8 MODE_VEL_WORLD_STEP = 7;
+      @verbatim (language="comment", text=
+        "Incremental body velocity step")
+      const uint8 MODE_VEL_BODY_STEP = 8;
+    };
+    @verbatim (language="comment", text=
+      "Motion command from control layer to sim_bridge" "\n"
+      "Replaces ZitSetpoint with a cleaner interface")
+    struct MotionCommand {
+      @verbatim (language="comment", text=
+        "One of the MODE_* constants")
+      uint8 mode;
+
+      @verbatim (language="comment", text=
+        "Bitmask: bit0=x, bit1=y, bit2=z, bit3=yaw (1=ignore axis)")
+      uint8 type_mask;
+
+      float x;
+
+      float y;
+
+      float z;
+
+      @verbatim (language="comment", text=
+        "Radians")
+      float yaw;
+    };
+  };
+};

@@ -1,0 +1,47 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from uv_msgs/msg/PidState.msg
+// generated code does not contain a copyright notice
+
+#include "uv_msgs/msg/PidGains.idl"
+
+module uv_msgs {
+  module msg {
+    @verbatim (language="comment", text=
+      "PID controller telemetry (published for debugging/tuning)")
+    struct PidState {
+      @verbatim (language="comment", text=
+        "Outer loop gains")
+      uv_msgs::msg::PidGains speed_mag;
+
+      @verbatim (language="comment", text=
+        "Inner loop X gains")
+      uv_msgs::msg::PidGains vel_x;
+
+      @verbatim (language="comment", text=
+        "Inner loop Y gains")
+      uv_msgs::msg::PidGains vel_y;
+
+      @verbatim (language="comment", text=
+        "Z axis gains")
+      uv_msgs::msg::PidGains pos_z;
+
+      @verbatim (language="comment", text=
+        "Yaw position loop")
+      uv_msgs::msg::PidGains yaw;
+
+      @verbatim (language="comment", text=
+        "Yaw rate loop")
+      uv_msgs::msg::PidGains yaw_rate;
+
+      float error_length;
+
+      float error_angle_deg;
+
+      float speed_cmd;
+
+      float vx_body_cmd;
+
+      float vy_body_cmd;
+    };
+  };
+};

@@ -1,0 +1,20 @@
+{
+  "package_name": "uv_msgs",
+  "non_idl_tuples": [
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/MotionCommand.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/AuvState.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/Detection.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/DetectionArray.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/ObjectPosition.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/ObjectPositionArray.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/PidGains.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/PidState.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/DeviceCommand.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/Waypoint.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/WaypointPath.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:msg/TaskStatus.msg",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:srv/RunTask.srv",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:srv/GetState.srv",
+    "/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_msgs:action/BasicMotion.action"
+  ]
+}

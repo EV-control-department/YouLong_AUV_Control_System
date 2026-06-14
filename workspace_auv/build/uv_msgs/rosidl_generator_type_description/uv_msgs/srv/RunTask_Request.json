@@ -1,0 +1,36 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "uv_msgs/srv/RunTask_Request",
+      "fields": [
+        {
+          "name": "task_name",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "start",
+          "type": {
+            "type_id": 15,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "uv_msgs/srv/RunTask_Request",
+      "hash_string": "RIHS01_aba01f53ff02937ad7de5081e23cbb6bc11ac0b2f0380d8cb2821f01a5da3def"
+    }
+  ]
+}

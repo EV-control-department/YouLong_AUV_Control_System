@@ -1,7 +1,10 @@
-# ROS 2 build artifacts
-build/
-install/
-log/
+# ROS 2 colcon workspace build artifacts
+auv_ws/build/
+auv_ws/install/
+auv_ws/log/
+sim_ws/build/
+sim_ws/install/
+sim_ws/log/
 
 # Python
 __pycache__/
@@ -36,11 +39,8 @@ venv/
 # Logs
 *.log
 
-# Claude Code
+# Claude Code local config
 .claude/
 
-.reasonix/
-.github/
-
+# Local workspace primer (not a doc)
 REASONIX.md
-CLAUDE.md

@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "zit6_interfaces/srv/GetParams_Request",
+      "fields": [
+        {
+          "name": "paths",
+          "type": {
+            "type_id": 161,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "zit6_interfaces/srv/GetParams_Request",
+      "hash_string": "RIHS01_a097a0292f09ae2de93662ac694115192e70a07475156e8cacfcd432a60f9871"
+    }
+  ]
+}

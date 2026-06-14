@@ -1,0 +1,13 @@
+# Request (Goal)
+uint8 WMOVE=1       # 世界系步进, target=[dx, dy, dz, drz]
+uint8 BMOVE=2       # 机体系步进, target=[dx, dy, dz, drz]
+uint8 SET=3         # 绝对定位, target=[x, y, z, yaw]
+uint8 cmd_type
+float32[] target    # [x, y, z, yaw]
+---
+# Result
+bool success
+string message
+---
+# Feedback
+float32 distance_remaining
