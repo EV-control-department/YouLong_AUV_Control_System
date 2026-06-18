@@ -24,16 +24,48 @@ namespace action
 namespace builder
 {
 
+class Init_BasicMotion_Goal_timeout
+{
+public:
+  explicit Init_BasicMotion_Goal_timeout(::uv_msgs::action::BasicMotion_Goal & msg)
+  : msg_(msg)
+  {}
+  ::uv_msgs::action::BasicMotion_Goal timeout(::uv_msgs::action::BasicMotion_Goal::_timeout_type arg)
+  {
+    msg_.timeout = std::move(arg);
+    return std::move(msg_);
+  }
+
+private:
+  ::uv_msgs::action::BasicMotion_Goal msg_;
+};
+
 class Init_BasicMotion_Goal_target
 {
 public:
   explicit Init_BasicMotion_Goal_target(::uv_msgs::action::BasicMotion_Goal & msg)
   : msg_(msg)
   {}
-  ::uv_msgs::action::BasicMotion_Goal target(::uv_msgs::action::BasicMotion_Goal::_target_type arg)
+  Init_BasicMotion_Goal_timeout target(::uv_msgs::action::BasicMotion_Goal::_target_type arg)
   {
     msg_.target = std::move(arg);
-    return std::move(msg_);
+    return Init_BasicMotion_Goal_timeout(msg_);
+  }
+
+private:
+  ::uv_msgs::action::BasicMotion_Goal msg_;
+};
+
+class Init_BasicMotion_Goal_axes
+{
+public:
+  explicit Init_BasicMotion_Goal_axes(::uv_msgs::action::BasicMotion_Goal & msg)
+  : msg_(msg)
+  {}
+  Init_BasicMotion_Goal_target axes(::uv_msgs::action::BasicMotion_Goal::_axes_type arg)
+  {
+    msg_.axes = std::move(arg);
+    return Init_BasicMotion_Goal_target(msg_);
   }
 
 private:
@@ -46,10 +78,10 @@ public:
   Init_BasicMotion_Goal_cmd_type()
   : msg_(::rosidl_runtime_cpp::MessageInitialization::SKIP)
   {}
-  Init_BasicMotion_Goal_target cmd_type(::uv_msgs::action::BasicMotion_Goal::_cmd_type_type arg)
+  Init_BasicMotion_Goal_axes cmd_type(::uv_msgs::action::BasicMotion_Goal::_cmd_type_type arg)
   {
     msg_.cmd_type = std::move(arg);
-    return Init_BasicMotion_Goal_target(msg_);
+    return Init_BasicMotion_Goal_axes(msg_);
   }
 
 private:

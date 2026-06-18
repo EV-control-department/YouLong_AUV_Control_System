@@ -23,7 +23,7 @@ extern "C"
 
 /// Constant 'WMOVE'.
 /**
-  * 世界系步进, target=[dx, dy, dz, drz]
+  * 世界系步进, target=[dx, dy, dz, dyaw]
  */
 enum
 {
@@ -32,7 +32,7 @@ enum
 
 /// Constant 'BMOVE'.
 /**
-  * 机体系步进, target=[dx, dy, dz, drz]
+  * 机体系步进, target=[dx, dy, dz, dyaw]
  */
 enum
 {
@@ -48,7 +48,36 @@ enum
   uv_msgs__action__BasicMotion_Goal__SET = 3
 };
 
+/// Constant 'WTRAVEL'.
+/**
+  * 世界系直线, target=[dx, dy, dz]
+ */
+enum
+{
+  uv_msgs__action__BasicMotion_Goal__WTRAVEL = 4
+};
+
+/// Constant 'BTRAVEL'.
+/**
+  * 机体系直线, target=[dx, dy, dz]
+ */
+enum
+{
+  uv_msgs__action__BasicMotion_Goal__BTRAVEL = 5
+};
+
+/// Constant 'START'.
+/**
+  * 初始化里程计原点（无视 axes/target/timeout）
+ */
+enum
+{
+  uv_msgs__action__BasicMotion_Goal__START = 6
+};
+
 // Include directives for member types
+// Member 'axes'
+#include "rosidl_runtime_c/string.h"
 // Member 'target'
 #include "rosidl_runtime_c/primitives_sequence.h"
 
@@ -56,8 +85,12 @@ enum
 typedef struct uv_msgs__action__BasicMotion_Goal
 {
   uint8_t cmd_type;
+  /// 要动的轴: "x","y","z","rz" 任意组合, 空=全部
+  rosidl_runtime_c__String axes;
   /// [x, y, z, yaw]
   rosidl_runtime_c__float__Sequence target;
+  /// 秒, ≤0=默认60s
+  float timeout;
 } uv_msgs__action__BasicMotion_Goal;
 
 // Struct for a sequence of uv_msgs__action__BasicMotion_Goal.
@@ -74,7 +107,8 @@ typedef struct uv_msgs__action__BasicMotion_Goal__Sequence
 
 // Include directives for member types
 // Member 'message'
-#include "rosidl_runtime_c/string.h"
+// already included above
+// #include "rosidl_runtime_c/string.h"
 
 /// Struct defined in action/BasicMotion in the package uv_msgs.
 typedef struct uv_msgs__action__BasicMotion_Result

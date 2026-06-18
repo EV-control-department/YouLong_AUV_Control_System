@@ -23,6 +23,7 @@ function _colcon_prefix_chain_powershell_source_script {
 
 # source chained prefixes
 _colcon_prefix_chain_powershell_source_script "/opt/ros/jazzy\local_setup.ps1"
+_colcon_prefix_chain_powershell_source_script "/home/origin/YouLong_AUV_Control_System/workspace_auv/install\local_setup.ps1"
 _colcon_prefix_chain_powershell_source_script "/home/origin/AUV2026/install\local_setup.ps1"
 _colcon_prefix_chain_powershell_source_script "/home/origin/AUV_zit6_cmake/install\local_setup.ps1"
 

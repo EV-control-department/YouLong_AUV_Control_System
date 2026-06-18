@@ -55,9 +55,29 @@
             "default_value": ""
           },
           {
+            "name": "axes",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
             "name": "target",
             "type": {
               "type_id": 154,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "timeout",
+            "type": {
+              "type_id": 10,
               "capacity": 0,
               "string_capacity": 0,
               "nested_type_name": ""
@@ -71,7 +91,7 @@
   "type_hashes": [
     {
       "type_name": "uv_msgs/action/BasicMotion_SendGoal_Request",
-      "hash_string": "RIHS01_01e31a06dfbce1ea5f6446f66bb7f938ee98b4cddaf66623f71007c2b31e120b"
+      "hash_string": "RIHS01_da1d2204e32bc33050e4cde42911016974c5927d9881c464ab9b3ab2bfabd81b"
     },
     {
       "type_name": "unique_identifier_msgs/msg/UUID",
@@ -79,7 +99,7 @@
     },
     {
       "type_name": "uv_msgs/action/BasicMotion_Goal",
-      "hash_string": "RIHS01_79e8043ac553b2da186147973ab254e149d990d967a657fe3cfca8a782d1849f"
+      "hash_string": "RIHS01_d213acd1f5e73a095c6a41b8c54b3dd7fdcb34af8e93ef0451c153422cfa14fd"
     }
   ]
 }

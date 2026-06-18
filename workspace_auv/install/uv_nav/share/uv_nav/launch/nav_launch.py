@@ -1,1 +1,13 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_nav/launch/nav_launch.py
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='uv_nav',
+            executable='navigator',
+            name='navigator',
+            output='screen',
+        ),
+    ])

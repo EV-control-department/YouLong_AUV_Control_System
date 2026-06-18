@@ -1236,3 +1236,614 @@ events:
         
       exitCode: 0
 ...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-KfN2Yi"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-KfN2Yi"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-KfN2Yi'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_ee6f7/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_ee6f7.dir/build.make CMakeFiles/cmTC_ee6f7.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-KfN2Yi”
+        Building C object CMakeFiles/cmTC_ee6f7.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_ee6f7.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-KfN2Yi/test_mpi.c
+        Linking C executable cmTC_ee6f7
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_ee6f7.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_ee6f7.dir/test_mpi.c.o -o cmTC_ee6f7  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-KfN2Yi”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-qVlZqP"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-qVlZqP"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-qVlZqP'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_a312d/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_a312d.dir/build.make CMakeFiles/cmTC_a312d.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-qVlZqP”
+        Building C object CMakeFiles/cmTC_a312d.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_a312d.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-qVlZqP/test_mpi.c
+        Linking C executable cmTC_a312d
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_a312d.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_a312d.dir/test_mpi.c.o -o cmTC_a312d  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-qVlZqP”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:570 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-MlOrmd"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-MlOrmd"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-MlOrmd'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_c79ec/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_c79ec.dir/build.make CMakeFiles/cmTC_c79ec.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-MlOrmd”
+        Building C object CMakeFiles/cmTC_c79ec.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_c79ec.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-MlOrmd/test_mpi.c
+        Linking C executable cmTC_c79ec
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_c79ec.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_c79ec.dir/test_mpi.c.o -o cmTC_c79ec  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-MlOrmd”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Ah0vGv"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Ah0vGv"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Ah0vGv'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_84cf5/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_84cf5.dir/build.make CMakeFiles/cmTC_84cf5.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Ah0vGv”
+        Building C object CMakeFiles/cmTC_84cf5.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_84cf5.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Ah0vGv/test_mpi.c
+        Linking C executable cmTC_84cf5
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_84cf5.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_84cf5.dir/test_mpi.c.o -o cmTC_84cf5  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Ah0vGv”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-r27tEN"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-r27tEN"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-r27tEN'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_9c44e/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_9c44e.dir/build.make CMakeFiles/cmTC_9c44e.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-r27tEN”
+        Building C object CMakeFiles/cmTC_9c44e.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_9c44e.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-r27tEN/test_mpi.c
+        Linking C executable cmTC_9c44e
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_9c44e.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_9c44e.dir/test_mpi.c.o -o cmTC_9c44e  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-r27tEN”
+        
+      exitCode: 0
+...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Puffwn"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Puffwn"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Puffwn'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_7e2f6/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_7e2f6.dir/build.make CMakeFiles/cmTC_7e2f6.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Puffwn”
+        Building C object CMakeFiles/cmTC_7e2f6.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_7e2f6.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Puffwn/test_mpi.c
+        Linking C executable cmTC_7e2f6
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_7e2f6.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_7e2f6.dir/test_mpi.c.o -o cmTC_7e2f6  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Puffwn”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Uut4YS"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Uut4YS"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Uut4YS'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_0fa4e/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_0fa4e.dir/build.make CMakeFiles/cmTC_0fa4e.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Uut4YS”
+        Building C object CMakeFiles/cmTC_0fa4e.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_0fa4e.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Uut4YS/test_mpi.c
+        Linking C executable cmTC_0fa4e
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_0fa4e.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_0fa4e.dir/test_mpi.c.o -o cmTC_0fa4e  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-Uut4YS”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:570 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-1gNwNe"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-1gNwNe"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-1gNwNe'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_080b3/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_080b3.dir/build.make CMakeFiles/cmTC_080b3.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-1gNwNe”
+        Building C object CMakeFiles/cmTC_080b3.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_080b3.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-1gNwNe/test_mpi.c
+        Linking C executable cmTC_080b3
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_080b3.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_080b3.dir/test_mpi.c.o -o cmTC_080b3  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-1gNwNe”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-E0giJU"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-E0giJU"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-E0giJU'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_4e0ba/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_4e0ba.dir/build.make CMakeFiles/cmTC_4e0ba.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-E0giJU”
+        Building C object CMakeFiles/cmTC_4e0ba.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_4e0ba.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-E0giJU/test_mpi.c
+        Linking C executable cmTC_4e0ba
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_4e0ba.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_4e0ba.dir/test_mpi.c.o -o cmTC_4e0ba  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-E0giJU”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-F2WSwb"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-F2WSwb"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-F2WSwb'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_1b07d/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_1b07d.dir/build.make CMakeFiles/cmTC_1b07d.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-F2WSwb”
+        Building C object CMakeFiles/cmTC_1b07d.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_1b07d.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-F2WSwb/test_mpi.c
+        Linking C executable cmTC_1b07d
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_1b07d.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_1b07d.dir/test_mpi.c.o -o cmTC_1b07d  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-F2WSwb”
+        
+      exitCode: 0
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-OKWT35"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-OKWT35"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-OKWT35'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_f870f/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_f870f.dir/build.make CMakeFiles/cmTC_f870f.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-OKWT35”
+        Building C object CMakeFiles/cmTC_f870f.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_f870f.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-OKWT35/test_mpi.c
+        Linking C executable cmTC_f870f
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_f870f.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_f870f.dir/test_mpi.c.o -o cmTC_f870f  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-OKWT35”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-78H6aN"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-78H6aN"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-78H6aN'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_a3859/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_a3859.dir/build.make CMakeFiles/cmTC_a3859.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-78H6aN”
+        Building C object CMakeFiles/cmTC_a3859.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_a3859.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-78H6aN/test_mpi.c
+        Linking C executable cmTC_a3859
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_a3859.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_a3859.dir/test_mpi.c.o -o cmTC_a3859  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-78H6aN”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:570 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-vlf9E6"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-vlf9E6"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-vlf9E6'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_5bf2c/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_5bf2c.dir/build.make CMakeFiles/cmTC_5bf2c.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-vlf9E6”
+        Building C object CMakeFiles/cmTC_5bf2c.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_5bf2c.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-vlf9E6/test_mpi.c
+        Linking C executable cmTC_5bf2c
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_5bf2c.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_5bf2c.dir/test_mpi.c.o -o cmTC_5bf2c  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-vlf9E6”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-EXNjRv"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-EXNjRv"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-EXNjRv'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_a2c87/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_a2c87.dir/build.make CMakeFiles/cmTC_a2c87.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-EXNjRv”
+        Building C object CMakeFiles/cmTC_a2c87.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_a2c87.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-EXNjRv/test_mpi.c
+        Linking C executable cmTC_a2c87
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_a2c87.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_a2c87.dir/test_mpi.c.o -o cmTC_a2c87  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-EXNjRv”
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1278 (try_compile)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1322 (_MPI_try_staged_settings)"
+      - "/usr/share/cmake-3.28/Modules/FindMPI.cmake:1645 (_MPI_check_lang_works)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/VTK-vtk-module-find-packages.cmake:397 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/vtk-config.cmake:150 (include)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:275 (find_package)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:324 (find_VTK)"
+      - "/usr/lib/x86_64-linux-gnu/cmake/pcl/PCLConfig.cmake:567 (find_external_library)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/ament_cmake_export_dependencies-extras.cmake:21 (find_package)"
+      - "/opt/ros/jazzy/share/pcl_conversions/cmake/pcl_conversionsConfig.cmake:41 (include)"
+      - "CMakeLists.txt:29 (find_package)"
+    description: "The MPI test test_mpi for C in mode normal"
+    directories:
+      source: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-lU0U0z"
+      binary: "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-lU0U0z"
+    cmakeVariables:
+      CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1/patches/99;/usr/lib/x86_64-linux-gnu/cmake/vtk-9.1;/opt/ros/jazzy/share/fastrtps_cmake_module/cmake/Modules;/usr/lib/x86_64-linux-gnu/cmake/pcl/Modules"
+    buildResult:
+      variable: "MPI_RESULT_C_test_mpi_normal"
+      cached: true
+      stdout: |
+        Change Dir: '/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-lU0U0z'
+        
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_ba19c/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_ba19c.dir/build.make CMakeFiles/cmTC_ba19c.dir/build
+        gmake[1]: 进入目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-lU0U0z”
+        Building C object CMakeFiles/cmTC_ba19c.dir/test_mpi.c.o
+        /usr/bin/cc  -isystem /usr/lib/x86_64-linux-gnu/openmpi/include -isystem /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi  -o CMakeFiles/cmTC_ba19c.dir/test_mpi.c.o -c /home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-lU0U0z/test_mpi.c
+        Linking C executable cmTC_ba19c
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_ba19c.dir/link.txt --verbose=1
+        /usr/bin/cc -L/usr/lib/x86_64-linux-gnu/openmpi/lib CMakeFiles/cmTC_ba19c.dir/test_mpi.c.o -o cmTC_ba19c  /usr/lib/x86_64-linux-gnu/libmpi.so 
+        gmake[1]: 离开目录“/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/CMakeFiles/CMakeScratch/TryCompile-lU0U0z”
+        
+      exitCode: 0
+...

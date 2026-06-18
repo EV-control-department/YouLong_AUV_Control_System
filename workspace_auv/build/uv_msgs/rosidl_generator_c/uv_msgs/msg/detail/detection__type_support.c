@@ -5,9 +5,9 @@
 #include <string.h>
 
 #include "uv_msgs/msg/detail/detection__functions.h"
+#include "rosidl_typesupport_interface/macros.h"
 #include "uv_msgs/msg/detail/detection__type_support.h"
 #include "uv_msgs/msg/detail/detection__struct.h"
-#include "rosidl_typesupport_interface/macros.h"
 
 #ifdef __cplusplus
 extern "C"

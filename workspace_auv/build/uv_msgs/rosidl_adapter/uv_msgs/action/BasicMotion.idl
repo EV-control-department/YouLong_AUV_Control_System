@@ -7,14 +7,23 @@ module uv_msgs {
   module action {
     module BasicMotion_Goal_Constants {
       @verbatim (language="comment", text=
-        "世界系步进, target=[dx, dy, dz, drz]")
+        "世界系步进, target=[dx, dy, dz, dyaw]")
       const uint8 WMOVE = 1;
       @verbatim (language="comment", text=
-        "机体系步进, target=[dx, dy, dz, drz]")
+        "机体系步进, target=[dx, dy, dz, dyaw]")
       const uint8 BMOVE = 2;
       @verbatim (language="comment", text=
         "绝对定位, target=[x, y, z, yaw]")
       const uint8 SET = 3;
+      @verbatim (language="comment", text=
+        "世界系直线, target=[dx, dy, dz]")
+      const uint8 WTRAVEL = 4;
+      @verbatim (language="comment", text=
+        "机体系直线, target=[dx, dy, dz]")
+      const uint8 BTRAVEL = 5;
+      @verbatim (language="comment", text=
+        "初始化里程计原点（无视 axes/target/timeout）")
+      const uint8 START = 6;
     };
     @verbatim (language="comment", text=
       "Request (Goal)")
@@ -22,8 +31,16 @@ module uv_msgs {
       uint8 cmd_type;
 
       @verbatim (language="comment", text=
+        "要动的轴: \"x\",\"y\",\"z\",\"rz\" 任意组合, 空=全部")
+      string axes;
+
+      @verbatim (language="comment", text=
         "[x, y, z, yaw]")
       sequence<float> target;
+
+      @verbatim (language="comment", text=
+        "秒, ≤0=默认60s")
+      float timeout;
     };
     @verbatim (language="comment", text=
       "Result")

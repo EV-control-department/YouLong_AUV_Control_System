@@ -4,9 +4,9 @@
 
 #include <string.h>
 
-#include "uv_msgs/msg/detail/waypoint__type_support.h"
 #include "uv_msgs/msg/detail/waypoint__struct.h"
 #include "rosidl_typesupport_interface/macros.h"
+#include "uv_msgs/msg/detail/waypoint__type_support.h"
 #include "uv_msgs/msg/detail/waypoint__functions.h"
 
 #ifdef __cplusplus

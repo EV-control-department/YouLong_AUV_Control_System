@@ -75,17 +75,18 @@ class SimBridgeNode(Node):
         self.current_pose_ready = False
         self.last_pid_time = self.get_clock().now()
 
-        # ARM / heartbeat state
-        self._armed = False
-        self._arm_mode = 0
+        # ARM / heartbeat state (always armed, heartbeat is optional)
+        self._armed = True
+        self._arm_mode = 3
         self._last_heartbeat_time = self.get_clock().now()
         self._hb_seq = 0
 
-        # INS state
-        self._ins_state = 3  # SINS/DVL (start aligned in sim)
-        self._ins_nav_ready = True
-        self._dvl_enabled = True
-        self._ins_align_start = None
+        # INS state: 0=待机 1=粗对准 2=精对准 3=SINS/GPS/DVL 4=SINS/DVL 5=MRU
+        self._ins_state = 1          # start in coarse alignment
+        self._ins_nav_ready = False  # not ready until coarse done
+        self._dvl_enabled = False    # DVL starts off
+        self._ins_boot_time = self.get_clock().now()  # used for initial 1→5 transition
+        self._ins_align_request = None  # time when SINS/DVL alignment was requested
 
         # === Publishers ===
         self.thruster_pub = self.create_publisher(
@@ -130,14 +131,14 @@ class SimBridgeNode(Node):
         # Position: body-frame error → body force
         self.pid_x = _Pid(800, 130.0, 200.0, i_limit=1000.0)
         self.pid_y = _Pid(600.0, 120.0, 150.0, i_limit=1000.0)
-        self.pid_z = _Pid(600.0, 30.0, 800.0, i_limit=6200.0, z_thrust_ff=230.0)
+        self.pid_z = _Pid(600.0, 30.0, 800.0, i_limit=6200.0, z_thrust_ff=0)
         self.pid_yaw = _Pid(1.5, 1.0, 0.1, i_limit=30.0)
         self.pid_yaw_rate = _Pid(30.0, 20.0, 1.0, i_limit=600.0)
 
         # Velocity: body-frame velocity error → body force
         self.pid_vx = _Pid(300.0, 50.0, 10.0, i_limit=500.0)
         self.pid_vy = _Pid(300.0, 50.0, 10.0, i_limit=500.0)
-        self.pid_vz = _Pid(300.0, 30.0, 50.0, i_limit=500.0, z_thrust_ff=230.0)
+        self.pid_vz = _Pid(300.0, 30.0, 50.0, i_limit=500.0, z_thrust_ff=0)
         self.pid_vyaw = _Pid(40.0, 20.0, 2.0, i_limit=300.0)
 
         # Map param paths to PID objects for write-through
@@ -281,11 +282,7 @@ class SimBridgeNode(Node):
             self._armed = True
 
     def _publish_zithbt(self) -> None:
-        # Check heartbeat timeout (1.5s without agxhbt → disarm)
-        elapsed = (self.get_clock().now() - self._last_heartbeat_time).nanoseconds / 1e9
-        if elapsed > 1.5 and self._armed:
-            self.get_logger().warn("Heartbeat timeout, disarming")
-            self._armed = False
+        # Always armed — heartbeat timeout disabled
 
         msg = UInt32()
         self._hb_seq += 1
@@ -298,32 +295,47 @@ class SimBridgeNode(Node):
         cmd = msg.data
         if cmd == 1:
             self._dvl_enabled = True
-            self.get_logger().info("INS: DVL enabled")
+            self.get_logger().info("INS: DVL enabled, requesting SINS/DVL alignment")
+            if self._ins_state == 5:
+                self._ins_align_request = self.get_clock().now()
+            elif self._ins_state == 1:
+                self.get_logger().info("INS: waiting for coarse alignment first")
         elif cmd == 2:
             self._dvl_enabled = False
-            self.get_logger().info("INS: DVL disabled")
+            self._ins_align_request = None
+            self.get_logger().info("INS: DVL disabled, fallback to MRU")
+            if self._ins_state == 4:
+                self._ins_state = 5
         elif cmd == 3:
             self.get_logger().info("INS: restarting alignment...")
-            self._ins_state = 0
+            self._ins_state = 1
             self._ins_nav_ready = False
-            self._ins_align_start = self.get_clock().now()
+            self._dvl_enabled = False
+            self._ins_align_request = None
+            self._ins_boot_time = self.get_clock().now()
 
     def _update_ins_alignment(self) -> None:
-        """Progress INS alignment state machine (called from control timer)."""
-        if self._ins_align_start is None:
-            return
-        elapsed = (self.get_clock().now() - self._ins_align_start).nanoseconds / 1e9
-        if elapsed >= 10.0 and self._ins_state < 3:
-            self._ins_state = 3
-            self._ins_nav_ready = True
-            self._ins_align_start = None
-            self.get_logger().info("INS alignment complete")
-        elif elapsed >= 5.0 and self._ins_state < 2:
-            self._ins_state = 2
-            self.get_logger().info("INS: fine alignment")
-        elif elapsed >= 2.0 and self._ins_state < 1:
-            self._ins_state = 1
-            self.get_logger().info("INS: coarse alignment")
+        """INS state machine: 1→5→4 (or 1→5 if no DVL)."""
+        now = self.get_clock().now()
+
+        # Phase 1: coarse alignment (1 → 5, ~1.5s after boot)
+        if self._ins_state == 1:
+            elapsed = (now - self._ins_boot_time).nanoseconds / 1e9
+            if elapsed >= 1.5:
+                self._ins_state = 5
+                self._ins_nav_ready = True
+                self.get_logger().info("INS: coarse alignment done → MRU mode")
+                # If DVL was already requested while in state 1, start alignment now
+                if self._dvl_enabled:
+                    self._ins_align_request = now
+
+        # Phase 2: SINS/DVL alignment (5 → 4, ~1.5s after request)
+        if self._ins_state == 5 and self._ins_align_request is not None:
+            elapsed = (now - self._ins_align_request).nanoseconds / 1e9
+            if elapsed >= 1.5:
+                self._ins_state = 4
+                self._ins_align_request = None
+                self.get_logger().info("INS: SINS/DVL alignment complete")
 
     # ── Parameter services ───────────────────────────────────────────
 
@@ -431,9 +443,9 @@ class SimBridgeNode(Node):
     # ── Thruster mixer (xunyun 6-thruster geometry) ────────────────
 
     def _publish_thrust_from_4dof(self, x: float, y: float, z: float, rz: float) -> None:
-        # When disarmed, force zero thrust
-        if not self._armed:
-            x = y = z = rz = 0.0
+        # DISABLED: always armed for now
+        # if not self._armed:
+        #     x = y = z = rz = 0.0
         self.force_4dof = [x, y, z, rz]
         MAX_T = 1000.0
 

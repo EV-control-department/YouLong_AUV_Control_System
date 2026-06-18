@@ -1,10 +1,10 @@
 # ROS 2 colcon workspace build artifacts
-auv_ws/build/
-auv_ws/install/
-auv_ws/log/
-sim_ws/build/
-sim_ws/install/
-sim_ws/log/
+workspace_auv/build/
+workspace_auv/install/
+workspace_auv/log/
+workspace_sim/build/
+workspace_sim/install/
+workspace_sim/log/
 
 # Python
 __pycache__/

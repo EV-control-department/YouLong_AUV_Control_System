@@ -16,6 +16,9 @@
 #include "uv_msgs/action/detail/basic_motion__struct.h"
 #include "uv_msgs/action/detail/basic_motion__functions.h"
 
+#include "rosidl_runtime_c/string.h"
+#include "rosidl_runtime_c/string_functions.h"
+
 #include "rosidl_runtime_c/primitives_sequence.h"
 #include "rosidl_runtime_c/primitives_sequence_functions.h"
 
@@ -60,6 +63,21 @@ bool uv_msgs__action__basic_motion__goal__convert_from_py(PyObject * _pymsg, voi
     }
     assert(PyLong_Check(field));
     ros_message->cmd_type = (uint8_t)PyLong_AsUnsignedLong(field);
+    Py_DECREF(field);
+  }
+  {  // axes
+    PyObject * field = PyObject_GetAttrString(_pymsg, "axes");
+    if (!field) {
+      return false;
+    }
+    assert(PyUnicode_Check(field));
+    PyObject * encoded_field = PyUnicode_AsUTF8String(field);
+    if (!encoded_field) {
+      Py_DECREF(field);
+      return false;
+    }
+    rosidl_runtime_c__String__assign(&ros_message->axes, PyBytes_AS_STRING(encoded_field));
+    Py_DECREF(encoded_field);
     Py_DECREF(field);
   }
   {  // target
@@ -124,6 +142,15 @@ bool uv_msgs__action__basic_motion__goal__convert_from_py(PyObject * _pymsg, voi
     }
     Py_DECREF(field);
   }
+  {  // timeout
+    PyObject * field = PyObject_GetAttrString(_pymsg, "timeout");
+    if (!field) {
+      return false;
+    }
+    assert(PyFloat_Check(field));
+    ros_message->timeout = (float)PyFloat_AS_DOUBLE(field);
+    Py_DECREF(field);
+  }
 
   return true;
 }
@@ -151,6 +178,23 @@ PyObject * uv_msgs__action__basic_motion__goal__convert_to_py(void * raw_ros_mes
     field = PyLong_FromUnsignedLong(ros_message->cmd_type);
     {
       int rc = PyObject_SetAttrString(_pymessage, "cmd_type", field);
+      Py_DECREF(field);
+      if (rc) {
+        return NULL;
+      }
+    }
+  }
+  {  // axes
+    PyObject * field = NULL;
+    field = PyUnicode_DecodeUTF8(
+      ros_message->axes.data,
+      strlen(ros_message->axes.data),
+      "replace");
+    if (!field) {
+      return NULL;
+    }
+    {
+      int rc = PyObject_SetAttrString(_pymessage, "axes", field);
       Py_DECREF(field);
       if (rc) {
         return NULL;
@@ -214,6 +258,17 @@ PyObject * uv_msgs__action__basic_motion__goal__convert_to_py(void * raw_ros_mes
     }
     Py_DECREF(field);
   }
+  {  // timeout
+    PyObject * field = NULL;
+    field = PyFloat_FromDouble(ros_message->timeout);
+    {
+      int rc = PyObject_SetAttrString(_pymessage, "timeout", field);
+      Py_DECREF(field);
+      if (rc) {
+        return NULL;
+      }
+    }
+  }
 
   // ownership of _pymessage is transferred to the caller
   return _pymessage;
@@ -233,8 +288,10 @@ PyObject * uv_msgs__action__basic_motion__goal__convert_to_py(void * raw_ros_mes
 // already included above
 // #include "uv_msgs/action/detail/basic_motion__functions.h"
 
-#include "rosidl_runtime_c/string.h"
-#include "rosidl_runtime_c/string_functions.h"
+// already included above
+// #include "rosidl_runtime_c/string.h"
+// already included above
+// #include "rosidl_runtime_c/string_functions.h"
 
 
 ROSIDL_GENERATOR_C_EXPORT

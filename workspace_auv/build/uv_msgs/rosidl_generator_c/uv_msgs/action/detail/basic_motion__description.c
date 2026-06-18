@@ -11,10 +11,10 @@ uv_msgs__action__BasicMotion__get_type_hash(
 {
   (void)type_support;
   static rosidl_type_hash_t hash = {1, {
-      0x06, 0xb0, 0xa6, 0x26, 0xed, 0xa9, 0x81, 0x5a,
-      0xdd, 0x50, 0xde, 0x31, 0x33, 0x78, 0xe7, 0x2f,
-      0xf5, 0x95, 0x13, 0x8d, 0x3a, 0xfe, 0xce, 0x8f,
-      0x29, 0x84, 0x45, 0xd7, 0xb0, 0x20, 0x44, 0x7b,
+      0xae, 0x63, 0xa1, 0xb1, 0x78, 0x62, 0x08, 0x5f,
+      0x2f, 0x25, 0x8e, 0x2b, 0xdd, 0x57, 0xb3, 0xa3,
+      0x63, 0x7a, 0x52, 0x8d, 0xa8, 0x29, 0x88, 0x51,
+      0xe5, 0x39, 0x70, 0xc0, 0xb2, 0x6c, 0xdb, 0xb2,
     }};
   return &hash;
 }
@@ -26,10 +26,10 @@ uv_msgs__action__BasicMotion_Goal__get_type_hash(
 {
   (void)type_support;
   static rosidl_type_hash_t hash = {1, {
-      0x79, 0xe8, 0x04, 0x3a, 0xc5, 0x53, 0xb2, 0xda,
-      0x18, 0x61, 0x47, 0x97, 0x3a, 0xb2, 0x54, 0xe1,
-      0x49, 0xd9, 0x90, 0xd9, 0x67, 0xa6, 0x57, 0xfe,
-      0x3c, 0xfc, 0xa8, 0xa7, 0x82, 0xd1, 0x84, 0x9f,
+      0xd2, 0x13, 0xac, 0xd1, 0xf5, 0xe7, 0x3a, 0x09,
+      0x5c, 0x6a, 0x41, 0xb8, 0xc5, 0x4b, 0x3d, 0xd7,
+      0xfd, 0xcb, 0x34, 0xaf, 0x8e, 0x93, 0xef, 0x04,
+      0x51, 0xc1, 0x53, 0x42, 0x2c, 0xfa, 0x14, 0xfd,
     }};
   return &hash;
 }
@@ -71,10 +71,10 @@ uv_msgs__action__BasicMotion_SendGoal__get_type_hash(
 {
   (void)type_support;
   static rosidl_type_hash_t hash = {1, {
-      0xa6, 0x79, 0xb6, 0x40, 0x39, 0x70, 0x3c, 0x3f,
-      0x79, 0xa1, 0xa7, 0xec, 0xfb, 0xad, 0xaa, 0xf4,
-      0x99, 0x72, 0x9b, 0x1f, 0x27, 0x55, 0xaa, 0x13,
-      0xf1, 0x34, 0xe1, 0x22, 0x87, 0x7d, 0x1a, 0xa9,
+      0xf8, 0xab, 0x02, 0x19, 0xd2, 0x03, 0x6e, 0xc2,
+      0xb6, 0x1f, 0x29, 0x51, 0x0e, 0xca, 0xc5, 0x74,
+      0x45, 0x01, 0x15, 0x3a, 0x53, 0x7c, 0x20, 0x34,
+      0x6a, 0xaf, 0x6f, 0x6c, 0xfd, 0xaf, 0x49, 0x8b,
     }};
   return &hash;
 }
@@ -86,10 +86,10 @@ uv_msgs__action__BasicMotion_SendGoal_Request__get_type_hash(
 {
   (void)type_support;
   static rosidl_type_hash_t hash = {1, {
-      0x01, 0xe3, 0x1a, 0x06, 0xdf, 0xbc, 0xe1, 0xea,
-      0x5f, 0x64, 0x46, 0xf6, 0x6b, 0xb7, 0xf9, 0x38,
-      0xee, 0x98, 0xb4, 0xcd, 0xda, 0xf6, 0x66, 0x23,
-      0xf7, 0x10, 0x07, 0xc2, 0xb3, 0x1e, 0x12, 0x0b,
+      0xda, 0x1d, 0x22, 0x04, 0xe3, 0x2b, 0xc3, 0x30,
+      0x50, 0xe4, 0xcd, 0xe4, 0x29, 0x11, 0x01, 0x69,
+      0x74, 0xc5, 0x92, 0x7d, 0x98, 0x81, 0xc4, 0x64,
+      0xab, 0x9b, 0x3a, 0xb2, 0xbf, 0xab, 0xd8, 0x1b,
     }};
   return &hash;
 }
@@ -116,10 +116,10 @@ uv_msgs__action__BasicMotion_SendGoal_Event__get_type_hash(
 {
   (void)type_support;
   static rosidl_type_hash_t hash = {1, {
-      0x48, 0x67, 0x8e, 0xc5, 0xcd, 0xca, 0x58, 0x3d,
-      0x39, 0x66, 0x22, 0xe5, 0xba, 0x0a, 0x0a, 0x98,
-      0x0c, 0x9b, 0xa9, 0x44, 0x4c, 0xca, 0x57, 0x61,
-      0xb4, 0xc7, 0xdd, 0x80, 0xb4, 0x93, 0x55, 0xd6,
+      0x1e, 0x00, 0xcf, 0xc4, 0x65, 0x48, 0x5e, 0x4d,
+      0xe7, 0xef, 0xac, 0xd9, 0x32, 0x77, 0x2b, 0x98,
+      0xc5, 0x5a, 0xd3, 0xb3, 0xb4, 0x3c, 0xce, 0x19,
+      0x7f, 0x07, 0x3d, 0x60, 0xb6, 0x32, 0x4f, 0x3c,
     }};
   return &hash;
 }
@@ -203,9 +203,9 @@ uv_msgs__action__BasicMotion_FeedbackMessage__get_type_hash(
 #include <string.h>
 
 // Include directives for referenced types
+#include "unique_identifier_msgs/msg/detail/uuid__functions.h"
 #include "builtin_interfaces/msg/detail/time__functions.h"
 #include "service_msgs/msg/detail/service_event_info__functions.h"
-#include "unique_identifier_msgs/msg/detail/uuid__functions.h"
 
 // Hashes for external referenced types
 #ifndef NDEBUG
@@ -418,7 +418,9 @@ uv_msgs__action__BasicMotion__get_type_description(
 }
 // Define type names, field names, and default values
 static char uv_msgs__action__BasicMotion_Goal__FIELD_NAME__cmd_type[] = "cmd_type";
+static char uv_msgs__action__BasicMotion_Goal__FIELD_NAME__axes[] = "axes";
 static char uv_msgs__action__BasicMotion_Goal__FIELD_NAME__target[] = "target";
+static char uv_msgs__action__BasicMotion_Goal__FIELD_NAME__timeout[] = "timeout";
 
 static rosidl_runtime_c__type_description__Field uv_msgs__action__BasicMotion_Goal__FIELDS[] = {
   {
@@ -432,9 +434,29 @@ static rosidl_runtime_c__type_description__Field uv_msgs__action__BasicMotion_Go
     {NULL, 0, 0},
   },
   {
+    {uv_msgs__action__BasicMotion_Goal__FIELD_NAME__axes, 4, 4},
+    {
+      rosidl_runtime_c__type_description__FieldType__FIELD_TYPE_STRING,
+      0,
+      0,
+      {NULL, 0, 0},
+    },
+    {NULL, 0, 0},
+  },
+  {
     {uv_msgs__action__BasicMotion_Goal__FIELD_NAME__target, 6, 6},
     {
       rosidl_runtime_c__type_description__FieldType__FIELD_TYPE_FLOAT_UNBOUNDED_SEQUENCE,
+      0,
+      0,
+      {NULL, 0, 0},
+    },
+    {NULL, 0, 0},
+  },
+  {
+    {uv_msgs__action__BasicMotion_Goal__FIELD_NAME__timeout, 7, 7},
+    {
+      rosidl_runtime_c__type_description__FieldType__FIELD_TYPE_FLOAT,
       0,
       0,
       {NULL, 0, 0},
@@ -452,7 +474,7 @@ uv_msgs__action__BasicMotion_Goal__get_type_description(
   static const rosidl_runtime_c__type_description__TypeDescription description = {
     {
       {uv_msgs__action__BasicMotion_Goal__TYPE_NAME, 31, 31},
-      {uv_msgs__action__BasicMotion_Goal__FIELDS, 2, 2},
+      {uv_msgs__action__BasicMotion_Goal__FIELDS, 4, 4},
     },
     {NULL, 0, 0},
   };
@@ -1189,11 +1211,16 @@ uv_msgs__action__BasicMotion_FeedbackMessage__get_type_description(
 
 static char toplevel_type_raw_source[] =
   "# Request (Goal)\n"
-  "uint8 WMOVE=1       # \\xe4\\xb8\\x96\\xe7\\x95\\x8c\\xe7\\xb3\\xbb\\xe6\\xad\\xa5\\xe8\\xbf\\x9b, target=[dx, dy, dz, drz]\n"
-  "uint8 BMOVE=2       # \\xe6\\x9c\\xba\\xe4\\xbd\\x93\\xe7\\xb3\\xbb\\xe6\\xad\\xa5\\xe8\\xbf\\x9b, target=[dx, dy, dz, drz]\n"
+  "uint8 WMOVE=1       # \\xe4\\xb8\\x96\\xe7\\x95\\x8c\\xe7\\xb3\\xbb\\xe6\\xad\\xa5\\xe8\\xbf\\x9b, target=[dx, dy, dz, dyaw]\n"
+  "uint8 BMOVE=2       # \\xe6\\x9c\\xba\\xe4\\xbd\\x93\\xe7\\xb3\\xbb\\xe6\\xad\\xa5\\xe8\\xbf\\x9b, target=[dx, dy, dz, dyaw]\n"
   "uint8 SET=3         # \\xe7\\xbb\\x9d\\xe5\\xaf\\xb9\\xe5\\xae\\x9a\\xe4\\xbd\\x8d, target=[x, y, z, yaw]\n"
+  "uint8 WTRAVEL=4     # \\xe4\\xb8\\x96\\xe7\\x95\\x8c\\xe7\\xb3\\xbb\\xe7\\x9b\\xb4\\xe7\\xba\\xbf, target=[dx, dy, dz]\n"
+  "uint8 BTRAVEL=5     # \\xe6\\x9c\\xba\\xe4\\xbd\\x93\\xe7\\xb3\\xbb\\xe7\\x9b\\xb4\\xe7\\xba\\xbf, target=[dx, dy, dz]\n"
+  "uint8 START=6       # \\xe5\\x88\\x9d\\xe5\\xa7\\x8b\\xe5\\x8c\\x96\\xe9\\x87\\x8c\\xe7\\xa8\\x8b\\xe8\\xae\\xa1\\xe5\\x8e\\x9f\\xe7\\x82\\xb9\\xef\\xbc\\x88\\xe6\\x97\\xa0\\xe8\\xa7\\x86 axes/target/timeout\\xef\\xbc\\x89\n"
   "uint8 cmd_type\n"
+  "string axes         # \\xe8\\xa6\\x81\\xe5\\x8a\\xa8\\xe7\\x9a\\x84\\xe8\\xbd\\xb4: \"x\",\"y\",\"z\",\"rz\" \\xe4\\xbb\\xbb\\xe6\\x84\\x8f\\xe7\\xbb\\x84\\xe5\\x90\\x88, \\xe7\\xa9\\xba=\\xe5\\x85\\xa8\\xe9\\x83\\xa8\n"
   "float32[] target    # [x, y, z, yaw]\n"
+  "float32 timeout     # \\xe7\\xa7\\x92, \\xe2\\x89\\xa40=\\xe9\\xbb\\x98\\xe8\\xae\\xa460s\n"
   "---\n"
   "# Result\n"
   "bool success\n"
@@ -1215,7 +1242,7 @@ uv_msgs__action__BasicMotion__get_individual_type_description_source(
   static const rosidl_runtime_c__type_description__TypeSource source = {
     {uv_msgs__action__BasicMotion__TYPE_NAME, 26, 26},
     {action_encoding, 6, 6},
-    {toplevel_type_raw_source, 310, 310},
+    {toplevel_type_raw_source, 555, 555},
   };
   return &source;
 }

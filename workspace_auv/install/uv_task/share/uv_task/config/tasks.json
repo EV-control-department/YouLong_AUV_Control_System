@@ -1,1 +1,9 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_task/config/tasks.json
+{
+  "tasks": [
+    {"name": "setz", "params": {"z": -1.0}},
+    {"name": "wait", "params": {"duration": 2.0}},
+    {"name": "setrz", "params": {"rz": 0.0}},
+    {"name": "bmovex", "params": {"dx": 2.0}},
+    {"name": "wait", "params": {"duration": 1.0}}
+  ]
+}

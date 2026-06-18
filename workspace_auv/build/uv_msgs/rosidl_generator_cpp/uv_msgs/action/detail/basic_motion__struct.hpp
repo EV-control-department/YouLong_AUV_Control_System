@@ -42,16 +42,20 @@ struct BasicMotion_Goal_
       rosidl_runtime_cpp::MessageInitialization::ZERO == _init)
     {
       this->cmd_type = 0;
+      this->axes = "";
+      this->timeout = 0.0f;
     }
   }
 
   explicit BasicMotion_Goal_(const ContainerAllocator & _alloc, rosidl_runtime_cpp::MessageInitialization _init = rosidl_runtime_cpp::MessageInitialization::ALL)
+  : axes(_alloc)
   {
-    (void)_alloc;
     if (rosidl_runtime_cpp::MessageInitialization::ALL == _init ||
       rosidl_runtime_cpp::MessageInitialization::ZERO == _init)
     {
       this->cmd_type = 0;
+      this->axes = "";
+      this->timeout = 0.0f;
     }
   }
 
@@ -59,9 +63,15 @@ struct BasicMotion_Goal_
   using _cmd_type_type =
     uint8_t;
   _cmd_type_type cmd_type;
+  using _axes_type =
+    std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>>;
+  _axes_type axes;
   using _target_type =
     std::vector<float, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<float>>;
   _target_type target;
+  using _timeout_type =
+    float;
+  _timeout_type timeout;
 
   // setters for named parameter idiom
   Type & set__cmd_type(
@@ -70,10 +80,22 @@ struct BasicMotion_Goal_
     this->cmd_type = _arg;
     return *this;
   }
+  Type & set__axes(
+    const std::basic_string<char, std::char_traits<char>, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<char>> & _arg)
+  {
+    this->axes = _arg;
+    return *this;
+  }
   Type & set__target(
     const std::vector<float, typename std::allocator_traits<ContainerAllocator>::template rebind_alloc<float>> & _arg)
   {
     this->target = _arg;
+    return *this;
+  }
+  Type & set__timeout(
+    const float & _arg)
+  {
+    this->timeout = _arg;
     return *this;
   }
 
@@ -84,6 +106,12 @@ struct BasicMotion_Goal_
     2u;
   static constexpr uint8_t SET =
     3u;
+  static constexpr uint8_t WTRAVEL =
+    4u;
+  static constexpr uint8_t BTRAVEL =
+    5u;
+  static constexpr uint8_t START =
+    6u;
 
   // pointer types
   using RawPtr =
@@ -128,7 +156,13 @@ struct BasicMotion_Goal_
     if (this->cmd_type != other.cmd_type) {
       return false;
     }
+    if (this->axes != other.axes) {
+      return false;
+    }
     if (this->target != other.target) {
+      return false;
+    }
+    if (this->timeout != other.timeout) {
       return false;
     }
     return true;
@@ -158,6 +192,21 @@ constexpr uint8_t BasicMotion_Goal_<ContainerAllocator>::BMOVE;
 // static constexpr member variable definitions are only needed in C++14 and below, deprecated in C++17
 template<typename ContainerAllocator>
 constexpr uint8_t BasicMotion_Goal_<ContainerAllocator>::SET;
+#endif  // __cplusplus < 201703L
+#if __cplusplus < 201703L
+// static constexpr member variable definitions are only needed in C++14 and below, deprecated in C++17
+template<typename ContainerAllocator>
+constexpr uint8_t BasicMotion_Goal_<ContainerAllocator>::WTRAVEL;
+#endif  // __cplusplus < 201703L
+#if __cplusplus < 201703L
+// static constexpr member variable definitions are only needed in C++14 and below, deprecated in C++17
+template<typename ContainerAllocator>
+constexpr uint8_t BasicMotion_Goal_<ContainerAllocator>::BTRAVEL;
+#endif  // __cplusplus < 201703L
+#if __cplusplus < 201703L
+// static constexpr member variable definitions are only needed in C++14 and below, deprecated in C++17
+template<typename ContainerAllocator>
+constexpr uint8_t BasicMotion_Goal_<ContainerAllocator>::START;
 #endif  // __cplusplus < 201703L
 
 }  // namespace action

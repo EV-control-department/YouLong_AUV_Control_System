@@ -4,10 +4,10 @@
 
 #include <string.h>
 
+#include "rosidl_typesupport_interface/macros.h"
+#include "uv_msgs/msg/detail/pid_state__struct.h"
 #include "uv_msgs/msg/detail/pid_state__type_support.h"
 #include "uv_msgs/msg/detail/pid_state__functions.h"
-#include "uv_msgs/msg/detail/pid_state__struct.h"
-#include "rosidl_typesupport_interface/macros.h"
 
 #ifdef __cplusplus
 extern "C"

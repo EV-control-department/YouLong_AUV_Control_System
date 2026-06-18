@@ -6,8 +6,8 @@
 
 #include "uv_msgs/msg/detail/device_command__type_support.h"
 #include "uv_msgs/msg/detail/device_command__functions.h"
-#include "uv_msgs/msg/detail/device_command__struct.h"
 #include "rosidl_typesupport_interface/macros.h"
+#include "uv_msgs/msg/detail/device_command__struct.h"
 
 #ifdef __cplusplus
 extern "C"

@@ -39,10 +39,16 @@ cdr_serialize(
   // Member: cmd_type
   cdr << ros_message.cmd_type;
 
+  // Member: axes
+  cdr << ros_message.axes;
+
   // Member: target
   {
     cdr << ros_message.target;
   }
+
+  // Member: timeout
+  cdr << ros_message.timeout;
 
   return true;
 }
@@ -56,10 +62,16 @@ cdr_deserialize(
   // Member: cmd_type
   cdr >> ros_message.cmd_type;
 
+  // Member: axes
+  cdr >> ros_message.axes;
+
   // Member: target
   {
     cdr >> ros_message.target;
   }
+
+  // Member: timeout
+  cdr >> ros_message.timeout;
 
   return true;
 }  // NOLINT(readability/fn_size)
@@ -85,6 +97,11 @@ get_serialized_size(
       eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
   }
 
+  // Member: axes
+  current_alignment += padding +
+    eprosima::fastcdr::Cdr::alignment(current_alignment, padding) +
+    (ros_message.axes.size() + 1);
+
   // Member: target
   {
     size_t array_size = ros_message.target.size();
@@ -92,6 +109,13 @@ get_serialized_size(
       eprosima::fastcdr::Cdr::alignment(current_alignment, padding);
     size_t item_size = sizeof(ros_message.target[0]);
     current_alignment += array_size * item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Member: timeout
+  {
+    size_t item_size = sizeof(ros_message.timeout);
+    current_alignment += item_size +
       eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
   }
 
@@ -124,6 +148,17 @@ max_serialized_size_BasicMotion_Goal(
     last_member_size = array_size * sizeof(uint8_t);
     current_alignment += array_size * sizeof(uint8_t);
   }
+  // Member: axes
+  {
+    size_t array_size = 1;
+    full_bounded = false;
+    is_plain = false;
+    for (size_t index = 0; index < array_size; ++index) {
+      current_alignment += padding +
+        eprosima::fastcdr::Cdr::alignment(current_alignment, padding) +
+        1;
+    }
+  }
   // Member: target
   {
     size_t array_size = 0;
@@ -131,6 +166,13 @@ max_serialized_size_BasicMotion_Goal(
     is_plain = false;
     current_alignment += padding +
       eprosima::fastcdr::Cdr::alignment(current_alignment, padding);
+    last_member_size = array_size * sizeof(uint32_t);
+    current_alignment += array_size * sizeof(uint32_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
+  }
+  // Member: timeout
+  {
+    size_t array_size = 1;
     last_member_size = array_size * sizeof(uint32_t);
     current_alignment += array_size * sizeof(uint32_t) +
       eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
@@ -144,7 +186,7 @@ max_serialized_size_BasicMotion_Goal(
     using DataType = uv_msgs::action::BasicMotion_Goal;
     is_plain =
       (
-      offsetof(DataType, target) +
+      offsetof(DataType, timeout) +
       last_member_size
       ) == ret_val;
   }
@@ -161,10 +203,16 @@ cdr_serialize_key(
   // Member: cmd_type
   cdr << ros_message.cmd_type;
 
+  // Member: axes
+  cdr << ros_message.axes;
+
   // Member: target
   {
     cdr << ros_message.target;
   }
+
+  // Member: timeout
+  cdr << ros_message.timeout;
 
   return true;
 }
@@ -189,6 +237,11 @@ get_serialized_size_key(
       eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
   }
 
+  // Member: axes
+  current_alignment += padding +
+    eprosima::fastcdr::Cdr::alignment(current_alignment, padding) +
+    (ros_message.axes.size() + 1);
+
   // Member: target
   {
     size_t array_size = ros_message.target.size();
@@ -196,6 +249,13 @@ get_serialized_size_key(
       eprosima::fastcdr::Cdr::alignment(current_alignment, padding);
     size_t item_size = sizeof(ros_message.target[0]);
     current_alignment += array_size * item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Member: timeout
+  {
+    size_t item_size = sizeof(ros_message.timeout);
+    current_alignment += item_size +
       eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
   }
 
@@ -228,6 +288,18 @@ max_serialized_size_key_BasicMotion_Goal(
     current_alignment += array_size * sizeof(uint8_t);
   }
 
+  // Member: axes
+  {
+    size_t array_size = 1;
+    full_bounded = false;
+    is_plain = false;
+    for (size_t index = 0; index < array_size; ++index) {
+      current_alignment += padding +
+        eprosima::fastcdr::Cdr::alignment(current_alignment, padding) +
+        1;
+    }
+  }
+
   // Member: target
   {
     size_t array_size = 0;
@@ -235,6 +307,14 @@ max_serialized_size_key_BasicMotion_Goal(
     is_plain = false;
     current_alignment += padding +
       eprosima::fastcdr::Cdr::alignment(current_alignment, padding);
+    last_member_size = array_size * sizeof(uint32_t);
+    current_alignment += array_size * sizeof(uint32_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
+  }
+
+  // Member: timeout
+  {
+    size_t array_size = 1;
     last_member_size = array_size * sizeof(uint32_t);
     current_alignment += array_size * sizeof(uint32_t) +
       eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
@@ -248,7 +328,7 @@ max_serialized_size_key_BasicMotion_Goal(
     using DataType = uv_msgs::action::BasicMotion_Goal;
     is_plain =
       (
-      offsetof(DataType, target) +
+      offsetof(DataType, timeout) +
       last_member_size
       ) == ret_val;
   }

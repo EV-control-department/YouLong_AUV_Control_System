@@ -12,6 +12,8 @@
 
 
 // Include directives for member types
+// Member `axes`
+#include "rosidl_runtime_c/string_functions.h"
 // Member `target`
 #include "rosidl_runtime_c/primitives_sequence_functions.h"
 
@@ -22,11 +24,17 @@ uv_msgs__action__BasicMotion_Goal__init(uv_msgs__action__BasicMotion_Goal * msg)
     return false;
   }
   // cmd_type
+  // axes
+  if (!rosidl_runtime_c__String__init(&msg->axes)) {
+    uv_msgs__action__BasicMotion_Goal__fini(msg);
+    return false;
+  }
   // target
   if (!rosidl_runtime_c__float__Sequence__init(&msg->target, 0)) {
     uv_msgs__action__BasicMotion_Goal__fini(msg);
     return false;
   }
+  // timeout
   return true;
 }
 
@@ -37,8 +45,11 @@ uv_msgs__action__BasicMotion_Goal__fini(uv_msgs__action__BasicMotion_Goal * msg)
     return;
   }
   // cmd_type
+  // axes
+  rosidl_runtime_c__String__fini(&msg->axes);
   // target
   rosidl_runtime_c__float__Sequence__fini(&msg->target);
+  // timeout
 }
 
 bool
@@ -51,10 +62,20 @@ uv_msgs__action__BasicMotion_Goal__are_equal(const uv_msgs__action__BasicMotion_
   if (lhs->cmd_type != rhs->cmd_type) {
     return false;
   }
+  // axes
+  if (!rosidl_runtime_c__String__are_equal(
+      &(lhs->axes), &(rhs->axes)))
+  {
+    return false;
+  }
   // target
   if (!rosidl_runtime_c__float__Sequence__are_equal(
       &(lhs->target), &(rhs->target)))
   {
+    return false;
+  }
+  // timeout
+  if (lhs->timeout != rhs->timeout) {
     return false;
   }
   return true;
@@ -70,12 +91,20 @@ uv_msgs__action__BasicMotion_Goal__copy(
   }
   // cmd_type
   output->cmd_type = input->cmd_type;
+  // axes
+  if (!rosidl_runtime_c__String__copy(
+      &(input->axes), &(output->axes)))
+  {
+    return false;
+  }
   // target
   if (!rosidl_runtime_c__float__Sequence__copy(
       &(input->target), &(output->target)))
   {
     return false;
   }
+  // timeout
+  output->timeout = input->timeout;
   return true;
 }
 
@@ -261,7 +290,8 @@ uv_msgs__action__BasicMotion_Goal__Sequence__copy(
 
 // Include directives for member types
 // Member `message`
-#include "rosidl_runtime_c/string_functions.h"
+// already included above
+// #include "rosidl_runtime_c/string_functions.h"
 
 bool
 uv_msgs__action__BasicMotion_Result__init(uv_msgs__action__BasicMotion_Result * msg)

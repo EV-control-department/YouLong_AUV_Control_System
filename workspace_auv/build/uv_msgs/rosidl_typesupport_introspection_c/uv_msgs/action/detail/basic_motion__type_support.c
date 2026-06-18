@@ -13,6 +13,8 @@
 
 
 // Include directives for member types
+// Member `axes`
+#include "rosidl_runtime_c/string_functions.h"
 // Member `target`
 #include "rosidl_runtime_c/primitives_sequence_functions.h"
 
@@ -90,7 +92,7 @@ bool uv_msgs__action__BasicMotion_Goal__rosidl_typesupport_introspection_c__resi
   return rosidl_runtime_c__float__Sequence__init(member, size);
 }
 
-static rosidl_typesupport_introspection_c__MessageMember uv_msgs__action__BasicMotion_Goal__rosidl_typesupport_introspection_c__BasicMotion_Goal_message_member_array[2] = {
+static rosidl_typesupport_introspection_c__MessageMember uv_msgs__action__BasicMotion_Goal__rosidl_typesupport_introspection_c__BasicMotion_Goal_message_member_array[4] = {
   {
     "cmd_type",  // name
     rosidl_typesupport_introspection_c__ROS_TYPE_UINT8,  // type
@@ -101,6 +103,24 @@ static rosidl_typesupport_introspection_c__MessageMember uv_msgs__action__BasicM
     0,  // array size
     false,  // is upper bound
     offsetof(uv_msgs__action__BasicMotion_Goal, cmd_type),  // bytes offset in struct
+    NULL,  // default value
+    NULL,  // size() function pointer
+    NULL,  // get_const(index) function pointer
+    NULL,  // get(index) function pointer
+    NULL,  // fetch(index, &value) function pointer
+    NULL,  // assign(index, value) function pointer
+    NULL  // resize(index) function pointer
+  },
+  {
+    "axes",  // name
+    rosidl_typesupport_introspection_c__ROS_TYPE_STRING,  // type
+    0,  // upper bound of string
+    NULL,  // members of sub message
+    false,  // is key
+    false,  // is array
+    0,  // array size
+    false,  // is upper bound
+    offsetof(uv_msgs__action__BasicMotion_Goal, axes),  // bytes offset in struct
     NULL,  // default value
     NULL,  // size() function pointer
     NULL,  // get_const(index) function pointer
@@ -126,13 +146,31 @@ static rosidl_typesupport_introspection_c__MessageMember uv_msgs__action__BasicM
     uv_msgs__action__BasicMotion_Goal__rosidl_typesupport_introspection_c__fetch_function__BasicMotion_Goal__target,  // fetch(index, &value) function pointer
     uv_msgs__action__BasicMotion_Goal__rosidl_typesupport_introspection_c__assign_function__BasicMotion_Goal__target,  // assign(index, value) function pointer
     uv_msgs__action__BasicMotion_Goal__rosidl_typesupport_introspection_c__resize_function__BasicMotion_Goal__target  // resize(index) function pointer
+  },
+  {
+    "timeout",  // name
+    rosidl_typesupport_introspection_c__ROS_TYPE_FLOAT,  // type
+    0,  // upper bound of string
+    NULL,  // members of sub message
+    false,  // is key
+    false,  // is array
+    0,  // array size
+    false,  // is upper bound
+    offsetof(uv_msgs__action__BasicMotion_Goal, timeout),  // bytes offset in struct
+    NULL,  // default value
+    NULL,  // size() function pointer
+    NULL,  // get_const(index) function pointer
+    NULL,  // get(index) function pointer
+    NULL,  // fetch(index, &value) function pointer
+    NULL,  // assign(index, value) function pointer
+    NULL  // resize(index) function pointer
   }
 };
 
 static const rosidl_typesupport_introspection_c__MessageMembers uv_msgs__action__BasicMotion_Goal__rosidl_typesupport_introspection_c__BasicMotion_Goal_message_members = {
   "uv_msgs__action",  // message namespace
   "BasicMotion_Goal",  // message name
-  2,  // number of fields
+  4,  // number of fields
   sizeof(uv_msgs__action__BasicMotion_Goal),
   false,  // has_any_key_member_
   uv_msgs__action__BasicMotion_Goal__rosidl_typesupport_introspection_c__BasicMotion_Goal_message_member_array,  // message members
@@ -184,7 +222,8 @@ ROSIDL_TYPESUPPORT_INTERFACE__MESSAGE_SYMBOL_NAME(rosidl_typesupport_introspecti
 
 // Include directives for member types
 // Member `message`
-#include "rosidl_runtime_c/string_functions.h"
+// already included above
+// #include "rosidl_runtime_c/string_functions.h"
 
 #ifdef __cplusplus
 extern "C"

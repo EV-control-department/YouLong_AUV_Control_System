@@ -4,9 +4,9 @@
 
 #include <string.h>
 
-#include "uv_msgs/msg/detail/object_position_array__type_support.h"
-#include "uv_msgs/msg/detail/object_position_array__struct.h"
 #include "rosidl_typesupport_interface/macros.h"
+#include "uv_msgs/msg/detail/object_position_array__struct.h"
+#include "uv_msgs/msg/detail/object_position_array__type_support.h"
 #include "uv_msgs/msg/detail/object_position_array__functions.h"
 
 #ifdef __cplusplus

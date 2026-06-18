@@ -74,8 +74,8 @@ CMakeFiles/uv_msgs__rosidl_generator_c.dir/rosidl_generator_c/uv_msgs/msg/detail
  /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
  /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
  /usr/include/strings.h \
+ /home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_generator_c/uv_msgs/msg/detail/detection__functions.h \
  /opt/ros/jazzy/include/builtin_interfaces/builtin_interfaces/msg/detail/time__functions.h \
  /opt/ros/jazzy/include/builtin_interfaces/builtin_interfaces/msg/rosidl_generator_c__visibility_control.h \
  /opt/ros/jazzy/include/std_msgs/std_msgs/msg/detail/header__functions.h \
- /opt/ros/jazzy/include/std_msgs/std_msgs/msg/rosidl_generator_c__visibility_control.h \
- /home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_generator_c/uv_msgs/msg/detail/detection__functions.h
+ /opt/ros/jazzy/include/std_msgs/std_msgs/msg/rosidl_generator_c__visibility_control.h

@@ -83,7 +83,7 @@ void resize_function__BasicMotion_Goal__target(void * untyped_member, size_t siz
   member->resize(size);
 }
 
-static const ::rosidl_typesupport_introspection_cpp::MessageMember BasicMotion_Goal_message_member_array[2] = {
+static const ::rosidl_typesupport_introspection_cpp::MessageMember BasicMotion_Goal_message_member_array[4] = {
   {
     "cmd_type",  // name
     ::rosidl_typesupport_introspection_cpp::ROS_TYPE_UINT8,  // type
@@ -94,6 +94,24 @@ static const ::rosidl_typesupport_introspection_cpp::MessageMember BasicMotion_G
     0,  // array size
     false,  // is upper bound
     offsetof(uv_msgs::action::BasicMotion_Goal, cmd_type),  // bytes offset in struct
+    nullptr,  // default value
+    nullptr,  // size() function pointer
+    nullptr,  // get_const(index) function pointer
+    nullptr,  // get(index) function pointer
+    nullptr,  // fetch(index, &value) function pointer
+    nullptr,  // assign(index, value) function pointer
+    nullptr  // resize(index) function pointer
+  },
+  {
+    "axes",  // name
+    ::rosidl_typesupport_introspection_cpp::ROS_TYPE_STRING,  // type
+    0,  // upper bound of string
+    nullptr,  // members of sub message
+    false,  // is key
+    false,  // is array
+    0,  // array size
+    false,  // is upper bound
+    offsetof(uv_msgs::action::BasicMotion_Goal, axes),  // bytes offset in struct
     nullptr,  // default value
     nullptr,  // size() function pointer
     nullptr,  // get_const(index) function pointer
@@ -119,13 +137,31 @@ static const ::rosidl_typesupport_introspection_cpp::MessageMember BasicMotion_G
     fetch_function__BasicMotion_Goal__target,  // fetch(index, &value) function pointer
     assign_function__BasicMotion_Goal__target,  // assign(index, value) function pointer
     resize_function__BasicMotion_Goal__target  // resize(index) function pointer
+  },
+  {
+    "timeout",  // name
+    ::rosidl_typesupport_introspection_cpp::ROS_TYPE_FLOAT,  // type
+    0,  // upper bound of string
+    nullptr,  // members of sub message
+    false,  // is key
+    false,  // is array
+    0,  // array size
+    false,  // is upper bound
+    offsetof(uv_msgs::action::BasicMotion_Goal, timeout),  // bytes offset in struct
+    nullptr,  // default value
+    nullptr,  // size() function pointer
+    nullptr,  // get_const(index) function pointer
+    nullptr,  // get(index) function pointer
+    nullptr,  // fetch(index, &value) function pointer
+    nullptr,  // assign(index, value) function pointer
+    nullptr  // resize(index) function pointer
   }
 };
 
 static const ::rosidl_typesupport_introspection_cpp::MessageMembers BasicMotion_Goal_message_members = {
   "uv_msgs::action",  // message namespace
   "BasicMotion_Goal",  // message name
-  2,  // number of fields
+  4,  // number of fields
   sizeof(uv_msgs::action::BasicMotion_Goal),
   false,  // has_any_key_member_
   BasicMotion_Goal_message_member_array,  // message members

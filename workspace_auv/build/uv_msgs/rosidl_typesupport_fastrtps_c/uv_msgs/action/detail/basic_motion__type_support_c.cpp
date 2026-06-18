@@ -38,6 +38,8 @@ extern "C"
 
 #include "rosidl_runtime_c/primitives_sequence.h"  // target
 #include "rosidl_runtime_c/primitives_sequence_functions.h"  // target
+#include "rosidl_runtime_c/string.h"  // axes
+#include "rosidl_runtime_c/string_functions.h"  // axes
 
 // forward declare type support functions
 
@@ -55,12 +57,31 @@ bool cdr_serialize_uv_msgs__action__BasicMotion_Goal(
     cdr << ros_message->cmd_type;
   }
 
+  // Field name: axes
+  {
+    const rosidl_runtime_c__String * str = &ros_message->axes;
+    if (str->capacity == 0 || str->capacity <= str->size) {
+      fprintf(stderr, "string capacity not greater than size\n");
+      return false;
+    }
+    if (str->data[str->size] != '\0') {
+      fprintf(stderr, "string not null-terminated\n");
+      return false;
+    }
+    cdr << str->data;
+  }
+
   // Field name: target
   {
     size_t size = ros_message->target.size;
     auto array_ptr = ros_message->target.data;
     cdr << static_cast<uint32_t>(size);
     cdr.serialize_array(array_ptr, size);
+  }
+
+  // Field name: timeout
+  {
+    cdr << ros_message->timeout;
   }
 
   return true;
@@ -74,6 +95,22 @@ bool cdr_deserialize_uv_msgs__action__BasicMotion_Goal(
   // Field name: cmd_type
   {
     cdr >> ros_message->cmd_type;
+  }
+
+  // Field name: axes
+  {
+    std::string tmp;
+    cdr >> tmp;
+    if (!ros_message->axes.data) {
+      rosidl_runtime_c__String__init(&ros_message->axes);
+    }
+    bool succeeded = rosidl_runtime_c__String__assign(
+      &ros_message->axes,
+      tmp.c_str());
+    if (!succeeded) {
+      fprintf(stderr, "failed to assign string into field 'axes'\n");
+      return false;
+    }
   }
 
   // Field name: target
@@ -102,6 +139,11 @@ bool cdr_deserialize_uv_msgs__action__BasicMotion_Goal(
     cdr.deserialize_array(array_ptr, size);
   }
 
+  // Field name: timeout
+  {
+    cdr >> ros_message->timeout;
+  }
+
   return true;
 }  // NOLINT(readability/fn_size)
 
@@ -127,6 +169,11 @@ size_t get_serialized_size_uv_msgs__action__BasicMotion_Goal(
       eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
   }
 
+  // Field name: axes
+  current_alignment += padding +
+    eprosima::fastcdr::Cdr::alignment(current_alignment, padding) +
+    (ros_message->axes.size + 1);
+
   // Field name: target
   {
     size_t array_size = ros_message->target.size;
@@ -136,6 +183,13 @@ size_t get_serialized_size_uv_msgs__action__BasicMotion_Goal(
     (void)array_ptr;
     size_t item_size = sizeof(array_ptr[0]);
     current_alignment += array_size * item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: timeout
+  {
+    size_t item_size = sizeof(ros_message->timeout);
+    current_alignment += item_size +
       eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
   }
 
@@ -168,6 +222,18 @@ size_t max_serialized_size_uv_msgs__action__BasicMotion_Goal(
     current_alignment += array_size * sizeof(uint8_t);
   }
 
+  // Field name: axes
+  {
+    size_t array_size = 1;
+    full_bounded = false;
+    is_plain = false;
+    for (size_t index = 0; index < array_size; ++index) {
+      current_alignment += padding +
+        eprosima::fastcdr::Cdr::alignment(current_alignment, padding) +
+        1;
+    }
+  }
+
   // Field name: target
   {
     size_t array_size = 0;
@@ -175,6 +241,14 @@ size_t max_serialized_size_uv_msgs__action__BasicMotion_Goal(
     is_plain = false;
     current_alignment += padding +
       eprosima::fastcdr::Cdr::alignment(current_alignment, padding);
+    last_member_size = array_size * sizeof(uint32_t);
+    current_alignment += array_size * sizeof(uint32_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
+  }
+
+  // Field name: timeout
+  {
+    size_t array_size = 1;
     last_member_size = array_size * sizeof(uint32_t);
     current_alignment += array_size * sizeof(uint32_t) +
       eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
@@ -189,7 +263,7 @@ size_t max_serialized_size_uv_msgs__action__BasicMotion_Goal(
     using DataType = uv_msgs__action__BasicMotion_Goal;
     is_plain =
       (
-      offsetof(DataType, target) +
+      offsetof(DataType, timeout) +
       last_member_size
       ) == ret_val;
   }
@@ -206,12 +280,31 @@ bool cdr_serialize_key_uv_msgs__action__BasicMotion_Goal(
     cdr << ros_message->cmd_type;
   }
 
+  // Field name: axes
+  {
+    const rosidl_runtime_c__String * str = &ros_message->axes;
+    if (str->capacity == 0 || str->capacity <= str->size) {
+      fprintf(stderr, "string capacity not greater than size\n");
+      return false;
+    }
+    if (str->data[str->size] != '\0') {
+      fprintf(stderr, "string not null-terminated\n");
+      return false;
+    }
+    cdr << str->data;
+  }
+
   // Field name: target
   {
     size_t size = ros_message->target.size;
     auto array_ptr = ros_message->target.data;
     cdr << static_cast<uint32_t>(size);
     cdr.serialize_array(array_ptr, size);
+  }
+
+  // Field name: timeout
+  {
+    cdr << ros_message->timeout;
   }
 
   return true;
@@ -239,6 +332,11 @@ size_t get_serialized_size_key_uv_msgs__action__BasicMotion_Goal(
       eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
   }
 
+  // Field name: axes
+  current_alignment += padding +
+    eprosima::fastcdr::Cdr::alignment(current_alignment, padding) +
+    (ros_message->axes.size + 1);
+
   // Field name: target
   {
     size_t array_size = ros_message->target.size;
@@ -248,6 +346,13 @@ size_t get_serialized_size_key_uv_msgs__action__BasicMotion_Goal(
     (void)array_ptr;
     size_t item_size = sizeof(array_ptr[0]);
     current_alignment += array_size * item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: timeout
+  {
+    size_t item_size = sizeof(ros_message->timeout);
+    current_alignment += item_size +
       eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
   }
 
@@ -278,6 +383,18 @@ size_t max_serialized_size_key_uv_msgs__action__BasicMotion_Goal(
     current_alignment += array_size * sizeof(uint8_t);
   }
 
+  // Field name: axes
+  {
+    size_t array_size = 1;
+    full_bounded = false;
+    is_plain = false;
+    for (size_t index = 0; index < array_size; ++index) {
+      current_alignment += padding +
+        eprosima::fastcdr::Cdr::alignment(current_alignment, padding) +
+        1;
+    }
+  }
+
   // Field name: target
   {
     size_t array_size = 0;
@@ -285,6 +402,14 @@ size_t max_serialized_size_key_uv_msgs__action__BasicMotion_Goal(
     is_plain = false;
     current_alignment += padding +
       eprosima::fastcdr::Cdr::alignment(current_alignment, padding);
+    last_member_size = array_size * sizeof(uint32_t);
+    current_alignment += array_size * sizeof(uint32_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
+  }
+
+  // Field name: timeout
+  {
+    size_t array_size = 1;
     last_member_size = array_size * sizeof(uint32_t);
     current_alignment += array_size * sizeof(uint32_t) +
       eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
@@ -298,7 +423,7 @@ size_t max_serialized_size_key_uv_msgs__action__BasicMotion_Goal(
     using DataType = uv_msgs__action__BasicMotion_Goal;
     is_plain =
       (
-      offsetof(DataType, target) +
+      offsetof(DataType, timeout) +
       last_member_size
       ) == ret_val;
   }
@@ -427,8 +552,10 @@ extern "C"
 {
 #endif
 
-#include "rosidl_runtime_c/string.h"  // message
-#include "rosidl_runtime_c/string_functions.h"  // message
+// already included above
+// #include "rosidl_runtime_c/string.h"  // message
+// already included above
+// #include "rosidl_runtime_c/string_functions.h"  // message
 
 // forward declare type support functions
 

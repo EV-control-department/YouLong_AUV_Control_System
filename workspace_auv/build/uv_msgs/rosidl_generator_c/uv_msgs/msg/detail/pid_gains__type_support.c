@@ -5,8 +5,8 @@
 #include <string.h>
 
 #include "uv_msgs/msg/detail/pid_gains__struct.h"
-#include "uv_msgs/msg/detail/pid_gains__functions.h"
 #include "rosidl_typesupport_interface/macros.h"
+#include "uv_msgs/msg/detail/pid_gains__functions.h"
 #include "uv_msgs/msg/detail/pid_gains__type_support.h"
 
 #ifdef __cplusplus

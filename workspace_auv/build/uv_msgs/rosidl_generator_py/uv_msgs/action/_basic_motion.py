@@ -35,6 +35,9 @@ class Metaclass_BasicMotion_Goal(type):
         'WMOVE': 1,
         'BMOVE': 2,
         'SET': 3,
+        'WTRAVEL': 4,
+        'BTRAVEL': 5,
+        'START': 6,
     }
 
     @classmethod
@@ -66,6 +69,9 @@ class Metaclass_BasicMotion_Goal(type):
             'WMOVE': cls.__constants['WMOVE'],
             'BMOVE': cls.__constants['BMOVE'],
             'SET': cls.__constants['SET'],
+            'WTRAVEL': cls.__constants['WTRAVEL'],
+            'BTRAVEL': cls.__constants['BTRAVEL'],
+            'START': cls.__constants['START'],
         }
 
     @property
@@ -83,6 +89,21 @@ class Metaclass_BasicMotion_Goal(type):
         """Message constant 'SET'."""
         return Metaclass_BasicMotion_Goal.__constants['SET']
 
+    @property
+    def WTRAVEL(self):
+        """Message constant 'WTRAVEL'."""
+        return Metaclass_BasicMotion_Goal.__constants['WTRAVEL']
+
+    @property
+    def BTRAVEL(self):
+        """Message constant 'BTRAVEL'."""
+        return Metaclass_BasicMotion_Goal.__constants['BTRAVEL']
+
+    @property
+    def START(self):
+        """Message constant 'START'."""
+        return Metaclass_BasicMotion_Goal.__constants['START']
+
 
 class BasicMotion_Goal(metaclass=Metaclass_BasicMotion_Goal):
     """
@@ -92,24 +113,33 @@ class BasicMotion_Goal(metaclass=Metaclass_BasicMotion_Goal):
       WMOVE
       BMOVE
       SET
+      WTRAVEL
+      BTRAVEL
+      START
     """
 
     __slots__ = [
         '_cmd_type',
+        '_axes',
         '_target',
+        '_timeout',
         '_check_fields',
     ]
 
     _fields_and_field_types = {
         'cmd_type': 'uint8',
+        'axes': 'string',
         'target': 'sequence<float>',
+        'timeout': 'float',
     }
 
     # This attribute is used to store an rosidl_parser.definition variable
     # related to the data type of each of the components the message.
     SLOT_TYPES = (
         rosidl_parser.definition.BasicType('uint8'),  # noqa: E501
+        rosidl_parser.definition.UnboundedString(),  # noqa: E501
         rosidl_parser.definition.UnboundedSequence(rosidl_parser.definition.BasicType('float')),  # noqa: E501
+        rosidl_parser.definition.BasicType('float'),  # noqa: E501
     )
 
     def __init__(self, **kwargs):
@@ -122,7 +152,9 @@ class BasicMotion_Goal(metaclass=Metaclass_BasicMotion_Goal):
                 'Invalid arguments passed to constructor: %s' % \
                 ', '.join(sorted(k for k in kwargs.keys() if '_' + k not in self.__slots__))
         self.cmd_type = kwargs.get('cmd_type', int())
+        self.axes = kwargs.get('axes', str())
         self.target = array.array('f', kwargs.get('target', []))
+        self.timeout = kwargs.get('timeout', float())
 
     def __repr__(self):
         typename = self.__class__.__module__.split('.')
@@ -156,7 +188,11 @@ class BasicMotion_Goal(metaclass=Metaclass_BasicMotion_Goal):
             return False
         if self.cmd_type != other.cmd_type:
             return False
+        if self.axes != other.axes:
+            return False
         if self.target != other.target:
+            return False
+        if self.timeout != other.timeout:
             return False
         return True
 
@@ -179,6 +215,19 @@ class BasicMotion_Goal(metaclass=Metaclass_BasicMotion_Goal):
             assert value >= 0 and value < 256, \
                 "The 'cmd_type' field must be an unsigned integer in [0, 255]"
         self._cmd_type = value
+
+    @builtins.property
+    def axes(self):
+        """Message field 'axes'."""
+        return self._axes
+
+    @axes.setter
+    def axes(self, value):
+        if self._check_fields:
+            assert \
+                isinstance(value, str), \
+                "The 'axes' field must be of type 'str'"
+        self._axes = value
 
     @builtins.property
     def target(self):
@@ -207,6 +256,21 @@ class BasicMotion_Goal(metaclass=Metaclass_BasicMotion_Goal):
                  all(not (val < -3.402823466e+38 or val > 3.402823466e+38) or math.isinf(val) for val in value)), \
                 "The 'target' field must be a set or sequence and each value of type 'float' and each float in [-340282346600000016151267322115014000640.000000, 340282346600000016151267322115014000640.000000]"
         self._target = array.array('f', value)
+
+    @builtins.property
+    def timeout(self):
+        """Message field 'timeout'."""
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, value):
+        if self._check_fields:
+            assert \
+                isinstance(value, float), \
+                "The 'timeout' field must be of type 'float'"
+            assert not (value < -3.402823466e+38 or value > 3.402823466e+38) or math.isinf(value), \
+                "The 'timeout' field must be a float in [-3.402823466e+38, 3.402823466e+38]"
+        self._timeout = value
 
 
 # Import statements for member types

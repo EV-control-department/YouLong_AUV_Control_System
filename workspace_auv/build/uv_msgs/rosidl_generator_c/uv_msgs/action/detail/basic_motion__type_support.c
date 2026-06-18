@@ -4,10 +4,10 @@
 
 #include <string.h>
 
-#include "uv_msgs/action/detail/basic_motion__struct.h"
 #include "uv_msgs/action/detail/basic_motion__functions.h"
-#include "uv_msgs/action/detail/basic_motion__type_support.h"
 #include "rosidl_typesupport_interface/macros.h"
+#include "uv_msgs/action/detail/basic_motion__struct.h"
+#include "uv_msgs/action/detail/basic_motion__type_support.h"
 
 #ifdef __cplusplus
 extern "C"
