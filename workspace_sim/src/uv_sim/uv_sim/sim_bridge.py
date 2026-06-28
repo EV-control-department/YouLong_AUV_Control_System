@@ -63,8 +63,8 @@ class SimBridgeNode(Node):
         self._hil_mode = self.get_parameter('hil_mode').value
 
         if self._hil_mode:
-            self._init_camera_only()
-            self.get_logger().info("sim_bridge started in HIL mode (camera passthrough only)")
+            self._init_hil()
+            self.get_logger().info("sim_bridge started in HIL mode (camera + thrust mixing)")
         else:
             self._init_full()
             self.get_logger().info("sim_bridge started (ZIT6 protocol, xunyun mixer)")
@@ -178,11 +178,28 @@ class SimBridgeNode(Node):
         self.create_timer(0.1, self._publish_zithbt)   # 10Hz heartbeat
         self.create_timer(0.0167, self._tick_60hz)      # 60Hz control + state
 
-    def _init_camera_only(self) -> None:
-        """HIL mode: camera passthrough + stitching only. No PID/thrust/ZIT6 logic."""
+    def _init_hil(self) -> None:
+        """HIL mode: camera passthrough + thrust mixing from MCU's /zit6/state/thr."""
         self._init_camera_publishers()
         self._init_camera_state()
         self._init_camera_subscriptions()
+
+        # Thrust mixing: MCU publishes 4-DOF forces → we mix to 6 thrusters
+        self.thrust = [0.0] * 6
+        self.force_4dof = [0.0, 0.0, 0.0, 0.0]
+        self.thruster_pub = self.create_publisher(
+            Float64MultiArray, "/auv/thrusters_cmd", 10
+        )
+        self.create_subscription(
+            Float32MultiArray, "/zit6/state/thr", self._thrust_cb, 10
+        )
+
+    def _thrust_cb(self, msg: Float32MultiArray) -> None:
+        """Receive 4-DOF forces from MCU, run thrust mixing, publish to Stonefish."""
+        if len(msg.data) >= 4:
+            self._publish_thrust_from_4dof(
+                msg.data[0], msg.data[1], msg.data[2], msg.data[3]
+            )
 
     def _init_camera_publishers(self) -> None:
         self.front_rect_left_pub = self.create_publisher(Image, "/auv/front_cam/left", 10)
