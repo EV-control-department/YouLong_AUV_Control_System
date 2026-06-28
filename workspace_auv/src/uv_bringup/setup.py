@@ -12,6 +12,7 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/sim_bringup.py',
             'launch/real_bringup.py',
+            'launch/sim_core.py',
         ]),
     ],
     install_requires=['setuptools'],
