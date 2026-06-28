@@ -13,6 +13,7 @@ setup(
             'launch/sim_bringup.py',
             'launch/real_bringup.py',
             'launch/sim_core.py',
+            'launch/hil_bringup.py',
         ]),
     ],
     install_requires=['setuptools'],

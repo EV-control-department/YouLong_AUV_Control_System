@@ -59,6 +59,18 @@ class SimBridgeNode(Node):
     def __init__(self) -> None:
         super().__init__("sim_bridge")
 
+        self.declare_parameter('hil_mode', False)
+        self._hil_mode = self.get_parameter('hil_mode').value
+
+        if self._hil_mode:
+            self._init_camera_only()
+            self.get_logger().info("sim_bridge started in HIL mode (camera passthrough only)")
+        else:
+            self._init_full()
+            self.get_logger().info("sim_bridge started (ZIT6 protocol, xunyun mixer)")
+
+    def _init_full(self) -> None:
+        """Full SIL mode: PID, thruster mixing, ZIT6 state machine + camera passthrough."""
         # Internal state
         self._tick = 0  # for rate-gated publishing
 
@@ -99,19 +111,10 @@ class SimBridgeNode(Node):
         self.zit6_hbt_pub = self.create_publisher(UInt32, "/zit6/state/zithbt", 10)
 
         # Camera republishers
-        self.front_rect_left_pub = self.create_publisher(Image, "/auv/front_cam/left", 10)
-        self.front_rect_right_pub = self.create_publisher(Image, "/auv/front_cam/right", 10)
-        self.down_rect_left_pub = self.create_publisher(Image, "/auv/down_cam/left", 10)
-        self.down_rect_right_pub = self.create_publisher(Image, "/auv/down_cam/right", 10)
-        self.front_rect_pub = self.create_publisher(Image, "/auv/front_cam/stitched", 10)
-        self.down_rect_pub = self.create_publisher(Image, "/auv/down_cam/stitched", 10)
+        self._init_camera_publishers()
 
         # Image stitching
-        self.bridge = CvBridge()
-        self.front_left_img = None
-        self.front_right_img = None
-        self.down_left_img = None
-        self.down_right_img = None
+        self._init_camera_state()
 
         # === PID controllers ===
         # Gains stored in dict for service access, synced to _Pid objects
@@ -169,14 +172,38 @@ class SimBridgeNode(Node):
         self.create_service(GetParams, "/zit6/get_params", self._get_params_cb)
         self.create_service(UpdateParams, "/zit6/update_params", self._update_params_cb)
 
+        # Camera subscriptions
+        self._init_camera_subscriptions()
+
+        self.create_timer(0.1, self._publish_zithbt)   # 10Hz heartbeat
+        self.create_timer(0.0167, self._tick_60hz)      # 60Hz control + state
+
+    def _init_camera_only(self) -> None:
+        """HIL mode: camera passthrough + stitching only. No PID/thrust/ZIT6 logic."""
+        self._init_camera_publishers()
+        self._init_camera_state()
+        self._init_camera_subscriptions()
+
+    def _init_camera_publishers(self) -> None:
+        self.front_rect_left_pub = self.create_publisher(Image, "/auv/front_cam/left", 10)
+        self.front_rect_right_pub = self.create_publisher(Image, "/auv/front_cam/right", 10)
+        self.down_rect_left_pub = self.create_publisher(Image, "/auv/down_cam/left", 10)
+        self.down_rect_right_pub = self.create_publisher(Image, "/auv/down_cam/right", 10)
+        self.front_rect_pub = self.create_publisher(Image, "/auv/front_cam/stitched", 10)
+        self.down_rect_pub = self.create_publisher(Image, "/auv/down_cam/stitched", 10)
+
+    def _init_camera_state(self) -> None:
+        self.bridge = CvBridge()
+        self.front_left_img = None
+        self.front_right_img = None
+        self.down_left_img = None
+        self.down_right_img = None
+
+    def _init_camera_subscriptions(self) -> None:
         self.create_subscription(Image, "/sim/front_cam/left/image_color", self._front_left_img_cb, 10)
         self.create_subscription(Image, "/sim/front_cam/right/image_color", self._front_right_img_cb, 10)
         self.create_subscription(Image, "/sim/down_cam/left/image_color", self._down_left_img_cb, 10)
         self.create_subscription(Image, "/sim/down_cam/right/image_color", self._down_right_img_cb, 10)
-
-        self.create_timer(0.1, self._publish_zithbt)   # 10Hz heartbeat
-        self.create_timer(0.0167, self._tick_60hz)      # 60Hz control + state
-        self.get_logger().info("sim_bridge started (ZIT6 protocol, xunyun mixer)")
 
     # ── ZIT6 setpoint callback ──────────────────────────────────────
 
