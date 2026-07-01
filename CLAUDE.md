@@ -224,7 +224,7 @@ print('SET:', result.success, result.message)
 
 **Key behaviors:**
 - **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them (no service call needed)
-- **Task map**: JSON `name` field maps to a method via `task_map` dict. Supported tasks: `start`, `setx`, `sety`, `setz`, `setrz`, `setxy`, `setxyz`, `setxyrz`, `setxyzrz`, `bmovex`, `bmovey`, `bmovez`, `bmoverz`, `bmovexy`, `bmovexyz`, `wmovex`, `wmovey`, `wmovez`, `wmoverz`, `wmovexy`, `wmovexyz`, `navigate`, `wait`
+- **Task map**: JSON `name` field maps to a method via `task_map` dict. Supports SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL tasks, plus `start`, `navigate`, `wait`. See `docs/debug_guide.md` for full task list.
 - **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
 - **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
 

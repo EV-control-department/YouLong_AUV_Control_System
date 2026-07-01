@@ -107,8 +107,8 @@ TOL_RZ = 5.0    # Yaw 轴容差 (度)
 # 步进控制参数
 # ═════════════════════════════════════════════════════════════════════════════
 STEP_X = 0.6             # X 方向步长 (椭圆半轴，米)
-STEP_Y = 0.4             # Y 方向步长 (椭圆半轴，米)
-STEP_PERIOD = 0.3        # 目标步进间隔/收敛时间阈值 (秒)
+STEP_Y = 0.2             # Y 方向步长 (椭圆半轴，米)
+STEP_PERIOD = 0.2        # 目标步进间隔/收敛时间阈值 (秒)
 LATERAL_LAMBDA = 2.0     # 横向误差指数衰减系数
 
 
@@ -233,8 +233,9 @@ class BasicMotionNode(Node):
         """
         with self._state_lock:
             if self._origin is not None:
-                self.get_logger().info('odom origin already set, skipping start()')
-                return
+                self.get_logger().info('odom origin already set. update it to current pose. ')
+                self.get_logger().warning('It might be an incorrect motion.')
+                
             self._origin = Coordinate(
                 x=self.pose.x, y=self.pose.y, z=self.pose.z, rz=self.pose.rz)
             self.get_logger().info(
@@ -468,7 +469,7 @@ class BasicMotionNode(Node):
                 t_remaining = float('inf')
 
             step_thresh = self._calc_step_size(move_angle) * 0.3
-            if converging and (t_remaining <= STEP_PERIOD / 2 or e_along < step_thresh):
+            if converging and (t_remaining <= STEP_PERIOD * 2  or e_along < step_thresh):
                 return True
 
             time.sleep(0.1)
@@ -839,7 +840,7 @@ class BasicMotionNode(Node):
         # ── 派发运动类型 ──────────────────────────────────────
         type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL'}
         type_name = type_names.get(req.cmd_type, f'UNKNOWN({req.cmd_type})')
-        self.get_logger().info("=============================",f'动作 {type_name}: axes="{req.axes}"开始',"=============================")
+        self.get_logger().info("============================="f'动作 {type_name}: axes="{req.axes}"开始'"=============================")
         self.get_logger().info(
             f'Action {type_name}: axes="{req.axes}", '
             f'target=[{x:.2f}, {y:.2f}, {z:.2f}, {yaw:.1f}], '

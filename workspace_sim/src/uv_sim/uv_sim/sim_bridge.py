@@ -541,10 +541,10 @@ class SimBridgeNode(Node):
             MAX_T = 1.0  # HIL mode: forces are normalized to [-1, 1]
 
         # NED body force → 6 thrusters (xunyun geometry)
-        h0 = (x + y + rz )     # T0: aft-stbd diagonal
-        h1 = (x - y - rz )     # T1: aft-port diagonal
-        h4 = -(x - y + rz )    # T4: fwd-stbd diagonal
-        h5 = -(x + y - rz )    # T5: fwd-port diagonal
+        h0 = (x + y - rz )     # T0: aft-stbd diagonal
+        h1 = (x - y + rz )     # T1: aft-port diagonal
+        h4 = -(x - y - rz )    # T4: fwd-stbd diagonal
+        h5 = -(x + y + rz )    # T5: fwd-port diagonal
         h2 = z*0.8;                        # HeaveBow
         h3 = z*0.8;                        # HeaveStern
 
@@ -613,7 +613,7 @@ class SimBridgeNode(Node):
         cmd_x = float(self.pid_x.step(ex_body, dt))
         cmd_y = float(self.pid_y.step(ey_body, dt))
         cmd_z = float(self.pid_z.step(ez, dt))
-        cmd_rz = -float(self.pid_yaw_rate.step(eyaw_rate, dt))
+        cmd_rz = float(self.pid_yaw_rate.step(eyaw_rate, dt))
 
         self._publish_thrust_from_4dof(cmd_x, cmd_y, cmd_z, cmd_rz)
 

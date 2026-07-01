@@ -12,6 +12,7 @@ import threading
 import time
 
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_srvs.srv import Trigger
@@ -146,6 +147,16 @@ class TaskRunnerNode(Node):
             'wmoverz': self._task_wmoverz,
             'wmovexy': self._task_wmovexy,
             'wmovexyz': self._task_wmovexyz,
+            'wtravelx': self._task_wtravelx,
+            'wtravely': self._task_wtravely,
+            'wtravelz': self._task_wtravelz,
+            'wtravelxy': self._task_wtravelxy,
+            'wtravelxyz': self._task_wtravelxyz,
+            'btravelx': self._task_btravelx,
+            'btravely': self._task_btravely,
+            'btravelz': self._task_btravelz,
+            'btravelxy': self._task_btravelxy,
+            'btravelxyz': self._task_btravelxyz,
             'navigate': self._task_navigate,
             'wait': self._task_wait,
         }
@@ -438,6 +449,102 @@ class TaskRunnerNode(Node):
             self._cmd_z += p['dz']
         return success
 
+    # --- WTRAVEL tasks (world frame linear travel: turn + go straight) ---
+
+    def _task_wtravelx(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WTRAVEL, [p['dx'], 0.0, 0.0, 0.0])
+        self.get_logger().info(f'wtravelx: {msg}')
+        if success:
+            self._cmd_x += p['dx']
+        return success
+
+    def _task_wtravely(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WTRAVEL, [0.0, p['dy'], 0.0, 0.0])
+        self.get_logger().info(f'wtravely: {msg}')
+        if success:
+            self._cmd_y += p['dy']
+        return success
+
+    def _task_wtravelz(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WTRAVEL, [0.0, 0.0, p['dz'], 0.0], "z")
+        self.get_logger().info(f'wtravelz: {msg}')
+        if success:
+            self._cmd_z += p['dz']
+        return success
+
+    def _task_wtravelxy(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WTRAVEL, [p['dx'], p['dy'], 0.0, 0.0])
+        self.get_logger().info(f'wtravelxy: {msg}')
+        if success:
+            self._cmd_x += p['dx']
+            self._cmd_y += p['dy']
+        return success
+
+    def _task_wtravelxyz(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WTRAVEL, [p['dx'], p['dy'], p['dz'], 0.0])
+        self.get_logger().info(f'wtravelxyz: {msg}')
+        if success:
+            self._cmd_x += p['dx']
+            self._cmd_y += p['dy']
+            self._cmd_z += p['dz']
+        return success
+
+    # --- BTRAVEL tasks (body frame linear travel: body→world + turn + go) ---
+
+    def _task_btravelx(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BTRAVEL, [p['dx'], 0.0, 0.0, 0.0])
+        self.get_logger().info(f'btravelx: {msg}')
+        if success:
+            cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
+            self._cmd_x += cy * p['dx']
+            self._cmd_y += sy * p['dx']
+        return success
+
+    def _task_btravely(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BTRAVEL, [0.0, p['dy'], 0.0, 0.0])
+        self.get_logger().info(f'btravely: {msg}')
+        if success:
+            cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
+            self._cmd_x += -sy * p['dy']
+            self._cmd_y += cy * p['dy']
+        return success
+
+    def _task_btravelz(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BTRAVEL, [0.0, 0.0, p['dz'], 0.0], "z")
+        self.get_logger().info(f'btravelz: {msg}')
+        if success:
+            self._cmd_z += p['dz']
+        return success
+
+    def _task_btravelxy(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BTRAVEL, [p['dx'], p['dy'], 0.0, 0.0])
+        self.get_logger().info(f'btravelxy: {msg}')
+        if success:
+            cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
+            self._cmd_x += cy * p['dx'] - sy * p['dy']
+            self._cmd_y += sy * p['dx'] + cy * p['dy']
+        return success
+
+    def _task_btravelxyz(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BTRAVEL, [p['dx'], p['dy'], p['dz'], 0.0])
+        self.get_logger().info(f'btravelxyz: {msg}')
+        if success:
+            cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
+            self._cmd_x += cy * p['dx'] - sy * p['dy']
+            self._cmd_y += sy * p['dx'] + cy * p['dy']
+            self._cmd_z += p['dz']
+        return success
+
     # --- Special tasks ---
 
     def _task_navigate(self, p: dict) -> bool:
@@ -466,7 +573,7 @@ class TaskRunnerNode(Node):
             path = request.task_name
             if not os.path.isabs(path):
                 default = os.path.join(
-                    os.path.dirname(__file__), '..', 'config', 'tasks.json'
+                    get_package_share_directory('uv_task'), 'config', 'tasks.json'
                 )
                 if os.path.exists(default):
                     path = default
@@ -527,7 +634,7 @@ def main(args=None):
 
     # Load default tasks and start immediately
     default_path = os.path.join(
-        os.path.dirname(__file__), '..', 'config', 'tasks.json'
+        get_package_share_directory('uv_task'), 'config', 'tasks.json'
     )
     if os.path.exists(default_path):
         node.tasks = node.load_tasks(default_path)

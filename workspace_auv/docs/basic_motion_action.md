@@ -292,16 +292,7 @@ if __name__ == '__main__':
 
 task_runner 通过同样的 ActionClient 接口调用 basic_motion。JSON 任务配置文件中的任务名映射到对应命令：
 
-| JSON 任务名  | 实际命令      | params            |
-| ------------ | ------------- | ----------------- |
-| `start`    | START         | `{}`            |
-| `setxyzrz` | SET           | `{x, y, z, rz}` |
-| `setz`     | SET（单轴）   | `{z}`           |
-| `wmovexy`  | WMOVE         | `{dx, dy}`      |
-| `bmovex`   | BMOVE         | `{dx}`          |
-| `wait`     | 纯 time.sleep | `{duration}`    |
-
-完整任务列表见 `uv_task/uv_task/task_runner.py` 的 `task_map`。
+完整任务列表（SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL 单轴到多轴共 25+ 个任务）见 `docs/debug_guide.md` 的 task_runner 章节。
 
 ---
 
