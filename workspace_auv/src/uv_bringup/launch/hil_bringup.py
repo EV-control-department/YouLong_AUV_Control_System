@@ -29,6 +29,10 @@ def generate_launch_description():
         'enable_task', default_value='false',
         description='Enable task runner'
     )
+    declare_enable_motion = DeclareLaunchArgument(
+        'enable_motion', default_value='false',
+        description='Enable motion control nodes'
+    )
     declare_scenario = DeclareLaunchArgument(
         'scenario', default_value='underwater_xunyun.scn',
         description='Stonefish scenario file name (in Data/ directory)'
@@ -45,6 +49,7 @@ def generate_launch_description():
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
     enable_task = LaunchConfiguration('enable_task')
+    enable_motion = LaunchConfiguration('enable_motion')
     serial_dev = LaunchConfiguration('serial_dev')
     serial_baud = LaunchConfiguration('serial_baud')
 
@@ -81,19 +86,30 @@ def generate_launch_description():
     )
 
     # ── micro-ROS Agent (bridges serial ↔ DDS) ─────────────────────
-    # Equivalent to: MicroXRCEAgent serial --dev /dev/ttyUSB0 -b 921600
+    # Runs: micro_ros_agent serial -D <dev> -b <baud> -v 4
+    import pathlib
+    _agent_install = pathlib.Path.home() / 'micro_ros_agent_ws' / 'install'
+    _agent_bin = (_agent_install / 'micro_ros_agent' / 'lib' / 'micro_ros_agent' / 'micro_ros_agent').as_posix()
+    _agent_lib = ':'.join([
+        (_agent_install / 'micro_ros_agent' / 'lib').as_posix(),
+        (_agent_install / 'micro_ros_msgs' / 'lib').as_posix(),
+    ])
+    _existing_ld = os.environ.get('LD_LIBRARY_PATH', '')
+    _agent_env = {'LD_LIBRARY_PATH': f'{_agent_lib}:{_existing_ld}'} if _existing_ld else {'LD_LIBRARY_PATH': _agent_lib}
     micro_ros_agent = ExecuteProcess(
-        cmd=['MicroXRCEAgent', 'serial', '--dev', serial_dev, '-b', serial_baud],
+        cmd=[_agent_bin, 'serial', '-D', serial_dev, '-b', serial_baud, '-v', '4'],
+        additional_env=_agent_env,
         output='screen',
         name='micro_ros_agent',
     )
 
-    # ── Control ────────────────────────────────────────────────────
+    # ── Control  (optional) ────────────────────────────────────────────────────
     basic_motion = Node(
         package='uv_control',
         executable='basic_motion',
         name='basic_motion',
         output='screen',
+        condition=IfCondition(enable_motion),
     )
 
     # ── Perception (optional) ──────────────────────────────────────
@@ -135,6 +151,7 @@ def generate_launch_description():
         declare_enable_ai,
         declare_enable_nav,
         declare_enable_task,
+        declare_enable_motion,
         declare_scenario,
         declare_serial_dev,
         declare_serial_baud,

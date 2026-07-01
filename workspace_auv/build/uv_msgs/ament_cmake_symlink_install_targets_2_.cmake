@@ -1,1 +1,0 @@
-ament_cmake_symlink_install_targets("TARGET_FILES" "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_generator_py/uv_msgs/uv_msgs_s__rosidl_typesupport_c.so" "TARGETS" "uv_msgs_s__rosidl_typesupport_c" "DESTINATION" "lib/python3.12/site-packages/uv_msgs")

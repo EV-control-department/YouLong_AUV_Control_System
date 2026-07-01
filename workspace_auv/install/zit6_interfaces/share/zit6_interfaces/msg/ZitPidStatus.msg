@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/src/zit6_interfaces/msg/ZitPidStatus.msg

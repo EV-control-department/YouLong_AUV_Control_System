@@ -1,7 +1,0 @@
-#!/usr/bin/env python3
-"""Entry point for sim_bridge node."""
-import sys
-from uv_sim.sim_bridge import main
-
-if __name__ == '__main__':
-    sys.exit(main())

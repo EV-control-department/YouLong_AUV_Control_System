@@ -1,0 +1,550 @@
+<?xml version="1.0"?>
+<scenario>
+	<environment>
+		<ned latitude="52.09" longitude="23.69"/>
+		<ocean>
+			<water density="1000.0" jerlov="0.22"/>
+			<waves height="0.0"/>
+			<current type="uniform">
+				<velocity xyz="0.0 0.0 0.0"/>
+			</current>
+		</ocean>
+		<atmosphere>
+			<sun azimuth="120.0" elevation="55.0"/>
+		</atmosphere>
+	</environment>
+	<materials>
+		<material name="Neutral" density="1000.0" restitution="0.5"/>
+		<material name="Concrete" density="2400.0" restitution="0.2"/>
+		<material name="PVC" density="1380.0" restitution="0.3"/>
+		<material name="Plastic" density="1100.0" restitution="0.3"/>
+		<friction_table>
+			<friction material1="Neutral" material2="Neutral" static="0.4" dynamic="0.2"/>
+			<friction material1="Neutral" material2="Concrete" static="0.3" dynamic="0.2"/>
+			<friction material1="Neutral" material2="PVC" static="0.4" dynamic="0.2"/>
+			<friction material1="Neutral" material2="Plastic" static="0.4" dynamic="0.2"/>
+			<friction material1="Concrete" material2="Concrete" static="0.8" dynamic="0.7"/>
+			<friction material1="PVC" material2="PVC" static="0.5" dynamic="0.4"/>
+			<friction material1="Plastic" material2="Plastic" static="0.5" dynamic="0.4"/>
+		</friction_table>
+	</materials>
+	<looks>
+		<look name="pool_floor" gray="1.0" roughness="0.65" texture="OIP_floor_tiled.png"/>
+		<look name="pool_wall" gray="1.0" roughness="0.45" texture="OIP_wall_tiled.png"/>
+		<look name="frame" rgb="0.88 0.88 0.88" roughness="0.5"/>
+		<look name="orange" rgb="1.0 0.45 0.0" roughness="0.3"/>
+		<look name="red" rgb="0.95 0.10 0.10" roughness="0.3"/>
+		<look name="green" rgb="0.10 0.75 0.20" roughness="0.3"/>
+		<look name="yellow" rgb="0.95 0.90 0.10" roughness="0.3"/>
+		<look name="blue" rgb="0.10 0.35 0.95" roughness="0.3"/>
+		<look name="black" rgb="0.05 0.05 0.05" roughness="0.5"/>
+		<look name="marker_white" rgb="0.97 0.97 0.97" roughness="0.2"/>
+		<look name="golf_ball" rgb="0.97 0.97 0.97" roughness="0.2"/>
+		<look name="aruco_tag" gray="0.5" roughness="0.3" texture="aruco_4x4_id3.png"/>
+		<look name="arrow_east" gray="0.5" roughness="0.5" texture="arrow_sign_east.png"/>
+		<look name="arrow_west" gray="0.5" roughness="0.5" texture="arrow_sign_west.png"/>
+		<look name="marker_triangle" rgb="1.0 0.45 0.0" roughness="0.3" texture="yellow_triangle.png"/>
+	</looks>
+	<!-- Pool: X in [0,12], Y in [-4,4], Z in [0,1.5] (NED: Z down, surface Z=0) -->
+	<static name="PoolBottom" type="plane">
+		<material name="Concrete"/>
+		<look name="pool_floor"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="6.0 0.0 1.5"/>
+	</static>
+	<static name="PoolWallNorth01" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.25 4.1 0.75"/>
+	</static>
+	<static name="PoolWallNorth02" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.75 4.1 0.75"/>
+	</static>
+	<static name="PoolWallNorth03" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="6.25 4.1 0.75"/>
+	</static>
+	<static name="PoolWallNorth04" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.75 4.1 0.75"/>
+	</static>
+	<static name="PoolWallNorth05" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.25 4.1 0.75"/>
+	</static>
+	<static name="PoolWallSouth01" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.25 -4.1 0.75"/>
+	</static>
+	<static name="PoolWallSouth02" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.75 -4.1 0.75"/>
+	</static>
+	<static name="PoolWallSouth03" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="6.25 -4.1 0.75"/>
+	</static>
+	<static name="PoolWallSouth04" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.75 -4.1 0.75"/>
+	</static>
+	<static name="PoolWallSouth05" type="box">
+		<dimensions xyz="2.5 0.2 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.25 -4.1 0.75"/>
+	</static>
+	<static name="PoolWallWest01" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.1 -3.2 0.75"/>
+	</static>
+	<static name="PoolWallWest02" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.1 -1.6 0.75"/>
+	</static>
+	<static name="PoolWallWest03" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.1 0.0 0.75"/>
+	</static>
+	<static name="PoolWallWest04" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.1 1.6 0.75"/>
+	</static>
+	<static name="PoolWallWest05" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.1 3.2 0.75"/>
+	</static>
+	<static name="PoolWallEast01" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="12.1 -3.2 0.75"/>
+	</static>
+	<static name="PoolWallEast02" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="12.1 -1.6 0.75"/>
+	</static>
+	<static name="PoolWallEast03" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="12.1 0.0 0.75"/>
+	</static>
+	<static name="PoolWallEast04" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="12.1 1.6 0.75"/>
+	</static>
+	<static name="PoolWallEast05" type="box">
+		<dimensions xyz="0.2 1.6 1.5"/>
+		<material name="Concrete"/>
+		<look name="pool_wall"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="12.1 3.2 0.75"/>
+	</static>
+	<!-- Starting zone: 90cm x 90cm PVC frame, shore-side touching X=0 wall -->
+	<static name="StartFrameShore" type="box">
+		<dimensions xyz="0.04 0.90 0.04"/>
+		<material name="PVC"/>
+		<look name="frame"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.02 0.0 0.02"/>
+	</static>
+	<static name="StartFrameFar" type="box">
+		<dimensions xyz="0.04 0.90 0.04"/>
+		<material name="PVC"/>
+		<look name="frame"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.88 0.0 0.02"/>
+	</static>
+	<static name="StartFrameLeft" type="box">
+		<dimensions xyz="0.90 0.04 0.04"/>
+		<material name="PVC"/>
+		<look name="frame"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.45 -0.43 0.02"/>
+	</static>
+	<static name="StartFrameRight" type="box">
+		<dimensions xyz="0.90 0.04 0.04"/>
+		<material name="PVC"/>
+		<look name="frame"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.45 0.43 0.02"/>
+	</static>
+	<!-- Red circle (30cm dia) on pool floor below start frame -->
+	<static name="StartRedCircle" type="cylinder">
+		<dimensions radius="0.15" height="0.005"/>
+		<material name="Plastic"/>
+		<look name="red"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.45 0.0 1.498"/>
+	</static>
+	<!-- Direction arrows: 40cm signs on pool floor -->
+	<static name="ArrowStartToArUco" type="box">
+		<dimensions xyz="0.40 0.20 0.005"/>
+		<material name="Plastic"/>
+		<look name="arrow_east"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.2 0.0 1.496"/>
+	</static>
+	<static name="ArrowTaskToTargets" type="box">
+		<dimensions xyz="0.40 0.20 0.005"/>
+		<material name="Plastic"/>
+		<look name="arrow_east"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="9.5 0.0 1.496"/>
+	</static>
+	<static name="ArrowTargetsToStart" type="box">
+		<dimensions xyz="0.40 0.20 0.005"/>
+		<material name="Plastic"/>
+		<look name="arrow_west"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.5 0.0 1.496"/>
+	</static>
+	<!-- Main pipeline: orange, S-curve, ~7m span, 28 segments -->
+	<static name="PipeSeg00" type="box">
+		<dimensions xyz="0.3658 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.818315" xyz="1.6250 0.1335 1.4400"/>
+	</static>
+	<static name="PipeSeg01" type="box">
+		<dimensions xyz="0.3561 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.792616" xyz="1.8750 0.3938 1.4400"/>
+	</static>
+	<static name="PipeSeg02" type="box">
+		<dimensions xyz="0.3380 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.738372" xyz="2.1250 0.6344 1.4400"/>
+	</static>
+	<static name="PipeSeg03" type="box">
+		<dimensions xyz="0.3140 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.649896" xyz="2.3750 0.8432 1.4400"/>
+	</static>
+	<static name="PipeSeg04" type="box">
+		<dimensions xyz="0.2880 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.519471" xyz="2.6250 1.0097 1.4400"/>
+	</static>
+	<static name="PipeSeg05" type="box">
+		<dimensions xyz="0.2653 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.341125" xyz="2.8750 1.1255 1.4400"/>
+	</static>
+	<static name="PipeSeg06" type="box">
+		<dimensions xyz="0.2518 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.119770" xyz="3.1250 1.1850 1.4400"/>
+	</static>
+	<static name="PipeSeg07" type="box">
+		<dimensions xyz="0.2518 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.119770" xyz="3.3750 1.1850 1.4400"/>
+	</static>
+	<static name="PipeSeg08" type="box">
+		<dimensions xyz="0.2653 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.341125" xyz="3.6250 1.1255 1.4400"/>
+	</static>
+	<static name="PipeSeg09" type="box">
+		<dimensions xyz="0.2880 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.519471" xyz="3.8750 1.0097 1.4400"/>
+	</static>
+	<static name="PipeSeg10" type="box">
+		<dimensions xyz="0.3140 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.649896" xyz="4.1250 0.8432 1.4400"/>
+	</static>
+	<static name="PipeSeg11" type="box">
+		<dimensions xyz="0.3380 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.738372" xyz="4.3750 0.6344 1.4400"/>
+	</static>
+	<static name="PipeSeg12" type="box">
+		<dimensions xyz="0.3561 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.792616" xyz="4.6250 0.3938 1.4400"/>
+	</static>
+	<static name="PipeSeg13" type="box">
+		<dimensions xyz="0.3658 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.818315" xyz="4.8750 0.1335 1.4400"/>
+	</static>
+	<static name="PipeSeg14" type="box">
+		<dimensions xyz="0.3658 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.818315" xyz="5.1250 -0.1335 1.4400"/>
+	</static>
+	<static name="PipeSeg15" type="box">
+		<dimensions xyz="0.3561 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.792616" xyz="5.3750 -0.3938 1.4400"/>
+	</static>
+	<static name="PipeSeg16" type="box">
+		<dimensions xyz="0.3380 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.738372" xyz="5.6250 -0.6344 1.4400"/>
+	</static>
+	<static name="PipeSeg17" type="box">
+		<dimensions xyz="0.3140 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.649896" xyz="5.8750 -0.8432 1.4400"/>
+	</static>
+	<static name="PipeSeg18" type="box">
+		<dimensions xyz="0.2880 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.519471" xyz="6.1250 -1.0097 1.4400"/>
+	</static>
+	<static name="PipeSeg19" type="box">
+		<dimensions xyz="0.2653 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.341125" xyz="6.3750 -1.1255 1.4400"/>
+	</static>
+	<static name="PipeSeg20" type="box">
+		<dimensions xyz="0.2518 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 -0.119770" xyz="6.6250 -1.1850 1.4400"/>
+	</static>
+	<static name="PipeSeg21" type="box">
+		<dimensions xyz="0.2518 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.119770" xyz="6.8750 -1.1850 1.4400"/>
+	</static>
+	<static name="PipeSeg22" type="box">
+		<dimensions xyz="0.2653 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.341125" xyz="7.1250 -1.1255 1.4400"/>
+	</static>
+	<static name="PipeSeg23" type="box">
+		<dimensions xyz="0.2880 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.519471" xyz="7.3750 -1.0097 1.4400"/>
+	</static>
+	<static name="PipeSeg24" type="box">
+		<dimensions xyz="0.3140 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.649896" xyz="7.6250 -0.8432 1.4400"/>
+	</static>
+	<static name="PipeSeg25" type="box">
+		<dimensions xyz="0.3380 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.738372" xyz="7.8750 -0.6344 1.4400"/>
+	</static>
+	<static name="PipeSeg26" type="box">
+		<dimensions xyz="0.3561 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.792616" xyz="8.1250 -0.3938 1.4400"/>
+	</static>
+	<static name="PipeSeg27" type="box">
+		<dimensions xyz="0.3658 0.12 0.12"/>
+		<material name="Plastic"/>
+		<look name="orange"/>
+		<world_transform rpy="0.0 0.0 0.818315" xyz="8.3750 -0.1335 1.4400"/>
+	</static>
+	<!-- Pipeline markings: alternating yellow triangles (leak) and black squares (pollution) -->
+		<!-- Yellow triangle (leak) #1 on segment 3 -->
+	<static name="MarkerTri1" type="box">
+		<dimensions xyz="0.10 0.10 0.005"/>
+		<material name="Plastic"/>
+		<look name="marker_triangle"/>
+		<world_transform rpy="0.0 0.0 0.649896" xyz="2.3750 0.8432 1.3770"/>
+	</static>
+		<!-- Black square (pollution) #2 on segment 10 -->
+	<static name="MarkerSq2" type="box">
+		<dimensions xyz="0.10 0.10 0.005"/>
+		<material name="Plastic"/>
+		<look name="black"/>
+		<world_transform rpy="0.0 0.0 -0.649896" xyz="4.1250 0.8432 1.3770"/>
+	</static>
+		<!-- Yellow triangle (leak) #3 on segment 17 -->
+	<static name="MarkerTri3" type="box">
+		<dimensions xyz="0.10 0.10 0.005"/>
+		<material name="Plastic"/>
+		<look name="marker_triangle"/>
+		<world_transform rpy="0.0 0.0 -0.649896" xyz="5.8750 -0.8432 1.3770"/>
+	</static>
+		<!-- Black square (pollution) #4 on segment 23 -->
+	<static name="MarkerSq4" type="box">
+		<dimensions xyz="0.10 0.10 0.005"/>
+		<material name="Plastic"/>
+		<look name="black"/>
+		<world_transform rpy="0.0 0.0 0.519471" xyz="7.3750 -1.0097 1.3770"/>
+	</static>
+	<!-- Task acquisition area: 90cm x 90cm frame at water surface -->
+	<static name="TaskFrameNear" type="box">
+		<dimensions xyz="0.04 0.90 0.04"/>
+		<material name="PVC"/>
+		<look name="frame"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.55 0.0 0.02"/>
+	</static>
+	<static name="TaskFrameFar" type="box">
+		<dimensions xyz="0.04 0.90 0.04"/>
+		<material name="PVC"/>
+		<look name="frame"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="9.45 0.0 0.02"/>
+	</static>
+	<static name="TaskFrameLeft" type="box">
+		<dimensions xyz="0.90 0.04 0.04"/>
+		<material name="PVC"/>
+		<look name="frame"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="9.00 -0.43 0.02"/>
+	</static>
+	<static name="TaskFrameRight" type="box">
+		<dimensions xyz="0.90 0.04 0.04"/>
+		<material name="PVC"/>
+		<look name="frame"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="9.00 0.43 0.02"/>
+	</static>
+	<!-- Indicator sign on pool floor below task acquisition frame -->
+	<static name="TaskIndicatorSign" type="box">
+		<dimensions xyz="0.30 0.30 0.005"/>
+		<material name="Plastic"/>
+		<look name="marker_white"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="9.0 0.0 1.496"/>
+	</static>
+	<!-- ArUco marker (OpenCV 4x4_1000, ID 3=green zone) on far wall -->
+	<static name="ArUcoMarker" type="box">
+		<dimensions xyz="0.005 0.30 0.30"/>
+		<material name="Plastic"/>
+		<look name="aruco_tag"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.99 0.0 0.75"/>
+	</static>
+	<!-- Pipeline segment frames: 50cm x 50cm colored frames on pool floor -->
+		<!-- yellow zone frame -->
+	<static name="YellowFrameTop" type="box">
+		<dimensions xyz="0.56 0.03 0.03"/>
+		<material name="PVC"/>
+		<look name="yellow"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.0 -2.25 1.485"/>
+	</static>
+	<static name="YellowFrameBottom" type="box">
+		<dimensions xyz="0.56 0.03 0.03"/>
+		<material name="PVC"/>
+		<look name="yellow"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.0 -1.75 1.485"/>
+	</static>
+	<static name="YellowFrameLeft" type="box">
+		<dimensions xyz="0.03 0.56 0.03"/>
+		<material name="PVC"/>
+		<look name="yellow"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="10.75 -2.00 1.485"/>
+	</static>
+	<static name="YellowFrameRight" type="box">
+		<dimensions xyz="0.03 0.56 0.03"/>
+		<material name="PVC"/>
+		<look name="yellow"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.25 -2.00 1.485"/>
+	</static>
+		<!-- green zone frame -->
+	<static name="GreenFrameTop" type="box">
+		<dimensions xyz="0.56 0.03 0.03"/>
+		<material name="PVC"/>
+		<look name="green"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.5 -0.25 1.485"/>
+	</static>
+	<static name="GreenFrameBottom" type="box">
+		<dimensions xyz="0.56 0.03 0.03"/>
+		<material name="PVC"/>
+		<look name="green"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.5 0.25 1.485"/>
+	</static>
+	<static name="GreenFrameLeft" type="box">
+		<dimensions xyz="0.03 0.56 0.03"/>
+		<material name="PVC"/>
+		<look name="green"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.25 0.00 1.485"/>
+	</static>
+	<static name="GreenFrameRight" type="box">
+		<dimensions xyz="0.03 0.56 0.03"/>
+		<material name="PVC"/>
+		<look name="green"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.75 0.00 1.485"/>
+	</static>
+		<!-- red zone frame -->
+	<static name="RedFrameTop" type="box">
+		<dimensions xyz="0.56 0.03 0.03"/>
+		<material name="PVC"/>
+		<look name="red"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.0 1.75 1.485"/>
+	</static>
+	<static name="RedFrameBottom" type="box">
+		<dimensions xyz="0.56 0.03 0.03"/>
+		<material name="PVC"/>
+		<look name="red"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.0 2.25 1.485"/>
+	</static>
+	<static name="RedFrameLeft" type="box">
+		<dimensions xyz="0.03 0.56 0.03"/>
+		<material name="PVC"/>
+		<look name="red"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="10.75 2.00 1.485"/>
+	</static>
+	<static name="RedFrameRight" type="box">
+		<dimensions xyz="0.03 0.56 0.03"/>
+		<material name="PVC"/>
+		<look name="red"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="11.25 2.00 1.485"/>
+	</static>
+	<!-- Signal beacon (golf ball) -->
+	<static name="SignalBeaconGolfBall" type="sphere">
+		<dimensions radius="0.0214"/>
+		<material name="Plastic"/>
+		<look name="golf_ball"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.70 0.30 1.478"/>
+	</static>
+	<!-- AUV robot (GIRONA500) -->
+	<include file="girona500auv_full.scn">
+		<arg name="robot_name" value="GIRONA500"/>
+		<arg name="robot_position" value="0.45 0.0 0.30"/>
+	</include>
+</scenario>

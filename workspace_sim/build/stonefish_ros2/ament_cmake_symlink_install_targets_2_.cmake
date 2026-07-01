@@ -1,1 +1,0 @@
-ament_cmake_symlink_install_targets("TARGET_FILES" "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_generator_py/stonefish_ros2/stonefish_ros2_s__rosidl_typesupport_c.so" "TARGETS" "stonefish_ros2_s__rosidl_typesupport_c" "DESTINATION" "lib/python3.12/site-packages/stonefish_ros2")

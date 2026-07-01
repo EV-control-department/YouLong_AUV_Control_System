@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_typesupport_fastrtps_cpp/uv_msgs/msg/detail/motion_command__rosidl_typesupport_fastrtps_cpp.hpp

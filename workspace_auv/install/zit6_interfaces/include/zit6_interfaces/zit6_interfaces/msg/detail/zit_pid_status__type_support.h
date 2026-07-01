@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/build/zit6_interfaces/rosidl_generator_c/zit6_interfaces/msg/detail/zit_pid_status__type_support.h

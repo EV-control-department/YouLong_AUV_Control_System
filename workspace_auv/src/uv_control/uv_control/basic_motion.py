@@ -392,7 +392,7 @@ class BasicMotionNode(Node):
         sa = math.sin(move_angle_rad)
         return 1.0 / math.sqrt((ca / STEP_X) ** 2 + (sa / STEP_Y) ** 2)
 
-    def _wait_step_convergence(self, move_angle: float,
+    def _wait_step_convergence(self, move_angle: float = 0.0,
                                timeout: float = 10.0) -> bool:
         """等待步进收敛（在运动方向坐标系中判断）。
 

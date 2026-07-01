@@ -1,7 +1,0 @@
-# Request to run a named task or task list
-
-string task_name      # Name of task or path to JSON file
-bool start            # true=start, false=stop
----
-bool success
-string message

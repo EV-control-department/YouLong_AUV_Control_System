@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_generator_c/uv_msgs/msg/pid_gains.h

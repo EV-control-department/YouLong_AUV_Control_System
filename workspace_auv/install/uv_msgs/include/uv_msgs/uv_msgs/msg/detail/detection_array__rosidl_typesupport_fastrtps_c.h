@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_typesupport_fastrtps_c/uv_msgs/msg/detail/detection_array__rosidl_typesupport_fastrtps_c.h

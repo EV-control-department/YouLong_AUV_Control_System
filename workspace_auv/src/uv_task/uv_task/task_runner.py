@@ -1,6 +1,8 @@
 """Task runner node: loads task list from JSON, executes tasks sequentially.
 
-Each task unit calls navigation or basic_motion functions.
+Each task calls basic_motion via the BasicMotion action server.
+The task runner is the single source of truth for commanded position,
+tracked locally (not from external topics).
 """
 
 import json
@@ -10,10 +12,12 @@ import threading
 import time
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
-from uv_msgs.msg import AuvState, ObjectPositionArray, TaskStatus, MotionCommand
+from uv_msgs.action import BasicMotion
+from uv_msgs.msg import ObjectPositionArray, TaskStatus
 from uv_msgs.srv import RunTask
 
 
@@ -23,22 +27,32 @@ class TaskRunnerNode(Node):
     def __init__(self):
         super().__init__('task_runner')
 
-        self.state = AuvState()
+        # Commanded position tracker (updated after every motion command).
+        # Starts at (0,0,0,0) after START, which matches basic_motion's odom origin.
+        # Used by single-axis SET tasks to fill non-targeted axes.
+        self._cmd_x = 0.0
+        self._cmd_y = 0.0
+        self._cmd_z = 0.0
+        self._cmd_yaw = 0.0
         self.objects = ObjectPositionArray()
-        self._state_lock = threading.Lock()
 
         self.tasks = []
         self.current_index = 0
         self.running = False
         self.stopped = False
+        self._active_goal_handle = None
 
-        # Publisher
-        self.pub_motion = self.create_publisher(MotionCommand, '/auv/cmd/motion', 10)
-        self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
+        # Action client
+        self._action_client = ActionClient(self, BasicMotion, 'basic_motion')
+        if not self._action_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error('BasicMotion action server not available!')
 
         # Subscribers
-        self.create_subscription(AuvState, '/auv/state', self._state_cb, 10)
-        self.create_subscription(ObjectPositionArray, '/perception/objects', self._objects_cb, 10)
+        self.create_subscription(
+            ObjectPositionArray, '/perception/objects', self._objects_cb, 10)
+
+        # Publishers
+        self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
 
         # Services
         self.create_service(RunTask, '/task/run', self._run_task_cb)
@@ -49,16 +63,8 @@ class TaskRunnerNode(Node):
 
         self.get_logger().info('TaskRunner node started')
 
-    def _state_cb(self, msg: AuvState):
-        with self._state_lock:
-            self.state = msg
-
     def _objects_cb(self, msg: ObjectPositionArray):
         self.objects = msg
-
-    def get_state(self) -> AuvState:
-        with self._state_lock:
-            return self.state
 
     # ========================================================================
     # Task loading
@@ -86,31 +92,40 @@ class TaskRunnerNode(Node):
         self.running = True
         self.stopped = False
         self.current_index = 0
+        total = len(self.tasks)
+        self.get_logger().info(f'=== Task list started ({total} tasks) ===')
 
-        while self.current_index < len(self.tasks) and not self.stopped:
+        while self.current_index < total and not self.stopped:
             task = self.tasks[self.current_index]
             name = task.get('name', 'unknown')
             params = task.get('params', {})
 
             self.get_logger().info(
-                f'Task {self.current_index + 1}/{len(self.tasks)}: {name} {params}'
-            )
+                f'[{self.current_index + 1}/{total}] {name} {params} '
+                f'| cmd_pose=({self._cmd_x:.2f}, {self._cmd_y:.2f}, '
+                f'{self._cmd_z:.2f}, {self._cmd_yaw:.1f}°)')
 
             try:
                 success = self._execute_task(name, params)
                 if not success:
-                    self.get_logger().warn(f'Task {name} returned failure')
+                    self.get_logger().warn(
+                        f'[{self.current_index + 1}/{total}] {name} FAILED')
             except Exception as e:
-                self.get_logger().error(f'Task {name} exception: {e}')
+                self.get_logger().error(
+                    f'[{self.current_index + 1}/{total}] {name} exception: {e}')
 
             self.current_index += 1
 
         self.running = False
-        self.get_logger().info('Task list completed')
+        if self.stopped:
+            self.get_logger().warn(f'=== Task list stopped at {self.current_index}/{total} ===')
+        else:
+            self.get_logger().info(f'=== Task list completed ({total}/{total}) ===')
 
     def _execute_task(self, name: str, params: dict) -> bool:
         """Execute a single task by name."""
         task_map = {
+            'start': self._task_start,
             'setx': self._task_setx,
             'sety': self._task_sety,
             'setz': self._task_setz,
@@ -143,205 +158,273 @@ class TaskRunnerNode(Node):
         return handler(params)
 
     # ========================================================================
+    # Action helper
+    # ========================================================================
+
+    def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0):
+        """Send a BasicMotion action goal and wait for completion (blocking).
+
+        Polls the future in a loop since this runs in a daemon thread while
+        the main thread's SingleThreadedExecutor processes DDS events.
+
+        Args:
+            cmd_type: BasicMotion.Goal.{START,SET,WMOVE,BMOVE,WTRAVEL,BTRAVEL}
+            target: list of 4 floats [x, y, z, yaw] (yaw in degrees)
+            axes: which axes to move (empty = all)
+            timeout: max time in seconds (0 = server default 60s)
+
+        Returns:
+            (success: bool, message: str)
+        """
+        type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL', 6: 'START'}
+        type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
+        t = [f'{v:.2f}' for v in target]
+        self.get_logger().info(
+            f'Send goal: {type_name} target=[{", ".join(t)}] timeout={timeout:.0f}s')
+
+        if not self._action_client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().error('Action server not available')
+            return False, 'Action server not available'
+
+        goal = BasicMotion.Goal()
+        goal.cmd_type = cmd_type
+        goal.axes = axes
+        goal.target = target
+        goal.timeout = float(timeout)
+
+        send_future = self._action_client.send_goal_async(goal)
+        while rclpy.ok() and not self.stopped and not send_future.done():
+            time.sleep(0.01)
+        if not rclpy.ok() or self.stopped:
+            self.get_logger().warn(f'Goal interrupted (stopped={self.stopped})')
+            return False, 'Stopped'
+        if not send_future.done():
+            self.get_logger().error('Goal send timeout')
+            return False, 'Goal send timeout'
+
+        goal_handle = send_future.result()
+        self._active_goal_handle = goal_handle
+        if not goal_handle.accepted:
+            self._active_goal_handle = None
+            self.get_logger().error(f'Goal rejected by server')
+            return False, 'Goal rejected by server'
+
+        self.get_logger().info(f'Goal accepted, waiting for result...')
+
+        result_future = goal_handle.get_result_async()
+        while rclpy.ok() and not self.stopped and not result_future.done():
+            time.sleep(0.01)
+        self._active_goal_handle = None
+        if not rclpy.ok() or self.stopped:
+            self.get_logger().warn(f'Goal result interrupted (stopped={self.stopped})')
+            return False, 'Stopped'
+        if not result_future.done():
+            self.get_logger().error('Result timeout')
+            return False, 'Result timeout'
+
+        result = result_future.result().result
+        status = 'SUCCESS' if result.success else f'FAILED: {result.message}'
+        self.get_logger().info(f'Goal result: {status}')
+        return result.success, result.message
+
+    # ========================================================================
     # Task implementations
     # ========================================================================
 
-    def _send_motion(self, mode: int, x: float, y: float, z: float, yaw: float):
-        msg = MotionCommand()
-        msg.mode = mode
-        msg.type_mask = 0
-        msg.x = x
-        msg.y = y
-        msg.z = z
-        msg.yaw = yaw
-        self.pub_motion.publish(msg)
+    # --- START ---
 
-    def _wait_reached(self, axes_mask: int = 0x0F, timeout: float = 60.0,
-                      tol_x: float = 0.1, tol_y: float = 0.1,
-                      tol_z: float = 0.1, tol_rz: float = 5.0) -> bool:
-        """Wait until position reached."""
-        rate = self.create_rate(10)
-        start = self.get_clock().now()
+    def _task_start(self, p: dict) -> bool:
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], timeout=0)
+        if success:
+            self._cmd_x = self._cmd_y = self._cmd_z = self._cmd_yaw = 0.0
+        else:
+            self.get_logger().error(f'START failed: {msg}')
+        return success
 
-        while rclpy.ok() and not self.stopped:
-            elapsed = (self.get_clock().now() - start).nanoseconds / 1e9
-            if elapsed > timeout:
-                return False
-
-            s = self.get_state()
-            reached = True
-
-            if axes_mask & 0x01 and abs(s.target_x - s.pos_x) > tol_x:
-                reached = False
-            if axes_mask & 0x02 and abs(s.target_y - s.pos_y) > tol_y:
-                reached = False
-            if axes_mask & 0x04 and abs(s.target_z - s.pos_z) > tol_z:
-                reached = False
-            if axes_mask & 0x08:
-                yaw_err = abs(math.degrees(s.target_yaw - s.yaw))
-                if yaw_err > 180:
-                    yaw_err = 360 - yaw_err
-                if yaw_err > tol_rz:
-                    reached = False
-
-            if reached:
-                return True
-
-            rate.sleep()
-
-        return False
-
-    # --- SET tasks ---
+    # --- SET tasks (absolute positioning) ---
 
     def _task_setx(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD, p['x'], s.pos_y, s.pos_z, s.yaw)
-        return self._wait_reached(0x01)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [p['x'], self._cmd_y, self._cmd_z, self._cmd_yaw])
+        if success:
+            self._cmd_x = p['x']
+        return success
 
     def _task_sety(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD, s.pos_x, p['y'], s.pos_z, s.yaw)
-        return self._wait_reached(0x02)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [self._cmd_x, p['y'], self._cmd_z, self._cmd_yaw])
+        if success:
+            self._cmd_y = p['y']
+        return success
 
     def _task_setz(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD, s.pos_x, s.pos_y, p['z'], s.yaw)
-        return self._wait_reached(0x04)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [self._cmd_x, self._cmd_y, p['z'], self._cmd_yaw])
+        if success:
+            self._cmd_z = p['z']
+        return success
 
     def _task_setrz(self, p: dict) -> bool:
-        s = self.get_state()
-        rz_rad = math.radians(p['rz'])
-        self._send_motion(MotionCommand.MODE_POS_WORLD, s.pos_x, s.pos_y, s.pos_z, rz_rad)
-        return self._wait_reached(0x08)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [self._cmd_x, self._cmd_y, self._cmd_z, p['rz']])
+        if success:
+            self._cmd_yaw = p['rz']
+        return success
 
     def _task_setxy(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD, p['x'], p['y'], s.pos_z, s.yaw)
-        return self._wait_reached(0x03)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [p['x'], p['y'], self._cmd_z, self._cmd_yaw])
+        if success:
+            self._cmd_x, self._cmd_y = p['x'], p['y']
+        return success
 
     def _task_setxyz(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD, p['x'], p['y'], p['z'], s.yaw)
-        return self._wait_reached(0x07)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [p['x'], p['y'], p['z'], self._cmd_yaw])
+        if success:
+            self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
+        return success
 
     def _task_setxyzrz(self, p: dict) -> bool:
-        rz_rad = math.radians(p.get('rz', 0.0))
-        self._send_motion(MotionCommand.MODE_POS_WORLD, p['x'], p['y'], p['z'], rz_rad)
-        return self._wait_reached(0x0F)
+        x, y, z, yaw = p['x'], p['y'], p['z'], p.get('rz', self._cmd_yaw)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET, [x, y, z, yaw])
+        if success:
+            self._cmd_x, self._cmd_y, self._cmd_z = x, y, z
+            self._cmd_yaw = yaw
+        return success
 
     def _task_setxyrz(self, p: dict) -> bool:
-        s = self.get_state()
-        rz_rad = math.radians(p.get('rz', 0.0))
-        self._send_motion(MotionCommand.MODE_POS_WORLD, p['x'], p['y'], s.pos_z, rz_rad)
-        return self._wait_reached(0x0B)
+        yaw = p.get('rz', self._cmd_yaw)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [p['x'], p['y'], self._cmd_z, yaw])
+        if success:
+            self._cmd_x, self._cmd_y = p['x'], p['y']
+            self._cmd_yaw = yaw
+        return success
 
     # --- BMOVE tasks (body frame stepping) ---
 
     def _task_bmovex(self, p: dict) -> bool:
-        s = self.get_state()
-        yaw = s.yaw
-        dx_w = p['dx'] * math.cos(yaw)
-        dy_w = p['dx'] * math.sin(yaw)
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x + dx_w, s.pos_y + dy_w, s.pos_z, s.yaw)
-        return self._wait_reached(0x03)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [p['dx'], 0.0, 0.0, 0.0])
+        if success:
+            cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
+            self._cmd_x += cy * p['dx']
+            self._cmd_y += sy * p['dx']
+        return success
 
     def _task_bmovey(self, p: dict) -> bool:
-        s = self.get_state()
-        yaw = s.yaw
-        dx_w = -p['dy'] * math.sin(yaw)
-        dy_w = p['dy'] * math.cos(yaw)
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x + dx_w, s.pos_y + dy_w, s.pos_z, s.yaw)
-        return self._wait_reached(0x03)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [0.0, p['dy'], 0.0, 0.0])
+        if success:
+            cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
+            self._cmd_x += -sy * p['dy']
+            self._cmd_y += cy * p['dy']
+        return success
 
     def _task_bmovez(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x, s.pos_y, s.pos_z + p['dz'], s.yaw)
-        return self._wait_reached(0x04)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [0.0, 0.0, p['dz'], 0.0])
+        if success:
+            self._cmd_z += p['dz']
+        return success
 
     def _task_bmoverz(self, p: dict) -> bool:
-        s = self.get_state()
-        rz_rad = s.yaw + math.radians(p['drz'])
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x, s.pos_y, s.pos_z, rz_rad)
-        return self._wait_reached(0x08)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [0.0, 0.0, 0.0, p['drz']])
+        if success:
+            self._cmd_yaw += p['drz']
+        return success
 
     def _task_bmovexy(self, p: dict) -> bool:
-        s = self.get_state()
-        yaw = s.yaw
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        dx_w = cy * p['dx'] - sy * p['dy']
-        dy_w = sy * p['dx'] + cy * p['dy']
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x + dx_w, s.pos_y + dy_w, s.pos_z, s.yaw)
-        return self._wait_reached(0x03)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [p['dx'], p['dy'], 0.0, 0.0])
+        if success:
+            cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
+            self._cmd_x += cy * p['dx'] - sy * p['dy']
+            self._cmd_y += sy * p['dx'] + cy * p['dy']
+        return success
 
     def _task_bmovexyz(self, p: dict) -> bool:
-        s = self.get_state()
-        yaw = s.yaw
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        dx_w = cy * p['dx'] - sy * p['dy']
-        dy_w = sy * p['dx'] + cy * p['dy']
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x + dx_w, s.pos_y + dy_w, s.pos_z + p['dz'], s.yaw)
-        return self._wait_reached(0x07)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [p['dx'], p['dy'], p['dz'], 0.0])
+        if success:
+            cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
+            self._cmd_x += cy * p['dx'] - sy * p['dy']
+            self._cmd_y += sy * p['dx'] + cy * p['dy']
+            self._cmd_z += p['dz']
+        return success
 
     # --- WMOVE tasks (world frame stepping) ---
 
     def _task_wmovex(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x + p['dx'], s.pos_y, s.pos_z, s.yaw)
-        return self._wait_reached(0x01)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [p['dx'], 0.0, 0.0, 0.0])
+        if success:
+            self._cmd_x += p['dx']
+        return success
 
     def _task_wmovey(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x, s.pos_y + p['dy'], s.pos_z, s.yaw)
-        return self._wait_reached(0x02)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [0.0, p['dy'], 0.0, 0.0])
+        if success:
+            self._cmd_y += p['dy']
+        return success
 
     def _task_wmovez(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x, s.pos_y, s.pos_z + p['dz'], s.yaw)
-        return self._wait_reached(0x04)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [0.0, 0.0, p['dz'], 0.0])
+        if success:
+            self._cmd_z += p['dz']
+        return success
 
     def _task_wmoverz(self, p: dict) -> bool:
-        s = self.get_state()
-        rz_rad = s.yaw + math.radians(p['drz'])
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x, s.pos_y, s.pos_z, rz_rad)
-        return self._wait_reached(0x08)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [0.0, 0.0, 0.0, p['drz']])
+        if success:
+            self._cmd_yaw += p['drz']
+        return success
 
     def _task_wmovexy(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x + p['dx'], s.pos_y + p['dy'], s.pos_z, s.yaw)
-        return self._wait_reached(0x03)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [p['dx'], p['dy'], 0.0, 0.0])
+        if success:
+            self._cmd_x += p['dx']
+            self._cmd_y += p['dy']
+        return success
 
     def _task_wmovexyz(self, p: dict) -> bool:
-        s = self.get_state()
-        self._send_motion(MotionCommand.MODE_POS_WORLD,
-                          s.pos_x + p['dx'], s.pos_y + p['dy'], s.pos_z + p['dz'], s.yaw)
-        return self._wait_reached(0x07)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [p['dx'], p['dy'], p['dz'], 0.0])
+        if success:
+            self._cmd_x += p['dx']
+            self._cmd_y += p['dy']
+            self._cmd_z += p['dz']
+        return success
 
     # --- Special tasks ---
 
     def _task_navigate(self, p: dict) -> bool:
-        """Navigate to target using simple direct movement (A* would need navigator node)."""
-        s = self.get_state()
-        goal_x = p.get('x', s.pos_x)
-        goal_y = p.get('y', s.pos_y)
-        goal_z = p.get('z', s.pos_z)
-        goal_rz = p.get('rz', math.degrees(s.yaw))
-        rz_rad = math.radians(goal_rz)
-        self._send_motion(MotionCommand.MODE_POS_WORLD, goal_x, goal_y, goal_z, rz_rad)
-        return self._wait_reached(0x0F, timeout=120.0)
+        x = p.get('x', self._cmd_x)
+        y = p.get('y', self._cmd_y)
+        z = p.get('z', self._cmd_z)
+        yaw = p.get('rz', self._cmd_yaw)
+        success, _ = self._send_action_goal(
+            BasicMotion.Goal.SET, [x, y, z, yaw], timeout=120.0)
+        if success:
+            self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = x, y, z, yaw
+        return success
 
     def _task_wait(self, p: dict) -> bool:
-        """Wait for specified duration."""
         duration = p.get('duration', 1.0)
         time.sleep(duration)
         return True
@@ -354,13 +437,13 @@ class TaskRunnerNode(Node):
         if request.start:
             path = request.task_name
             if not os.path.isabs(path):
-                # Try default config path
                 default = os.path.join(
                     os.path.dirname(__file__), '..', 'config', 'tasks.json'
                 )
                 if os.path.exists(default):
                     path = default
 
+            self.get_logger().info(f'Service /task/run: start tasks from {path}')
             self.tasks = self.load_tasks(path)
             if self.tasks:
                 thread = threading.Thread(target=self.run_task_list, daemon=True)
@@ -371,13 +454,20 @@ class TaskRunnerNode(Node):
                 response.success = False
                 response.message = 'No tasks loaded'
         else:
+            self.get_logger().info('Service /task/run: stop requested')
             self.stopped = True
             response.success = True
             response.message = 'Stopped'
         return response
 
     def _stop_task_cb(self, request, response):
+        self.get_logger().warn('Service /task/stop: emergency stop')
         self.stopped = True
+        if self._active_goal_handle is not None:
+            self.get_logger().info('Cancelling active action goal')
+            cancel_future = self._action_client.async_cancel_goal(
+                self._active_goal_handle)
+            self._active_goal_handle = None
         response.success = True
         response.message = 'Tasks stopped'
         return response
@@ -407,12 +497,16 @@ def main(args=None):
     rclpy.init(args=args)
     node = TaskRunnerNode()
 
-    # Load default tasks if available
+    # Load default tasks and start immediately
     default_path = os.path.join(
         os.path.dirname(__file__), '..', 'config', 'tasks.json'
     )
     if os.path.exists(default_path):
         node.tasks = node.load_tasks(default_path)
+        if node.tasks:
+            thread = threading.Thread(target=node.run_task_list, daemon=True)
+            thread.start()
+            node.get_logger().info(f'Auto-started task list ({len(node.tasks)} tasks)')
 
     try:
         rclpy.spin(node)

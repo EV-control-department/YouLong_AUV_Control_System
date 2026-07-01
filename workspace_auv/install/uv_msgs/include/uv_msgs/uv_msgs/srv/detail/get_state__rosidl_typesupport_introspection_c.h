@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_typesupport_introspection_c/uv_msgs/srv/detail/get_state__rosidl_typesupport_introspection_c.h

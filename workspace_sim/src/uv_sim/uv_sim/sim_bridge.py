@@ -179,7 +179,7 @@ class SimBridgeNode(Node):
         self.create_timer(0.0167, self._tick_60hz)      # 60Hz control + state
 
     def _init_hil(self) -> None:
-        """HIL mode: camera passthrough + thrust mixing from MCU's /zit6/state/thr."""
+        """HIL mode: camera passthrough + thrust mixing + nav aggregation for MCU."""
         self._init_camera_publishers()
         self._init_camera_state()
         self._init_camera_subscriptions()
@@ -194,12 +194,57 @@ class SimBridgeNode(Node):
             Float32MultiArray, "/zit6/state/thr", self._thrust_cb, 10
         )
 
+        # Nav aggregation: subscribe Stonefish odometry + IMU, publish /zit6/sim/nav
+        self._sim_pos = [0.0] * 6   # x, y, z, roll, pitch, yaw (NED)
+        self._sim_vel = [0.0] * 6   # u, v, w, p, q, r (body FRD)
+        self.sim_nav_pub = self.create_publisher(
+            Float32MultiArray, "/zit6/sim/nav", 10
+        )
+        self.create_subscription(Odometry, "/auv/odometry", self._sim_nav_odom_cb, 10)
+        self.create_subscription(Imu, "/auv/imu", self._sim_nav_imu_cb, 10)
+
     def _thrust_cb(self, msg: Float32MultiArray) -> None:
         """Receive 4-DOF forces from MCU, run thrust mixing, publish to Stonefish."""
         if len(msg.data) >= 4:
             self._publish_thrust_from_4dof(
                 msg.data[0], msg.data[1], msg.data[2], msg.data[3]
             )
+
+    def _sim_nav_odom_cb(self, msg: Odometry) -> None:
+        """Aggregate Stonefish odometry into /zit6/sim/nav position + body velocity."""
+        # Position (NED world frame)
+        self._sim_pos[0] = msg.pose.pose.position.x
+        self._sim_pos[1] = msg.pose.pose.position.y
+        self._sim_pos[2] = msg.pose.pose.position.z
+        # Orientation → roll, pitch, yaw
+        q = msg.pose.pose.orientation
+        roll, pitch, yaw = self._quat_to_rpy(q.x, q.y, q.z, q.w)
+        self._sim_pos[3] = roll
+        self._sim_pos[4] = pitch
+        self._sim_pos[5] = yaw
+
+        # World-frame linear velocity → body-frame (NED FRD)
+        vx_w = msg.twist.twist.linear.x
+        vy_w = msg.twist.twist.linear.y
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        self._sim_vel[0] = vx_w * cy + vy_w * sy    # u (surge)
+        self._sim_vel[1] = -vx_w * sy + vy_w * cy   # v (sway)
+        self._sim_vel[2] = msg.twist.twist.linear.z  # w (heave)
+        # p, q, r filled by IMU callback
+
+        self._publish_sim_nav()
+
+    def _sim_nav_imu_cb(self, msg: Imu) -> None:
+        """Store angular velocity from IMU for /zit6/sim/nav."""
+        self._sim_vel[3] = msg.angular_velocity.x  # p (roll rate)
+        self._sim_vel[4] = msg.angular_velocity.y  # q (pitch rate)
+        self._sim_vel[5] = msg.angular_velocity.z  # r (yaw rate)
+
+    def _publish_sim_nav(self) -> None:
+        """Publish aggregated nav data (12 floats) on /zit6/sim/nav."""
+        nav = Float32MultiArray()
+        nav.data = self._sim_pos + self._sim_vel
+        self.sim_nav_pub.publish(nav)
 
     def _init_camera_publishers(self) -> None:
         self.front_rect_left_pub = self.create_publisher(Image, "/auv/front_cam/left", 10)
@@ -492,14 +537,16 @@ class SimBridgeNode(Node):
         #     x = y = z = rz = 0.0
         self.force_4dof = [x, y, z, rz]
         MAX_T = 1000.0
+        if self._hil_mode:
+            MAX_T = 1.0  # HIL mode: forces are normalized to [-1, 1]
 
         # NED body force → 6 thrusters (xunyun geometry)
-        h0 = (x + y + rz * 0.5)     # T0: aft-stbd diagonal
-        h1 = (x - y - rz * 0.5)     # T1: aft-port diagonal
-        h4 = -(x - y + rz * 0.5)    # T4: fwd-stbd diagonal
-        h5 = -(x + y - rz * 0.5)    # T5: fwd-port diagonal
-        h2 = z                        # HeaveBow
-        h3 = z                        # HeaveStern
+        h0 = (x + y + rz )     # T0: aft-stbd diagonal
+        h1 = (x - y - rz )     # T1: aft-port diagonal
+        h4 = -(x - y + rz )    # T4: fwd-stbd diagonal
+        h5 = -(x + y - rz )    # T5: fwd-port diagonal
+        h2 = z*0.5;                        # HeaveBow
+        h3 = z*0.5;                        # HeaveStern
 
         raw = [h0, h1, h2, h3, h4, h5]
         for i in range(len(raw)):

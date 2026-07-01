@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/build/uv_msgs/rosidl_generator_cpp/uv_msgs/msg/detail/waypoint_path__builder.hpp

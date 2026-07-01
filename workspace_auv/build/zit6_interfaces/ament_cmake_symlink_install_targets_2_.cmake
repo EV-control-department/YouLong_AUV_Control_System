@@ -1,1 +1,0 @@
-ament_cmake_symlink_install_targets("TARGET_FILES" "/home/origin/YouLong_AUV_Control_System/workspace_auv/build/zit6_interfaces/rosidl_generator_py/zit6_interfaces/zit6_interfaces_s__rosidl_typesupport_c.so" "TARGETS" "zit6_interfaces_s__rosidl_typesupport_c" "DESTINATION" "lib/python3.12/site-packages/zit6_interfaces")

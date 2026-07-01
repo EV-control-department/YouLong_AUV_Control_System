@@ -1,1 +1,0 @@
-ament_cmake_symlink_install_targets("TARGET_FILES" "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/stonefish_simulator" "/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/stonefish_simulator_nogpu" "TARGETS" "stonefish_simulator" "stonefish_simulator_nogpu" "DESTINATION" "lib/stonefish_ros2")

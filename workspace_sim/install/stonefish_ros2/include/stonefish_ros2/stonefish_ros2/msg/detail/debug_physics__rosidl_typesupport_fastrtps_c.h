@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_sim/build/stonefish_ros2/rosidl_typesupport_fastrtps_c/stonefish_ros2/msg/detail/debug_physics__rosidl_typesupport_fastrtps_c.h

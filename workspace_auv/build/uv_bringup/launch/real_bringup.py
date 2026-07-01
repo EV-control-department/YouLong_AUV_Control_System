@@ -1,1 +1,0 @@
-/home/origin/YouLong_AUV_Control_System/workspace_auv/src/uv_bringup/launch/real_bringup.py
