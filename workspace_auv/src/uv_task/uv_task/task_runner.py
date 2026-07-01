@@ -245,57 +245,70 @@ class TaskRunnerNode(Node):
     # --- SET tasks (absolute positioning) ---
 
     def _task_setx(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
+        success, msg = self._send_action_goal(
             BasicMotion.Goal.SET,
-            [p['x'], self._cmd_y, self._cmd_z, self._cmd_yaw])
+            [p['x'], self._cmd_y, self._cmd_z, self._cmd_yaw],
+            "x")
+        self.get_logger().info(f'setx: {msg}')
         if success:
             self._cmd_x = p['x']
         return success
 
     def _task_sety(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
+        success, msg = self._send_action_goal(
             BasicMotion.Goal.SET,
-            [self._cmd_x, p['y'], self._cmd_z, self._cmd_yaw])
+            [self._cmd_x, p['y'], self._cmd_z, self._cmd_yaw],
+            "y")
+        self.get_logger().info(f'sety: {msg}')
         if success:
             self._cmd_y = p['y']
         return success
 
     def _task_setz(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
+        success, msg = self._send_action_goal(
             BasicMotion.Goal.SET,
-            [self._cmd_x, self._cmd_y, p['z'], self._cmd_yaw])
+            [self._cmd_x, self._cmd_y, p['z'], self._cmd_yaw],
+            "z")
+        self.get_logger().info(f'setz: {msg}')
         if success:
             self._cmd_z = p['z']
         return success
 
     def _task_setrz(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
+        success, msg = self._send_action_goal(
             BasicMotion.Goal.SET,
-            [self._cmd_x, self._cmd_y, self._cmd_z, p['rz']])
+            [self._cmd_x, self._cmd_y, self._cmd_z, p['rz']],
+            "rz")
+        self.get_logger().info(f'setrz: {msg}')
         if success:
             self._cmd_yaw = p['rz']
         return success
 
     def _task_setxy(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
+        success, msg = self._send_action_goal(
             BasicMotion.Goal.SET,
-            [p['x'], p['y'], self._cmd_z, self._cmd_yaw])
+            [p['x'], p['y'], self._cmd_z, self._cmd_yaw],
+            "xy")
+        self.get_logger().info(f'setxy: {msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
         return success
 
     def _task_setxyz(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
+        success, msg = self._send_action_goal(
             BasicMotion.Goal.SET,
-            [p['x'], p['y'], p['z'], self._cmd_yaw])
+            [p['x'], p['y'], p['z'], self._cmd_yaw],
+            "xyz")
+        self.get_logger().info(f'setxyz: {msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
         return success
 
     def _task_setxyzrz(self, p: dict) -> bool:
         x, y, z, yaw = p['x'], p['y'], p['z'], p.get('rz', self._cmd_yaw)
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.SET, [x, y, z, yaw])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.SET, [x, y, z, yaw], "xyzrz")
+        self.get_logger().info(f'setxyzrz: {msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = x, y, z
             self._cmd_yaw = yaw
@@ -303,9 +316,11 @@ class TaskRunnerNode(Node):
 
     def _task_setxyrz(self, p: dict) -> bool:
         yaw = p.get('rz', self._cmd_yaw)
-        success, _ = self._send_action_goal(
+        success, msg = self._send_action_goal(
             BasicMotion.Goal.SET,
-            [p['x'], p['y'], self._cmd_z, yaw])
+            [p['x'], p['y'], self._cmd_z, yaw],
+            "xyrz")
+        self.get_logger().info(f'setxyrz: {msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
             self._cmd_yaw = yaw
@@ -314,8 +329,9 @@ class TaskRunnerNode(Node):
     # --- BMOVE tasks (body frame stepping) ---
 
     def _task_bmovex(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.BMOVE, [p['dx'], 0.0, 0.0, 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [p['dx'], 0.0, 0.0, 0.0], "x")
+        self.get_logger().info(f'bmovex: {msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx']
@@ -323,8 +339,9 @@ class TaskRunnerNode(Node):
         return success
 
     def _task_bmovey(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.BMOVE, [0.0, p['dy'], 0.0, 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [0.0, p['dy'], 0.0, 0.0], "y")
+        self.get_logger().info(f'bmovey: {msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += -sy * p['dy']
@@ -332,22 +349,25 @@ class TaskRunnerNode(Node):
         return success
 
     def _task_bmovez(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.BMOVE, [0.0, 0.0, p['dz'], 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [0.0, 0.0, p['dz'], 0.0], "z")
+        self.get_logger().info(f'bmovez: {msg}')
         if success:
             self._cmd_z += p['dz']
         return success
 
     def _task_bmoverz(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.BMOVE, [0.0, 0.0, 0.0, p['drz']])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [0.0, 0.0, 0.0, p['drz']], "rz")
+        self.get_logger().info(f'bmoverz: {msg}')
         if success:
             self._cmd_yaw += p['drz']
         return success
 
     def _task_bmovexy(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.BMOVE, [p['dx'], p['dy'], 0.0, 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [p['dx'], p['dy'], 0.0, 0.0], "xy")
+        self.get_logger().info(f'bmovexy: {msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx'] - sy * p['dy']
@@ -355,8 +375,9 @@ class TaskRunnerNode(Node):
         return success
 
     def _task_bmovexyz(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.BMOVE, [p['dx'], p['dy'], p['dz'], 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [p['dx'], p['dy'], p['dz'], 0.0], "xyz")
+        self.get_logger().info(f'bmovexyz: {msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx'] - sy * p['dy']
@@ -367,44 +388,50 @@ class TaskRunnerNode(Node):
     # --- WMOVE tasks (world frame stepping) ---
 
     def _task_wmovex(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [p['dx'], 0.0, 0.0, 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [p['dx'], 0.0, 0.0, 0.0], "x")
+        self.get_logger().info(f'wmovex: {msg}')
         if success:
             self._cmd_x += p['dx']
         return success
 
     def _task_wmovey(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, p['dy'], 0.0, 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [0.0, p['dy'], 0.0, 0.0], "y")
+        self.get_logger().info(f'wmovey: {msg}')
         if success:
             self._cmd_y += p['dy']
         return success
 
     def _task_wmovez(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, 0.0, p['dz'], 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [0.0, 0.0, p['dz'], 0.0], "z")
+        self.get_logger().info(f'wmovez: {msg}')
         if success:
             self._cmd_z += p['dz']
         return success
 
     def _task_wmoverz(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, 0.0, 0.0, p['drz']])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [0.0, 0.0, 0.0, p['drz']], "rz")
+        self.get_logger().info(f'wmoverz: {msg}')
         if success:
             self._cmd_yaw += p['drz']
         return success
 
     def _task_wmovexy(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [p['dx'], p['dy'], 0.0, 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [p['dx'], p['dy'], 0.0, 0.0], "xy")
+        self.get_logger().info(f'wmovexy: {msg}')
         if success:
             self._cmd_x += p['dx']
             self._cmd_y += p['dy']
         return success
 
     def _task_wmovexyz(self, p: dict) -> bool:
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [p['dx'], p['dy'], p['dz'], 0.0])
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.WMOVE, [p['dx'], p['dy'], p['dz'], 0.0], "xyz")
+        self.get_logger().info(f'wmovexyz: {msg}')
         if success:
             self._cmd_x += p['dx']
             self._cmd_y += p['dy']
@@ -418,8 +445,9 @@ class TaskRunnerNode(Node):
         y = p.get('y', self._cmd_y)
         z = p.get('z', self._cmd_z)
         yaw = p.get('rz', self._cmd_yaw)
-        success, _ = self._send_action_goal(
-            BasicMotion.Goal.SET, [x, y, z, yaw], timeout=120.0)
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.SET, [x, y, z, yaw], "xyzrz", timeout=120.0)
+        self.get_logger().info(f'navigate: {msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = x, y, z, yaw
         return success

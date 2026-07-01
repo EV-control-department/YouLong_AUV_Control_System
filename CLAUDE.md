@@ -8,14 +8,14 @@ Two colcon workspaces in this repo:
 
 ```
 YouLong_AUV_Control_System/
-  auv_ws/       # AUV control stack (no sim dependency)
-  sim_ws/       # Simulation overlay (sources auv_ws, adds stonefish_ros2)
+  workspace_auv/       # AUV control stack (no sim dependency)
+  workspace_sim/       # Simulation overlay (sources workspace_auv, adds stonefish_ros2)
 ```
 
-### Build & Run — AUV Workspace (`auv_ws/`)
+### Build & Run — AUV Workspace (`workspace_auv/`)
 
 ```bash
-cd auv_ws
+cd workspace_auv
 colcon build                          # build all packages
 colcon build --packages-select uv_control  # build one package
 colcon build --symlink-install        # symlink install (Python changes take effect without rebuild)
@@ -24,17 +24,17 @@ source install/setup.bash             # source the workspace overlay BEFORE any 
 ros2 launch uv_bringup real_bringup.py   # real AUV stack
 ```
 
-### Build & Run — Sim Workspace (`sim_ws/`)
+### Build & Run — Sim Workspace (`workspace_sim/`)
 
 ```bash
-cd sim_ws
+cd workspace_sim
 colcon build                          # builds stonefish_ros2 only
-source install/setup.bash             # also sources auv_ws underlay
+source install/setup.bash             # also sources workspace_auv underlay
 
 ros2 launch uv_bringup sim_bringup.py   # full simulation stack
 ```
 
-Note: `sim_ws` uses colcon overlay — source `auv_ws/install/setup.bash` first, then `sim_ws/install/setup.bash`.
+Note: `workspace_sim` uses colcon overlay — source `workspace_auv/install/setup.bash` first, then `workspace_sim/install/setup.bash`.
 
 ## Architecture
 
@@ -218,6 +218,48 @@ print('SET:', result.success, result.message)
 4. **axes 字段**当前仅用于日志记录，server 内部未使用（始终全轴生效）
 5. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行，不阻塞主循环
 
+### task_runner (`uv_task`)
+
+`workspace_auv/src/uv_task/uv_task/task_runner.py` is the competition task executor. It reads a JSON task list (`config/tasks.json`) and executes tasks sequentially using BasicMotion ActionClient.
+
+**Key behaviors:**
+- **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them (no service call needed)
+- **Task map**: JSON `name` field maps to a method via `task_map` dict. Supported tasks: `start`, `setx`, `sety`, `setz`, `setrz`, `setxy`, `setxyz`, `setxyrz`, `setxyzrz`, `bmovex`, `bmovey`, `bmovez`, `bmoverz`, `bmovexy`, `bmovexyz`, `wmovex`, `wmovey`, `wmovez`, `wmoverz`, `wmovexy`, `wmovexyz`, `navigate`, `wait`
+- **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
+- **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
+
+**ActionClient pattern (SingleThreadedExecutor + daemon thread):**
+
+```python
+# Daemon thread sends goals, main thread runs rclpy.spin()
+# Future polling (NOT spin_until_future_complete):
+send_future = client.send_goal_async(goal)
+while rclpy.ok() and not self.stopped and not send_future.done():
+    time.sleep(0.01)
+```
+
+The main thread runs `rclpy.spin(node)` with SingleThreadedExecutor; the work thread polls futures in a loop. `spin_until_future_complete` is NOT used (creates a second executor → conflicts).
+
+**Position tracking:** task_runner tracks commanded position locally (`_cmd_x/_cmd_y/_cmd_z/_cmd_yaw`) rather than subscribing to AuvState, because AuvState is only published by the simulator, not by the real AUV hardware.
+
+### AuvState — Sim-Only Topic
+
+`auv_msgs/msg/AuvState` is published **only** by `stonefish_ros2` (the simulator). Real AUV hardware does not publish this topic. Nodes running on the real AUV must not depend on it.
+
+For pose feedback on real hardware, use:
+- `/zit6/cmd/setpoint` (ZIT6 protocol) for commanded positions
+- Future: sensor fusion node to estimate actual pose
+
+### sim_bridge Known Issues
+
+`workspace_sim/src/uv_sim/uv_sim/sim_bridge.py` line 616:
+
+```python
+cmd_rz = -float(self.pid_yaw_rate.step(eyaw_rate, dt))    # BUG: negation inverts yaw polarity
+```
+
+The `-` sign inverts yaw control polarity, causing the AUV to spin instead of holding depth/yaw. Fix: remove the negation → `cmd_rz = float(...)`.
+
 ### Coordinate System & Conventions
 
 - **NED** (North-East-Down) throughout. Yaw 0 = North, **clockwise positive**.
@@ -243,6 +285,17 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 
 - **ament_python**: `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_bringup`
 - **ament_cmake**: `uv_msgs`, `zit6_interfaces`, `stonefish_ros2` (define custom `.msg`/`.srv` files)
+
+## Key Files
+
+| Path | Purpose |
+|---|---|
+| `workspace_auv/src/uv_task/config/tasks.json` | Competition task list (JSON array of `{name, params}`) |
+| `workspace_auv/src/uv_task/uv_task/task_runner.py` | Task executor, BasicMotion action client |
+| `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
+| `workspace_auv/src/uv_hm/uv_hm/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
+| `workspace_auv/docs/basic_motion_action.md` | BasicMotion action interface reference |
+| `workspace_auv/docs/debug_guide.md` | Debugging guide (ros2 CLI, action test, simulation) |
 
 ## Conventions
 

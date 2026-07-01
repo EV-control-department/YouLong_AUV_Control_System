@@ -134,12 +134,12 @@ class SimBridgeNode(Node):
         # Position: body-frame error → body force
         self.pid_x = _Pid(800, 130.0, 200.0, i_limit=1000.0)
         self.pid_y = _Pid(600.0, 120.0, 150.0, i_limit=1000.0)
-        self.pid_z = _Pid(600.0, 30.0, 800.0, i_limit=6200.0, z_thrust_ff=0)
+        self.pid_z = _Pid(600.0, 80.0, 800.0, i_limit=6200.0, z_thrust_ff=0)
         self.pid_yaw = _Pid(1.5, 1.0, 0.1, i_limit=30.0)
         self.pid_yaw_rate = _Pid(30.0, 20.0, 1.0, i_limit=600.0)
 
         # Velocity: body-frame velocity error → body force
-        self.pid_vx = _Pid(300.0, 50.0, 10.0, i_limit=500.0)
+        self.pid_vx = _Pid(600.0, 50.0, 10.0, i_limit=500.0)
         self.pid_vy = _Pid(300.0, 50.0, 10.0, i_limit=500.0)
         self.pid_vz = _Pid(300.0, 30.0, 50.0, i_limit=500.0, z_thrust_ff=0)
         self.pid_vyaw = _Pid(40.0, 20.0, 2.0, i_limit=300.0)
@@ -545,8 +545,8 @@ class SimBridgeNode(Node):
         h1 = (x - y - rz )     # T1: aft-port diagonal
         h4 = -(x - y + rz )    # T4: fwd-stbd diagonal
         h5 = -(x + y - rz )    # T5: fwd-port diagonal
-        h2 = z*0.5;                        # HeaveBow
-        h3 = z*0.5;                        # HeaveStern
+        h2 = z*0.8;                        # HeaveBow
+        h3 = z*0.8;                        # HeaveStern
 
         raw = [h0, h1, h2, h3, h4, h5]
         for i in range(len(raw)):

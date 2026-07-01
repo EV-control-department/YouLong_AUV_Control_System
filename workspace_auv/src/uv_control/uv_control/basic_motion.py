@@ -170,6 +170,10 @@ class BasicMotionNode(Node):
         msg.seq = 0
         self._target = self._map_to_odom(Coordinate(x=x, y=y, z=z, rz=math.degrees(yaw_rad)))
         self.pub_setpoint.publish(msg)
+        odom_t = self._target
+        self.get_logger().info(
+            f'发往ZIT6: map=({x:.2f}, {y:.2f}, {z:.2f}, {math.degrees(yaw_rad):.1f}°), '
+            f'对应odom=({odom_t.x:.2f}, {odom_t.y:.2f}, {odom_t.z:.2f}, {odom_t.rz:.1f}°)')
 
     def _status_cb(self, msg: ZitStatus):
         with self._state_lock:
@@ -304,24 +308,24 @@ class BasicMotionNode(Node):
     # ═════════════════════════════════════════════════════════════════════════
 
     def set_body(self, x: float, y: float, z: float, yaw_deg: float):
-        """设置机体系绝对位置。yaw 单位为度。
-
-        以当前 target 为参考坐标系，转换 body 目标 → set_world。
-        """
+        """设置机体系绝对位置。yaw 单位为度。"""
         _, t, _ = self.get_state()
         body_target = Coordinate(x=x, y=y, z=z, rz=yaw_deg)
         new_target = t.to_world_frame(body_target)
+        self.get_logger().info(
+            f'set_body: body目标=({x:.2f}, {y:.2f}, {z:.2f}, {yaw_deg:.1f}°) '
+            f'→ world目标=({new_target.x:.2f}, {new_target.y:.2f}, {new_target.z:.2f}, {new_target.rz:.1f}°)')
         self.set_world(new_target.x, new_target.y, new_target.z, new_target.rz)
 
     def set_step(self, dx: float, dy: float, dz: float, dyaw_deg: float):
-        """设置机体系增量步进。dyaw 单位为度。
-
-        body 增量 → Coordinate → to_world_frame → 叠加到target的map 位姿 → set_world。
-        """
+        """设置机体系增量步进。dyaw 单位为度。"""
         _, t, _ = self.get_state()
         target_step = Coordinate(x=dx, y=dy, z=dz, rz=dyaw_deg)
         map_target = t.to_world_frame(target_step)
 
+        self.get_logger().info(
+            f'set_step: 增量=({dx:.3f}, {dy:.3f}, {dz:.3f}, {dyaw_deg:.2f}°) '
+            f'→ world目标=({map_target.x:.2f}, {map_target.y:.2f}, {map_target.z:.2f}, {map_target.rz:.1f}°)')
         self.set_world(map_target.x, map_target.y, map_target.z, map_target.rz)
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -335,6 +339,12 @@ class BasicMotionNode(Node):
 
     def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, timeout):
         """完成步进移动的最后一步，等待到达目标位置。"""
+        p, _, _ = self.get_state()
+        dist = math.sqrt((target_x-p.x)**2 + (target_y-p.y)**2 + (target_z-p.z)**2)
+        self.get_logger().info(
+            f'最终定位: 目标=({target_x:.2f}, {target_y:.2f}, {target_z:.2f}, {target_yaw_degree:.1f}°), '
+            f'当前位置=({p.x:.2f}, {p.y:.2f}, {p.z:.2f}, {p.rz:.1f}°), '
+            f'距离={dist:.2f}m')
         self.set_world(target_x, target_y, target_z, target_yaw_degree)
         return self._wait_reached(timeout=timeout)
     
@@ -343,36 +353,46 @@ class BasicMotionNode(Node):
                       tol_x: float = TOL_X, tol_y: float = TOL_Y,
                       tol_z: float = TOL_Z, tol_rz: float = TOL_RZ,
                       timeout: float = 60.0) -> bool:
-        """阻塞等待 AUV 到达目标位置。
-
-        以 10Hz 检查各轴误差是否在容差范围内。
-        """
+        """阻塞等待 AUV 到达目标位置。"""
         start = time.monotonic()
+        self._wait_count = 0
 
         while rclpy.ok():
             if self._is_cancelled():
-                self.get_logger().info('_wait_reached: action cancelled')
+                self.get_logger().info('等待到达: 被取消')
                 return False
             elapsed = time.monotonic() - start
             if elapsed > timeout:
-                self.get_logger().warning('_wait_reached超时')
+                self.get_logger().warning(f'等待到达超时 ({timeout:.0f}s)')
                 return False
 
             body_target = self._odom_to_body(self._target)
 
-            reached = True
+            err_x = abs(body_target.x)
+            err_y = abs(body_target.y)
+            err_z = abs(body_target.z)
+            err_yaw = abs(wrap_deg(body_target.rz))
 
-            if abs(body_target.x) > tol_x:
+            reached = True
+            if err_x > tol_x:
                 reached = False
-            if abs(body_target.y) > tol_y:
+            if err_y > tol_y:
                 reached = False
-            if abs(body_target.z) > tol_z:
+            if err_z > tol_z:
                 reached = False
-            yaw_err = abs(wrap_deg(body_target.rz))
-            if yaw_err > tol_rz:
+            if err_yaw > tol_rz:
                 reached = False
+
+            # 每秒打印一次误差
+            self._wait_count += 1
+            if self._wait_count % 10 == 0:
+                self.get_logger().info(
+                    f'等待到达: err=({err_x:.3f}, {err_y:.3f}, {err_z:.3f}, {err_yaw:.2f}°), '
+                    f'容差=({tol_x}, {tol_y}, {tol_z}, {tol_rz}), '
+                    f'已用{elapsed:.0f}s/{timeout:.0f}s')
 
             if reached:
+                self.get_logger().info(f'到达目标, 共耗时{elapsed:.1f}s')
                 return True
             time.sleep(0.1)
 
@@ -458,42 +478,32 @@ class BasicMotionNode(Node):
     def _step_move_world(self, target_x: float, target_y: float,
                          target_z: float, target_yaw_degree: float,
                          timeout: float = 60.0) -> bool:
-        """步进移动：odom 系目标，拆成小段逐段发送。
-
-        每步根据当前横向误差计算动态步长，收敛后再发下一步。
-        最后发送精确目标并等待到达。
-
-        Args:
-            target_x, target_y, target_z: 目标位置 (odom 系)
-            target_yaw_degree: 目标偏航 (角度)
-            timeout: 超时秒数
-
-        Returns:
-            True = 全部到达, False = 超时
-        """
+        """步进移动：odom 系目标，拆成小段逐段发送。"""
+        step_no = 0
         start = time.monotonic()
+        self.get_logger().info(
+            f'步进开始: 目标=({target_x:.2f}, {target_y:.2f}, {target_z:.2f}, {target_yaw_degree:.1f}°), '
+            f'总超时={timeout:.0f}s')
         while rclpy.ok():
-            # 总体超时检查
             remaining = timeout - (time.monotonic() - start)
             if remaining <= 0:
-                self.get_logger().warning('_step_move_world: overall timeout')
+                self.get_logger().warning(f'步进超时: 已用{time.monotonic()-start:.0f}s')
                 return False
             if self._is_cancelled():
-                self.get_logger().info('_step_move_world: action cancelled')
+                self.get_logger().info('步进被取消')
                 return False
 
             target_world = Coordinate(x=target_x, y=target_y, z=target_z)
             target_body = self._odom_to_body(target_world)
 
-            _, target_odom, _ = self.get_state()
+            p, target_odom, _ = self.get_state()
             target_target = target_odom.to_local_frame(target_world)
-
 
             # 机体坐标系误差 → 运动方向坐标系
             ex_body = target_body.x
             ey_body = target_body.y
             dist_xy = math.sqrt(target_target.x**2 + target_target.y**2)
-
+            dist_3d = math.sqrt(dist_xy**2 + (target_z - p.z)**2)
 
             move_angle = math.atan2(ey_body, ex_body)
             base_step = self._calc_step_size(move_angle)
@@ -504,34 +514,44 @@ class BasicMotionNode(Node):
             e_lateral = -sa * target_body.x + ca * target_body.y
 
             if e_along < base_step:
+                self.get_logger().info(
+                    f'步进结束: 前向误差{e_along:.3f}m < 基步长{base_step:.3f}m, '
+                    f'剩余距离={dist_3d:.2f}m')
                 break
 
             # 动态步长：横向误差越大步长越小
             step_along = base_step * math.exp(-LATERAL_LAMBDA * abs(e_lateral))
 
-
-
-            dz_total = target_z - self.pose.z
-            drz_total = target_yaw_degree - self.pose.rz
+            dz_total = target_z - p.z
+            drz_total = target_yaw_degree - p.rz
             steps_remaining = max(1, math.ceil(dist_xy / base_step))
 
             step_z = dz_total / steps_remaining
             step_rz = drz_total / steps_remaining
 
-            vector_body = Coordinate(x = ca * step_along, y = sa * step_along, z = step_z, rz = step_rz)
+            vector_body = Coordinate(x=ca * step_along, y=sa * step_along, z=step_z, rz=step_rz)
+
+            step_no += 1
+            self.get_logger().info(
+                f'步进第{step_no}步: 步长={step_along:.3f}m, '
+                f'前向误差={e_along:.2f}m, 横向误差={e_lateral:.2f}m, '
+                f'剩余距离={dist_3d:.2f}m, '
+                f'步进向量=({vector_body.x:.3f}, {vector_body.y:.3f}, {vector_body.z:.3f}, {vector_body.rz:.2f}°)')
 
             # 步进目标 = 当前 target + 步进增量
-            self.set_step(dx = vector_body.x, dy = vector_body.y, dz = vector_body.z, dyaw_deg = vector_body.rz)
+            self.set_step(dx=vector_body.x, dy=vector_body.y, dz=vector_body.z, dyaw_deg=vector_body.rz)
 
             # 每一步用剩余时间（至少 1 秒）
             step_timeout = max(1.0, remaining)
             if not self._wait_step_convergence(move_angle, timeout=step_timeout):
-                self.get_logger().warning('_step_move_world: step convergence failed')
+                self.get_logger().warning(f'步进第{step_no}步收敛超时')
 
-        # 最终目标（用剩余时间）
+        # 最终目标
         remaining = timeout - (time.monotonic() - start)
         if remaining <= 0:
+            self.get_logger().warning('步进最终段超时')
             return False
+        self.get_logger().info(f'步进完成, 共{step_no}步, 发送最终目标等待到达')
         return self._cmd_and_wait(
             target_x, target_y, target_z, target_yaw_degree,
             timeout=remaining)
@@ -694,14 +714,7 @@ class BasicMotionNode(Node):
 
     def _travel_world(self, dx_w: float, dy_w: float, dz: float = 0.0,
                       timeout: float = 60.0) -> bool:
-        """直线移动基础函数：先转向目标方向，再沿 body-X 步进前进。
-
-        Args:
-            dx_w: 世界系 X 偏移 (北)
-            dy_w: 世界系 Y 偏移 (东)
-            dz: Z 轴偏移 (深度)
-            timeout: 超时秒数
-        """
+        """直线移动基础函数：先转向目标方向，再沿 body-X 步进前进。"""
         p, _, _ = self.get_state()
         target_x = p.x + dx_w
         target_y = p.y + dy_w
@@ -710,14 +723,20 @@ class BasicMotionNode(Node):
         dist_xy = math.sqrt(dx_w**2 + dy_w**2)
         if dist_xy > 0.03:
             target_yaw = math.degrees(math.atan2(dy_w, dx_w))
-            # 第一步：转向目标方向
+            self.get_logger().info(
+                f'直线移动 第一阶段(转向): 目标朝向{target_yaw:.1f}°, '
+                f'当前朝向{p.rz:.1f}°')
             self._step_move_world(p.x, p.y, p.z, target_yaw,
                                   timeout=timeout)
-            # 第二步：沿 body-X 前进
+            self.get_logger().info(
+                f'直线移动 第二阶段(前进): 目标=({target_x:.2f}, {target_y:.2f}), '
+                f'距离={dist_xy:.2f}m')
             return self._step_move_world(
                 target_x, target_y, target_z, target_yaw,
                 timeout=timeout)
         else:
+            self.get_logger().info(
+                f'直线移动: 距离过短({dist_xy:.3f}m), 直发深度/偏航')
             return self._step_move_world(
                 p.x, p.y, target_z, p.rz,
                 timeout=timeout)
@@ -820,6 +839,7 @@ class BasicMotionNode(Node):
         # ── 派发运动类型 ──────────────────────────────────────
         type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL'}
         type_name = type_names.get(req.cmd_type, f'UNKNOWN({req.cmd_type})')
+        self.get_logger().info("=============================",f'动作 {type_name}: axes="{req.axes}"开始',"=============================")
         self.get_logger().info(
             f'Action {type_name}: axes="{req.axes}", '
             f'target=[{x:.2f}, {y:.2f}, {z:.2f}, {yaw:.1f}], '
@@ -837,14 +857,24 @@ class BasicMotionNode(Node):
             off = p.body_to_world(x, y)
             self._action_target = {'x': p.x + off.x, 'y': p.y + off.y,
                                    'z': p.z + z, 'yaw': p.rz + yaw}
+            self.get_logger().info(
+                f'BMOVE坐标变换: body偏移=({x:.2f}, {y:.2f}) '
+                f'→ world偏移=({off.x:.2f}, {off.y:.2f}) '
+                f'当前yaw={p.rz:.1f}°')
             success = self.bmovexyzrz(x, y, z, yaw, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.WTRAVEL:
             self._action_target = {'x': p.x + x, 'y': p.y + y, 'z': p.z + z, 'yaw': p.rz}
+            self.get_logger().info(
+                f'WTRAVEL: 偏移=({x:.2f}, {y:.2f}, {z:.2f}), '
+                f'方向角={math.degrees(math.atan2(y, x)):.1f}°')
             success = self._travel_world(x, y, z, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.BTRAVEL:
             off = p.body_to_world(x, y)
             self._action_target = {'x': p.x + off.x, 'y': p.y + off.y,
                                    'z': p.z + z, 'yaw': p.rz}
+            self.get_logger().info(
+                f'BTRAVEL: body偏移=({x:.2f}, {y:.2f}) '
+                f'→ world偏移=({off.x:.2f}, {off.y:.2f})')
             success = self._travel_world(off.x, off.y, z, timeout=timeout)
         else:
             self.get_logger().error(f'Action rejected: unknown cmd_type={req.cmd_type}')
