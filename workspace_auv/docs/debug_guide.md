@@ -31,6 +31,8 @@ cd workspace_sim && colcon build && source install/setup.bash
 
 ```bash
 ros2 node list
+ros2 node info /vision
+ros2 node info /position
 ros2 node info /basic_motion
 ros2 node info /task_runner
 ros2 node info /sim_bridge
@@ -46,12 +48,22 @@ ros2 topic list
 ros2 topic info /topic_name
 
 # 实时查看话题内容
+ros2 topic echo /basic_motion/pose_info
 ros2 topic echo /zit6/cmd/setpoint
 ros2 topic echo /zit6/state/status
 ros2 topic echo /task/status
 ros2 topic echo /auv/odometry
 
+# 感知系统
+ros2 topic echo /perception/objects
+ros2 topic echo /perception/detection/front_left
+ros2 topic echo /perception/detection/front_right
+ros2 topic echo /perception/detection/down_left
+ros2 topic echo /perception/detection/down_right
+
 # 查看话题频率
+ros2 topic hz /basic_motion/pose_info
+ros2 topic hz /perception/objects
 ros2 topic hz /zit6/cmd/setpoint
 ros2 topic hz /auv/odometry
 ```

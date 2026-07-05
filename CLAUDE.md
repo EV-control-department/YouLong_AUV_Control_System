@@ -18,10 +18,25 @@ YouLong_AUV_Control_System/
 cd workspace_auv
 colcon build                          # build all packages
 colcon build --packages-select uv_control  # build one package
-colcon build --symlink-install        # symlink install (Python changes take effect without rebuild)
+colcon build --symlink-install        # symlink install (Python + launch changes take effect without rebuild)
 source install/setup.bash             # source the workspace overlay BEFORE any ros2 command
 
 ros2 launch uv_bringup real_bringup.py   # real AUV stack
+```
+
+**修改后是否需要重新编译：**
+- **启动文件 (launch/)** → 需要 `colcon build`（除非用了 `--symlink-install`）
+- **Python 源码** → 需要 `colcon build`（除非用了 `--symlink-install`）
+- **msg/srv/action 定义** → 必须 `colcon build`（ament_cmake，symlink 无效）
+- **C++ 源码** → 必须 `colcon build`
+- **JSON 配置文件** → 无需编译，直接生效
+
+**优先使用 `--packages-select` 只编译修改的包：**
+```bash
+# 只编译你改过的包，比全量 colcon build 快得多
+colcon build --packages-select uv_bringup    # 改了 launch 文件
+colcon build --packages-select uv_control    # 改了 control 代码
+colcon build --packages-select uv_msgs       # 改了 msg/srv/action 定义（依赖它的包也要重新编译）
 ```
 
 ### Build & Run — Sim Workspace (`workspace_sim/`)
@@ -47,7 +62,7 @@ This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater
 | 0 | `stonefish_ros2` (C++) | Stonefish 1.6 marine physics simulator, NO GPU mode |
 | 1 | `uv_hm` | Cascaded PID + thruster mixing → 6 thrusters. `sim_bridge` for simulation, `hw_manager` placeholder for STM32 MCU |
 | 2 | `uv_control` | Motion API: SET/WMOVE/BMOVE/TRAVEL. Only entry point is `basic_motion` |
-| 3 | `uv_perception` | YOLO object detection + monocular ray intersection for 3D positioning |
+| 3 | `uv_perception` | 4 通道双目 YOLO 检测 + 多帧单目射线交会 3D 定位。sim/real 模式切换，发布 PoseInfo 位姿源 |
 | 4 | `uv_nav` | A* pathfinding + obstacle avoidance waypoint following |
 | 5 | `uv_task` | JSON-based competition task runner |
 
@@ -123,7 +138,7 @@ goal.target = [2.0, 1.0, 0.0, 0.0]     # 世界系：向北 2m，向东 1m
 
 - **世界系步进**：从当前位置加上偏移量为目标
 - 使用动态步进算法：长距离拆成小段，每步根据横向误差动态调整步长
-- 步进参数：STEP_X=0.6m, STEP_Y=0.4m（椭圆模型），STEP_PERIOD=0.3s
+- 步进参数：STEP_X=0.6m, STEP_Y=0.2m（椭圆模型），STEP_PERIOD=0.3s
 - 收敛判据：预估剩余时间 ≤ 0.15s，或前向误差 < 步长×0.3
 
 #### BMOVE 命令
@@ -246,9 +261,7 @@ The main thread runs `rclpy.spin(node)` with SingleThreadedExecutor; the work th
 
 `auv_msgs/msg/AuvState` is published **only** by `stonefish_ros2` (the simulator). Real AUV hardware does not publish this topic. Nodes running on the real AUV must not depend on it.
 
-For pose feedback on real hardware, use:
-- `/zit6/cmd/setpoint` (ZIT6 protocol) for commanded positions
-- Future: sensor fusion node to estimate actual pose
+For pose feedback, perception nodes use `/basic_motion/pose_info` (`uv_msgs/PoseInfo`, 30Hz) published by `basic_motion`. This works in both simulation and real-hardware modes.
 
 ### sim_bridge Known Issues
 
@@ -294,7 +307,10 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_auv/src/uv_task/uv_task/task_runner.py` | Task executor, BasicMotion action client |
 | `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
 | `workspace_auv/src/uv_hm/uv_hm/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
+| `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, dataset capture |
+| `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization |
 | `workspace_auv/docs/basic_motion_action.md` | BasicMotion action interface reference |
+| `workspace_auv/docs/perception.md` | Perception system architecture + data flow |
 | `workspace_auv/docs/debug_guide.md` | Debugging guide (ros2 CLI, action test, simulation) |
 
 ## Conventions

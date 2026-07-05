@@ -76,6 +76,7 @@ from std_msgs.msg import Float32MultiArray
 
 from zit6_interfaces.msg import ZitSetpoint, ZitStatus
 from uv_msgs.action import BasicMotion
+from uv_msgs.msg import PoseInfo
 from uv_control.coordinate import Coordinate, wrap_deg, wrap_rad
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -150,6 +151,10 @@ class BasicMotionNode(Node):
         self._action_target = None       # 绝对目标 {x, y, z, yaw}，用于反馈
         self._action_axes = None         # 当前 action 的生效轴，用于反馈
         self.create_timer(0.5, self._action_feedback_cb)
+
+        # ── PoseInfo Publisher ─────────────────────────────────
+        self.pub_pose = self.create_publisher(PoseInfo, '/basic_motion/pose_info', 10)
+        self.create_timer(1.0 / 30.0, self._publish_pose_info)
 
         self.get_logger().info('BasicMotion node started')
 
@@ -920,6 +925,27 @@ class BasicMotionNode(Node):
         feedback = BasicMotion.Feedback()
         feedback.distance_remaining = float(math.sqrt(dx**2 + dy**2 + dz**2))
         self._action_goal_handle.publish_feedback(feedback)
+
+
+    def _publish_pose_info(self):
+        """Publish origin, robot pose, and target pose at 30Hz."""
+        msg = PoseInfo()
+        msg.stamp = self.get_clock().now().to_msg()
+        with self._state_lock:
+            if self._origin is not None:
+                msg.origin_x = float(self._origin.x)
+                msg.origin_y = float(self._origin.y)
+                msg.origin_z = float(self._origin.z)
+                msg.origin_yaw = float(self._origin.rz)
+            msg.robot_x = float(self.pose.x)
+            msg.robot_y = float(self.pose.y)
+            msg.robot_z = float(self.pose.z)
+            msg.robot_yaw = float(self.pose.rz)
+            msg.target_x = float(self._target.x)
+            msg.target_y = float(self._target.y)
+            msg.target_z = float(self._target.z)
+            msg.target_yaw = float(self._target.rz)
+        self.pub_pose.publish(msg)
 
 
 def main(args=None):

@@ -286,7 +286,7 @@
 		<world_transform rpy="0.0 0.0 0.0" xyz="10.5 0.2 0.79"/>
 	</static>
 
-	<include file="xunyun.scn">
+	<include file="xunyun_fixed.scn">
 		<arg name="robot_name" value="GIRONA500"/>
 		<arg name="robot_position" value="0.70 0.0 0.50"/>
 	</include>

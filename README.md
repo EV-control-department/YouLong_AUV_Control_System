@@ -21,7 +21,7 @@
 
 ```
 YouLong_AUV_Control_System/
-├── auv_ws/        # AUV 控制栈（无仿真依赖）
+├── workspace_auv/        # AUV 控制栈（无仿真依赖）
 │   └── src/
 │       ├── uv_control/     # 运动控制
 │       ├── uv_hm/          # 硬件管理
@@ -31,7 +31,7 @@ YouLong_AUV_Control_System/
 │       ├── uv_bringup/     # 启动文件
 │       ├── uv_msgs/        # 自定义消息格式
 │       └── zit6_interfaces/# ZIT6 协议定义
-├── sim_ws/        # 仿真覆盖层（依赖 auv_ws）
+├── workspace_sim/        # 仿真覆盖层（依赖 workspace_auv）
 │   └── src/
 │       └── stonefish_ros2/ # Stonefish 仿真器
 ├── docs/          # 设计文档
@@ -42,12 +42,12 @@ YouLong_AUV_Control_System/
 
 ```bash
 # AUV 控制栈
-cd auv_ws
+cd workspace_auv
 colcon build --symlink-install && source install/setup.bash
 ros2 launch uv_bringup real_bringup.py
 
-# 仿真栈（需要先 source auv_ws）
-cd sim_ws
+# 仿真栈（需要先 source workspace_auv）
+cd workspace_sim
 colcon build && source install/setup.bash
 ros2 launch uv_bringup sim_bringup.py
 ```
@@ -66,13 +66,12 @@ ros2 launch uv_bringup sim_bringup.py
 - **hw_manager (uv_hm)** — STM32 MCU 通信仅占位
 - **PID 控制参数** — 参数未调优
 - **thrust_mixer** — 推力分配矩阵未验证
-- **vision (uv_perception)** — YOLO 检测流程未审查
-- **position (uv_perception)** — 单目 3D 定位未审查
+- **vision (uv_perception)** — YOLO 检测流程，4 通道双目 YOLO + sim/real 模式切换，已仿真验证
+- **position (uv_perception)** — 多帧单目射线交会 3D 定位，已仿真验证
 - **astar / navigator (uv_nav)** — 路径规划与避障未审查
 - **task_runner (uv_task)** — 竞赛任务执行器未审查
 - **stonefish 场景和物理参数** — 仿真场景（`underwater_xunyun.scn` 等）未验证
 - **坐标系单位一致性** — 除 basic_motion 外，其他节点的角度/坐标单位未审查
-- **启动配置** — `sim_bringup.py` 中仍引用已移除的 `minimal_control` 节点
 - **测试** — 无单元测试或集成测试
 
 ## 坐标系约定

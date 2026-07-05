@@ -6,6 +6,7 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotionCommand.msg"
@@ -20,10 +21,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Waypoint.msg"
   "msg/WaypointPath.msg"
   "msg/TaskStatus.msg"
+  "msg/PoseInfo.msg"
   "srv/RunTask.srv"
   "srv/GetState.srv"
   "action/BasicMotion.action"
-  DEPENDENCIES std_msgs sensor_msgs action_msgs
+  DEPENDENCIES std_msgs sensor_msgs action_msgs builtin_interfaces
 )
 
 ament_package()

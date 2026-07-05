@@ -7,7 +7,7 @@ import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 
 
@@ -33,6 +33,7 @@ def generate_launch_description():
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
     enable_task = LaunchConfiguration('enable_task')
+    scenario_desc = LaunchConfiguration('scenario_desc')
 
     # Stonefish simulator paths
     # Use source directory path for Data (simulator needs direct filesystem access)
@@ -51,7 +52,7 @@ def generate_launch_description():
         name='stonefish_simulator',
         arguments=[
             simulation_data_dir,
-            os.path.join(simulation_data_dir, 'underwater_xunyun.scn'),
+            PathJoinSubstitution([simulation_data_dir, scenario_desc]),
             '100.0',
             '1280',
             '720',
@@ -116,7 +117,7 @@ def generate_launch_description():
         declare_enable_task,
         declare_scenario,
         LogInfo(msg=['Simulation data: ', simulation_data_dir]),
-        LogInfo(msg=['Scenario: ', os.path.join(simulation_data_dir, 'underwater_xunyun.scn')]),
+        LogInfo(msg=['Scenario: ', PathJoinSubstitution([simulation_data_dir, scenario_desc])]),
         stonefish_sim,
         sim_bridge,
         basic_motion,

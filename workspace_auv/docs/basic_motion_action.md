@@ -109,7 +109,7 @@ target:   [dx, dy, dz, dyaw]    # 世界系偏移量
 | 参数           | 值   | 说明                 |
 | -------------- | ---- | -------------------- |
 | STEP_X         | 0.6m | X 方向椭圆半轴       |
-| STEP_Y         | 0.4m | Y 方向椭圆半轴       |
+| STEP_Y         | 0.2m | Y 方向椭圆半轴       |
 | STEP_PERIOD    | 0.3s | 收敛时间阈值         |
 | LATERAL_LAMBDA | 2.0  | 横向误差指数衰减系数 |
 
@@ -193,6 +193,21 @@ goal.target = [3.0, 0.0, 0.0, 0.0]
 | WTRAVEL | odom   | 偏移量   | 转向 + 直线        | 过门、直线轨迹   |
 | BTRAVEL | body   | 偏移量   | 旋转 + 转向 + 直线 | 沿当前方向直线   |
 | START   | —     | —       | 初始化原点         | 开始作业         |
+
+---
+
+## PoseInfo 话题
+
+basic_motion 同时以 30Hz 发布 `/basic_motion/pose_info` (类型 `uv_msgs/PoseInfo`)，供感知系统获取机器人位姿：
+
+```
+builtin_interfaces/Time stamp    # 时间戳
+float32 origin_x/y/z/yaw         # odom 原点在 map 系中的位姿 (yaw: 度)
+float32 robot_x/y/z/yaw          # 机器人当前 odom 系位姿 (yaw: 度)
+float32 target_x/y/z/yaw         # 当前运动目标 odom 系位姿 (yaw: 度)
+```
+
+`position` 节点 (uv_perception) 订阅此话题作为射线原点，不再依赖仅仿真可用的 `/auv/state`。
 
 ---
 

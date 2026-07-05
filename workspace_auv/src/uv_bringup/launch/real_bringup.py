@@ -48,6 +48,7 @@ def generate_launch_description():
         executable='vision',
         name='vision',
         output='screen',
+        parameters=[{'sim_mode': False}],
         condition=IfCondition(enable_ai),
     )
 

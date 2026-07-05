@@ -7,30 +7,38 @@ Tracks and remembers object world positions.
 
 import math
 import numpy as np
-from collections import defaultdict
 
 import rclpy
 from rclpy.node import Node
 
-from uv_msgs.msg import Detection, DetectionArray, ObjectPosition, ObjectPositionArray, AuvState
+from uv_msgs.msg import Detection, DetectionArray, ObjectPosition, ObjectPositionArray, PoseInfo
 
 
-# Camera parameters (from xunyun.scn)
-FRONT_CAM = {
-    'width': 1280, 'height': 960,
-    'hfov': 34.19,  # degrees
-    'offset': np.array([0.25, -0.02825, 0.25]),  # body NED (x, y, z)
-    'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),  # cam->body NED
+# Camera intrinsic + extrinsic parameters (from xunyun_fixed.scn)
+# Each camera has its own body offset; optical_to_body is shared per pair
+CAM_PARAMS = {
+    'front_left': {
+        'width': 1280, 'height': 960, 'hfov': 34.19,
+        'offset': np.array([0.25, -0.02825, 0.25]),
+        'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
+    },
+    'front_right': {
+        'width': 1280, 'height': 960, 'hfov': 34.19,
+        'offset': np.array([0.25, 0.02825, 0.25]),
+        'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
+    },
+    'down_left': {
+        'width': 1280, 'height': 960, 'hfov': 32.18,
+        'offset': np.array([0.0, -0.03765, 0.21]),
+        'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
+    },
+    'down_right': {
+        'width': 1280, 'height': 960, 'hfov': 32.18,
+        'offset': np.array([0.0, 0.03765, 0.21]),
+        'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
+    },
 }
 
-DOWN_CAM = {
-    'width': 1280, 'height': 960,
-    'hfov': 32.18,
-    'offset': np.array([0.0, 0.03765, 0.21]),
-    'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),  # cam->body NED
-}
-
-MAX_HISTORY = 20
 MIN_BASELINE = 0.1  # minimum baseline between ray origins (meters)
 MAX_DISTANCE = 50.0  # maximum object distance (meters)
 RANSAC_INLIER_DIST = 1.5  # meters
@@ -52,37 +60,58 @@ def _euler_to_rotation_matrix(rx_deg: float, ry_deg: float, rz_deg: float) -> np
     return R
 
 
+CLASS_NAMES = {
+    0: "blue_drump", 1: "blue_stick", 2: "gate_green_stick",
+    3: "gate_red_stick", 4: "red_drump", 5: "red_stick",
+    6: "yellow_flag", 7: "yellow_stick",
+}
+
+
 class PositionNode(Node):
     """Position node: 3D object localization via monocular ray intersection."""
 
     def __init__(self):
         super().__init__('position')
 
+        self.declare_parameter('max_history', 30)
+        self._max_history = self.get_parameter('max_history').get_parameter_value().integer_value
+
         # Robot pose (NED)
         self.robot_pos = np.array([0.0, 0.0, 0.0])
         self.robot_yaw = 0.0  # degrees
+        self._pose_received = False
 
-        # Ray history: class_id -> list of {'origin': np.array, 'direction': np.array}
-        self.ray_history = defaultdict(list)
+        # Ray history: (class_id, camera_pair) -> list of rays
+        self.ray_history: dict[tuple, list] = {}
 
-        # Object memory: class_id -> {'position': np.array, 'confidence': float, 'observations': int}
-        self.object_memory = {}
+        # Object memory: (class_id, camera_pair) -> position info
+        self.object_memory: dict[tuple, dict] = {}
 
-        # Camera focal lengths
-        self.front_fx = FRONT_CAM['width'] / (2.0 * math.tan(math.radians(FRONT_CAM['hfov']) / 2.0))
-        self.front_fy = self.front_fx  # assume square pixels
-        self.front_cx = FRONT_CAM['width'] / 2.0
-        self.front_cy = FRONT_CAM['height'] / 2.0
+        # Debug counters
+        self._det_msg_count: dict[str, int] = {}
+        self._ray_skipped_baseline: int = 0
+        self._ray_added_total: int = 0
+        self._intersect_attempts: int = 0
+        self._intersect_fails: int = 0
+        self._debug_timer = None  # set after first detection
 
-        self.down_fx = DOWN_CAM['width'] / (2.0 * math.tan(math.radians(DOWN_CAM['hfov']) / 2.0))
-        self.down_fy = self.down_fx
-        self.down_cx = DOWN_CAM['width'] / 2.0
-        self.down_cy = DOWN_CAM['height'] / 2.0
+        # Precompute focal lengths and centers per camera
+        self._cam_params = {}
+        for name, p in CAM_PARAMS.items():
+            fx = p['width'] / (2.0 * math.tan(math.radians(p['hfov']) / 2.0))
+            self._cam_params[name] = {
+                'fx': fx, 'fy': fx,  # square pixels
+                'cx': p['width'] / 2.0, 'cy': p['height'] / 2.0,
+                'offset': p['offset'],
+                'optical_to_body': p['optical_to_body'],
+            }
 
         # Subscribers
-        self.create_subscription(DetectionArray, '/perception/detection/front', self._front_det_cb, 10)
-        self.create_subscription(DetectionArray, '/perception/detection/down', self._down_det_cb, 10)
-        self.create_subscription(AuvState, '/auv/state', self._state_cb, 10)
+        self.create_subscription(DetectionArray, '/perception/detection/front_left', self._front_left_cb, 10)
+        self.create_subscription(DetectionArray, '/perception/detection/front_right', self._front_right_cb, 10)
+        self.create_subscription(DetectionArray, '/perception/detection/down_left', self._down_left_cb, 10)
+        self.create_subscription(DetectionArray, '/perception/detection/down_right', self._down_right_cb, 10)
+        self.create_subscription(PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10)
 
         # Publisher
         self.pub_objects = self.create_publisher(ObjectPositionArray, '/perception/objects', 10)
@@ -92,23 +121,56 @@ class PositionNode(Node):
 
         self.get_logger().info('Position node started')
 
-    def _state_cb(self, msg: AuvState):
-        self.robot_pos = np.array([msg.pos_x, msg.pos_y, msg.pos_z])
-        self.robot_yaw = math.degrees(msg.yaw)
+    def _pose_cb(self, msg: PoseInfo):
+        if not self._pose_received:
+            self._pose_received = True
+            self.get_logger().info(
+                f'First pose received: robot=({msg.robot_x:.2f}, {msg.robot_y:.2f}, '
+                f'{msg.robot_z:.2f}), yaw={msg.robot_yaw:.1f}°')
+        self.robot_pos = np.array([msg.robot_x, msg.robot_y, msg.robot_z])
+        self.robot_yaw = msg.robot_yaw
 
-    def _front_det_cb(self, msg: DetectionArray):
-        self._process_detection(msg, 'front')
+    def _front_left_cb(self, msg: DetectionArray):
+        self._on_detection(msg, 'front_left')
 
-    def _down_det_cb(self, msg: DetectionArray):
-        self._process_detection(msg, 'down')
+    def _front_right_cb(self, msg: DetectionArray):
+        self._on_detection(msg, 'front_right')
+
+    def _down_left_cb(self, msg: DetectionArray):
+        self._on_detection(msg, 'down_left')
+
+    def _down_right_cb(self, msg: DetectionArray):
+        self._on_detection(msg, 'down_right')
+
+    def _on_detection(self, msg: DetectionArray, camera: str):
+        # Track arrival count per camera
+        n = self._det_msg_count.get(camera, 0)
+        if n == 0:
+            self.get_logger().info(
+                f'First detection msg from {camera}: '
+                f'{len(msg.detections)} detections')
+            # Start debug summary timer on first detection
+            if self._debug_timer is None:
+                self._debug_timer = self.create_timer(3.0, self._debug_summary)
+        self._det_msg_count[camera] = n + 1
+
+        self._process_detection(msg, camera)
 
     def _process_detection(self, msg: DetectionArray, camera: str):
-        """Process detection results: generate rays and intersect."""
-        cam = FRONT_CAM if camera == 'front' else DOWN_CAM
-        fx = self.front_fx if camera == 'front' else self.down_fx
-        fy = self.front_fy if camera == 'front' else self.down_fy
-        cx = self.front_cx if camera == 'front' else self.down_cx
-        cy = self.front_cy if camera == 'front' else self.down_cy
+        """Process detection results: generate rays and intersect.
+
+        camera: one of 'front_left', 'front_right', 'down_left', 'down_right'.
+        Rays are grouped by (class_id, camera_pair) where camera_pair is 'front' or 'down'
+        so left and right channels of the same stereo pair contribute to the same queue.
+        """
+        cp = self._cam_params[camera]
+        fx, fy = cp['fx'], cp['fy']
+        cx, cy = cp['cx'], cp['cy']
+        offset = cp['offset']
+        optical_to_body = cp['optical_to_body']
+
+        # camera_pair for ray grouping: 'front' or 'down'
+        camera_pair = 'front' if camera.startswith('front') else 'down'
 
         # Robot rotation matrix (world NED)
         R_robot = _euler_to_rotation_matrix(0, 0, self.robot_yaw)
@@ -120,53 +182,67 @@ class PositionNode(Node):
             v_cam = v_cam / np.linalg.norm(v_cam)
 
             # Camera to body NED
-            v_body = cam['optical_to_body'] @ v_cam
+            v_body = optical_to_body @ v_cam
 
             # Body to world NED
             v_world = R_robot @ v_body
             v_world = v_world / np.linalg.norm(v_world)
 
             # Ray origin: robot position + camera offset in world frame
-            offset_world = R_robot @ cam['offset']
+            offset_world = R_robot @ offset
             ray_origin = self.robot_pos + offset_world
 
-            # Manage ray history
+            # Manage ray history — keyed by (class_id, camera_pair)
             class_id = det.class_id
-            history = self.ray_history[class_id]
+            key = (class_id, camera_pair)
+            history = self.ray_history.setdefault(key, [])
 
             # Check baseline distance
             if history:
                 last_origin = history[-1]['origin']
                 dist = np.linalg.norm(ray_origin - last_origin)
                 if dist < MIN_BASELINE:
+                    self._ray_skipped_baseline += 1
                     continue  # Too close to last ray
 
             # Add ray
+            self._ray_added_total += 1
             history.append({
                 'origin': ray_origin,
                 'direction': v_world,
             })
 
             # Prune if too many
-            if len(history) > MAX_HISTORY:
-                self._prune_rays(class_id, history)
+            if len(history) > self._max_history:
+                self._prune_rays(history)
 
             # Try intersection
             if len(history) >= MIN_RAYS_FOR_INTERSECTION:
+                self._intersect_attempts += 1
                 position = self._intersect_rays_pairwise(history)
-                if position is not None:
+                if position is None:
+                    self._intersect_fails += 1
+                else:
                     # Validate distance
                     dist = np.linalg.norm(position - self.robot_pos)
                     if dist < MAX_DISTANCE:
-                        self.object_memory[class_id] = {
+                        is_new = (key not in self.object_memory)
+                        self.object_memory[key] = {
                             'position': position,
                             'confidence': det.confidence,
                             'observations': len(history),
                         }
+                        if is_new:
+                            cls_name = CLASS_NAMES.get(class_id, str(class_id))
+                            self.get_logger().info(
+                                f'New object: {cls_name} (id={class_id}) '
+                                f'via {camera_pair}, '
+                                f'pos=({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}), '
+                                f'dist={dist:.2f}m, rays={len(history)}')
 
-    def _prune_rays(self, class_id: int, history: list):
+    def _prune_rays(self, history: list):
         """Prune redundant rays using pairwise scoring."""
-        if len(history) <= MAX_HISTORY:
+        if len(history) <= self._max_history:
             return
 
         # Score each ray by redundancy with others
@@ -263,15 +339,37 @@ class PositionNode(Node):
         except np.linalg.LinAlgError:
             return None
 
+    def _debug_summary(self):
+        """Periodic debug: log detection rates, ray history, object count."""
+        det_info = ', '.join(
+            f'{cam}={n}' for cam, n in sorted(self._det_msg_count.items()))
+        ray_info = ', '.join(
+            f'{CLASS_NAMES.get(cid, cid)}({cid})/{cp}={len(h)}'
+            for (cid, cp), h in sorted(self.ray_history.items()))
+        total_rays = sum(len(h) for h in self.ray_history.values())
+        self.get_logger().info(
+            f'[DEBUG] pose_ok={self._pose_received}, '
+            f'robot_pos=({self.robot_pos[0]:.1f}, {self.robot_pos[1]:.1f}, {self.robot_pos[2]:.1f}) '
+            f'yaw={self.robot_yaw:.1f}°, '
+            f'objects={len(self.object_memory)}, '
+            f'total_rays={total_rays} '
+            f'(added={self._ray_added_total}, '
+            f'skipped_base={self._ray_skipped_baseline}), '
+            f'intersect: attempts={self._intersect_attempts} '
+            f'fails={self._intersect_fails}, '
+            f'history_keys={len(self.ray_history)}, '
+            f'det_msgs=[{det_info}], '
+            f'rays=[{ray_info or "(none)"}]')
+
     def _broadcast_objects(self):
         """Publish tracked object positions at 10Hz."""
         msg = ObjectPositionArray()
         msg.header.stamp = self.get_clock().now().to_msg()
 
-        for class_id, data in self.object_memory.items():
+        for (class_id, camera_pair), data in self.object_memory.items():
             obj = ObjectPosition()
             obj.class_id = class_id
-            obj.class_name = str(class_id)
+            obj.class_name = CLASS_NAMES.get(class_id, str(class_id))
             obj.world_x = float(data['position'][0])
             obj.world_y = float(data['position'][1])
             obj.world_z = float(data['position'][2])
