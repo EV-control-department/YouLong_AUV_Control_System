@@ -59,7 +59,7 @@ This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater
 
 | Layer | Package | Role |
 |---|---|---|
-| 0 | `stonefish_ros2` (C++) | Stonefish 1.6 marine physics simulator, NO GPU mode |
+| 0 | `stonefish_ros2` (C++) | Stonefish 1.6 marine physics simulator, GPU mode (runs `stonefish_simulator`) |
 | 1 | `uv_hm` | Cascaded PID + thruster mixing → 6 thrusters. `sim_bridge` for simulation, `hw_manager` placeholder for STM32 MCU |
 | 2 | `uv_control` | Motion API: SET/WMOVE/BMOVE/TRAVEL. Only entry point is `basic_motion` |
 | 3 | `uv_perception` | 4 通道双目 YOLO 检测 + 多帧单目射线交会 3D 定位。sim/real 模式切换，发布 PoseInfo 位姿源 |

@@ -19,22 +19,22 @@ from uv_msgs.msg import Detection, DetectionArray, ObjectPosition, ObjectPositio
 CAM_PARAMS = {
     'front_left': {
         'width': 1280, 'height': 960, 'hfov': 34.19,
-        'offset': np.array([0.25, -0.02825, 0.25]),
+        'offset': np.array([0.23, -0.05, 0.76]),
         'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
     },
     'front_right': {
         'width': 1280, 'height': 960, 'hfov': 34.19,
-        'offset': np.array([0.25, 0.02825, 0.25]),
+        'offset': np.array([0.23, 0.05, 0.76]),
         'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
     },
     'down_left': {
         'width': 1280, 'height': 960, 'hfov': 32.18,
-        'offset': np.array([0.0, -0.03765, 0.21]),
+        'offset': np.array([-0.13, -0.05, 0.645]),
         'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
     },
     'down_right': {
         'width': 1280, 'height': 960, 'hfov': 32.18,
-        'offset': np.array([0.0, 0.03765, 0.21]),
+        'offset': np.array([-0.13, 0.05, 0.645]),
         'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
     },
 }

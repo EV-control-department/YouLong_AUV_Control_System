@@ -64,9 +64,10 @@
 		<world_transform rpy="0.0 0.0 0.0" xyz="5.0 0.0 1.0"/>
 	</dynamic>
 
-    <include file="xunyun.scn">
+    <include file="xunyun_fixed.scn">
 		<arg name="robot_name" value="GIRONA500"/>
-		<arg name="robot_position" value="0.0 0.0 1.0"/>
+		<arg name="robot_position" value="0.0 0.0 0.0"/>
+		<arg name="robot_orientation" value="0.0 0.0 1.5708"/>
 	</include>
 
 	<cable name="Cable1" physics="submerged" buoyant="false">

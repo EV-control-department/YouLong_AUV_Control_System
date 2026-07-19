@@ -18,7 +18,7 @@ def generate_launch_description():
         description='Enable AI perception nodes'
     )
     declare_enable_nav = DeclareLaunchArgument(
-        'enable_nav', default_value='true',
+        'enable_nav', default_value='false',
         description='Enable navigation node'
     )
     declare_enable_task = DeclareLaunchArgument(
@@ -26,7 +26,7 @@ def generate_launch_description():
         description='Enable task runner'
     )
     declare_scenario = DeclareLaunchArgument(
-        'scenario_desc', default_value='underwater_xunyun.scn',
+        'scenario_desc', default_value='wuurc_murc_2026_auv.scn',
         description='Stonefish scenario file name (in Data/ directory)'
     )
 

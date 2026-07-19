@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <scenario>
+<arg name="robot_orientation" default="0.0 0.0 0.0"/>
     <!-- 定义机器人实体: 名字通过宏传入, 不固定在世界坐标带物理属性, 忽略自碰撞 -->
     <robot name="$(arg robot_name)" fixed="false" self_collisions="false">
         <!-- 基础连杆 (Base Link): 机器人的主刚体结构。类型为复合结构(compound)，并在水下受物理规律约束(submerged) -->
@@ -495,6 +496,6 @@
 		<ros_publisher thrusters="/auv/thrusters_state"/>
         
         <!-- 定义整个机器人在外界大场景出生(Spawn)时的绝对位置，值由宏传入 -->
-		<world_transform rpy="0.0 0.0 0.0" xyz="$(arg robot_position)"/>
+		<world_transform rpy="$(arg robot_orientation)" xyz="$(arg robot_position)"/>
 	</robot>
 </scenario>

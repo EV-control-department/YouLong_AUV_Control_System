@@ -162,7 +162,7 @@ class VisionNode(Node):
 
             if not model_path:
                 for candidate in [
-                    os.path.expanduser('~/YouLong_AUV_Control_System/workspace_auv/src/datas/SAUVC_sim52.pt'),
+                    os.path.expanduser('~/YouLong_AUV_Control_System/workspace_auv/src/datas/WUURC2026_sim_719.pt'),
                 ]:
                     if os.path.exists(candidate):
                         model_path = candidate

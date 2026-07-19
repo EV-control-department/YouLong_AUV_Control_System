@@ -1501,5 +1501,6 @@
 	<include file="xunyun_fixed.scn">
 		<arg name="robot_name" value="XUNYUN"/>
 		<arg name="robot_position" value="10.5000 -2.8000 0.30"/>
+		<arg name="robot_orientation" value="0.0 0.0 1.5708"/>
 	</include>
 </scenario>
