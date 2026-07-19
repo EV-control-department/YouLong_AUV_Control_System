@@ -307,28 +307,28 @@
 		<sensor name="front_cam_left" type="camera" rate="10.0">
 			<link name="Vehicle"/>
 			<origin rpy="1.5708 0 1.5708" xyz="0.25 -0.02825 0.25"/>
-			<specs resolution_x="1280" resolution_y="960" horizontal_fov="34.19"/>
+			<specs resolution_x="1280" resolution_y="960" horizontal_fov="87.19"/>
 			<ros_publisher topic="/sim/front_cam/left"/>
 		</sensor>
 
 		<sensor name="front_cam_right" type="camera" rate="10.0">
 			<link name="Vehicle"/>
 			<origin rpy="1.5708 0 1.5708" xyz="0.25 0.02825 0.25"/>
-			<specs resolution_x="1280" resolution_y="960" horizontal_fov="34.19"/>
+			<specs resolution_x="1280" resolution_y="960" horizontal_fov="87.19"/>
 			<ros_publisher topic="/sim/front_cam/right"/>
 		</sensor>
 
 		<sensor name="down_cam_left" type="camera" rate="30.0">
 			<link name="Vehicle"/>
 			<origin rpy="0 0 1.5708" xyz="0 -0.03765 0.21"/>
-			<specs resolution_x="1280" resolution_y="960" horizontal_fov="32.18"/>
+			<specs resolution_x="1280" resolution_y="960" horizontal_fov="57.19"/>
 			<ros_publisher topic="/sim/down_cam/left"/>
 		</sensor>
 
 		<sensor name="down_cam_right" type="camera" rate="30.0">
 			<link name="Vehicle"/>
 			<origin rpy="0 0 1.5708" xyz="0 0.03765 0.21"/>
-			<specs resolution_x="1280" resolution_y="960" horizontal_fov="32.18"/>
+			<specs resolution_x="1280" resolution_y="960" horizontal_fov="57.19"/>
 			<ros_publisher topic="/sim/down_cam/right"/>
 		</sensor>
 
