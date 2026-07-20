@@ -172,6 +172,8 @@ class BasicMotionNode(Node):
         msg.y = float(y)
         msg.z = float(z)
         msg.yaw = float(yaw_rad)
+        msg.roll = 0.0         # roll/pitch 未使用，控制栈保持 4-DOF
+        msg.pitch = 0.0
         msg.seq = 0
         self._target = self._map_to_odom(Coordinate(x=x, y=y, z=z, rz=math.degrees(yaw_rad)))
         self.pub_setpoint.publish(msg)
@@ -185,28 +187,40 @@ class BasicMotionNode(Node):
             self.status = msg
 
     def _vel_cb(self, msg: Float32MultiArray):
-        """ZIT6 速度回调。机体速度 [vx, vy, vz, vyaw_rad_s]，存机体+世界两套。"""
+        """ZIT6 速度回调。机体速度 6-DOF [vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad_s]。"""
         with self._state_lock:
-            if len(msg.data) < 4:
-                return
-            self.vel_body = {
-                'x': msg.data[0],
-                'y': msg.data[1],
-                'z': msg.data[2],
-                'rz': msg.data[3],   # rad/s
-            }
+            if len(msg.data) >= 6:
+                self.vel_body = {
+                    'x': msg.data[0], 'y': msg.data[1], 'z': msg.data[2],
+                    'rx': msg.data[3], 'ry': msg.data[4], 'rz': msg.data[5],
+                }
+            elif len(msg.data) >= 4:
+                self.vel_body = {
+                    'x': msg.data[0], 'y': msg.data[1],
+                    'z': msg.data[2], 'rz': msg.data[3],
+                }
 
     def _pos_cb(self, msg: Float32MultiArray):
-        """ZIT6 位置回调。原始数据是 map 系，内部转 odom 系后存为 self.pose。"""
+        """ZIT6 位置回调。原始数据是 map 系，内部转 odom 系后存为 self.pose。
+
+        支持 6 元素 [x, y, z, roll_rad, pitch_rad, yaw_rad] 和
+        旧 4 元素 [x, y, z, yaw_rad] 两种格式。
+        """
         with self._state_lock:
             if len(msg.data) < 4:
                 return
-            map_pos = Coordinate(
-                x=msg.data[0],
-                y=msg.data[1],
-                z=msg.data[2],
-                rz=math.degrees(msg.data[3]),   # 弧度→度
-            )
+            if len(msg.data) >= 6:
+                map_pos = Coordinate(
+                    x=msg.data[0], y=msg.data[1], z=msg.data[2],
+                    rx=math.degrees(msg.data[3]),   # roll rad
+                    ry=math.degrees(msg.data[4]),   # pitch rad
+                    rz=math.degrees(msg.data[5]),   # yaw rad
+                )
+            else:
+                map_pos = Coordinate(
+                    x=msg.data[0], y=msg.data[1], z=msg.data[2],
+                    rz=math.degrees(msg.data[3]),   # 弧度→度
+                )
             if self._origin is not None:
                 self.pose = self._map_to_odom(map_pos)
             else:
@@ -940,6 +954,8 @@ class BasicMotionNode(Node):
             msg.robot_x = float(self.pose.x)
             msg.robot_y = float(self.pose.y)
             msg.robot_z = float(self.pose.z)
+            msg.robot_roll = float(self.pose.rx)
+            msg.robot_pitch = float(self.pose.ry)
             msg.robot_yaw = float(self.pose.rz)
             msg.target_x = float(self._target.x)
             msg.target_y = float(self._target.y)
