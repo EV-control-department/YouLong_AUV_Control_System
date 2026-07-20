@@ -273,6 +273,29 @@ cmd_rz = -float(self.pid_yaw_rate.step(eyaw_rate, dt))    # BUG: negation invert
 
 The `-` sign inverts yaw control polarity, causing the AUV to spin instead of holding depth/yaw. Fix: remove the negation → `cmd_rz = float(...)`.
 
+### 6-DOF State Feedback (migrated 2026-07-20)
+
+控制栈保持 4-DOF，状态反馈升级为 6-DOF 以携带完整姿态，用于纠正 position 节点的位置估计。
+
+**统一数据顺序：** `[x, y, z, roll, pitch, yaw]`
+
+| 话题 | 格式 | 发布者 |
+|---|---|---|
+| `/zit6/state/pos` | `[x, y, z, roll_rad, pitch_rad, yaw_rad]` | sim_bridge |
+| `/zit6/state/vel` | `[vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad_s]` | sim_bridge |
+| `/zit6/state/thr` | `[Fx, Fy, Fz, 0, 0, Mz]` | sim_bridge |
+| `PoseInfo` | 含 `robot_roll`, `robot_pitch` (deg) | basic_motion 30Hz |
+
+**数据流：**
+```
+IMU → sim_bridge._odom_cb (全 RPY 提取)
+  → /zit6/state/pos [6elem] → basic_motion._pos_cb → self.pose.rx/ry
+  → PoseInfo (robot_roll/pitch) → position._pose_cb → _euler_to_rotation_matrix(roll,pitch,yaw)
+  → 射线方向 v_world = R_robot @ v_body (完整姿态)
+```
+
+**注意：** `_vel_cb` 和 `_pos_cb` 都兼容旧 4 元素格式（通过 `len(msg.data) >= 6` 检查）。
+
 ### Coordinate System & Conventions
 
 - **NED** (North-East-Down) throughout. Yaw 0 = North, **clockwise positive**.
@@ -308,7 +331,8 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
 | `workspace_auv/src/uv_hm/uv_hm/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
 | `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, dataset capture |
-| `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization |
+| `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization (now uses full RPY for ray casting) |
+| `visualization/auv_visualizer.py` | PySide6 GUI: 2D map, objects/rays, node list, task status, force remote control |
 | `workspace_auv/docs/basic_motion_action.md` | BasicMotion action interface reference |
 | `workspace_auv/docs/perception.md` | Perception system architecture + data flow |
 | `workspace_auv/docs/debug_guide.md` | Debugging guide (ros2 CLI, action test, simulation) |
