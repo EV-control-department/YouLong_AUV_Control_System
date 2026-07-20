@@ -1,0 +1,64 @@
+# Default PID parameters for sim_bridge cascade controller
+
+# Outer loop: error magnitude -> speed magnitude
+speed_mag:
+  kp: 0.5
+  ki: 0.05
+  kd: 0.1
+  i_limit: 2.0
+  output_limit: 2.0
+
+# Inner loop: body-frame velocity
+vel_x:
+  kp: 300.0
+  ki: 50.0
+  kd: 10.0
+  i_limit: 500.0
+  output_limit: 1000.0
+
+vel_y:
+  kp: 300.0
+  ki: 50.0
+  kd: 10.0
+  i_limit: 500.0
+  output_limit: 1000.0
+
+# Z axis: position PID with buoyancy feedforward
+pos_z:
+  kp: 600.0
+  ki: 30.0
+  kd: 800.0
+  i_limit: 6200.0
+  output_limit: 1000.0
+  feedforward: 230.0
+
+# Yaw: position -> rate cascade
+yaw:
+  kp: 1.5
+  ki: 1.0
+  kd: 0.1
+  i_limit: 30.0
+  output_limit: 45.0
+
+yaw_rate:
+  kp: 30.0
+  ki: 20.0
+  kd: 1.0
+  i_limit: 600.0
+  output_limit: 1000.0
+
+# Velocity-only mode
+vel_z:
+  kp: 300.0
+  ki: 30.0
+  kd: 50.0
+  i_limit: 500.0
+  output_limit: 1000.0
+  feedforward: 230.0
+
+vel_yaw:
+  kp: 40.0
+  ki: 20.0
+  kd: 2.0
+  i_limit: 300.0
+  output_limit: 1000.0

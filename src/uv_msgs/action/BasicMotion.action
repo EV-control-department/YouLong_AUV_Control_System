@@ -1,0 +1,18 @@
+# Request (Goal)
+uint8 WMOVE=1       # 世界系步进, target=[dx, dy, dz, dyaw]
+uint8 BMOVE=2       # 机体系步进, target=[dx, dy, dz, dyaw]
+uint8 SET=3         # 绝对定位, target=[x, y, z, yaw]
+uint8 WTRAVEL=4     # 世界系直线, target=[dx, dy, dz]
+uint8 BTRAVEL=5     # 机体系直线, target=[dx, dy, dz]
+uint8 START=6       # 初始化里程计原点（无视 axes/target/timeout）
+uint8 cmd_type
+string axes         # 要动的轴: "x","y","z","rz" 任意组合, 空=全部
+float32[] target    # [x, y, z, yaw]
+float32 timeout     # 秒, ≤0=默认60s
+---
+# Result
+bool success
+string message
+---
+# Feedback
+float32 distance_remaining
