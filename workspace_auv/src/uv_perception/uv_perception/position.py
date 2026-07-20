@@ -78,7 +78,9 @@ class PositionNode(Node):
 
         # Robot pose (NED)
         self.robot_pos = np.array([0.0, 0.0, 0.0])
-        self.robot_yaw = 0.0  # degrees
+        self.robot_roll = 0.0   # degrees
+        self.robot_pitch = 0.0  # degrees
+        self.robot_yaw = 0.0    # degrees
         self._pose_received = False
 
         # Ray history: (class_id, camera_pair) -> list of rays
@@ -128,6 +130,8 @@ class PositionNode(Node):
                 f'First pose received: robot=({msg.robot_x:.2f}, {msg.robot_y:.2f}, '
                 f'{msg.robot_z:.2f}), yaw={msg.robot_yaw:.1f}°')
         self.robot_pos = np.array([msg.robot_x, msg.robot_y, msg.robot_z])
+        self.robot_roll = msg.robot_roll
+        self.robot_pitch = msg.robot_pitch
         self.robot_yaw = msg.robot_yaw
 
     def _front_left_cb(self, msg: DetectionArray):
@@ -172,8 +176,8 @@ class PositionNode(Node):
         # camera_pair for ray grouping: 'front' or 'down'
         camera_pair = 'front' if camera.startswith('front') else 'down'
 
-        # Robot rotation matrix (world NED)
-        R_robot = _euler_to_rotation_matrix(0, 0, self.robot_yaw)
+        # Robot rotation matrix (world NED) — full 6-DOF attitude
+        R_robot = _euler_to_rotation_matrix(self.robot_roll, self.robot_pitch, self.robot_yaw)
 
         for det in msg.detections:
             # Pixel to camera ray
