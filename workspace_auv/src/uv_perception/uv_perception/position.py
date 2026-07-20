@@ -11,7 +11,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 
-from uv_msgs.msg import Detection, DetectionArray, ObjectPosition, ObjectPositionArray, PoseInfo
+from uv_msgs.msg import DetectionArray, ObjectPosition, ObjectPositionArray, PoseInfo
 
 
 # Camera intrinsic + extrinsic parameters (from xunyun_fixed.scn)
@@ -41,7 +41,6 @@ CAM_PARAMS = {
 
 MIN_BASELINE = 0.1  # minimum baseline between ray origins (meters)
 MAX_DISTANCE = 50.0  # maximum object distance (meters)
-RANSAC_INLIER_DIST = 1.5  # meters
 MIN_RAYS_FOR_INTERSECTION = 3
 
 
@@ -128,7 +127,7 @@ class PositionNode(Node):
             self._pose_received = True
             self.get_logger().info(
                 f'First pose received: robot=({msg.robot_x:.2f}, {msg.robot_y:.2f}, '
-                f'{msg.robot_z:.2f}), yaw={msg.robot_yaw:.1f}°')
+                f'{msg.robot_z:.2f}), roll={msg.robot_roll:.1f}°, pitch={msg.robot_pitch:.1f}°, yaw={msg.robot_yaw:.1f}°')
         self.robot_pos = np.array([msg.robot_x, msg.robot_y, msg.robot_z])
         self.robot_roll = msg.robot_roll
         self.robot_pitch = msg.robot_pitch
@@ -354,7 +353,7 @@ class PositionNode(Node):
         self.get_logger().info(
             f'[DEBUG] pose_ok={self._pose_received}, '
             f'robot_pos=({self.robot_pos[0]:.1f}, {self.robot_pos[1]:.1f}, {self.robot_pos[2]:.1f}) '
-            f'yaw={self.robot_yaw:.1f}°, '
+            f'rpy=({self.robot_roll:.1f}°, {self.robot_pitch:.1f}°, {self.robot_yaw:.1f}°), '
             f'objects={len(self.object_memory)}, '
             f'total_rays={total_rays} '
             f'(added={self._ray_added_total}, '
