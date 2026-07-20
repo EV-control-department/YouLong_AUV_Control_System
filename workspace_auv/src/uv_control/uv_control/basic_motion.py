@@ -127,6 +127,7 @@ class BasicMotionNode(Node):
         self._origin_warned = False     # 防止 _pos_cb 重复打印警告
         self._state_lock = threading.Lock()
         self.vel_body = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}   # 机体速度                     # 世界速度
+        self._pose_stamp = self.get_clock().now().to_msg()            # 位姿测量时间（_pos_cb 接收时刻）
 
         # ─────────────────────────────────────────────────────────
         # Layer 1: ZIT6 协议发布/订阅
@@ -209,6 +210,7 @@ class BasicMotionNode(Node):
         with self._state_lock:
             if len(msg.data) < 4:
                 return
+            self._pose_stamp = self.get_clock().now().to_msg()  # 记录接收时刻作为测量时间
             if len(msg.data) >= 6:
                 map_pos = Coordinate(
                     x=msg.data[0], y=msg.data[1], z=msg.data[2],
@@ -256,7 +258,7 @@ class BasicMotionNode(Node):
                 self.get_logger().warning('It might be an incorrect motion.')
                 
             self._origin = Coordinate(
-                x=self.pose.x, y=self.pose.y, z=self.pose.z, rz=self.pose.rz)
+                x=self.pose.x, y=self.pose.y, z=0.0, rz=self.pose.rz)
             self.get_logger().info(
                 f'DEBUG pose before zero: x={self.pose.x:.4f}, y={self.pose.y:.4f}, '
                 f'z={self.pose.z:.4f}, rz={self.pose.rz:.4f}')
@@ -944,7 +946,7 @@ class BasicMotionNode(Node):
     def _publish_pose_info(self):
         """Publish origin, robot pose, and target pose at 30Hz."""
         msg = PoseInfo()
-        msg.stamp = self.get_clock().now().to_msg()
+        msg.stamp = self._pose_stamp
         with self._state_lock:
             if self._origin is not None:
                 msg.origin_x = float(self._origin.x)

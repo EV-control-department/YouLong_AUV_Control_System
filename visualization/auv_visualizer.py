@@ -17,14 +17,18 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+
 # ── PySide6 ────────────────────────────────────────────────────
 from PySide6.QtCore import QPointF, QRectF, QTimer, Qt
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
-    QPen,
+    QImage,
     QPainter,
+    QPen,
+    QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -55,6 +59,7 @@ from PySide6.QtWidgets import (
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSPresetProfiles
+from sensor_msgs.msg import Image as RosImage
 from uv_msgs.msg import ObjectPositionArray, PoseInfo, TaskStatus
 from zit6_interfaces.msg import ZitSetpoint
 
@@ -87,11 +92,17 @@ class PoseSnapshot:
 class ObjectSnapshot:
     """单个物体快照。"""
     class_id: int = 0
+    instance_id: int = 0
     x: float = 0.0
     y: float = 0.0
     z: float = 0.0
     confidence: float = 0.0
     num_obs: int = 0
+
+    @property
+    def full_id(self) -> tuple:
+        """(class_id, instance_id) 唯一标识。"""
+        return (self.class_id, self.instance_id)
 
 
 @dataclass
@@ -113,14 +124,21 @@ class NodeInfo:
 
 # ── 颜色方案 ──────────────────────────────────────────────────
 OBJECT_COLORS: Dict[int, QColor] = {
-    0: QColor("#E74C3C"),  # red
-    1: QColor("#3498DB"),  # blue
-    2: QColor("#2ECC71"),  # green
-    3: QColor("#F39C12"),  # orange
-    4: QColor("#9B59B6"),  # purple
-    5: QColor("#1ABC9C"),  # teal
-    6: QColor("#E67E22"),  # dark orange
-    7: QColor("#2980B9"),  # dark blue
+    0: QColor("#F1C40F"),  # yellow_sector
+    1: QColor("#E74C3C"),  # red_sector
+    2: QColor("#2ECC71"),  # green_sector
+    3: QColor("#3498DB"),  # arrow
+    4: QColor("#E67E22"),  # start
+    5: QColor("#F39C12"),  # triangle
+    6: QColor("#9B59B6"),  # square
+    7: QColor("#1ABC9C"),  # basket
+    8: QColor("#95A5A6"),  # aruco_tag
+}
+# ID → 名称
+CLASS_NAMES: Dict[int, str] = {
+    0: "yellow_sector", 1: "red_sector", 2: "green_sector",
+    3: "arrow", 4: "start", 5: "triangle",
+    6: "square", 7: "basket", 8: "aruco_tag",
 }
 DEFAULT_OBJECT_COLOR = QColor("#95A5A6")  # gray
 AUV_COLOR = QColor("#00DDFF")
@@ -134,6 +152,26 @@ TEXT_COLOR = QColor("#ECEFF1")
 
 # 状态名
 STATUS_NAMES = {0: "IDLE", 1: "RUNNING", 2: "PAUSED", 3: "DONE", 4: "ERROR"}
+
+# 标注图像显示尺寸
+ANNOTATED_DISPLAY_W = 160
+ANNOTATED_DISPLAY_H = 120
+
+
+def _ros_image_to_qpixmap(data: dict) -> QPixmap:
+    """ROS Image raw data → QPixmap (BGR8/RGB8 only). 在 GUI 线程调用。"""
+    w, h = data["width"], data["height"]
+    enc = data.get("encoding", "bgr8")
+    raw = data["data"]
+    fmt = QImage.Format.Format_BGR888 if "bgr" in enc else QImage.Format.Format_RGB888
+    qimg = QImage(raw, w, h, w * 3, fmt)
+    if qimg.isNull():
+        return QPixmap()
+    return QPixmap.fromImage(qimg).scaled(
+        ANNOTATED_DISPLAY_W, ANNOTATED_DISPLAY_H,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
 
 # ══════════════════════════════════════════════════════════════════
 # ROS 2 节点（运行在独立线程）
@@ -161,6 +199,14 @@ class ROS2Node(Node):
         # 遥控发布
         self._setpoint_pub = self.create_publisher(ZitSetpoint, "/zit6/cmd/setpoint", 10)
         self._seq = 0
+
+        # 标注图像订阅 (2×2 四个通道)
+        for cam in ["front_left", "front_right", "down_left", "down_right"]:
+            self.create_subscription(
+                RosImage, f"/perception/annotated/{cam}",
+                lambda msg, c=cam: self._annotated_cb(c, msg),
+                qos_sensor,
+            )
 
         # 节点列表轮询
         self._node_timer = self.create_timer(2.0, self._poll_nodes)
@@ -197,6 +243,7 @@ class ROS2Node(Node):
         for obj in msg.objects:
             objects.append({
                 "class_id": obj.class_id,
+                "instance_id": obj.instance_id,
                 "x": obj.world_x,
                 "y": obj.world_y,
                 "z": obj.world_z,
@@ -212,6 +259,16 @@ class ROS2Node(Node):
             "total": msg.total_tasks,
             "name": msg.current_task_name,
             "error": msg.error_message,
+        }))
+
+    def _annotated_cb(self, cam: str, msg: RosImage):
+        """标注图像回调 — 只传原始数据到 GUI 线程解码。"""
+        self._q.put(("annotated", {
+            "cam": cam,
+            "width": msg.width,
+            "height": msg.height,
+            "encoding": msg.encoding,
+            "data": bytes(msg.data),  # copy 出 bytes，避免 GC 问题
         }))
 
     def _poll_nodes(self):
@@ -279,9 +336,9 @@ class AUVGraphicsItem(QGraphicsItem):
         self._yaw_deg = 0.0
 
     def set_yaw(self, yaw_deg: float):
-        """yaw 度，NED 约定。Qt Y 轴向上时，旋转 -yaw（因为 Qt CCW 为正）。"""
+        """yaw 度，NED 约定（0°=北，顺时针正）。直接用在 Qt 坐标系。"""
         self._yaw_deg = yaw_deg
-        self.setRotation(-yaw_deg)
+        self.setRotation(yaw_deg)
         self.update()
 
     def boundingRect(self):
@@ -306,18 +363,20 @@ class ObjectGraphicsItem(QGraphicsItem):
 
     RADIUS = 6.0
 
-    def __init__(self, class_id: int):
+    def __init__(self, class_id: int, instance_id: int = 0):
         super().__init__()
         self._class_id = class_id
+        self._instance_id = instance_id
         color = OBJECT_COLORS.get(class_id, DEFAULT_OBJECT_COLOR)
         self._brush = QBrush(color)
         self._pen = QPen(color.darker(150), 1.5)
 
-        # ID 标签
+        # 标签: class_id:instance_id + 名称
+        name = CLASS_NAMES.get(class_id, f"?")
         self._label = QGraphicsTextItem(self)
         self._label.setDefaultTextColor(color)
-        self._label.setFont(QFont("Monospace", 9, QFont.Weight.Bold))
-        self._label.setPlainText(str(class_id))
+        self._label.setFont(QFont("Monospace", 8, QFont.Weight.Bold))
+        self._label.setPlainText(f"{class_id}:{instance_id}")
         self._label.setPos(self.RADIUS + 3, -self.RADIUS - 3)
 
     def boundingRect(self):
@@ -393,7 +452,7 @@ class MapView(QGraphicsView):
         self._target_item.setVisible(False)
 
         # 动态元素
-        self._object_items: Dict[int, ObjectGraphicsItem] = {}
+        self._object_items: Dict[Tuple[int, int], ObjectGraphicsItem] = {}
         self._ray_lines: List[QGraphicsItem] = []
         self._grid_items: List[QGraphicsItem] = []
 
@@ -434,16 +493,17 @@ class MapView(QGraphicsView):
         # 6. 更新物体
         current_ids = set()
         for obj in objects:
-            current_ids.add(obj.class_id)
+            full_id = (obj.class_id, obj.instance_id)
+            current_ids.add(full_id)
             osx, osy = self._world_to_scene(obj.x, obj.y)
 
             # 获取或创建物体 item
-            if obj.class_id not in self._object_items:
-                item = ObjectGraphicsItem(obj.class_id)
+            if full_id not in self._object_items:
+                item = ObjectGraphicsItem(obj.class_id, obj.instance_id)
                 self._scene.addItem(item)
-                self._object_items[obj.class_id] = item
+                self._object_items[full_id] = item
             else:
-                item = self._object_items[obj.class_id]
+                item = self._object_items[full_id]
 
             item.setPos(osx, osy)
 
@@ -456,9 +516,9 @@ class MapView(QGraphicsView):
                 self._ray_lines.append(ray_line)
 
         # 移除不再存在的物体
-        for cid in list(self._object_items):
-            if cid not in current_ids:
-                self._scene.removeItem(self._object_items.pop(cid))
+        for fid in list(self._object_items):
+            if fid not in current_ids:
+                self._scene.removeItem(self._object_items.pop(fid))
 
     def set_auto_follow(self, enabled: bool):
         self._auto_follow = enabled
@@ -696,6 +756,7 @@ class VisualizerGUI(QMainWindow):
         self._objects: List[ObjectSnapshot] = []
         self._task = TaskSnapshot()
         self._nodes: List[NodeInfo] = []
+        self._annotated: Dict[str, QPixmap] = {}  # cam_name → pixmap
 
         # 频率计数
         self._pose_count = 0
@@ -778,6 +839,9 @@ class VisualizerGUI(QMainWindow):
         # 顶层水平分割
         hsplit = QSplitter(Qt.Orientation.Horizontal)
 
+        # 最左：2×2 标注图像
+        hsplit.addWidget(self._create_camera_panel())
+
         # 左侧面板：节点列表 + 位置信息
         left_widget = self._create_left_panel()
         hsplit.addWidget(left_widget)
@@ -791,10 +855,11 @@ class VisualizerGUI(QMainWindow):
         hsplit.addWidget(right_widget)
 
         # 比例
-        hsplit.setStretchFactor(0, 1)
-        hsplit.setStretchFactor(1, 3)
-        hsplit.setStretchFactor(2, 1)
-        hsplit.setSizes([280, 700, 280])
+        hsplit.setStretchFactor(0, 1)  # camera
+        hsplit.setStretchFactor(1, 1)  # left
+        hsplit.setStretchFactor(2, 3)  # map
+        hsplit.setStretchFactor(3, 1)  # right
+        hsplit.setSizes([340, 240, 700, 280])
 
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -896,9 +961,9 @@ class VisualizerGUI(QMainWindow):
         # 物体列表
         grp_obj = QGroupBox("检测物体")
         obj_layout = QVBoxLayout(grp_obj)
-        self._obj_table = QTableWidget(0, 5)
+        self._obj_table = QTableWidget(0, 7)
         self._obj_table.setHorizontalHeaderLabels([
-            "ID", "X(北)", "Y(东)", "Z(深)", "置信度"
+            "C:I", "名称", "X(北)", "Y(东)", "Z(深)", "置信度", "#Obs"
         ])
         self._obj_table.setAlternatingRowColors(True)
         self._obj_table.horizontalHeader().setStretchLastSection(True)
@@ -930,7 +995,32 @@ class VisualizerGUI(QMainWindow):
 
         return widget
 
-    # ── 数据轮询 ───────────────────────────────────────────────
+    def _create_camera_panel(self) -> QWidget:
+        """4 通道标注图像，纵向排列在左侧。"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self._cam_labels: Dict[str, QLabel] = {}
+        for cam in ["front_left", "front_right", "down_left", "down_right"]:
+            lbl_title = QLabel(cam)
+            lbl_title.setStyleSheet(f"color: {AUV_COLOR.name()}; font-size: 10px;")
+            lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_img = QLabel("等待…")
+            lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_img.setMinimumSize(ANNOTATED_DISPLAY_W, ANNOTATED_DISPLAY_H)
+            lbl_img.setStyleSheet(f"""
+                background-color: {BG_COLOR.name()};
+                border: 1px solid {GRID_TEXT_COLOR.name()};
+                color: #555; font-size: 10px;
+            """)
+            self._cam_labels[cam] = lbl_img
+            layout.addWidget(lbl_title)
+            layout.addWidget(lbl_img)
+
+        layout.addStretch()
+        return widget
 
     def _poll_ros_data(self):
         """从队列取出所有 ROS 数据，更新本地快照。"""
@@ -949,6 +1039,10 @@ class VisualizerGUI(QMainWindow):
             elif msg_type == "task":
                 self._task = TaskSnapshot(**data)
                 self._task_count += 1
+            elif msg_type == "annotated":
+                pix = _ros_image_to_qpixmap(data)
+                if not pix.isNull():
+                    self._annotated[data["cam"]] = pix
             elif msg_type == "nodes":
                 self._nodes = [NodeInfo(**n) for n in data]
 
@@ -967,6 +1061,7 @@ class VisualizerGUI(QMainWindow):
         # 更新 UI
         self._update_left_panel()
         self._update_right_panel()
+        self._update_camera_panel()
         self._map.update_state(self._pose, self._objects)
         self._update_status_bar()
 
@@ -1011,12 +1106,17 @@ class VisualizerGUI(QMainWindow):
         self._obj_table.setRowCount(len(self._objects))
         for row, obj in enumerate(self._objects):
             color = OBJECT_COLORS.get(obj.class_id, DEFAULT_OBJECT_COLOR)
-            id_item = QTableWidgetItem(str(obj.class_id))
+            name = CLASS_NAMES.get(obj.class_id, f"?")
+            id_item = QTableWidgetItem(f"{obj.class_id}:{obj.instance_id}")
             id_item.setForeground(color)
-            id_item.setFont(QFont("Monospace", 11, QFont.Weight.Bold))
+            id_item.setFont(QFont("Monospace", 10, QFont.Weight.Bold))
             self._obj_table.setItem(row, 0, id_item)
+            name_item = QTableWidgetItem(name)
+            name_item.setForeground(color)
+            self._obj_table.setItem(row, 1, name_item)
             for col, val in enumerate([f"{obj.x:.2f}", f"{obj.y:.2f}",
-                                        f"{obj.z:.2f}", f"{obj.confidence:.2f}"], 1):
+                                        f"{obj.z:.2f}", f"{obj.confidence:.2f}",
+                                        str(obj.num_obs)], 2):
                 item = QTableWidgetItem(val)
                 item.setForeground(TEXT_COLOR)
                 self._obj_table.setItem(row, col, item)
@@ -1039,6 +1139,13 @@ class VisualizerGUI(QMainWindow):
             f"进度: {self._task.current_idx}/{self._task.total}"
         )
         self._task_error_label.setText(self._task.error or "")
+
+    def _update_camera_panel(self):
+        """刷新四个通道的标注图像。"""
+        for cam, lbl in self._cam_labels.items():
+            if cam in self._annotated:
+                lbl.setPixmap(self._annotated[cam])
+            # else: keep previous image or placeholder
 
     def _update_status_bar(self):
         self._status_label.setText(
