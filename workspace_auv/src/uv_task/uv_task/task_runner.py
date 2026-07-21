@@ -588,6 +588,45 @@ class TaskRunnerNode(Node):
 
     # --- Special tasks ---
 
+    def _move_to_nearest_object_xy(self, class_id: int) -> bool:
+        """SET 绝对定位到 class_id 最近物体的 XY 坐标。
+
+        使用 self.objects (ObjectPositionArray) 获取 3D 位置，
+        成功后更新 self._cmd_x/_cmd_y。
+        """
+        nearest = None
+        min_dist = float('inf')
+        for obj in self.objects.objects:
+            if obj.class_id == class_id:
+                dx = obj.world_x - self._cmd_x
+                dy = obj.world_y - self._cmd_y
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest = obj
+
+        if nearest is None:
+            self.get_logger().warn(
+                f'_move_to_nearest_object_xy: no object class_id={class_id}')
+            return False
+
+        self.get_logger().info(
+            f'_move_to_nearest_object_xy: class_id={class_id} '
+            f'at ({nearest.world_x:.2f}, {nearest.world_y:.2f}) '
+            f'dist={min_dist:.2f}m')
+
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [nearest.world_x, nearest.world_y, self._cmd_z, self._cmd_yaw],
+            'xy', timeout=15.0, quiet=True)
+        if success:
+            self._cmd_x = nearest.world_x
+            self._cmd_y = nearest.world_y
+        else:
+            self.get_logger().warn(
+                f'_move_to_nearest_object_xy failed: {msg}')
+        return success
+
     def _task_navigate(self, p: dict) -> bool:
         x = p.get('x', self._cmd_x)
         y = p.get('y', self._cmd_y)

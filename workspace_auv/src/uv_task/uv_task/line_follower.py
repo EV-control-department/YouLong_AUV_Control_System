@@ -90,6 +90,9 @@ class LineFollower:
         self._search_spiral_dir = 0    # 螺旋方向计数 (0…7)
         self._search_spiral_size = float(params.get('search_spiral_start', 0.02))
 
+        # ── 三角形标记抑制 ──
+        self._triangle_approached = False  # True=刚处理过三角形，跳过检测
+
         self._logger.info(
             f'LineFollower created: timeout={params.get("timeout", 120)}s')
 
@@ -187,15 +190,52 @@ class LineFollower:
                 ok = self._follow_step(line)
                 if not ok:
                     return False
-                # 检查是否遇到停止标志
-                if self._params.get('stop_when_marker', False):
-                    det = self._best_detection(
-                        self._params.get('marker_class_ids', []))
-                    if det is not None:
-                        self._logger.info(
-                            f'LineFollower: marker class={det[0].class_id} '
-                            f'detected, stopping')
-                        return True
+                # ── 三角形标记处理 ──
+                # 抑制恢复：三角形 bbox 中心在图像上 1/3 区域 → 新三角形出现
+                det = self._best_detection([5])
+                if det is not None:
+                    bbox_center_y = (det[0].bbox_y1 + det[0].bbox_y2) / 2.0
+                    height = float(self._params.get(
+                        'image_height',
+                        self._node.get_parameter('down_image_height').value))
+                    if self._triangle_approached:
+                        if bbox_center_y < height / 3.0:
+                            self._triangle_approached = False
+                            self._logger.info(
+                                'LineFollower: triangle in upper 1/3, '
+                                'flag reset to 0')
+
+                    if (not self._triangle_approached
+                            and bbox_center_y > height / 5.0):
+                        det = self._best_detection([5])
+                        if det is not None:
+                            self._logger.info(
+                                'LineFollower: triangle (class=5) detected, '
+                                'approaching')
+                            # 1. 闭环接近 100 次
+                            for i in range(100):
+                                if self._stopped:
+                                    return False
+                                if not self._node._move_to_nearest_object_xy(5):
+                                    self._logger.warn(
+                                        f'Approach #{i+1}: no object found, '
+                                        f'stopping after {i} iterations')
+                                    break
+                            # 2. 自转 360°（3 × 120° BMOVE rz）
+                            self._logger.info(
+                                'LineFollower: rotating 360° (3×120°)')
+                            for _ in range(3):
+                                if self._stopped:
+                                    return False
+                                self._node._send_action_goal(
+                                    BasicMotion.Goal.BMOVE,
+                                    [0.0, 0.0, 0.0, 120.0], 'rz',
+                                    timeout=15.0, quiet=True)
+                                self._node._cmd_yaw += 120.0
+                            # 3. 标记已处理
+                            self._triangle_approached = True
+                            self._logger.info(
+                                'LineFollower: triangle handled, flag set to 1')
             elif self._lost_count < self._lost_max and self._last_valid_line is not None:
                 # 短暂丢帧 → 用最后的有效方向盲跟一小步
                 self._lost_count += 1

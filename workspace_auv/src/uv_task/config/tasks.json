@@ -3,7 +3,8 @@
     {"name": "start", "params": {}},
     {"name": "wait", "params": {"duration": 0.0}},
     {"name": "setz", "params": {"z": 0.4}},
-    {"name": "wtravelxy", "params": {"x": 2.0, "y": 0.0}},
+    {"name": "wtravelxy", "params": {"x": 2.4, "y": -0.8}},
+    {"name": "setrz", "params": {"rz": 50}},
     {"name": "follow_line", "params": {
       "timeout": 120.0,
       "stop_when_marker": true,
