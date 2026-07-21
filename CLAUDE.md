@@ -36,6 +36,7 @@ ros2 launch uv_bringup real_bringup.py   # real AUV stack
 # 只编译你改过的包，比全量 colcon build 快得多
 colcon build --packages-select uv_bringup    # 改了 launch 文件
 colcon build --packages-select uv_control    # 改了 control 代码
+colcon build --packages-select uv_task       # 改了 task_runner / line_follower
 colcon build --packages-select uv_msgs       # 改了 msg/srv/action 定义（依赖它的包也要重新编译）
 ```
 
@@ -62,7 +63,7 @@ This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater
 | 0 | `stonefish_ros2` (C++) | Stonefish 1.6 marine physics simulator, GPU mode (runs `stonefish_simulator`) |
 | 1 | `uv_hm` | Cascaded PID + thruster mixing → 6 thrusters. `sim_bridge` for simulation, `hw_manager` placeholder for STM32 MCU |
 | 2 | `uv_control` | Motion API: SET/WMOVE/BMOVE/TRAVEL. Only entry point is `basic_motion` |
-| 3 | `uv_perception` | 4 通道双目 YOLO 检测 + 多帧单目射线交会 3D 定位。sim/real 模式切换，发布 PoseInfo 位姿源 |
+| 3 | `uv_perception` | 4 通道双目 YOLO 检测 + YOLO-Seg 管道分割 + 多帧单目射线交会 3D 定位。sim/real 模式切换，发布 PoseInfo 位姿源 |
 | 4 | `uv_nav` | A* pathfinding + obstacle avoidance waypoint following |
 | 5 | `uv_task` | JSON-based competition task runner |
 
@@ -239,7 +240,7 @@ print('SET:', result.success, result.message)
 
 **Key behaviors:**
 - **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them (no service call needed)
-- **Task map**: JSON `name` field maps to a method via `task_map` dict. Supports SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL tasks, plus `start`, `navigate`, `wait`. See `docs/debug_guide.md` for full task list.
+- **Task map**: JSON `name` field maps to a method via `task_map` dict. Supports SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL tasks, plus `start`, `navigate`, `wait`, `follow_line`. See `docs/debug_guide.md` for full task list.
 - **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
 - **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
 
@@ -280,6 +281,82 @@ ros2 service call /task/exec uv_msgs/srv/ExecTask \
 ros2 service call /task/exec uv_msgs/srv/ExecTask \
   "{task_name: 'wtravelxy', params_json: '{\"x\": 2, \"y\": 3}', timeout: 0.0}"
 ```
+
+### follow_line 任务 (LineFollower)
+
+`follow_line` 是管道巡线视觉伺服任务，通过下视摄像头的 YOLO-Seg 管道分割结果进行闭环控制。实现在独立的 `line_follower.py` 中。
+
+**架构：**
+
+```
+TaskRunnerNode._task_follow_line()
+  └─ LineFollower (独立子对象，仅在任务执行期间存活)
+       ├─ 订阅 /perception/line/down_{left,right}  (LineState)
+       ├─ 订阅 /perception/detection/down_{left,right}  (DetectionArray)
+       ├─ execute() → 搜索 → 跟踪 主循环
+       │   ├─ _search_for_line()   # 8方向扩展方框螺旋搜索（仅平移 BMOVE）
+       │   └─ _follow_step()       # 双通道 PID 闭环巡线
+       └─ destroy()  # 清理订阅，释放资源
+```
+
+**控制映射（双通道独立 PID）：**
+
+| 视觉输入 | PID 通道 | 控制输出 | 说明 |
+|---|---|---|---|
+| `center_error` (归一化[-1,1]) | 横向 PID | `dy` (机体系横移) | 把 AUV 推回管道中心 |
+| `heading_error_deg` ([-90°,90°]) | 偏航 PID | `dyaw` (机体系旋转) | 对齐管道方向 |
+
+**前进步长自适应：** 修正量越大前进越慢 `forward = forward_base × (1 - 0.5 × total_correction)`，最少保持 25% 基础步长。
+
+**YOLO 丢帧恢复：**
+- 连续丢帧 ≤ `lost_tolerance`(默认 50 帧) → coast 模式：用最后有效 heading 盲跟，前进步长减半，不更新 I/D 状态
+- 超过阈值 → 进入搜索模式
+
+**搜索阶段（8 方向扩展方框螺旋）：**
+```
+方向序列: 前→右前→右→右后→后→左后→左→左前 (循环)
+每完成一圈 (8步)，框大小 += search_spiral_step
+直到达到 search_max_spiral 上限
+纯平移 BMOVE xy，不旋转
+```
+
+**任务参数（tasks.json 中 `follow_line` 的 params）：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `timeout` | float | 120.0 | 任务总超时 (s) |
+| `stop_when_marker` | bool | false | 检测到 marker 时停止 |
+| `marker_class_ids` | list | [] | 停止标记的 YOLO class_id |
+| `forward_step` | float | 0.10 | 基础前进步长 (m) |
+| `min_forward_step` | float | 0.02 | 最小前进步长 (m) |
+| `lost_tolerance` | int | 50 | 丢帧容忍帧数 |
+| `coast_forward_step` | float | 0.05 | 盲跟前进步长 (m) |
+| `search_spiral_start` | float | 0.02 | 初始搜索框大小 (m) |
+| `search_spiral_step` | float | 0.30 | 每圈扩展步长 (m) |
+| `search_max_spiral` | float | 2.0 | 最大搜索范围 (m) |
+| `search_max_step` | float | 0.50 | 搜索单步最大移动 (m) |
+| `line_pid_p/i/d` | float | 0.009/0/0 | 横向 PID 增益 |
+| `line_pid_output_limit` | float | 0.30 | 横向 PID 输出限幅 (m) |
+| `max_lateral_step` | float | 0.03 | 最大横向步长 (m) |
+| `heading_pid_p/i/d` | float | 0.15/0.005/0.02 | 偏航 PID 增益 |
+| `heading_pid_output_limit` | float | 6.0 | 偏航 PID 输出限幅 (°) |
+| `max_yaw_step` | float | 3.0 | 最大偏航步长 (°) |
+| `perception_max_age` | float | 0.60 | 感知数据最大有效期 (s) |
+
+**LineState 消息 (`/perception/line/{camera_name}`)：**
+
+vision 节点通过 YOLO-Seg 分割 mask → 轮廓提取 → 矩 + minAreaRect 计算管道中心线和方向角，经 Kalman 滤波器平滑后发布。
+
+```
+builtin_interfaces/Time stamp
+string camera_name
+bool detected                  # 是否检测到管道
+float32 center_error           # 管道中心相对于图像中心的归一化偏移 [-1, 1]
+float32 heading_error_deg      # 管道长轴与竖直方向的夹角 [-90°, 90°]
+float32 area_ratio             # 分割 mask 面积 / 图像面积
+```
+
+左右下视的 LineState 通过**双角度圆周平均**融合（避免 +89°/-89° 边界问题）。
 
 ### AuvState — Sim-Only Topic
 
@@ -352,6 +429,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 |---|---|
 | `workspace_auv/src/uv_task/config/tasks.json` | Competition task list (JSON array of `{name, params}`) |
 | `workspace_auv/src/uv_task/uv_task/task_runner.py` | Task executor, BasicMotion action client |
+| `workspace_auv/src/uv_task/uv_task/line_follower.py` | LineFollower: 管道巡线视觉伺服子对象 (双通道 PID + 搜索) |
 | `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
 | `workspace_auv/src/uv_hm/uv_hm/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
 | `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, dataset capture |
