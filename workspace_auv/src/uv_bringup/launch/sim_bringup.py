@@ -25,6 +25,10 @@ def generate_launch_description():
         'enable_task', default_value='false',
         description='Enable task runner'
     )
+    declare_debug_mode = DeclareLaunchArgument(
+        'debug_mode', default_value='false',
+        description='Task runner debug mode: single-task execution via /task/exec'
+    )
     declare_scenario = DeclareLaunchArgument(
         'scenario_desc', default_value='wuurc_murc_2026_auv.scn',
         description='Stonefish scenario file name (in Data/ directory)'
@@ -37,6 +41,7 @@ def generate_launch_description():
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
     enable_task = LaunchConfiguration('enable_task')
+    debug_mode = LaunchConfiguration('debug_mode')
     scenario_desc = LaunchConfiguration('scenario_desc')
     publish_annotated = LaunchConfiguration('publish_annotated')
 
@@ -114,6 +119,7 @@ def generate_launch_description():
         executable='task_runner',
         name='task_runner',
         output='screen',
+        parameters=[{'debug_mode': debug_mode}],
         condition=IfCondition(enable_task),
     )
 
@@ -121,6 +127,7 @@ def generate_launch_description():
         declare_enable_ai,
         declare_enable_nav,
         declare_enable_task,
+        declare_debug_mode,
         declare_scenario,
         declare_publish_annotated,
         LogInfo(msg=['Simulation data: ', simulation_data_dir]),

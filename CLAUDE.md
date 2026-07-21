@@ -257,6 +257,30 @@ The main thread runs `rclpy.spin(node)` with SingleThreadedExecutor; the work th
 
 **Position tracking:** task_runner tracks commanded position locally (`_cmd_x/_cmd_y/_cmd_z/_cmd_yaw`) rather than subscribing to AuvState, because AuvState is only published by the simulator, not by the real AUV hardware.
 
+**任务参数约定：**
+- **SET** — 绝对世界坐标 `{x, y, z, rz}`。未指定的轴从 `_cmd_*` 填充
+- **WMOVE / WTRAVEL** (W 前缀) — 绝对世界坐标 `{x, y, z, rz}`。内部计算 `dx = x - _cmd_x` 后发偏移量给 basic_motion
+- **BMOVE / BTRAVEL** (B 前缀) — 机体系偏移量 `{dx, dy, dz, drz}`
+
+**Debug 模式：**
+
+通过 ROS 2 参数 `debug_mode` 控制（默认 `false`）：
+- `debug_mode:=true` → 抑制 auto-start，暴露 `/task/exec` service 用于逐任务测试
+- `debug_mode:=false`（默认）→ 原有行为，启动即执行 tasks.json
+
+```bash
+# 启动 debug 模式
+ros2 launch uv_bringup sim_bringup.py enable_task:=true debug_mode:=true
+
+# 单步执行任务
+ros2 service call /task/exec uv_msgs/srv/ExecTask \
+  "{task_name: 'start', params_json: '{}', timeout: 0.0}"
+ros2 service call /task/exec uv_msgs/srv/ExecTask \
+  "{task_name: 'setz', params_json: '{\"z\": 0.4}', timeout: 0.0}"
+ros2 service call /task/exec uv_msgs/srv/ExecTask \
+  "{task_name: 'wtravelxy', params_json: '{\"x\": 2, \"y\": 3}', timeout: 0.0}"
+```
+
 ### AuvState — Sim-Only Topic
 
 `auv_msgs/msg/AuvState` is published **only** by `stonefish_ros2` (the simulator). Real AUV hardware does not publish this topic. Nodes running on the real AUV must not depend on it.
