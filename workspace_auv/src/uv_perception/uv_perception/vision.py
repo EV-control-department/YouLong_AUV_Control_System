@@ -91,10 +91,12 @@ class VisionNode(Node):
         super().__init__('vision')
 
         self.declare_parameter('publish_images', False)
-        self._publish_images = self.get_parameter('publish_images').get_parameter_value().bool_value
+        self._publish_images = self.get_parameter(
+            'publish_images').get_parameter_value().bool_value
 
         self.declare_parameter('publish_annotated', False)
-        self._publish_annotated = self.get_parameter('publish_annotated').get_parameter_value().bool_value
+        self._publish_annotated = self.get_parameter(
+            'publish_annotated').get_parameter_value().bool_value
 
         # 巡线使用轮廓矩 + minAreaRect 提取管道中心/方向，无需相机安装偏置。
         self.declare_parameter('segment_model_path', '')
@@ -176,10 +178,14 @@ class VisionNode(Node):
 
         # Publishers — 4 detection + 4 image (common to both modes)
         self.pub_det = {
-            'front_left':  self.create_publisher(DetectionArray, '/perception/detection/front_left', 10),
-            'front_right': self.create_publisher(DetectionArray, '/perception/detection/front_right', 10),
-            'down_left':   self.create_publisher(DetectionArray, '/perception/detection/down_left', 10),
-            'down_right':  self.create_publisher(DetectionArray, '/perception/detection/down_right', 10),
+            'front_left': self.create_publisher(
+                DetectionArray, '/perception/detection/front_left', 10),
+            'front_right': self.create_publisher(
+                DetectionArray, '/perception/detection/front_right', 10),
+            'down_left': self.create_publisher(
+                DetectionArray, '/perception/detection/down_left', 10),
+            'down_right': self.create_publisher(
+                DetectionArray, '/perception/detection/down_right', 10),
         }
         self.pub_img = {
             'front_left':  self.create_publisher(Image, '/perception/image/front_left', 10),
@@ -238,24 +244,46 @@ class VisionNode(Node):
 
             if not model_path:
                 for candidate in [
-                    os.path.expanduser('~/YouLong_AUV_Control_System/workspace_auv/src/datas/WUURC2026_sim_719.pt'),
+                    os.path.expanduser(
+                        '~/YouLong_AUV_Control_System/workspace_auv/src/'
+                        'datas/WUURC2026_sim_719.pt'),
                 ]:
                     if os.path.exists(candidate):
                         model_path = candidate
                         break
+                if not model_path:
+                    # The competition box model is shipped with this package.
+                    # Keep an installed-package fallback for non-symlink builds.
+                    resource_box = os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)),
+                        'resource', 'box_best.pt')
+                    if os.path.exists(resource_box):
+                        model_path = resource_box
+                    else:
+                        try:
+                            from ament_index_python.packages import get_package_share_directory
+                            share_box = os.path.join(
+                                get_package_share_directory('uv_perception'),
+                                'resource', 'box_best.pt')
+                            if os.path.exists(share_box):
+                                model_path = share_box
+                        except Exception:
+                            pass
 
             if model_path and os.path.exists(model_path):
                 self._model = YOLO(model_path)
                 self._model_loaded = True
                 self.get_logger().info(f'YOLO model loaded: {model_path}')
             else:
-                self.get_logger().warn(f'YOLO model not found, detection disabled')
+                self.get_logger().warn('YOLO model not found, detection disabled')
 
             # --- Segment model (YOLO-Seg) for line following ---
             seg_path = self.get_parameter('segment_model_path').get_parameter_value().string_value
             if not seg_path:
                 for candidate in [
-                    os.path.expanduser('~/YouLong_AUV_Control_System/workspace_auv/src/datas/WUURC2026simSegment.pt'),
+                    os.path.expanduser(
+                        '~/YouLong_AUV_Control_System/workspace_auv/src/'
+                        'datas/WUURC2026simSegment.pt'),
                 ]:
                     if os.path.exists(candidate):
                         seg_path = candidate
@@ -263,7 +291,8 @@ class VisionNode(Node):
                 if not seg_path:
                     # Try resource/seg_best.pt next to this file
                     resource_seg = os.path.join(
-                        os.path.dirname(os.path.dirname(__file__)), 'resource', 'seg_best.pt')
+                        os.path.dirname(os.path.dirname(__file__)),
+                        'resource', 'seg_best.pt')
                     if os.path.exists(resource_seg):
                         seg_path = resource_seg
                     else:
@@ -284,7 +313,7 @@ class VisionNode(Node):
                 self.get_logger().info(f'Segment model loaded: {seg_path}')
             else:
                 self.get_logger().warn(
-                    f'Segment model not found, line following disabled')
+                    'Segment model not found, line following disabled')
         except ImportError:
             self.get_logger().warn('ultralytics not installed, detection disabled')
 
@@ -562,7 +591,6 @@ class VisionNode(Node):
         if isinstance(names, (list, tuple)) and 0 <= class_id < len(names):
             return str(names[class_id])
         return 'unknown'
-
 
     def _save_frame(self, img, channel: str):
         """Save a dataset frame at up to 5 FPS per channel."""

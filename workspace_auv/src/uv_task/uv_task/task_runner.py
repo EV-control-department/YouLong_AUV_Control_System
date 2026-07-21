@@ -15,10 +15,17 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
 
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import ObjectPositionArray, TaskStatus
+from uv_msgs.msg import (
+    DetectionArray,
+    DeviceCommand,
+    ObjectPositionArray,
+    PoseInfo,
+    TaskStatus,
+)
 from uv_msgs.srv import ExecTask, RunTask
 
 from uv_task.line_follower import LineFollower
@@ -26,6 +33,25 @@ from uv_task.line_follower import LineFollower
 
 class TaskRunnerNode(Node):
     """Task runner: JSON task loader and sequential executor."""
+
+    # Classes exported by uv_perception/vision.py's box model.
+    CLASS_YELLOW_SECTOR = 0
+    CLASS_RED_SECTOR = 1
+    CLASS_GREEN_SECTOR = 2
+    CLASS_ARROW = 3
+    CLASS_START = 4
+    CLASS_BASKET = 7
+    CLASS_ARUCO_TAG = 8
+
+    # Firmware-facing command values on /task/device_command.  The message
+    # already exists in uv_msgs; hardware firmware only needs to subscribe to
+    # this topic and translate these command values to its local drivers.
+    CMD_SAMPLE_WATER = 1
+    CMD_DROP_BEACON = 2
+    CMD_LED_OFF = 0
+    CMD_LED_YELLOW = 1
+    CMD_LED_GREEN = 2
+    CMD_LED_RED = 3
 
     def __init__(self):
         super().__init__('task_runner')
@@ -38,6 +64,14 @@ class TaskRunnerNode(Node):
         self._cmd_z = 0.0
         self._cmd_yaw = 0.0
         self.objects = ObjectPositionArray()
+        self._perception_lock = threading.RLock()
+        self._detections = {}
+        self._front_stitched_image = None
+        self._front_stitched_received_at = 0.0
+        self._pose_info = None
+        self._pose_info_received_at = 0.0
+        self._aruco_marker_id = None
+        self._selected_sector = None
 
         self.tasks = []
         self.current_index = 0
@@ -55,6 +89,34 @@ class TaskRunnerNode(Node):
         # Camera parameters (used by LineFollower sub-task via get_parameter)
         self.declare_parameter('down_image_width', 1280.0)
         self.declare_parameter('down_image_height', 960.0)
+
+        # Fixed WUURC world targets and depths are intentionally kept in
+        # config/tasks.json.  Only reusable visual and actuator tuning stays
+        # here as ROS parameters.
+        self.declare_parameter('wuurc_surface_delta_z', 0.50)
+        self.declare_parameter('wuurc_surface_dwell_s', 1.0)
+
+        # Single down-camera visual centring.  The gains map image error to
+        # small FRD BMOVE steps.  Signs are installation-specific and are
+        # deliberately parameters, rather than hidden camera assumptions.
+        self.declare_parameter('wuurc_align_confidence', 0.80)
+        self.declare_parameter('wuurc_align_pixel_tolerance', 35.0)
+        self.declare_parameter('wuurc_align_max_step_m', 0.12)
+        self.declare_parameter('wuurc_align_m_per_pixel_x', 0.00055)
+        self.declare_parameter('wuurc_align_m_per_pixel_y', 0.00055)
+        self.declare_parameter('wuurc_align_body_x_sign', -1.0)
+        self.declare_parameter('wuurc_align_body_y_sign', -1.0)
+        self.declare_parameter('wuurc_align_timeout_s', 25.0)
+        self.declare_parameter('wuurc_detection_max_age_s', 0.60)
+        self.declare_parameter('wuurc_pose_max_age_s', 1.0)
+        self.declare_parameter('wuurc_aruco_timeout_s', 12.0)
+        self.declare_parameter('wuurc_led_duration_s', 3.0)
+
+        # The command topic avoids a dependency on the placeholder hardware
+        # manager.  These values are intentionally configurable to match the
+        # STM32 command table when it becomes available.
+        self.declare_parameter('wuurc_sample_command', self.CMD_SAMPLE_WATER)
+        self.declare_parameter('wuurc_drop_command', self.CMD_DROP_BEACON)
 
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {
@@ -92,6 +154,14 @@ class TaskRunnerNode(Node):
             'navigate': self._task_navigate,
             'wait': self._task_wait,
             'follow_line': self._task_follow_line,
+            'sync_ins_pose': self._task_sync_ins_pose,
+            'align_downward': self._task_align_downward,
+            'surface_attempt': self._task_surface_attempt,
+            'recognize_aruco': self._task_recognize_aruco,
+            'select_aruco_sector': self._task_select_aruco_sector,
+            'show_selected_sector_led': self._task_show_selected_sector_led,
+            'drop_beacon': self._task_drop_beacon,
+            'take_water_sample': self._task_take_water_sample,
         }
 
         # Action client
@@ -102,9 +172,24 @@ class TaskRunnerNode(Node):
         # Subscribers
         self.create_subscription(
             ObjectPositionArray, '/perception/objects', self._objects_cb, 10)
+        for camera_name in (
+                'front_left', 'front_right', 'down_left', 'down_right'):
+            self.create_subscription(
+                DetectionArray,
+                f'/perception/detection/{camera_name}',
+                lambda msg, name=camera_name: self._detections_cb(name, msg),
+                10)
+        # ArUco IDs are not part of DetectionArray.  We use the same camera
+        # stream consumed by vision.py, but decode the 4x4_1000 ID locally.
+        self.create_subscription(
+            Image, '/auv/front_cam/stitched', self._front_stitched_cb, 2)
+        self.create_subscription(
+            PoseInfo, '/basic_motion/pose_info', self._pose_info_cb, 10)
 
         # Publishers
         self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
+        self.pub_device_command = self.create_publisher(
+            DeviceCommand, '/task/device_command', 10)
 
         # Services
         self.create_service(RunTask, '/task/run', self._run_task_cb)
@@ -119,6 +204,23 @@ class TaskRunnerNode(Node):
 
     def _objects_cb(self, msg: ObjectPositionArray):
         self.objects = msg
+
+    def _detections_cb(self, camera_name: str, msg: DetectionArray):
+        """Cache the newest vision.py output for low-latency task decisions."""
+        with self._perception_lock:
+            self._detections[camera_name] = (time.monotonic(), msg)
+
+    def _front_stitched_cb(self, msg: Image):
+        """Cache the raw front image used only for ArUco ID decoding."""
+        with self._perception_lock:
+            self._front_stitched_image = msg
+            self._front_stitched_received_at = time.monotonic()
+
+    def _pose_info_cb(self, msg: PoseInfo):
+        """Cache the INS pose published by basic_motion (not position.py)."""
+        with self._perception_lock:
+            self._pose_info = msg
+            self._pose_info_received_at = time.monotonic()
 
     # ========================================================================
     # Task loading
@@ -164,9 +266,19 @@ class TaskRunnerNode(Node):
                 if not success:
                     self.get_logger().warn(
                         f'[{self.current_index + 1}/{total}] {name} FAILED')
+                    if params.get('stop_on_failure', False):
+                        self.stopped = True
+                        self.get_logger().error(
+                            f'[{self.current_index + 1}/{total}] {name} failure '
+                            'requested task-list stop')
             except Exception as e:
                 self.get_logger().error(
                     f'[{self.current_index + 1}/{total}] {name} exception: {e}')
+                if params.get('stop_on_failure', False):
+                    self.stopped = True
+                    self.get_logger().error(
+                        f'[{self.current_index + 1}/{total}] {name} exception '
+                        'requested task-list stop')
 
             self.current_index += 1
 
@@ -244,11 +356,11 @@ class TaskRunnerNode(Node):
         self._active_goal_handle = goal_handle
         if not goal_handle.accepted:
             self._active_goal_handle = None
-            self.get_logger().error(f'Goal rejected by server')
+            self.get_logger().error('Goal rejected by server')
             return False, 'Goal rejected by server'
 
         if not quiet:
-            self.get_logger().info(f'Goal accepted, waiting for result...')
+            self.get_logger().info('Goal accepted, waiting for result...')
 
         result_future = goal_handle.get_result_async()
         while rclpy.ok() and not self.stopped and not result_future.done():
@@ -269,7 +381,7 @@ class TaskRunnerNode(Node):
                 f'{type_name} FAILED: {result.message} '
                 f'target=[{t_str}]')
         elif not quiet:
-            self.get_logger().info(f'Goal result: SUCCESS')
+            self.get_logger().info('Goal result: SUCCESS')
         return result.success, result.message
 
     # ========================================================================
@@ -515,13 +627,22 @@ class TaskRunnerNode(Node):
             self._cmd_z = p['z']
         return success
 
+    def _resolve_wtravelxy_target(self, p: dict) -> tuple[float, float]:
+        """Resolve a literal target or the sector chosen from an ArUco ID."""
+        if p.get('target') != 'selected_sector':
+            return float(p['x']), float(p['y'])
+        if self._selected_sector is None:
+            raise ValueError('No selected sector; run select_aruco_sector first')
+        return self._selected_sector['x'], self._selected_sector['y']
+
     def _task_wtravelxy(self, p: dict) -> bool:
-        dx, dy = p['x'] - self._cmd_x, p['y'] - self._cmd_y
+        x, y = self._resolve_wtravelxy_target(p)
+        dx, dy = x - self._cmd_x, y - self._cmd_y
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WTRAVEL, [dx, dy, 0.0, 0.0], "xy")
         self.get_logger().info(f'wtravelxy: {msg}')
         if success:
-            self._cmd_x, self._cmd_y = p['x'], p['y']
+            self._cmd_x, self._cmd_y = x, y
         return success
 
     def _task_wtravelxyz(self, p: dict) -> bool:
@@ -613,6 +734,335 @@ class TaskRunnerNode(Node):
         finally:
             follower.destroy()
 
+    # --- WUURC 2026 AUV mission, starting at the pipeline basket ---
+
+    def _wuurc_param(self, name: str, overrides: dict):
+        """Return a task override, otherwise the declared ROS parameter."""
+        return overrides.get(name, self.get_parameter(f'wuurc_{name}').value)
+
+    def _sync_command_pose_from_ins(self, max_age_s: float = 1.0) -> bool:
+        """Rebase the task command tracker on current BasicMotion INS pose.
+
+        LineFollower can receive a successful small action while the vehicle is
+        physically constrained.  Its commanded-pose integration then differs
+        from the real vehicle pose.  Before an absolute field transfer, use
+        ``PoseInfo`` from basic_motion to prevent a stale large delta.
+        """
+        with self._perception_lock:
+            pose = self._pose_info
+            received_at = self._pose_info_received_at
+        if pose is None or time.monotonic() - received_at > max_age_s:
+            self.get_logger().error(
+                'WUURC cannot synchronize command pose: '
+                'basic_motion/pose_info is missing or stale')
+            return False
+        self._cmd_x = float(pose.robot_x)
+        self._cmd_y = float(pose.robot_y)
+        self._cmd_z = float(pose.robot_z)
+        self._cmd_yaw = float(pose.robot_yaw)
+        self.get_logger().info(
+            f'WUURC INS handoff pose: '
+            f'({self._cmd_x:.2f}, {self._cmd_y:.2f}, '
+            f'{self._cmd_z:.2f}, {self._cmd_yaw:.1f}°)')
+        return True
+
+    def _latest_detection(self, class_id: int, camera_name: str,
+                          min_confidence: float, max_age_s: float):
+        """Return the freshest, highest-confidence detection of one class."""
+        with self._perception_lock:
+            cached = self._detections.get(camera_name)
+        if cached is None:
+            return None
+        received_at, array = cached
+        if time.monotonic() - received_at > max_age_s:
+            return None
+        candidates = [
+            det for det in array.detections
+            if det.class_id == class_id and det.confidence >= min_confidence
+        ]
+        return max(candidates, key=lambda det: det.confidence) if candidates else None
+
+    def _apply_body_delta(self, dx: float, dy: float, dz: float = 0.0,
+                          dyaw: float = 0.0):
+        """Update the local command tracker after a successful FRD BMOVE."""
+        yaw = math.radians(self._cmd_yaw)
+        self._cmd_x += math.cos(yaw) * dx - math.sin(yaw) * dy
+        self._cmd_y += math.sin(yaw) * dx + math.cos(yaw) * dy
+        self._cmd_z += dz
+        self._cmd_yaw = (self._cmd_yaw + dyaw + 180.0) % 360.0 - 180.0
+
+    def _align_downward(self, class_id: int, label: str,
+                        overrides: dict) -> bool:
+        """Centre a YOLO box with one down-facing camera and FRD micro-steps.
+
+        This deliberately uses ``vision.py``'s ``down_left`` DetectionArray,
+        not the unreliable PositionNode.  Horizontal image error is corrected
+        through body-Y and vertical image error through body-X.  The two signs
+        are parameters because camera mounting orientation differs between the
+        simulator and the vehicle after commissioning.
+        """
+        timeout_s = float(self._wuurc_param('align_timeout_s', overrides))
+        deadline = time.monotonic() + timeout_s
+        confidence = float(self._wuurc_param('align_confidence', overrides))
+        max_age = float(self._wuurc_param('detection_max_age_s', overrides))
+        tolerance = float(self._wuurc_param('align_pixel_tolerance', overrides))
+        max_step = float(self._wuurc_param('align_max_step_m', overrides))
+        image_x = float(self.get_parameter('down_image_width').value) / 2.0
+        image_y = float(self.get_parameter('down_image_height').value) / 2.0
+
+        while time.monotonic() < deadline and not self.stopped:
+            det = self._latest_detection(
+                class_id, 'down_left', confidence, max_age)
+            if det is None:
+                time.sleep(0.05)
+                continue
+
+            error_x = det.pixel_x - image_x
+            error_y = det.pixel_y - image_y
+            if abs(error_x) <= tolerance and abs(error_y) <= tolerance:
+                self.get_logger().info(
+                    f'WUURC down alignment complete: {label}, '
+                    f'pixel_error=({error_x:.1f}, {error_y:.1f})')
+                return True
+
+            body_x = float(self._wuurc_param('align_body_x_sign', overrides))
+            body_x *= error_y * float(self._wuurc_param(
+                'align_m_per_pixel_y', overrides))
+            body_y = float(self._wuurc_param('align_body_y_sign', overrides))
+            body_y *= error_x * float(self._wuurc_param(
+                'align_m_per_pixel_x', overrides))
+            body_x = max(-max_step, min(max_step, body_x))
+            body_y = max(-max_step, min(max_step, body_y))
+
+            success, message = self._send_action_goal(
+                BasicMotion.Goal.BMOVE, [body_x, body_y, 0.0, 0.0], 'xy',
+                timeout=8.0, quiet=True)
+            if not success:
+                self.get_logger().warn(
+                    f'WUURC down alignment failed for {label}: {message}')
+                return False
+            self._apply_body_delta(body_x, body_y)
+
+        self.get_logger().warn(f'WUURC down alignment timeout: {label}')
+        return False
+
+    def _try_surface_and_restore(self, overrides: dict,
+                                 restore: bool = True) -> bool:
+        """Attempt the required 0.5 m ascent, safely restoring depth on failure.
+
+        The current simulation vehicle may reject a complete surfacing target.
+        A failed action is non-fatal: it restores the commanded depth and lets
+        the remaining scoring tasks continue.  During task acquisition, a
+        successful ascent is also restored because ArUco recognition happens
+        after re-submerging.
+        """
+        original_depth = self._cmd_z
+        ascent = abs(float(self._wuurc_param('surface_delta_z', overrides)))
+        success, message = self._send_action_goal(
+            BasicMotion.Goal.BMOVE, [0.0, 0.0, -ascent, 0.0], 'z',
+            timeout=20.0)
+        if not success:
+            self.get_logger().warn(
+                f'WUURC surface attempt unavailable: {message}; '
+                f'restoring z={original_depth:.2f}')
+            self._task_setz({'z': original_depth})
+            return False
+
+        self._cmd_z -= ascent
+        time.sleep(float(self._wuurc_param('surface_dwell_s', overrides)))
+        if restore:
+            if not self._task_setz({'z': original_depth}):
+                self.get_logger().error('WUURC failed to re-submerge after surface')
+                return False
+        return True
+
+    def _publish_device_command(self, device_type: int, command: int,
+                                value: float, description: str):
+        """Publish one non-blocking hardware command without using hw_manager."""
+        msg = DeviceCommand()
+        msg.device_type = device_type
+        msg.command = int(command)
+        msg.value = float(value)
+        self.pub_device_command.publish(msg)
+        self.get_logger().info(
+            f'WUURC device command: {description} '
+            f'(type={device_type}, command={command}, value={value:.1f})')
+
+    def _decode_aruco_id(self, max_age_s: float):
+        """Decode one 4x4_1000 ArUco ID from the current front-left image.
+
+        ``vision.py`` already confirms the board as YOLO class 8.  Its message
+        intentionally has no marker-ID field, so the ID is decoded here from
+        the original stitched stream without changing the perception package.
+        """
+        with self._perception_lock:
+            image = self._front_stitched_image
+            received_at = self._front_stitched_received_at
+        if image is None or time.monotonic() - received_at > max_age_s:
+            return None
+        if image.encoding not in ('bgr8', 'rgb8') or image.width < 2:
+            return None
+
+        try:
+            import cv2
+            import numpy as np
+
+            expected_row_bytes = image.width * 3
+            if image.step < expected_row_bytes or len(image.data) < image.height * image.step:
+                return None
+            frame = np.frombuffer(image.data, dtype=np.uint8).reshape(
+                image.height, image.step)
+            frame = frame[:, :expected_row_bytes].reshape(
+                image.height, image.width, 3)
+            color_code = (
+                cv2.COLOR_RGB2GRAY if image.encoding == 'rgb8'
+                else cv2.COLOR_BGR2GRAY)
+            dictionary = cv2.aruco.getPredefinedDictionary(
+                cv2.aruco.DICT_4X4_1000)
+            if hasattr(cv2.aruco, 'ArucoDetector'):
+                detector = cv2.aruco.ArucoDetector(
+                    dictionary, cv2.aruco.DetectorParameters())
+                detect = detector.detectMarkers
+            else:
+                def detect(gray):
+                    return cv2.aruco.detectMarkers(gray, dictionary)
+
+            # The simulator publishes a left/right stitched image.  Checking
+            # both halves avoids depending on the camera-side placement of the
+            # board and keeps the decoder compatible with a single front camera.
+            for half in (frame[:, :image.width // 2],
+                         frame[:, image.width // 2:]):
+                gray = cv2.cvtColor(half, color_code)
+                _corners, ids, _rejected = detect(gray)
+                if ids is None:
+                    continue
+                for marker in ids.reshape(-1):
+                    marker_id = int(marker)
+                    if marker_id in (1, 2, 3, 4, 5, 6):
+                        return marker_id
+            return None
+        except Exception as exc:
+            self.get_logger().warn(f'WUURC ArUco decoder unavailable: {exc}')
+            return None
+
+    def _recognize_aruco(self, overrides: dict):
+        """Wait for a valid task ID (1..6) at the measured observation point."""
+        timeout_s = float(self._wuurc_param('aruco_timeout_s', overrides))
+        max_age_s = float(self._wuurc_param('detection_max_age_s', overrides))
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline and not self.stopped:
+            marker_id = self._decode_aruco_id(max_age_s)
+            if marker_id in (1, 2, 3, 4, 5, 6):
+                self.get_logger().info(f'WUURC ArUco task received: id={marker_id}')
+                return marker_id
+            time.sleep(0.05)
+        self.get_logger().error('WUURC failed to recognize ArUco ID 1..6')
+        return None
+
+    def _sector_for_aruco(self, marker_id: int):
+        """Map regulation IDs 1..6 to a scene sector, class, and LED code."""
+        if marker_id in (1, 2):
+            return {
+                'name': 'yellow_sector', 'x': 1.75, 'y': -2.80,
+                'class_id': self.CLASS_YELLOW_SECTOR,
+                'led_command': self.CMD_LED_YELLOW,
+            }
+        if marker_id in (3, 4):
+            return {
+                'name': 'green_sector', 'x': 3.50, 'y': -2.80,
+                'class_id': self.CLASS_GREEN_SECTOR,
+                'led_command': self.CMD_LED_GREEN,
+            }
+        if marker_id in (5, 6):
+            return {
+                'name': 'red_sector', 'x': 5.25, 'y': -2.80,
+                'class_id': self.CLASS_RED_SECTOR,
+                'led_command': self.CMD_LED_RED,
+            }
+        return None
+
+    def _task_sync_ins_pose(self, p: dict) -> bool:
+        """Synchronize the command tracker before a JSON world move."""
+        max_age = float(self._wuurc_param('pose_max_age_s', p))
+        return self._sync_command_pose_from_ins(max_age)
+
+    def _task_align_downward(self, p: dict) -> bool:
+        """Centre a literal YOLO class or the class of the selected sector."""
+        if p.get('target') == 'selected_sector':
+            if self._selected_sector is None:
+                self.get_logger().error(
+                    'Downward alignment skipped: no selected sector')
+                return False
+            return self._align_downward(
+                self._selected_sector['class_id'],
+                self._selected_sector['name'], p)
+        class_id = int(p['class_id'])
+        return self._align_downward(class_id, p.get('label', str(class_id)), p)
+
+    def _task_surface_attempt(self, p: dict) -> bool:
+        """Attempt a configured ascent, restoring depth unless requested otherwise."""
+        return self._try_surface_and_restore(
+            p, restore=bool(p.get('restore', True)))
+
+    def _task_recognize_aruco(self, p: dict) -> bool:
+        """Decode and retain the current 4x4_1000 ArUco task ID."""
+        marker_id = self._recognize_aruco(p)
+        fallback_id = p.get('fallback_id')
+        if marker_id is None and fallback_id in (1, 2, 3, 4, 5, 6):
+            marker_id = int(fallback_id)
+            self.get_logger().warn(
+                f'WUURC ArUco decode timed out; using explicit configured '
+                f'fallback ID {marker_id}')
+        self._aruco_marker_id = marker_id
+        self._selected_sector = None
+        return marker_id is not None
+
+    def _task_select_aruco_sector(self, p: dict) -> bool:
+        """Resolve the retained ArUco ID into a dynamic WTRAVELXY target."""
+        sector = self._sector_for_aruco(self._aruco_marker_id)
+        if sector is None:
+            self.get_logger().error(
+                'Sector selection failed: no valid ArUco ID')
+            return False
+        self._selected_sector = sector
+        self.get_logger().info(
+            f'Selected {sector["name"]} for ArUco {self._aruco_marker_id}')
+        return True
+
+    def _task_show_selected_sector_led(self, p: dict) -> bool:
+        """Display the colour corresponding to the selected ArUco sector."""
+        if self._selected_sector is None or self._aruco_marker_id is None:
+            self.get_logger().error('Sector LED skipped: no selected sector')
+            return False
+        self._publish_device_command(
+            DeviceCommand.DEVICE_LED,
+            self._selected_sector['led_command'], float(self._aruco_marker_id),
+            f'show task sector for ArUco {self._aruco_marker_id}')
+        time.sleep(float(self._wuurc_param('led_duration_s', p)))
+        self._publish_device_command(
+            DeviceCommand.DEVICE_LED, self.CMD_LED_OFF, 0.0, 'turn LED off')
+        return True
+
+    def _task_drop_beacon(self, p: dict) -> bool:
+        """Publish exactly one beacon drop command after sector alignment."""
+        if self._selected_sector is None or self._aruco_marker_id is None:
+            self.get_logger().error('Beacon drop skipped: no selected sector')
+            return False
+        self._publish_device_command(
+            DeviceCommand.DEVICE_SERVO,
+            int(self._wuurc_param('drop_command', p)),
+            float(self._aruco_marker_id),
+            f'drop beacon into {self._selected_sector["name"]}')
+        return True
+
+    def _task_take_water_sample(self, p: dict) -> bool:
+        """Publish the one lower-computer command for environmental sampling."""
+        self._publish_device_command(
+            DeviceCommand.DEVICE_ARM,
+            int(self._wuurc_param('sample_command', p)), 1.0,
+            'take water sample')
+        return True
+
     # ========================================================================
     # Service handlers
     # ========================================================================
@@ -649,7 +1099,7 @@ class TaskRunnerNode(Node):
         self.stopped = True
         if self._active_goal_handle is not None:
             self.get_logger().info('Cancelling active action goal')
-            cancel_future = self._action_client.async_cancel_goal(
+            self._action_client.async_cancel_goal(
                 self._active_goal_handle)
             self._active_goal_handle = None
         response.success = True

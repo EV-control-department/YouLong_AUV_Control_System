@@ -275,3 +275,4 @@ ros2 run uv_perception vision --ros-args -p publish_images:=true
 2. 相机内参硬编码在 `position.py` 中，`config/*.npz` 立体校准文件未被使用
 3. 需要 AUV 运动产生视差才能定位（静态悬停时无法更新位置）
 4. 最大感知距离 50m，超过此范围的目标被丢弃
+

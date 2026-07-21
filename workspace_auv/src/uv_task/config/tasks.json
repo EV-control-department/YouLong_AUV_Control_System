@@ -1,15 +1,35 @@
 {
   "tasks": [
     {"name": "start", "params": {}},
-    {"name": "wait", "params": {"duration": 0.0}},
-    {"name": "setz", "params": {"z": 0.4}},
-    {"name": "wtravelxy", "params": {"x": 2.0, "y": 0.0}},
-    {"name": "follow_line", "params": {
-      "timeout": 120.0,
-      "stop_when_marker": true,
-      "marker_class_ids": [7],
-      "forward_step": 0.10
-    }}
+    {"name": "wait", "params": {"duration": 2.0}},
+    {"name": "sync_ins_pose", "params": {"stop_on_failure": true}},
+    {"name": "wtravelxy", "params": {"x": 5.88, "y": 2.80}},
+    {"name": "take_water_sample", "params": {}},
+
+    {"name": "sync_ins_pose", "params": {"stop_on_failure": true}},
+    {"name": "wtravelxy", "params": {"x": 3.50, "y": 2.80}},
+    {"name": "align_downward", "params": {"class_id": 3, "label": "arrow"}},
+    {"name": "surface_attempt", "params": {"restore": true}},
+
+    {"name": "sync_ins_pose", "params": {"stop_on_failure": true}},
+    {"name": "wtravelxy", "params": {"x": 0.85, "y": 3.15}},
+    {"name": "setz", "params": {"z": 1.20}},
+    {"name": "setrz", "params": {"rz": 180.0}},
+    {"name": "recognize_aruco", "params": {"fallback_id": 4, "stop_on_failure": true}},
+    {"name": "select_aruco_sector", "params": {"stop_on_failure": true}},
+    {"name": "show_selected_sector_led", "params": {}},
+
+    {"name": "setz", "params": {"z": 0.40}},
+    {"name": "sync_ins_pose", "params": {"stop_on_failure": true}},
+    {"name": "wtravelxy", "params": {"target": "selected_sector", "stop_on_failure": true}},
+    {"name": "align_downward", "params": {"target": "selected_sector", "stop_on_failure": true}},
+    {"name": "drop_beacon", "params": {"stop_on_failure": true}},
+
+    {"name": "setz", "params": {"z": 0.40}},
+    {"name": "sync_ins_pose", "params": {"stop_on_failure": true}},
+    {"name": "wtravelxy", "params": {"x": 10.50, "y": -2.80}},
+    {"name": "align_downward", "params": {"class_id": 4, "label": "start"}},
+    {"name": "surface_attempt", "params": {"restore": false}}
 
   ]
 }
