@@ -9,8 +9,32 @@ import math
 import threading
 import time
 
+import numpy as np
+
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import Detection, DetectionArray, LineState
+from uv_msgs.msg import Detection, DetectionArray, LineState, PoseInfo
+
+
+# ==========================================================================
+# 下视双目相机参数（与 position.py CAM_PARAMS 保持一致）
+# ==========================================================================
+
+_DOWN_HFOV = 87.19
+_DOWN_WIDTH = 1280
+_DOWN_HEIGHT = 960
+_DOWN_FX = _DOWN_WIDTH / (2.0 * math.tan(math.radians(_DOWN_HFOV) / 2.0))
+_DOWN_FY = _DOWN_FX
+_DOWN_CX = _DOWN_WIDTH / 2.0
+_DOWN_CY = _DOWN_HEIGHT / 2.0
+
+# 下视相机在机体 NED 系中的安装偏移
+_DOWN_OFFSET_LEFT = np.array([-0.13, -0.05, 0.0645])
+_DOWN_OFFSET_RIGHT = np.array([-0.13, 0.05, 0.0645])
+
+# 下视相机 optical → body NED 旋转矩阵
+_DOWN_OPTICAL_TO_BODY = np.array([[0, -1, 0],
+                                   [1, 0, 0],
+                                   [0, 0, 1]])
 
 
 # ==========================================================================
@@ -30,6 +54,39 @@ def _wrap_degrees(angle: float) -> float:
     while angle < -180.0:
         angle += 360.0
     return angle
+
+
+def _euler_to_rotation_matrix(rx_deg: float, ry_deg: float,
+                               rz_deg: float) -> 'np.ndarray':
+    """ZYX 欧拉角 (度) → 旋转矩阵（与 position.py 一致）。"""
+    rx, ry, rz = math.radians(rx_deg), math.radians(ry_deg), math.radians(rz_deg)
+    cx, sx = math.cos(rx), math.sin(rx)
+    cy, sy = math.cos(ry), math.sin(ry)
+    cz, sz = math.cos(rz), math.sin(rz)
+    return np.array([
+        [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+        [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+        [-sy,     cy * sx,                cy * cx],
+    ])
+
+
+def _ray_intersection_midpoint(o1: 'np.ndarray', d1: 'np.ndarray',
+                                o2: 'np.ndarray', d2: 'np.ndarray'):
+    """两射线公垂线中点。返回 (x,y,z) 或 None（平行/交点在身后）。"""
+    w = o1 - o2
+    a = float(np.dot(d1, d1))
+    b = float(np.dot(d1, d2))
+    c_val = float(np.dot(d2, d2))
+    denom = a * c_val - b * b
+    if abs(denom) < 1e-10:
+        return None
+    e = float(np.dot(d1, w))
+    f = float(np.dot(d2, w))
+    t1 = (b * f - c_val * e) / denom
+    t2 = (a * f - b * e) / denom
+    if t1 <= 0 or t2 <= 0:
+        return None
+    return (o1 + d1 * t1 + o2 + d2 * t2) / 2.0
 
 
 def _apply_body_delta(cmd_x, cmd_y, cmd_z, cmd_yaw, dx, dy, dz, dyaw):
@@ -61,6 +118,7 @@ class LineFollower:
         self._lock = threading.RLock()
         self._line_states = {}       # camera_name → (monotonic, LineState)
         self._down_detections = {}   # camera_name → (monotonic, DetectionArray)
+        self._robot_pose = None      # (x, y, z, roll_deg, pitch_deg, yaw_deg)
         self._subs = []
         for cam in ('down_left', 'down_right'):
             self._subs.append(node.create_subscription(
@@ -69,6 +127,8 @@ class LineFollower:
             self._subs.append(node.create_subscription(
                 DetectionArray, f'/perception/detection/{cam}',
                 lambda msg, c=cam: self._det_cb(c, msg), 10))
+        self._subs.append(node.create_subscription(
+            PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10))
 
         # ── PID 状态（横向和偏航独立控制）──
         # 横向 PID: center_error → dy (把 AUV 推回管道中心)
@@ -90,8 +150,9 @@ class LineFollower:
         self._search_spiral_dir = 0    # 螺旋方向计数 (0…7)
         self._search_spiral_size = float(params.get('search_spiral_start', 0.02))
 
-        # ── 三角形标记抑制 ──
+        # ── 三角形/正方形标记抑制 ──
         self._triangle_approached = False  # True=刚处理过三角形，跳过检测
+        self._square_approached = False    # True=刚处理过正方形，跳过检测
 
         self._logger.info(
             f'LineFollower created: timeout={params.get("timeout", 120)}s')
@@ -105,6 +166,10 @@ class LineFollower:
     def _det_cb(self, camera_name: str, msg: DetectionArray):
         with self._lock:
             self._down_detections[camera_name] = (time.monotonic(), msg)
+
+    def _pose_cb(self, msg: PoseInfo):
+        self._robot_pose = (msg.robot_x, msg.robot_y, msg.robot_z,
+                            msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
 
     # ── 感知融合 ──────────────────────────────────────────────────────
 
@@ -212,15 +277,87 @@ class LineFollower:
                             self._logger.info(
                                 'LineFollower: triangle (class=5) detected, '
                                 'approaching')
-                            # 1. 闭环接近 100 次
+                            # 1. 闭环接近 100 次（双目三角测量）
                             for i in range(100):
                                 if self._stopped:
                                     return False
-                                if not self._node._move_to_nearest_object_xy(5):
+                                target = self._triangulate_object(5)
+                                if target is None:
                                     self._logger.warn(
-                                        f'Approach #{i+1}: no object found, '
-                                        f'stopping after {i} iterations')
+                                        f'Approach #{i+1}: triangulation '
+                                        f'failed, stopping after {i} iterations')
                                     break
+                                self._logger.info(
+                                    f'Approach #{i+1}: target='
+                                    f'({target[0]:.2f}, {target[1]:.2f}, '
+                                    f'{target[2]:.2f})')
+                                self._node._send_action_goal(
+                                    BasicMotion.Goal.SET,
+                                    [target[0], target[1],
+                                     self._node._cmd_z, self._node._cmd_yaw],
+                                    'xy', timeout=15.0, quiet=True)
+                                self._node._cmd_x = target[0]
+                                self._node._cmd_y = target[1]
+                            # 2. 下沉 0.5m → 上升 0.5m
+                            self._node._send_action_goal(
+                                BasicMotion.Goal.BMOVE,
+                                [0.0, 0.0, 0.5, 0.0], 'z',
+                                timeout=15.0, quiet=True)
+                            self._node._cmd_z += 0.5
+                            self._node._send_action_goal(
+                                BasicMotion.Goal.BMOVE,
+                                [0.0, 0.0, -0.5, 0.0], 'z',
+                                timeout=15.0, quiet=True)
+                            self._node._cmd_z -= 0.5
+                            # 3. 标记已处理
+                            self._triangle_approached = True
+                            self._logger.info(
+                                'LineFollower: triangle handled, flag set to 1')
+
+                # ── 正方形标记处理 ──
+                # 抑制恢复：正方形 bbox 中心在图像上 1/3 区域 → 新正方形出现
+                det = self._best_detection([6])
+                if det is not None:
+                    bbox_center_y = (det[0].bbox_y1 + det[0].bbox_y2) / 2.0
+                    height = float(self._params.get(
+                        'image_height',
+                        self._node.get_parameter('down_image_height').value))
+                    if self._square_approached:
+                        if bbox_center_y < height / 3.0:
+                            self._square_approached = False
+                            self._logger.info(
+                                'LineFollower: square in upper 1/3, '
+                                'flag reset to 0')
+
+                    if (not self._square_approached
+                            and bbox_center_y > height / 5.0):
+                        det = self._best_detection([6])
+                        if det is not None:
+                            self._logger.info(
+                                'LineFollower: square (class=6) detected, '
+                                'approaching')
+                            # 1. 闭环接近 100 次（双目三角测量）
+                            for i in range(100):
+                                if self._stopped:
+                                    return False
+                                target = self._triangulate_object(6)
+                                if target is None:
+                                    self._logger.warn(
+                                        f'Square approach #{i+1}: '
+                                        f'triangulation failed, stopping '
+                                        f'after {i} iterations')
+                                    break
+                                self._logger.info(
+                                    f'Square approach #{i+1}: target='
+                                    f'({target[0]:.2f}, {target[1]:.2f}, '
+                                    f'{target[2]:.2f})')
+                                self._node._send_action_goal(
+                                    BasicMotion.Goal.SET,
+                                    [target[0], target[1],
+                                     self._node._cmd_z, self._node._cmd_yaw],
+                                    'xy', timeout=15.0, quiet=True)
+                                self._node._cmd_x = target[0]
+                                self._node._cmd_y = target[1]
                             # 2. 自转 360°（3 × 120° BMOVE rz）
                             self._logger.info(
                                 'LineFollower: rotating 360° (3×120°)')
@@ -233,9 +370,9 @@ class LineFollower:
                                     timeout=15.0, quiet=True)
                                 self._node._cmd_yaw += 120.0
                             # 3. 标记已处理
-                            self._triangle_approached = True
+                            self._square_approached = True
                             self._logger.info(
-                                'LineFollower: triangle handled, flag set to 1')
+                                'LineFollower: square handled, flag set to 1')
             elif self._lost_count < self._lost_max and self._last_valid_line is not None:
                 # 短暂丢帧 → 用最后的有效方向盲跟一小步
                 self._lost_count += 1
@@ -459,6 +596,73 @@ class LineFollower:
         pid_max = abs(float(output_limit))
         output = _clamp(output, -pid_max, pid_max)
         return output, output
+
+    # ── 双目三角测量 ──────────────────────────────────────────────────
+
+    def _stereo_pair(self, class_id: int):
+        """返回左右目对 class_id 的最佳匹配检测 ``(left_det, right_det)``。
+
+        任一眼缺失或过期则返回 None。
+        """
+        max_age = float(self._params.get('perception_max_age', 0.60))
+        now = time.monotonic()
+        with self._lock:
+            left_entry = self._down_detections.get('down_left')
+            right_entry = self._down_detections.get('down_right')
+
+        if left_entry is None or right_entry is None:
+            return None
+        left_t, left_msg = left_entry
+        right_t, right_msg = right_entry
+        if now - left_t > max_age or now - right_t > max_age:
+            return None
+
+        best_left = max(
+            (d for d in left_msg.detections if d.class_id == class_id),
+            key=lambda d: d.confidence, default=None)
+        best_right = max(
+            (d for d in right_msg.detections if d.class_id == class_id),
+            key=lambda d: d.confidence, default=None)
+        if best_left is None or best_right is None:
+            return None
+        return (best_left, best_right)
+
+    def _pixel_to_world_ray(self, px: float, py: float,
+                             offset: 'np.ndarray', R_robot: 'np.ndarray',
+                             robot_pos: 'np.ndarray'):
+        """像素坐标 → 世界系射线 (origin, direction)。"""
+        v_cam = np.array([(px - _DOWN_CX) / _DOWN_FX,
+                          (py - _DOWN_CY) / _DOWN_FY, 1.0])
+        v_cam = v_cam / np.linalg.norm(v_cam)
+        v_body = _DOWN_OPTICAL_TO_BODY @ v_cam
+        v_world = R_robot @ v_body
+        v_world = v_world / np.linalg.norm(v_world)
+        origin = robot_pos + R_robot @ offset
+        return origin, v_world
+
+    def _triangulate_object(self, class_id: int):
+        """对 class_id 进行双目三角测量，返回世界坐标 ``(x, y, z)`` 或 None。"""
+        pair = self._stereo_pair(class_id)
+        if pair is None or self._robot_pose is None:
+            return None
+
+        left_det, right_det = pair
+        rx, ry, rz, roll, pitch, yaw = self._robot_pose
+
+        R_robot = _euler_to_rotation_matrix(roll, pitch, yaw)
+        robot_pos = np.array([rx, ry, rz])
+
+        l_origin, l_dir = self._pixel_to_world_ray(
+            left_det.pixel_x, left_det.pixel_y,
+            _DOWN_OFFSET_LEFT, R_robot, robot_pos)
+        r_origin, r_dir = self._pixel_to_world_ray(
+            right_det.pixel_x, right_det.pixel_y,
+            _DOWN_OFFSET_RIGHT, R_robot, robot_pos)
+
+        pos = _ray_intersection_midpoint(l_origin, l_dir, r_origin, r_dir)
+        if pos is None:
+            return None
+        return (float(pos[0]), float(pos[1]), float(pos[2]))
 
     # ── 资源清理 ──────────────────────────────────────────────────────
 
