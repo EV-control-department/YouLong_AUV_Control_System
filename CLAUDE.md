@@ -293,9 +293,13 @@ TaskRunnerNode._task_follow_line()
   └─ LineFollower (独立子对象，仅在任务执行期间存活)
        ├─ 订阅 /perception/line/down_{left,right}  (LineState)
        ├─ 订阅 /perception/detection/down_{left,right}  (DetectionArray)
+       ├─ 订阅 /basic_motion/pose_info  (PoseInfo, 30Hz) — 用于双目定位
        ├─ execute() → 搜索 → 跟踪 主循环
-       │   ├─ _search_for_line()   # 8方向扩展方框螺旋搜索（仅平移 BMOVE）
-       │   └─ _follow_step()       # 双通道 PID 闭环巡线
+       │   ├─ _search_for_line()            # 8方向扩展方框螺旋搜索（仅平移 BMOVE）
+       │   ├─ _follow_step()                # 双通道 PID 闭环巡线
+       │   ├─ 三角形(class=5) 检测 → 100次双目接近 + 下沉↑0.5m→0.5m + 抑制
+       │   └─ 正方形(class=6) 检测 → 100次双目接近 + 自转 360° + 抑制
+       ├─ _triangulate_object()  # 下视双目三角测量（不依赖 position 节点）
        └─ destroy()  # 清理订阅，释放资源
 ```
 
@@ -342,6 +346,33 @@ TaskRunnerNode._task_follow_line()
 | `heading_pid_output_limit` | float | 6.0 | 偏航 PID 输出限幅 (°) |
 | `max_yaw_step` | float | 3.0 | 最大偏航步长 (°) |
 | `perception_max_age` | float | 0.60 | 感知数据最大有效期 (s) |
+
+**标记处理（三角形/正方形）：**
+
+巡线过程中检测到下视画面中的标记物体时自动触发动作。两者共享相同的抑制/恢复机制。
+
+| 标记 | class_id | 检测到后动作 | 抑制恢复条件 |
+|---|---|---|---|
+| 三角形 | 5 | 100 次双目接近 + 下沉 0.5m → 上升 0.5m | bbox 中心进入图像上 1/3 |
+| 正方形 | 6 | 100 次双目接近 + 自转 360° (3×120° BMOVE rz) | bbox 中心进入图像上 1/3 |
+
+触发条件：标记 bbox 中心在图像下 4/5 区域（防止远处虚警）。
+抑制机制：处理完成后 `_*_approached=True`，同一标记不会重复触发；直到 bbox 进入上 1/3 区域才解除抑制（说明标记已从视野下方移出，露出新标记）。
+
+**双目三角测量（_triangulate_object）：**
+
+不依赖 position 节点的 `ObjectPositionArray`，LineFollower 内部直接用下视双目的 YOLO 检测结果进行三角定位。
+
+```
+左目检测 → pixel_to_world_ray → 世界射线
+右目检测 → pixel_to_world_ray → 世界射线
+         ↓
+  公垂线中点交会 → 目标 3D 世界坐标 → SET xy 接近
+```
+
+- 相机参数与 `position.py` `CAM_PARAMS` 保持一致：HFOV=87.19, fx≈639, offset=(-0.13, ±0.05, 0.0645)
+- 使用 PoseInfo 的完整 6-DOF 姿态 (roll/pitch/yaw) 做射线旋转变换
+- optical→body 旋转矩阵：`[[0,-1,0],[1,0,0],[0,0,1]]`
 
 **LineState 消息 (`/perception/line/{camera_name}`)：**
 

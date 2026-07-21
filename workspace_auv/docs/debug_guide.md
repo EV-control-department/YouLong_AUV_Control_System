@@ -374,12 +374,33 @@ ros2 service call /task/exec uv_msgs/srv/ExecTask \
 | 搜索时移动太快错过管道 | `search_max_step` 太大 | 减小到 0.3m 以下 |
 | 前进步长过大冲出管道 | `forward_step` 太大 | 减小到 0.05-0.08m |
 | 日志淹没问题 | BMOVE per-step 日志太多 | LineFollower 内部用 `quiet=True`，每 20 步才 INFO 一次 |
+| 三角测量返回 None | 左右目未同时检测到标记 | `ros2 topic echo /perception/detection/down_left` 确认双目都有对应 class_id |
+| 标记重复触发 | 抑制未生效 / bbox 位置判断错误 | 检查 `triangle in upper 1/3` / `square in upper 1/3` 日志 |
+| 接近循环停止过早 | 三角测量连续失败 / 目标超出视野 | 检查 `Approach #N: triangulation failed` 日志 |
+
+**标记处理流程：**
+
+| 标记 | class_id | 检测到后动作 |
+|---|---|---|
+| 三角形 | 5 | 100 次双目接近 → 下沉 0.5m → 上升 0.5m |
+| 正方形 | 6 | 100 次双目接近 → 自转 360° (3×120°) |
+
+触发条件：bbox 中心在图像下 4/5。抑制恢复：bbox 中心进入图像上 1/3。
 
 **日志关键字：**
 - `LineFollower created` — 子对象初始化成功
 - `Line search:` — 进入搜索模式（方向、大小、步长）
 - `Line follow #N` — 正常跟踪（每 20 步输出 INFO，其余 DEBUG）
 - `lost frame #N` — YOLO 丢帧，coast 盲跟中
+- `triangle (class=5) detected` — 检测到三角形，开始接近
+- `square (class=6) detected` — 检测到正方形，开始接近
+- `Approach #N: target=(...)` — 双目接近迭代日志
+- `Approach #N: triangulation failed` — 三角测量失败（需排查双目检测）
+- `rotating 360°` — 正方形自转
+- `triangle in upper 1/3, flag reset to 0` — 三角形抑制解除
+- `square in upper 1/3, flag reset to 0` — 正方形抑制解除
+- `triangle handled, flag set to 1` — 三角形处理完成
+- `square handled, flag set to 1` — 正方形处理完成
 - `LineFollower destroyed` — 子对象清理完成
 - `BMOVE FAILED` — 运动超时或失败（总是 ERROR 级别）
 
