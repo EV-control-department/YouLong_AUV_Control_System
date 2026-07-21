@@ -230,7 +230,7 @@ print('SET:', result.success, result.message)
 1. **必须先 START**：任何 SET/WMOVE/BMOVE/TRAVEL 之前必须发送 START。如果 odom 原点未设置，server 会 reject goal 并返回 `"odom origin not set, call start() first"`
 2. **target 必须 4 元素**：就算 WTRAVEL/BTRAVEL 忽略 yaw，也必须传 4 个值。否则 server abort
 3. **timeout ≤ 0** 自动用 60s
-4. **axes 字段**当前仅用于日志记录，server 内部未使用（始终全轴生效）
+4. **axes 字段**：控制哪些轴生效。SET/WMOVE/WTRAVEL 分支根据 axes 只覆盖指定轴，其余轴从当前目标位姿保留。空字符串或 `"xyzrz"` = 全轴生效。注意 `'z' in 'xyrz'` 误匹配问题，服务端用 `axes.replace('rz', '')` 处理
 5. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行，不阻塞主循环
 
 ### task_runner (`uv_task`)

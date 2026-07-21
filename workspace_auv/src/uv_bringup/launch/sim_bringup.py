@@ -37,6 +37,10 @@ def generate_launch_description():
         'publish_annotated', default_value='false',
         description='Publish YOLO annotated images with detection boxes'
     )
+    declare_segment_model_path = DeclareLaunchArgument(
+        'segment_model_path', default_value='',
+        description='Path to YOLO-Seg model for pipe line following'
+    )
 
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
@@ -44,6 +48,7 @@ def generate_launch_description():
     debug_mode = LaunchConfiguration('debug_mode')
     scenario_desc = LaunchConfiguration('scenario_desc')
     publish_annotated = LaunchConfiguration('publish_annotated')
+    segment_model_path = LaunchConfiguration('segment_model_path')
 
     # Stonefish simulator paths
     # Use source directory path for Data (simulator needs direct filesystem access)
@@ -92,7 +97,8 @@ def generate_launch_description():
         executable='vision',
         name='vision',
         output='screen',
-        parameters=[{'publish_annotated': publish_annotated}],
+        parameters=[{'publish_annotated': publish_annotated,
+                      'segment_model_path': segment_model_path}],
         condition=IfCondition(enable_ai),
     )
 
@@ -130,6 +136,7 @@ def generate_launch_description():
         declare_debug_mode,
         declare_scenario,
         declare_publish_annotated,
+        declare_segment_model_path,
         LogInfo(msg=['Simulation data: ', simulation_data_dir]),
         LogInfo(msg=['Scenario: ', PathJoinSubstitution([simulation_data_dir, scenario_desc])]),
         stonefish_sim,

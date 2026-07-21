@@ -27,11 +27,16 @@ def generate_launch_description():
         'publish_annotated', default_value='false',
         description='Publish YOLO annotated images with detection boxes'
     )
+    declare_segment_model_path = DeclareLaunchArgument(
+        'segment_model_path', default_value='',
+        description='Path to YOLO-Seg model for pipe line following'
+    )
 
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
     enable_task = LaunchConfiguration('enable_task')
     publish_annotated = LaunchConfiguration('publish_annotated')
+    segment_model_path = LaunchConfiguration('segment_model_path')
 
     # Hardware manager (replaces sim_bridge on real hardware)
     hw_manager = Node(
@@ -53,7 +58,8 @@ def generate_launch_description():
         executable='vision',
         name='vision',
         output='screen',
-        parameters=[{'sim_mode': False, 'publish_annotated': publish_annotated}],
+        parameters=[{'sim_mode': False, 'publish_annotated': publish_annotated,
+                      'segment_model_path': segment_model_path}],
         condition=IfCondition(enable_ai),
     )
 
@@ -86,6 +92,7 @@ def generate_launch_description():
         declare_enable_nav,
         declare_enable_task,
         declare_publish_annotated,
+        declare_segment_model_path,
         hw_manager,
         basic_motion,
         vision,
