@@ -21,6 +21,8 @@ from uv_msgs.action import BasicMotion
 from uv_msgs.msg import ObjectPositionArray, TaskStatus
 from uv_msgs.srv import ExecTask, RunTask
 
+from uv_task.line_follower import LineFollower
+
 
 class TaskRunnerNode(Node):
     """Task runner: JSON task loader and sequential executor."""
@@ -49,6 +51,10 @@ class TaskRunnerNode(Node):
         self._debug_task_name = None
         self._debug_executing = False
         self._debug_timeout = -1.0
+
+        # Camera parameters (used by LineFollower sub-task via get_parameter)
+        self.declare_parameter('down_image_width', 1280.0)
+        self.declare_parameter('down_image_height', 960.0)
 
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {
@@ -85,6 +91,7 @@ class TaskRunnerNode(Node):
             'btravelxyz': self._task_btravelxyz,
             'navigate': self._task_navigate,
             'wait': self._task_wait,
+            'follow_line': self._task_follow_line,
         }
 
         # Action client
@@ -182,7 +189,8 @@ class TaskRunnerNode(Node):
     # Action helper
     # ========================================================================
 
-    def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0):
+    def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
+                          quiet=False):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -193,6 +201,7 @@ class TaskRunnerNode(Node):
             target: list of 4 floats [x, y, z, yaw] (yaw in degrees)
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
+            quiet: if True, suppress per-goal INFO logs (errors still logged)
 
         Returns:
             (success: bool, message: str)
@@ -205,9 +214,10 @@ class TaskRunnerNode(Node):
         if self._debug_timeout > 0:
             effective_timeout = self._debug_timeout
 
-        t = [f'{v:.2f}' for v in target]
-        self.get_logger().info(
-            f'Send goal: {type_name} target=[{", ".join(t)}] timeout={effective_timeout:.0f}s')
+        if not quiet:
+            t = [f'{v:.2f}' for v in target]
+            self.get_logger().info(
+                f'Send goal: {type_name} target=[{", ".join(t)}] timeout={effective_timeout:.0f}s')
 
         if not self._action_client.wait_for_server(timeout_sec=2.0):
             self.get_logger().error('Action server not available')
@@ -223,7 +233,8 @@ class TaskRunnerNode(Node):
         while rclpy.ok() and not self.stopped and not send_future.done():
             time.sleep(0.01)
         if not rclpy.ok() or self.stopped:
-            self.get_logger().warn(f'Goal interrupted (stopped={self.stopped})')
+            if not quiet:
+                self.get_logger().warn(f'Goal interrupted (stopped={self.stopped})')
             return False, 'Stopped'
         if not send_future.done():
             self.get_logger().error('Goal send timeout')
@@ -236,22 +247,29 @@ class TaskRunnerNode(Node):
             self.get_logger().error(f'Goal rejected by server')
             return False, 'Goal rejected by server'
 
-        self.get_logger().info(f'Goal accepted, waiting for result...')
+        if not quiet:
+            self.get_logger().info(f'Goal accepted, waiting for result...')
 
         result_future = goal_handle.get_result_async()
         while rclpy.ok() and not self.stopped and not result_future.done():
             time.sleep(0.01)
         self._active_goal_handle = None
         if not rclpy.ok() or self.stopped:
-            self.get_logger().warn(f'Goal result interrupted (stopped={self.stopped})')
+            if not quiet:
+                self.get_logger().warn(f'Goal result interrupted (stopped={self.stopped})')
             return False, 'Stopped'
         if not result_future.done():
             self.get_logger().error('Result timeout')
             return False, 'Result timeout'
 
         result = result_future.result().result
-        status = 'SUCCESS' if result.success else f'FAILED: {result.message}'
-        self.get_logger().info(f'Goal result: {status}')
+        if not result.success:
+            t_str = ', '.join(f'{v:.2f}' for v in target)
+            self.get_logger().error(
+                f'{type_name} FAILED: {result.message} '
+                f'target=[{t_str}]')
+        elif not quiet:
+            self.get_logger().info(f'Goal result: SUCCESS')
         return result.success, result.message
 
     # ========================================================================
@@ -586,6 +604,14 @@ class TaskRunnerNode(Node):
         duration = p.get('duration', 1.0)
         time.sleep(duration)
         return True
+
+    def _task_follow_line(self, p: dict) -> bool:
+        """执行管道巡线任务 — 创建 LineFollower 子对象并运行。"""
+        follower = LineFollower(self, p)
+        try:
+            return follower.execute()
+        finally:
+            follower.destroy()
 
     # ========================================================================
     # Service handlers
