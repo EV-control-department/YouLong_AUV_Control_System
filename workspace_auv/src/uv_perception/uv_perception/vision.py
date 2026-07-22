@@ -10,6 +10,8 @@ independently. Output: 4 detection channels + 4 debug image channels.
 Parameters:
     model_path (str): Path to YOLO model .pt file.
     publish_images (bool): Whether to forward split images (default: false).
+    save_dataset (bool): Save split camera frames for offline analysis.
+    dataset_dir (str): Directory for saved frames; empty uses package ``img/``.
     sim_mode (bool): true=ROS images, false=V4L2 capture (default: true).
     front_cam_path (str): V4L2 device path for front camera (real mode only).
     down_cam_path (str): V4L2 device path for down camera (real mode only).
@@ -119,15 +121,23 @@ class VisionNode(Node):
 
         self.declare_parameter('save_dataset', False)
         self._save_dataset = self.get_parameter('save_dataset').get_parameter_value().bool_value
-        self._dataset_dir = ''
+        self.declare_parameter('dataset_dir', '')
+        configured_dataset_dir = self.get_parameter(
+            'dataset_dir').get_parameter_value().string_value.strip()
+        self._dataset_dir = os.path.abspath(os.path.expanduser(
+            configured_dataset_dir)) if configured_dataset_dir else ''
         self._dataset_last_s = {}  # channel -> last save time (second bucket)
         self._dataset_count_s = {}  # channel -> count in current second
         if self._save_dataset:
-            # img/ at same level as src/
-            self._dataset_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'img')
+            if not self._dataset_dir:
+                # img/ at same level as src/ (backward-compatible default)
+                self._dataset_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                    'img')
             os.makedirs(self._dataset_dir, exist_ok=True)
-            self.get_logger().info(f'Dataset saving enabled: {self._dataset_dir}')
+            self.get_logger().info(
+                f'Dataset saving enabled: {self._dataset_dir} '
+                '(front_left/front_right/down_left/down_right, max 5 FPS each)')
 
         self.bridge = None
         self._model = None
