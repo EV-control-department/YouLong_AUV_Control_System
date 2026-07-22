@@ -919,26 +919,80 @@ class TaskRunnerNode(Node):
                 else cv2.COLOR_BGR2GRAY)
             dictionary = cv2.aruco.getPredefinedDictionary(
                 cv2.aruco.DICT_4X4_1000)
+            detector_params = cv2.aruco.DetectorParameters()
+            # The simulated marker can be small in the front image.  Broaden
+            # the perimeter range while retaining the standard 4x4 dictionary.
+            detector_params.minMarkerPerimeterRate = 0.01
+            detector_params.maxMarkerPerimeterRate = 4.0
+            detector_params.adaptiveThreshWinSizeMin = 3
+            detector_params.adaptiveThreshWinSizeMax = 51
+            detector_params.adaptiveThreshWinSizeStep = 4
+            detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+            detector_params.detectInvertedMarker = True
             if hasattr(cv2.aruco, 'ArucoDetector'):
                 detector = cv2.aruco.ArucoDetector(
-                    dictionary, cv2.aruco.DetectorParameters())
-                detect = detector.detectMarkers
+                    dictionary, detector_params)
+
+                def detect(gray):
+                    return detector.detectMarkers(gray)
             else:
                 def detect(gray):
-                    return cv2.aruco.detectMarkers(gray, dictionary)
+                    return cv2.aruco.detectMarkers(
+                        gray, dictionary, parameters=detector_params)
 
-            # The simulator publishes a left/right stitched image.  Checking
-            # both halves avoids depending on the camera-side placement of the
-            # board and keeps the decoder compatible with a single front camera.
-            for half in (frame[:, :image.width // 2],
-                         frame[:, image.width // 2:]):
+            def valid_ids(gray):
+                """Run full-frame image preparations and return a task ID."""
+                if min(gray.shape[:2]) < 8:
+                    return None
+                # The Stonefish texture fills the PNG and has no quiet-zone.
+                # Add contrasting margins, then enlarge tiny camera markers.
+                pad = max(8, int(min(gray.shape[:2]) * 0.08))
+                padded = [
+                    cv2.copyMakeBorder(
+                        gray, pad, pad, pad, pad,
+                        cv2.BORDER_CONSTANT, value=255),
+                    cv2.copyMakeBorder(
+                        gray, pad, pad, pad, pad,
+                        cv2.BORDER_CONSTANT, value=0),
+                ]
+                images = [gray] + padded
+                for source in padded:
+                    images.append(cv2.resize(
+                        source, None, fx=4.0, fy=4.0,
+                        interpolation=cv2.INTER_CUBIC))
+                    images.append(cv2.resize(
+                        source, None, fx=8.0, fy=8.0,
+                        interpolation=cv2.INTER_NEAREST))
+                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                images.append(clahe.apply(gray))
+                if min(gray.shape[:2]) >= 11:
+                    images.append(cv2.adaptiveThreshold(
+                        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        cv2.THRESH_BINARY, 11, 2))
+                for candidate in images:
+                    _corners, ids, _rejected = detect(candidate)
+                    if ids is None:
+                        continue
+                    for marker in ids.reshape(-1):
+                        marker_id = int(marker)
+                        if marker_id in (1, 2, 3, 4, 5, 6):
+                            return marker_id
+                return None
+
+            # The simulator publishes a left/right stitched image.  ArUco is
+            # deliberately decoded from each complete half-frame; YOLO boxes
+            # and position.py estimates are not used by this path.
+            midpoint = image.width // 2
+            for half in (frame[:, :midpoint], frame[:, midpoint:]):
                 gray = cv2.cvtColor(half, color_code)
-                _corners, ids, _rejected = detect(gray)
-                if ids is None:
-                    continue
-                for marker in ids.reshape(-1):
-                    marker_id = int(marker)
-                    if marker_id in (1, 2, 3, 4, 5, 6):
+                marker_id = valid_ids(gray)
+                if marker_id is not None:
+                    return marker_id
+                # Water lighting can make luminance grayscale low contrast;
+                # retry the complete frame through individual B/G/R channels.
+                for channel in cv2.split(half):
+                    marker_id = valid_ids(channel)
+                    if marker_id is not None:
                         return marker_id
             return None
         except Exception as exc:
