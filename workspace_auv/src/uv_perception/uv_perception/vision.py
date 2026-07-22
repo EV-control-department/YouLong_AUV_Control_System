@@ -239,8 +239,22 @@ class VisionNode(Node):
         try:
             from ultralytics import YOLO
 
+            def valid_file(path: str, parameter_name: str) -> str:
+                """Accept only model files; reject accidental directories."""
+                path = os.path.expanduser(path.strip()) if path else ''
+                if not path:
+                    return ''
+                if os.path.isfile(path):
+                    return path
+                self.get_logger().warn(
+                    f'{parameter_name}={path!r} is not a model file; '
+                    'using the package fallback')
+                return ''
+
             self.declare_parameter('model_path', '')
-            model_path = self.get_parameter('model_path').get_parameter_value().string_value
+            model_path = valid_file(
+                self.get_parameter('model_path').get_parameter_value().string_value,
+                'model_path')
 
             if not model_path:
                 for candidate in [
@@ -248,7 +262,7 @@ class VisionNode(Node):
                         '~/YouLong_AUV_Control_System/workspace_auv/src/'
                         'datas/WUURC2026_sim_719.pt'),
                 ]:
-                    if os.path.exists(candidate):
+                    if os.path.isfile(candidate):
                         model_path = candidate
                         break
                 if not model_path:
@@ -257,7 +271,7 @@ class VisionNode(Node):
                     resource_box = os.path.join(
                         os.path.dirname(os.path.dirname(__file__)),
                         'resource', 'box_best.pt')
-                    if os.path.exists(resource_box):
+                    if os.path.isfile(resource_box):
                         model_path = resource_box
                     else:
                         try:
@@ -265,12 +279,12 @@ class VisionNode(Node):
                             share_box = os.path.join(
                                 get_package_share_directory('uv_perception'),
                                 'resource', 'box_best.pt')
-                            if os.path.exists(share_box):
+                            if os.path.isfile(share_box):
                                 model_path = share_box
                         except Exception:
                             pass
 
-            if model_path and os.path.exists(model_path):
+            if model_path and os.path.isfile(model_path):
                 self._model = YOLO(model_path)
                 self._model_loaded = True
                 self.get_logger().info(f'YOLO model loaded: {model_path}')
@@ -278,14 +292,17 @@ class VisionNode(Node):
                 self.get_logger().warn('YOLO model not found, detection disabled')
 
             # --- Segment model (YOLO-Seg) for line following ---
-            seg_path = self.get_parameter('segment_model_path').get_parameter_value().string_value
+            seg_path = valid_file(
+                self.get_parameter(
+                    'segment_model_path').get_parameter_value().string_value,
+                'segment_model_path')
             if not seg_path:
                 for candidate in [
                     os.path.expanduser(
                         '~/YouLong_AUV_Control_System/workspace_auv/src/'
                         'datas/WUURC2026simSegment.pt'),
                 ]:
-                    if os.path.exists(candidate):
+                    if os.path.isfile(candidate):
                         seg_path = candidate
                         break
                 if not seg_path:
@@ -293,7 +310,7 @@ class VisionNode(Node):
                     resource_seg = os.path.join(
                         os.path.dirname(os.path.dirname(__file__)),
                         'resource', 'seg_best.pt')
-                    if os.path.exists(resource_seg):
+                    if os.path.isfile(resource_seg):
                         seg_path = resource_seg
                     else:
                         # Try ament_index_python fallback
@@ -302,12 +319,12 @@ class VisionNode(Node):
                             share_seg = os.path.join(
                                 get_package_share_directory('uv_perception'),
                                 'resource', 'seg_best.pt')
-                            if os.path.exists(share_seg):
+                            if os.path.isfile(share_seg):
                                 seg_path = share_seg
                         except Exception:
                             pass
 
-            if seg_path and os.path.exists(seg_path):
+            if seg_path and os.path.isfile(seg_path):
                 self._segment_model = YOLO(seg_path)
                 self._segment_model_loaded = True
                 self.get_logger().info(f'Segment model loaded: {seg_path}')

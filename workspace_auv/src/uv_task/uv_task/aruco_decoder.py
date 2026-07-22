@@ -182,7 +182,14 @@ class ArucoDecoder:
 
     def detect(self, image):
         """Return all valid target IDs found in one complete BGR frame."""
-        detections = set()
+        # The verified contour/template path is both robust to the rendered
+        # Stonefish texture and much faster than running all large-scale
+        # ArUco variants.  Use it first so 50-frame live voting keeps pace
+        # with the camera stream.
+        detections = self._contour_fallback(image)
+        if detections:
+            return detections
+
         for variant, scales in self._preprocess(image):
             for scale in scales:
                 scaled = variant if scale == 1 else cv2.resize(
@@ -194,4 +201,4 @@ class ArucoDecoder:
                 detections.update(
                     int(marker_id) for marker_id in ids.ravel()
                     if int(marker_id) in TARGET_IDS)
-        return detections | self._contour_fallback(image)
+        return detections
