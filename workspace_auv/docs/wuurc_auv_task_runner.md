@@ -37,7 +37,7 @@ ArUco、动态 sector 选择和设备命令使用专用任务点。
 | 环境采样 | 已实现话题下发 | `/task/device_command` |
 | 获取框 arrow 下视对正 | 已实现 | `task_runner.py::_align_downward` |
 | 获取框上浮 0.5 m、失败回退 | 已实现 | `task_runner.py::_try_surface_and_restore` |
-| ArUco 4x4_1000 ID 识别 | 已实现 | `task_runner.py::_decode_aruco_id` |
+| ArUco 4x4_1000 ID 识别 | 已实现 | `uv_task/aruco_decoder.py` + 50 帧投票 |
 | ID 到 yellow/green/red sector 映射 | 已实现 | `task_runner.py::_sector_for_aruco` |
 | sector 下视对正和 beacon 投放命令 | 已实现 | `align_downward`、`drop_beacon` |
 | 返回 start、start 标志下视对正、上浮尝试 | 已实现 | JSON `wtravelxy`、`align_downward` |
@@ -121,8 +121,10 @@ device_type=DEVICE_ARM(1), command=1, value=1
 ### 3. ArUco 识别和 sector 投放
 
 机器人移动到 ArUco 墙牌的测量观测位置，设置观测深度和朝向，随后从
-`/auv/front_cam/stitched` 的左半幅图像使用 OpenCV `DICT_4X4_1000` 解码。
-只接受 ID 1 到 6：
+`/auv/front_cam/stitched` 的左右完整半幅图像使用 `aruco/build/detect_aruco.py`
+中已经验证的 OpenCV 逻辑解码。识别不使用 YOLO 框，也不使用
+`position.py`。任务等待 50 个不同图像帧，每帧检测到的合法 ID 计数一次，最终
+选择出现次数最多的 ID；平票时选择较小的 ID。只接受 ID 1 到 6：
 
 | ArUco ID | 目标 sector | YOLO 类别 | LED 命令 |
 |---|---|---:|---:|
@@ -137,8 +139,9 @@ device_type=DEVICE_ARM(1), command=1, value=1
 device_type=DEVICE_SERVO(2), command=2, value=ArUco_ID
 ```
 
-如果在超时时间内没有获得合法 ArUco ID，任务不会盲选一个 sector，避免先访问
-错误 sector 导致比赛只计算错误区域得分；随后仍会继续返回 start。
+如果 50 帧中没有获得合法 ArUco ID，`recognize_aruco` 会失败并因
+`stop_on_failure` 暂停任务，不会盲选 sector。当前 Stonefish 配置中的
+`fallback_id: 4` 仅用于已知 ID4 的仿真场景；真实比赛应删除该参数。
 
 ### 4. 返回起点
 
@@ -173,7 +176,8 @@ workspace_auv/src/uv_perception/resource/seg_best.pt
 | `wuurc_align_body_x_sign` | `-1` | 图像 Y 到 body-X 的方向 |
 | `wuurc_align_body_y_sign` | `-1` | 图像 X 到 body-Y 的方向 |
 | `wuurc_align_timeout_s` | `25` s | 单次视觉对正超时 |
-| `wuurc_aruco_timeout_s` | `12` s | ArUco 识别超时 |
+| `wuurc_aruco_timeout_s` | `12` s | ArUco 50 帧采样最长等待时间 |
+| `wuurc_aruco_sample_count` | `50` | ArUco 投票帧数 |
 | `wuurc_led_duration_s` | `3` s | LED 指示时间 |
 
 第一次下水调试时，应先固定机器人，观察一帧检测框，确认图像向右/向下的误差
@@ -330,3 +334,6 @@ ros2 topic hz /auv/down_cam/stitched
 source /opt/ros/humble/setup.bash
 source /home/laurie/AUV2026/YouLong_AUV_Control_System/workspace_sim/install/setup.bash
 source /home/laurie/AUV2026/YouLong_AUV_Control_System/workspace_auv/install/setup.bash
+舍弃使用yolo框的逻辑，直接使用cv在整个图像范围内识别aruco tag
+
+ros2 launch uv_bringup sim_bringup.py   scenario_desc:=wuurc_murc_2026_auv.scn   enable_ai:=true   enable_nav:=false     task_auto_start:=true   task_file:=/home/laurie/AUV2026/YouLong_AUV_Control_System/workspace_auv/src/uv_task/config/tasks.json   model_path:=/home/laurie/AUV2026/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/resource/box_best.pt   segment_model_path:=/home/laurie/AUV2026/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/resource/seg_best.pt quite:=true

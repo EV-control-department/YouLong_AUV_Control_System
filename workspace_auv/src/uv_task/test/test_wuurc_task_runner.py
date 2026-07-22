@@ -1,7 +1,10 @@
 """Unit tests for WUURC sector selection and dynamic travel targets."""
 
+from collections import Counter
+
 import pytest
 
+from uv_task.aruco_decoder import select_majority_id
 from uv_task.task_runner import TaskRunnerNode
 
 
@@ -61,3 +64,11 @@ def test_wtravelxy_rejects_sector_move_without_aruco_result():
     with pytest.raises(ValueError, match='No selected sector'):
         _TaskRunnerShape()._resolve_wtravelxy_target(
             {'target': 'selected_sector'})
+
+
+def test_aruco_vote_selects_most_frequent_id():
+    assert select_majority_id(Counter({4: 31, 3: 19})) == 4
+
+
+def test_aruco_vote_ignores_invalid_ids_and_breaks_ties_deterministically():
+    assert select_majority_id(Counter({8: 50, 2: 5, 1: 5})) == 1

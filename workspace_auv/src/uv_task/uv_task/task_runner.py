@@ -10,6 +10,7 @@ import math
 import os
 import threading
 import time
+from collections import Counter
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
@@ -28,6 +29,7 @@ from uv_msgs.msg import (
 )
 from uv_msgs.srv import ExecTask, RunTask
 
+from uv_task.aruco_decoder import ArucoDecoder, select_majority_id
 from uv_task.line_follower import LineFollower
 
 
@@ -68,6 +70,8 @@ class TaskRunnerNode(Node):
         self._detections = {}
         self._front_stitched_image = None
         self._front_stitched_received_at = 0.0
+        self._front_stitched_sequence = 0
+        self._aruco_decoder = None
         self._pose_info = None
         self._pose_info_received_at = 0.0
         self._aruco_marker_id = None
@@ -110,6 +114,7 @@ class TaskRunnerNode(Node):
         self.declare_parameter('wuurc_detection_max_age_s', 0.60)
         self.declare_parameter('wuurc_pose_max_age_s', 1.0)
         self.declare_parameter('wuurc_aruco_timeout_s', 12.0)
+        self.declare_parameter('wuurc_aruco_sample_count', 50)
         self.declare_parameter('wuurc_led_duration_s', 3.0)
 
         # The command topic avoids a dependency on the placeholder hardware
@@ -215,6 +220,7 @@ class TaskRunnerNode(Node):
         with self._perception_lock:
             self._front_stitched_image = msg
             self._front_stitched_received_at = time.monotonic()
+            self._front_stitched_sequence += 1
 
     def _pose_info_cb(self, msg: PoseInfo):
         """Cache the INS pose published by basic_motion (not position.py)."""
@@ -888,130 +894,86 @@ class TaskRunnerNode(Node):
             f'WUURC device command: {description} '
             f'(type={device_type}, command={command}, value={value:.1f})')
 
-    def _decode_aruco_id(self, max_age_s: float):
-        """Decode one 4x4_1000 ArUco ID from the current front-left image.
+    def _decode_aruco_ids(self, max_age_s: float):
+        """Decode valid IDs from one fresh stitched stereo image.
 
-        ``vision.py`` already confirms the board as YOLO class 8.  Its message
-        intentionally has no marker-ID field, so the ID is decoded here from
-        the original stitched stream without changing the perception package.
+        The decoder is the port of ``aruco/build/detect_aruco.py``.  It uses
+        complete camera frames only: no YOLO boxes and no PositionNode output.
         """
         with self._perception_lock:
             image = self._front_stitched_image
             received_at = self._front_stitched_received_at
+            sequence = self._front_stitched_sequence
         if image is None or time.monotonic() - received_at > max_age_s:
-            return None
+            return set(), None
         if image.encoding not in ('bgr8', 'rgb8') or image.width < 2:
-            return None
+            return set(), None
 
         try:
             import cv2
             import numpy as np
 
             expected_row_bytes = image.width * 3
-            if image.step < expected_row_bytes or len(image.data) < image.height * image.step:
-                return None
+            if (image.step < expected_row_bytes
+                    or len(image.data) < image.height * image.step):
+                return set(), None
             frame = np.frombuffer(image.data, dtype=np.uint8).reshape(
                 image.height, image.step)
             frame = frame[:, :expected_row_bytes].reshape(
                 image.height, image.width, 3)
-            color_code = (
-                cv2.COLOR_RGB2GRAY if image.encoding == 'rgb8'
-                else cv2.COLOR_BGR2GRAY)
-            dictionary = cv2.aruco.getPredefinedDictionary(
-                cv2.aruco.DICT_4X4_1000)
-            detector_params = cv2.aruco.DetectorParameters()
-            # The simulated marker can be small in the front image.  Broaden
-            # the perimeter range while retaining the standard 4x4 dictionary.
-            detector_params.minMarkerPerimeterRate = 0.01
-            detector_params.maxMarkerPerimeterRate = 4.0
-            detector_params.adaptiveThreshWinSizeMin = 3
-            detector_params.adaptiveThreshWinSizeMax = 51
-            detector_params.adaptiveThreshWinSizeStep = 4
-            detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-            detector_params.detectInvertedMarker = True
-            if hasattr(cv2.aruco, 'ArucoDetector'):
-                detector = cv2.aruco.ArucoDetector(
-                    dictionary, detector_params)
+            if image.encoding == 'rgb8':
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            if self._aruco_decoder is None:
+                self._aruco_decoder = ArucoDecoder()
 
-                def detect(gray):
-                    return detector.detectMarkers(gray)
-            else:
-                def detect(gray):
-                    return cv2.aruco.detectMarkers(
-                        gray, dictionary, parameters=detector_params)
-
-            def valid_ids(gray):
-                """Run full-frame image preparations and return a task ID."""
-                if min(gray.shape[:2]) < 8:
-                    return None
-                # The Stonefish texture fills the PNG and has no quiet-zone.
-                # Add contrasting margins, then enlarge tiny camera markers.
-                pad = max(8, int(min(gray.shape[:2]) * 0.08))
-                padded = [
-                    cv2.copyMakeBorder(
-                        gray, pad, pad, pad, pad,
-                        cv2.BORDER_CONSTANT, value=255),
-                    cv2.copyMakeBorder(
-                        gray, pad, pad, pad, pad,
-                        cv2.BORDER_CONSTANT, value=0),
-                ]
-                images = [gray] + padded
-                for source in padded:
-                    images.append(cv2.resize(
-                        source, None, fx=4.0, fy=4.0,
-                        interpolation=cv2.INTER_CUBIC))
-                    images.append(cv2.resize(
-                        source, None, fx=8.0, fy=8.0,
-                        interpolation=cv2.INTER_NEAREST))
-                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-                images.append(clahe.apply(gray))
-                if min(gray.shape[:2]) >= 11:
-                    images.append(cv2.adaptiveThreshold(
-                        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                        cv2.THRESH_BINARY, 11, 2))
-                for candidate in images:
-                    _corners, ids, _rejected = detect(candidate)
-                    if ids is None:
-                        continue
-                    for marker in ids.reshape(-1):
-                        marker_id = int(marker)
-                        if marker_id in (1, 2, 3, 4, 5, 6):
-                            return marker_id
-                return None
-
-            # The simulator publishes a left/right stitched image.  ArUco is
-            # deliberately decoded from each complete half-frame; YOLO boxes
-            # and position.py estimates are not used by this path.
             midpoint = image.width // 2
-            for half in (frame[:, :midpoint], frame[:, midpoint:]):
-                gray = cv2.cvtColor(half, color_code)
-                marker_id = valid_ids(gray)
-                if marker_id is not None:
-                    return marker_id
-                # Water lighting can make luminance grayscale low contrast;
-                # retry the complete frame through individual B/G/R channels.
-                for channel in cv2.split(half):
-                    marker_id = valid_ids(channel)
-                    if marker_id is not None:
-                        return marker_id
-            return None
+            return (
+                self._aruco_decoder.detect(frame[:, :midpoint])
+                | self._aruco_decoder.detect(frame[:, midpoint:]),
+                sequence,
+            )
         except Exception as exc:
             self.get_logger().warn(f'WUURC ArUco decoder unavailable: {exc}')
-            return None
+            return set(), sequence
 
     def _recognize_aruco(self, overrides: dict):
-        """Wait for a valid task ID (1..6) at the measured observation point."""
+        """Vote over 50 distinct camera frames and return the majority ID."""
         timeout_s = float(self._wuurc_param('aruco_timeout_s', overrides))
         max_age_s = float(self._wuurc_param('detection_max_age_s', overrides))
+        sample_count = int(overrides.get(
+            'sample_count', self.get_parameter('wuurc_aruco_sample_count').value))
+        sample_count = max(1, sample_count)
         deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline and not self.stopped:
-            marker_id = self._decode_aruco_id(max_age_s)
-            if marker_id in (1, 2, 3, 4, 5, 6):
-                self.get_logger().info(f'WUURC ArUco task received: id={marker_id}')
-                return marker_id
-            time.sleep(0.05)
-        self.get_logger().error('WUURC failed to recognize ArUco ID 1..6')
-        return None
+        votes = Counter()
+        sampled_frames = 0
+        last_sequence = -1
+
+        while (time.monotonic() < deadline and not self.stopped
+               and sampled_frames < sample_count):
+            marker_ids, sequence = self._decode_aruco_ids(max_age_s)
+            if sequence is None or sequence == last_sequence:
+                time.sleep(0.01)
+                continue
+            last_sequence = sequence
+            sampled_frames += 1
+            votes.update(marker_ids)
+
+        if sampled_frames < sample_count:
+            self.get_logger().error(
+                f'WUURC ArUco sampled only {sampled_frames}/{sample_count} '
+                'fresh camera frames')
+            return None
+        marker_id = select_majority_id(votes)
+        if marker_id is None:
+            self.get_logger().error(
+                f'WUURC ArUco found no valid ID in {sample_count} frames')
+            return None
+        vote_summary = ', '.join(
+            f'{candidate}:{votes[candidate]}' for candidate in sorted(votes))
+        self.get_logger().info(
+            f'WUURC ArUco vote ({sample_count} frames): {vote_summary}; '
+            f'selected id={marker_id}')
+        return marker_id
 
     def _sector_for_aruco(self, marker_id: int):
         """Map regulation IDs 1..6 to a scene sector, class, and LED code."""
