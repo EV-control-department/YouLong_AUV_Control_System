@@ -31,22 +31,12 @@ def generate_launch_description():
         'segment_model_path', default_value='',
         description='Path to YOLO-Seg model for pipe line following'
     )
-    declare_save_dataset = DeclareLaunchArgument(
-        'save_dataset', default_value='false',
-        description='Save front/down split camera frames'
-    )
-    declare_dataset_dir = DeclareLaunchArgument(
-        'dataset_dir', default_value='',
-        description='Directory for saved front/down camera frames'
-    )
 
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
     enable_task = LaunchConfiguration('enable_task')
     publish_annotated = LaunchConfiguration('publish_annotated')
     segment_model_path = LaunchConfiguration('segment_model_path')
-    save_dataset = LaunchConfiguration('save_dataset')
-    dataset_dir = LaunchConfiguration('dataset_dir')
 
     # Hardware manager (replaces sim_bridge on real hardware)
     hw_manager = Node(
@@ -72,8 +62,6 @@ def generate_launch_description():
             'sim_mode': False,
             'publish_annotated': publish_annotated,
             'segment_model_path': segment_model_path,
-            'save_dataset': save_dataset,
-            'dataset_dir': dataset_dir,
         }],
         condition=IfCondition(enable_ai),
     )
@@ -108,8 +96,6 @@ def generate_launch_description():
         declare_enable_task,
         declare_publish_annotated,
         declare_segment_model_path,
-        declare_save_dataset,
-        declare_dataset_dir,
         hw_manager,
         basic_motion,
         vision,
