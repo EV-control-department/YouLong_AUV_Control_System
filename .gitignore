@@ -1,4 +1,7 @@
 # ROS 2 colcon workspace build artifacts
+/build/
+/install/
+/log/
 workspace_auv/build/
 workspace_auv/install/
 workspace_auv/log/
