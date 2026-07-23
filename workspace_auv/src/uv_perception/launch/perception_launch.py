@@ -24,8 +24,10 @@ def generate_launch_description():
             executable='vision',
             name='vision',
             output='screen',
-            parameters=[{'publish_annotated': publish_annotated,
-                          'segment_model_path': segment_model_path}],
+            parameters=[{
+                'publish_annotated': publish_annotated,
+                'segment_model_path': segment_model_path,
+            }],
         ),
         Node(
             package='uv_perception',

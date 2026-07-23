@@ -58,8 +58,11 @@ def generate_launch_description():
         executable='vision',
         name='vision',
         output='screen',
-        parameters=[{'sim_mode': False, 'publish_annotated': publish_annotated,
-                      'segment_model_path': segment_model_path}],
+        parameters=[{
+            'sim_mode': False,
+            'publish_annotated': publish_annotated,
+            'segment_model_path': segment_model_path,
+        }],
         condition=IfCondition(enable_ai),
     )
 

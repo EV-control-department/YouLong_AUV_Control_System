@@ -5,7 +5,7 @@ Launches Stonefish simulator + all control/perception/nav/task nodes.
 
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -102,8 +102,10 @@ def generate_launch_description():
         executable='vision',
         name='vision',
         output='screen',
-        parameters=[{'publish_annotated': publish_annotated,
-                      'segment_model_path': segment_model_path}],
+        parameters=[{
+            'publish_annotated': publish_annotated,
+            'segment_model_path': segment_model_path,
+        }],
         condition=IfCondition(enable_ai),
     )
 
