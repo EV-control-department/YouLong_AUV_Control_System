@@ -14,11 +14,11 @@
 文件：`uv_msgs/action/BasicMotion.action`
 
 ```
-uint8 WMOVE=1       # 世界系步进, target=[dx, dy, dz, dyaw]
+uint8 WMOVE=1       # 世界系步进, target=[x, y, z, yaw]
 uint8 BMOVE=2       # 机体系步进, target=[dx, dy, dz, dyaw]
 uint8 SET=3         # 绝对定位, target=[x, y, z, yaw]
-uint8 WTRAVEL=4     # 世界系直线, target=[dx, dy, dz]
-uint8 BTRAVEL=5     # 机体系直线, target=[dx, dy, dz]
+uint8 WTRAVEL=4     # 世界系直线, target=[x, y, z, yaw]
+uint8 BTRAVEL=5     # 机体系直线, target=[x, y, z, yaw]
 uint8 START=6       # 初始化里程计原点
 ---
 uint8 cmd_type
@@ -96,10 +96,10 @@ goal.target = [5.0, 0.0, -2.0, 90.0]
 
 ```
 cmd_type: BasicMotion.Goal.WMOVE
-target:   [dx, dy, dz, dyaw]    # 世界系偏移量
+target:   [x, y, z, yaw]    # odom 系绝对坐标
 ```
 
-- 从当前位置加上偏移量为目标
+- 参数为 odom 系绝对坐标，未指定轴从当前目标 `t` 补齐
 - 使用动态步进算法：长距离拆成小段逐段发送
 - 每步根据当前横向误差动态调整步长
 - 横向误差大时步长自动减小，提高抗干扰能力
@@ -109,8 +109,8 @@ target:   [dx, dy, dz, dyaw]    # 世界系偏移量
 | 参数           | 值   | 说明                 |
 | -------------- | ---- | -------------------- |
 | STEP_X         | 0.6m | X 方向椭圆半轴       |
-| STEP_Y         | 0.2m | Y 方向椭圆半轴       |
-| STEP_PERIOD    | 0.3s | 收敛时间阈值         |
+| STEP_Y         | 0.4m | Y 方向椭圆半轴       |
+| STEP_PERIOD    | 0.2s | 收敛时间阈值         |
 | LATERAL_LAMBDA | 2.0  | 横向误差指数衰减系数 |
 
 **示例：**
@@ -118,7 +118,7 @@ target:   [dx, dy, dz, dyaw]    # 世界系偏移量
 ```python
 goal.cmd_type = BasicMotion.Goal.WMOVE
 goal.target = [2.0, 1.0, 0.0, 0.0]
-# 结果：AUV 向北 2m, 向东 1m（相对于当前位置）
+# 结果：AUV 移动到 odom 坐标 (2, 1)，深度和偏航不变
 ```
 
 ### BMOVE — 机体系步进
@@ -150,49 +150,51 @@ goal.target = [0.0, 1.0, 0.0, 45.0]
 
 ```
 cmd_type: BasicMotion.Goal.WTRAVEL
-target:   [dx, dy, dz, 0]       # yaw 被忽略
+target:   [x, y, z, yaw]       # odom 系绝对坐标，yaw=完成后最终朝向
 ```
 
+- 参数为 odom 系绝对坐标，未指定轴从当前目标 `t` 补齐
 - 两步执行：先原地转向目标方向 → 再沿 body-X 直线前进
-- 转向角 = `atan2(dy, dx)`
+- 第一阶段转向角 = `atan2(dy, dx)`（从 t 计算方向）
+- **yaw 定义任务完成后的最终朝向**（非方向角，方向由 xy 目标决定）
 - 适用于需要直线轨迹的任务（过门、巡线等）
 
 **示例：**
 
 ```python
 goal.cmd_type = BasicMotion.Goal.WTRAVEL
-goal.target = [3.0, 4.0, 0.0, 0.0]
-# 结果：AUV 先转向 atan2(4,3)≈53° 方向，再向前走 5m
+goal.target = [3.0, 4.0, 0.0, 45.0]
+# 结果：AUV 转向 atan2(4,3)≈53° 方向，直线前进到 (3, 4, 0)，完成后朝向 45°
 ```
 
 ### BTRAVEL — 机体系直线移动
 
 ```
 cmd_type: BasicMotion.Goal.BTRAVEL
-target:   [dx, dy, dz, 0]       # yaw 被忽略
+target:   [dx, dy, dz, dyaw]       # 机体系偏移量
 ```
 
-- body 偏移转 world 后走 WTRAVEL
-- 两步执行：先转向目标方向 → 再沿 body-X 直线前进
+- 机体系偏移量，基于当前**位置 p** 转世界系后走 WTRAVEL
+- 两步执行：body→world → 转向目标方向 → 沿 body-X 直线前进
 
 **示例：**
 
 ```python
 goal.cmd_type = BasicMotion.Goal.BTRAVEL
 goal.target = [3.0, 0.0, 0.0, 0.0]
-# 结果：AUV 先转向当前朝向方向，再向前走 3m
+# 结果：AUV 沿当前朝向直线前进 3m
 ```
 
 ### 命令对比
 
-| 命令    | 坐标系 | 目标含义 | 运动模式           | 典型场景         |
-| ------- | ------ | -------- | ------------------ | ---------------- |
-| SET     | odom   | 绝对坐标 | 直发 + 等到达      | 明确目标点       |
-| WMOVE   | odom   | 偏移量   | 动态步进           | 向指定方向走一段 |
-| BMOVE   | body   | 偏移量   | 旋转 + 动态步进    | 相对当前姿态移动 |
-| WTRAVEL | odom   | 偏移量   | 转向 + 直线        | 过门、直线轨迹   |
-| BTRAVEL | body   | 偏移量   | 旋转 + 转向 + 直线 | 沿当前方向直线   |
-| START   | —     | —       | 初始化原点         | 开始作业         |
+| 命令    | 坐标系 | 目标含义   | 运动模式           | 典型场景         |
+| ------- | ------ | ---------- | ------------------ | ---------------- |
+| SET     | odom   | 绝对坐标   | 直发 + 等到达      | 明确目标点       |
+| WMOVE   | odom   | 绝对坐标   | 动态步进           | 向指定位置步进   |
+| BMOVE   | body   | 偏移量     | 旋转 + 动态步进    | 相对当前姿态移动 |
+| WTRAVEL | odom   | 绝对坐标   | 转向 + 直线        | 过门、直线轨迹   |
+| BTRAVEL | body   | 偏移量     | 旋转 + 转向 + 直线 | 沿当前方向直线   |
+| START   | —      | —          | 初始化原点         | 开始作业         |
 
 ---
 
@@ -203,7 +205,7 @@ basic_motion 同时以 30Hz 发布 `/basic_motion/pose_info` (类型 `uv_msgs/Po
 ```
 builtin_interfaces/Time stamp    # 时间戳
 float32 origin_x/y/z/yaw         # odom 原点在 map 系中的位姿 (yaw: 度)
-float32 robot_x/y/z/yaw          # 机器人当前 odom 系位姿 (yaw: 度)
+float32 robot_x/y/z/roll/pitch/yaw  # 机器人当前 odom 系位姿 (角度均为度, roll/pitch 用于6-DOF坐标变换)
 float32 target_x/y/z/yaw         # 当前运动目标 odom 系位姿 (yaw: 度)
 ```
 
@@ -314,8 +316,9 @@ task_runner 通过同样的 ActionClient 接口调用 basic_motion。JSON 任务
 ## 注意事项
 
 1. **必须先 START**：任何 SET/WMOVE/BMOVE/TRAVEL 之前必须发送 START。server 拒绝并返回 `"odom origin not set, call start() first"`
-2. **target 必须 4 元素**：即使 WTRAVEL/BTRAVEL 忽略 yaw，也必须传 4 个值
+2. **target 必须 4 元素**：所有命令类型都必须传 4 个值 `[x, y, z, yaw]`
 3. **timeout ≤ 0** 自动使用 60s
-4. **axes 字段**当前仅用于日志记录，server 内部未实现（始终全轴生效）
-5. **yaw 单位**：始终是**度**，不是弧度
-6. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行
+4. **axes 控制生效轴**：SET/WMOVE/WTRAVEL 根据 axes 只覆盖指定轴，未指定轴从当前目标 `t` 补齐。空字符串或 `"xyzrz"` = 全轴生效。`'z' in 'xyrz'` 误匹配需用 `axes.replace('rz', '')` 处理
+5. **运动基准点**：WMOVE/WTRAVEL 未指定轴从 `t`(目标)补齐，BMOVE/BTRAVEL 基于 `p`(位置)
+6. **yaw 单位**：始终是**度**，不是弧度
+7. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行

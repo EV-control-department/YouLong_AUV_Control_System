@@ -48,6 +48,7 @@ colcon build                          # builds stonefish_ros2 only
 source install/setup.bash             # also sources workspace_auv underlay
 
 ros2 launch uv_bringup sim_bringup.py   # full simulation stack
+ros2 launch uv_bringup sim_bringup.py sim_rate:=200.0  # 2x speed
 ```
 
 Note: `workspace_sim` uses colcon overlay — source `workspace_auv/install/setup.bash` first, then `workspace_sim/install/setup.bash`.
@@ -244,7 +245,7 @@ print('SET:', result.success, result.message)
 
 **Key behaviors:**
 - **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them (no service call needed)
-- **Task map**: JSON `name` field maps to a method via `task_map` dict. Supports SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL tasks, plus `start`, `navigate`, `wait`, `follow_line`. See `docs/debug_guide.md` for full task list.
+- **Task map**: JSON `name` field maps to a method via `task_map` dict. Supports SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL tasks, plus `start`, `navigate`, `wait`, `follow_line`, `arrow_surface`. See `docs/debug_guide.md` for full task list.
 - **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
 - **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
 
@@ -335,9 +336,11 @@ TaskRunnerNode._task_follow_line()
 | `timeout` | float | 120.0 | 任务总超时 (s) |
 | `stop_when_marker` | bool | false | 检测到 marker 时停止 |
 | `marker_class_ids` | list | [] | 停止标记的 YOLO class_id |
+| `triangle_class_id` | int | 5 | 三角形标记 YOLO class_id |
+| `square_class_id` | int | 6 | 正方形标记 YOLO class_id |
 | `forward_step` | float | 0.10 | 基础前进步长 (m) |
 | `min_forward_step` | float | 0.02 | 最小前进步长 (m) |
-| `lost_tolerance` | int | 50 | 丢帧容忍帧数 |
+| `lost_tolerance` | int | 100 | 丢帧容忍帧数 |
 | `coast_forward_step` | float | 0.05 | 盲跟前进步长 (m) |
 | `search_spiral_start` | float | 0.02 | 初始搜索框大小 (m) |
 | `search_spiral_step` | float | 0.30 | 每圈扩展步长 (m) |
@@ -355,10 +358,10 @@ TaskRunnerNode._task_follow_line()
 
 巡线过程中检测到下视画面中的标记物体时自动触发动作。两者共享相同的抑制/恢复机制。
 
-| 标记 | class_id | 检测到后动作 | 抑制恢复条件 |
-|---|---|---|---|
-| 三角形 | 5 | 100 次双目接近 + 下沉 0.5m → 上升 0.5m | bbox 中心进入图像上 1/3 |
-| 正方形 | 6 | 100 次双目接近 + 自转 360° (3×120° BMOVE rz) | bbox 中心进入图像上 1/3 |
+| 标记 | 参数 | 默认 class_id | 检测到后动作 | 抑制恢复条件 |
+|---|---|---|---|---|---|
+| 三角形 | `triangle_class_id` | 5 | 100 次双目接近 + 下沉 0.5m → 上升 0.5m | bbox 中心进入图像上 1/3 |
+| 正方形 | `square_class_id` | 6 | 100 次双目接近 + 自转 360° (3×120° BMOVE rz) | bbox 中心进入图像上 1/3 |
 
 触发条件：标记 bbox 中心在图像下 4/5 区域（防止远处虚警）。
 抑制机制：处理完成后 `_*_approached=True`，同一标记不会重复触发；直到 bbox 进入上 1/3 区域才解除抑制（说明标记已从视野下方移出，露出新标记）。
@@ -392,6 +395,63 @@ float32 area_ratio             # 分割 mask 面积 / 图像面积
 ```
 
 左右下视的 LineState 通过**双角度圆周平均**融合（避免 +89°/-89° 边界问题）。
+
+### arrow_surface 任务 (ArrowSurfacer)
+
+`arrow_surface` 是箭头对准 + 扇区对准 + 投球复合任务。实现在独立的 `arrow_surfacer.py` 中。
+
+**流程：**
+
+```
+TaskRunnerNode._task_arrow_surface()
+  └─ ArrowSurfacer (独立子对象，仅在任务执行期间存活)
+       ├─ 订阅 /perception/detection/down_{left,right}  (DetectionArray)
+       ├─ 订阅 /basic_motion/pose_info  (PoseInfo, 30Hz)
+       ├─ 订阅 /perception/aruco/ids  (Int32MultiArray)
+       ├─ execute() — 9 步顺序
+       │    1. setrz → view_yaw (默认 90°)
+       │    2. 微步螺旋搜索箭头 (class=3)
+       │    3. 100 次双目接近箭头
+       │    4. WMOVE setz=-1 短暂出水 (ArUco 读取)
+       │    5. WMOVE setz=0.4 恢复深度
+       │    6. 前视 ArUco 扫描 (±15° 摇头 + 下潜上升 0.5m)
+       │    7. ArUco ID → 扇区映射
+       │    8. WTRAVEL 到扇区位置
+       │    9. 搜索扇区 + 100 次双目接近
+       │   10. log: throwing ball to <color> sector
+       └─ destroy() 清理订阅
+```
+
+**扇区映射（ArUco ID → 扇区颜色 + YOLO class_id）：**
+
+| ArUco ID | 颜色 | 默认 class_id |
+|---|---|---|
+| 1, 2 | yellow | 0 |
+| 3, 4 | green | 2 |
+| 5, 6 | red | 1 |
+| 无 ID | green (默认) | 2 |
+
+**任务参数（tasks.json 中 `arrow_surface` 的 params）：**
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `timeout` | 120.0 | 任务总超时 (s) |
+| `arrow_class_id` | 3 | 箭头 YOLO class_id |
+| `sector_x` / `sector_y` | 0.0 | 扇区目标位置 (odom) |
+| `yellow_class_id` | 0 | 黄色扇区 YOLO class_id |
+| `red_class_id` | 1 | 红色扇区 YOLO class_id |
+| `green_class_id` | 2 | 绿色扇区 YOLO class_id |
+| `view_yaw` | 90 | 前视搜索朝向 (°) |
+
+### ArUco 检测 (vision.py)
+
+vision 节点启动后台 daemon 线程（~20Hz），从前视左右半幅检测 ArUco 标记：
+
+- **字典**：`cv2.aruco.DICT_4X4_50`
+- **输入**：`/auv/front_cam/stitched` → 拆分 → 左右半幅分别检测
+- **输出**：`/perception/aruco/ids`（`std_msgs/Int32MultiArray`），仅含 ID 1-6
+- **线程安全**：`threading.Lock()` 保护共享帧，`copy()` 避免竞争
+- 由 `ArrowSurfacer._aruco_cb()` 消费，用于扇区选择
 
 ### AuvState — Sim-Only Topic
 
@@ -465,11 +525,13 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_auv/src/uv_task/config/tasks.json` | Competition task list (JSON array of `{name, params}`) |
 | `workspace_auv/src/uv_task/uv_task/task_runner.py` | Task executor, BasicMotion action client |
 | `workspace_auv/src/uv_task/uv_task/line_follower.py` | LineFollower: 管道巡线视觉伺服子对象 (双通道 PID + 搜索) |
+| `workspace_auv/src/uv_task/uv_task/arrow_surfacer.py` | ArrowSurfacer: 箭头对准+扇区对准+投球子对象 |
 | `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
 | `workspace_auv/src/uv_hm/uv_hm/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
-| `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, dataset capture |
+| `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, ArUco detection thread |
 | `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization (now uses full RPY for ray casting) |
 | `visualization/auv_visualizer.py` | PySide6 GUI: 2D map, objects/rays, node list, task status, force remote control |
+| `workspace_auv/src/uv_bringup/launch/sim_bringup.py` | Sim bringup: `sim_rate` param controls physics rate |
 | `workspace_auv/docs/basic_motion_action.md` | BasicMotion action interface reference |
 | `workspace_auv/docs/perception.md` | Perception system architecture + data flow |
 | `workspace_auv/docs/debug_guide.md` | Debugging guide (ros2 CLI, action test, simulation) |

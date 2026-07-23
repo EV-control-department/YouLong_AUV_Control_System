@@ -21,6 +21,7 @@ from uv_msgs.action import BasicMotion
 from uv_msgs.msg import ObjectPositionArray, TaskStatus
 from uv_msgs.srv import ExecTask, RunTask
 
+from uv_task.arrow_surfacer import ArrowSurfacer
 from uv_task.line_follower import LineFollower
 
 
@@ -92,6 +93,7 @@ class TaskRunnerNode(Node):
             'navigate': self._task_navigate,
             'wait': self._task_wait,
             'follow_line': self._task_follow_line,
+            'arrow_surface': self._task_arrow_surface,
         }
 
         # Action client
@@ -638,6 +640,14 @@ class TaskRunnerNode(Node):
             return follower.execute()
         finally:
             follower.destroy()
+
+    def _task_arrow_surface(self, p: dict) -> bool:
+        """执行箭头对准+出水任务 — 创建 ArrowSurfacer 子对象并运行。"""
+        surfacer = ArrowSurfacer(self, p)
+        try:
+            return surfacer.execute()
+        finally:
+            surfacer.destroy()
 
     # ========================================================================
     # Service handlers

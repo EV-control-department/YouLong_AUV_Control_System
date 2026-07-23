@@ -17,6 +17,7 @@ Parameters:
 
 import math
 import os
+import threading
 import time
 
 import cv2
@@ -24,6 +25,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from std_msgs.msg import Int32MultiArray
 
 from uv_msgs.msg import Detection, DetectionArray, LineState
 
@@ -198,6 +200,17 @@ class VisionNode(Node):
             for name in self.pub_det
         }
 
+        # ── ArUco detection ─────────────────────────────────────────
+        self._aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
+        self._aruco_params = cv2.aruco.DetectorParameters()
+        self._aruco_detector = cv2.aruco.ArucoDetector(self._aruco_dict, self._aruco_params)
+        self._aruco_pub = self.create_publisher(Int32MultiArray, '/perception/aruco/ids', 10)
+        self._front_lock = threading.Lock()
+        self._front_frames = None  # (left_img, right_img) for ArUco thread
+        self._aruco_thread = threading.Thread(target=self._aruco_loop, daemon=True)
+        self._aruco_thread.start()
+        self.get_logger().info('ArUco detection thread started')
+
     def _init_undistort(self):
         """Load camera matrix and distortion coefficients from parameters.
 
@@ -288,6 +301,27 @@ class VisionNode(Node):
         except ImportError:
             self.get_logger().warn('ultralytics not installed, detection disabled')
 
+    def _aruco_loop(self):
+        """Background thread: detect ArUco markers on front camera halves."""
+        while rclpy.ok():
+            with self._front_lock:
+                frames = self._front_frames
+                self._front_frames = None
+            if frames is not None:
+                try:
+                    all_ids = set()
+                    for img in frames:
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        _, ids, _ = self._aruco_detector.detectMarkers(gray)
+                        if ids is not None:
+                            all_ids.update(int(m) for m in ids.flatten() if 1 <= int(m) <= 6)
+                    msg = Int32MultiArray()
+                    msg.data = sorted(all_ids)
+                    self._aruco_pub.publish(msg)
+                except Exception as e:
+                    self.get_logger().warn(f'ArUco detection error: {e}')
+            time.sleep(0.05)  # ~20 Hz
+
     def _front_img_cb(self, msg: Image):
         self._process_image(msg, 'front')
 
@@ -312,6 +346,11 @@ class VisionNode(Node):
         mid = w // 2
         left_img = cv2.undistort(cv_img[:, :mid], K, D)
         right_img = cv2.undistort(cv_img[:, mid:], K, D)
+
+        # Store both front halves for ArUco detection thread
+        if camera == 'front':
+            with self._front_lock:
+                self._front_frames = (left_img.copy(), right_img.copy())
 
         left_name = f'{camera}_left'
         right_name = f'{camera}_right'

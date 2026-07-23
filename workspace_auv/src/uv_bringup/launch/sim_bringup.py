@@ -41,6 +41,10 @@ def generate_launch_description():
         'segment_model_path', default_value='',
         description='Path to YOLO-Seg model for pipe line following'
     )
+    declare_sim_rate = DeclareLaunchArgument(
+        'sim_rate', default_value='100.0',
+        description='Simulation physics rate (Hz). Higher = faster. Default 100 = real-time'
+    )
 
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
@@ -49,6 +53,7 @@ def generate_launch_description():
     scenario_desc = LaunchConfiguration('scenario_desc')
     publish_annotated = LaunchConfiguration('publish_annotated')
     segment_model_path = LaunchConfiguration('segment_model_path')
+    sim_rate = LaunchConfiguration('sim_rate')
 
     # Stonefish simulator paths
     # Use source directory path for Data (simulator needs direct filesystem access)
@@ -68,7 +73,7 @@ def generate_launch_description():
         arguments=[
             simulation_data_dir,
             PathJoinSubstitution([simulation_data_dir, scenario_desc]),
-            '100.0',
+            sim_rate,
             '1280',
             '720',
             'high',
@@ -137,6 +142,7 @@ def generate_launch_description():
         declare_scenario,
         declare_publish_annotated,
         declare_segment_model_path,
+        declare_sim_rate,
         LogInfo(msg=['Simulation data: ', simulation_data_dir]),
         LogInfo(msg=['Scenario: ', PathJoinSubstitution([simulation_data_dir, scenario_desc])]),
         stonefish_sim,

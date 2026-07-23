@@ -625,8 +625,7 @@ class BasicMotionNode(Node):
 
     def sety(self, y: float, timeout: float = 60.0) -> bool:
         p, _, _ = self.get_state()
-        return self._cmd_and_wait(p.x, y, p.z, p.rz,
-                                  AX_Y, timeout=timeout)
+        return self._cmd_and_wait(p.x, y, p.z, p.rz, timeout=timeout)
 
     # --- WMOVE 系列 (世界系步进) --------------------------------------------
 
@@ -848,7 +847,7 @@ class BasicMotionNode(Node):
             success = self.bmovexyzrz(x, y, z, yaw, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.WTRAVEL:
             axes = req.axes or 'xyzrz'
-            tx, ty, tz = t.x, t.y, t.z
+            tx, ty, tz, trz = t.x, t.y, t.z, t.rz
             if 'x' in axes: tx = x
             if 'y' in axes: ty = y
             if 'z' in axes.replace('rz', ''): tz = z
@@ -869,7 +868,7 @@ class BasicMotionNode(Node):
             self.get_logger().info(
                 f'BTRAVEL: body偏移=({x:.2f}, {y:.2f}) '
                 f'→ world偏移=({off.x:.2f}, {off.y:.2f})')
-            success = self._travel_world(tx_w, ty_w, tz_w, timeout=timeout)
+            success = self._travel_world(tx_w, ty_w, tz_w, p.rz, timeout=timeout)
         else:
             self.get_logger().error(f'Action rejected: unknown cmd_type={req.cmd_type}')
             result = BasicMotion.Result()
