@@ -21,6 +21,9 @@ from uv_msgs.action import BasicMotion
 from uv_msgs.msg import ObjectPositionArray, TaskStatus
 from uv_msgs.srv import ExecTask, RunTask
 
+from uv_task.arrow_surfacer import ArrowSurfacer
+from uv_task.line_follower import LineFollower
+
 
 class TaskRunnerNode(Node):
     """Task runner: JSON task loader and sequential executor."""
@@ -49,6 +52,10 @@ class TaskRunnerNode(Node):
         self._debug_task_name = None
         self._debug_executing = False
         self._debug_timeout = -1.0
+
+        # Camera parameters (used by LineFollower sub-task via get_parameter)
+        self.declare_parameter('down_image_width', 1280.0)
+        self.declare_parameter('down_image_height', 960.0)
 
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {
@@ -85,6 +92,8 @@ class TaskRunnerNode(Node):
             'btravelxyz': self._task_btravelxyz,
             'navigate': self._task_navigate,
             'wait': self._task_wait,
+            'follow_line': self._task_follow_line,
+            'arrow_surface': self._task_arrow_surface,
         }
 
         # Action client
@@ -182,7 +191,8 @@ class TaskRunnerNode(Node):
     # Action helper
     # ========================================================================
 
-    def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0):
+    def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
+                          quiet=False):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -193,6 +203,7 @@ class TaskRunnerNode(Node):
             target: list of 4 floats [x, y, z, yaw] (yaw in degrees)
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
+            quiet: if True, suppress per-goal INFO logs (errors still logged)
 
         Returns:
             (success: bool, message: str)
@@ -205,9 +216,10 @@ class TaskRunnerNode(Node):
         if self._debug_timeout > 0:
             effective_timeout = self._debug_timeout
 
-        t = [f'{v:.2f}' for v in target]
-        self.get_logger().info(
-            f'Send goal: {type_name} target=[{", ".join(t)}] timeout={effective_timeout:.0f}s')
+        if not quiet:
+            t = [f'{v:.2f}' for v in target]
+            self.get_logger().info(
+                f'Send goal: {type_name} target=[{", ".join(t)}] timeout={effective_timeout:.0f}s')
 
         if not self._action_client.wait_for_server(timeout_sec=2.0):
             self.get_logger().error('Action server not available')
@@ -223,7 +235,8 @@ class TaskRunnerNode(Node):
         while rclpy.ok() and not self.stopped and not send_future.done():
             time.sleep(0.01)
         if not rclpy.ok() or self.stopped:
-            self.get_logger().warn(f'Goal interrupted (stopped={self.stopped})')
+            if not quiet:
+                self.get_logger().warn(f'Goal interrupted (stopped={self.stopped})')
             return False, 'Stopped'
         if not send_future.done():
             self.get_logger().error('Goal send timeout')
@@ -236,22 +249,29 @@ class TaskRunnerNode(Node):
             self.get_logger().error(f'Goal rejected by server')
             return False, 'Goal rejected by server'
 
-        self.get_logger().info(f'Goal accepted, waiting for result...')
+        if not quiet:
+            self.get_logger().info(f'Goal accepted, waiting for result...')
 
         result_future = goal_handle.get_result_async()
         while rclpy.ok() and not self.stopped and not result_future.done():
             time.sleep(0.01)
         self._active_goal_handle = None
         if not rclpy.ok() or self.stopped:
-            self.get_logger().warn(f'Goal result interrupted (stopped={self.stopped})')
+            if not quiet:
+                self.get_logger().warn(f'Goal result interrupted (stopped={self.stopped})')
             return False, 'Stopped'
         if not result_future.done():
             self.get_logger().error('Result timeout')
             return False, 'Result timeout'
 
         result = result_future.result().result
-        status = 'SUCCESS' if result.success else f'FAILED: {result.message}'
-        self.get_logger().info(f'Goal result: {status}')
+        if not result.success:
+            t_str = ', '.join(f'{v:.2f}' for v in target)
+            self.get_logger().error(
+                f'{type_name} FAILED: {result.message} '
+                f'target=[{t_str}]')
+        elif not quiet:
+            self.get_logger().info(f'Goal result: SUCCESS')
         return result.success, result.message
 
     # ========================================================================
@@ -415,103 +435,90 @@ class TaskRunnerNode(Node):
     # --- WMOVE tasks (世界系步进：参数为绝对世界坐标，内部计算偏移) ---
 
     def _task_wmovex(self, p: dict) -> bool:
-        dx = p['x'] - self._cmd_x
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [dx, 0.0, 0.0, 0.0], "x")
+            BasicMotion.Goal.WMOVE, [p['x'], 0.0, 0.0, 0.0], "x")
         self.get_logger().info(f'wmovex: {msg}')
         if success:
             self._cmd_x = p['x']
         return success
 
     def _task_wmovey(self, p: dict) -> bool:
-        dy = p['y'] - self._cmd_y
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, dy, 0.0, 0.0], "y")
+            BasicMotion.Goal.WMOVE, [0.0, p['y'], 0.0, 0.0], "y")
         self.get_logger().info(f'wmovey: {msg}')
         if success:
             self._cmd_y = p['y']
         return success
 
     def _task_wmovez(self, p: dict) -> bool:
-        dz = p['z'] - self._cmd_z
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, 0.0, dz, 0.0], "z")
+            BasicMotion.Goal.WMOVE, [0.0, 0.0, p['z'], 0.0], "z")
         self.get_logger().info(f'wmovez: {msg}')
         if success:
             self._cmd_z = p['z']
         return success
 
     def _task_wmoverz(self, p: dict) -> bool:
-        drz = p['rz'] - self._cmd_yaw
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, 0.0, 0.0, drz], "rz")
+            BasicMotion.Goal.WMOVE, [0.0, 0.0, 0.0, p['rz']], "rz")
         self.get_logger().info(f'wmoverz: {msg}')
         if success:
             self._cmd_yaw = p['rz']
         return success
 
     def _task_wmovexy(self, p: dict) -> bool:
-        dx, dy = p['x'] - self._cmd_x, p['y'] - self._cmd_y
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [dx, dy, 0.0, 0.0], "xy")
+            BasicMotion.Goal.WMOVE, [p['x'], p['y'], 0.0, 0.0], "xy")
         self.get_logger().info(f'wmovexy: {msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
         return success
 
     def _task_wmovexyz(self, p: dict) -> bool:
-        dx, dy, dz = p['x'] - self._cmd_x, p['y'] - self._cmd_y, p['z'] - self._cmd_z
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [dx, dy, dz, 0.0], "xyz")
+            BasicMotion.Goal.WMOVE, [p['x'], p['y'], p['z'], 0.0], "xyz")
         self.get_logger().info(f'wmovexyz: {msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
         return success
 
-    # --- WTRAVEL tasks (世界系直线：参数为绝对世界坐标，内部计算偏移) ---
+    # --- WTRAVEL tasks (世界系直线：参数为绝对世界坐标) ---
 
     def _task_wtravelx(self, p: dict) -> bool:
-        dx = p['x'] - self._cmd_x
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [dx, 0.0, 0.0, 0.0], "x")
+            BasicMotion.Goal.WTRAVEL, [p['x'], 0.0, 0.0, 0.0], "x")
         self.get_logger().info(f'wtravelx: {msg}')
         if success:
             self._cmd_x = p['x']
         return success
 
     def _task_wtravely(self, p: dict) -> bool:
-        dy = p['y'] - self._cmd_y
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [0.0, dy, 0.0, 0.0], "y")
+            BasicMotion.Goal.WTRAVEL, [0.0, p['y'], 0.0, 0.0], "y")
         self.get_logger().info(f'wtravely: {msg}')
         if success:
             self._cmd_y = p['y']
         return success
 
     def _task_wtravelz(self, p: dict) -> bool:
-        dz = p['z'] - self._cmd_z
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [0.0, 0.0, dz, 0.0], "z")
+            BasicMotion.Goal.WTRAVEL, [0.0, 0.0, p['z'], 0.0], "z")
         self.get_logger().info(f'wtravelz: {msg}')
         if success:
             self._cmd_z = p['z']
         return success
 
     def _task_wtravelxy(self, p: dict) -> bool:
-        dx, dy = p['x'] - self._cmd_x, p['y'] - self._cmd_y
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [dx, dy, 0.0, 0.0], "xy")
+            BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], 0.0, 0.0], "xy")
         self.get_logger().info(f'wtravelxy: {msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
         return success
 
     def _task_wtravelxyz(self, p: dict) -> bool:
-        dx = p['x'] - self._cmd_x
-        dy = p['y'] - self._cmd_y
-        dz = p['z'] - self._cmd_z
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [dx, dy, dz, 0.0], "xyz")
+            BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], p['z'], 0.0], "xyz")
         self.get_logger().info(f'wtravelxyz: {msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
@@ -570,6 +577,45 @@ class TaskRunnerNode(Node):
 
     # --- Special tasks ---
 
+    def _move_to_nearest_object_xy(self, class_id: int) -> bool:
+        """SET 绝对定位到 class_id 最近物体的 XY 坐标。
+
+        使用 self.objects (ObjectPositionArray) 获取 3D 位置，
+        成功后更新 self._cmd_x/_cmd_y。
+        """
+        nearest = None
+        min_dist = float('inf')
+        for obj in self.objects.objects:
+            if obj.class_id == class_id:
+                dx = obj.world_x - self._cmd_x
+                dy = obj.world_y - self._cmd_y
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest = obj
+
+        if nearest is None:
+            self.get_logger().warn(
+                f'_move_to_nearest_object_xy: no object class_id={class_id}')
+            return False
+
+        self.get_logger().info(
+            f'_move_to_nearest_object_xy: class_id={class_id} '
+            f'at ({nearest.world_x:.2f}, {nearest.world_y:.2f}) '
+            f'dist={min_dist:.2f}m')
+
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [nearest.world_x, nearest.world_y, self._cmd_z, self._cmd_yaw],
+            'xy', timeout=15.0, quiet=True)
+        if success:
+            self._cmd_x = nearest.world_x
+            self._cmd_y = nearest.world_y
+        else:
+            self.get_logger().warn(
+                f'_move_to_nearest_object_xy failed: {msg}')
+        return success
+
     def _task_navigate(self, p: dict) -> bool:
         x = p.get('x', self._cmd_x)
         y = p.get('y', self._cmd_y)
@@ -586,6 +632,22 @@ class TaskRunnerNode(Node):
         duration = p.get('duration', 1.0)
         time.sleep(duration)
         return True
+
+    def _task_follow_line(self, p: dict) -> bool:
+        """执行管道巡线任务 — 创建 LineFollower 子对象并运行。"""
+        follower = LineFollower(self, p)
+        try:
+            return follower.execute()
+        finally:
+            follower.destroy()
+
+    def _task_arrow_surface(self, p: dict) -> bool:
+        """执行箭头对准+出水任务 — 创建 ArrowSurfacer 子对象并运行。"""
+        surfacer = ArrowSurfacer(self, p)
+        try:
+            return surfacer.execute()
+        finally:
+            surfacer.destroy()
 
     # ========================================================================
     # Service handlers

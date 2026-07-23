@@ -40,7 +40,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMainWindow,
     QPushButton,
@@ -60,7 +59,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSPresetProfiles
 from sensor_msgs.msg import Image as RosImage
-from uv_msgs.msg import ObjectPositionArray, PoseInfo, TaskStatus
+from uv_msgs.msg import AuvState, ObjectPositionArray, PoseInfo, TaskStatus
 from zit6_interfaces.msg import ZitSetpoint
 
 
@@ -177,17 +176,23 @@ def _ros_image_to_qpixmap(data: dict) -> QPixmap:
 # ROS 2 节点（运行在独立线程）
 # ══════════════════════════════════════════════════════════════════
 
+
 class ROS2Node(Node):
     """接收所有话题 + 轮询节点的 ROS 2 节点。"""
 
     def __init__(self, data_queue: queue.Queue):
         super().__init__("auv_visualizer")
         self._q = data_queue
+        self._pose_info_received_at = 0.0
 
         # 话题订阅
         qos_sensor = QoSPresetProfiles.SENSOR_DATA.value
         self._sub_pose = self.create_subscription(
             PoseInfo, "/basic_motion/pose_info", self._pose_cb, 10
+        )
+        # sim_bridge/MCU state is a fallback while basic_motion is unavailable.
+        self._sub_state = self.create_subscription(
+            AuvState, "/auv/state", self._state_cb, qos_sensor
         )
         self._sub_objects = self.create_subscription(
             ObjectPositionArray, "/perception/objects", self._objects_cb, qos_sensor
@@ -207,6 +212,18 @@ class ROS2Node(Node):
                 lambda msg, c=cam: self._annotated_cb(c, msg),
                 qos_sensor,
             )
+
+        # Annotated images require publish_annotated:=true.  Subscribe to the
+        # simulator's stitched cameras as a fallback so the panel always has
+        # live images during normal runs.
+        self.create_subscription(
+            RosImage, "/auv/front_cam/stitched",
+            lambda msg: self._stitched_cb("front", msg), qos_sensor,
+        )
+        self.create_subscription(
+            RosImage, "/auv/down_cam/stitched",
+            lambda msg: self._stitched_cb("down", msg), qos_sensor,
+        )
 
         # 节点列表轮询
         self._node_timer = self.create_timer(2.0, self._poll_nodes)
@@ -228,6 +245,7 @@ class ROS2Node(Node):
         self._setpoint_pub.publish(msg)
 
     def _pose_cb(self, msg: PoseInfo):
+        self._pose_info_received_at = time.monotonic()
         self._q.put(("pose", {
             "x": msg.robot_x, "y": msg.robot_y, "z": msg.robot_z,
             "roll": msg.robot_roll, "pitch": msg.robot_pitch, "yaw": msg.robot_yaw,
@@ -235,6 +253,21 @@ class ROS2Node(Node):
             "target_z": msg.target_z, "target_yaw": msg.target_yaw,
             "origin_x": msg.origin_x, "origin_y": msg.origin_y,
             "origin_z": msg.origin_z, "origin_yaw": msg.origin_yaw,
+            "stamp": time.time(),
+        }))
+
+    def _state_cb(self, msg: AuvState):
+        """Use simulator/MCU state only if the odom pose stream is absent."""
+        if time.monotonic() - self._pose_info_received_at <= 1.0:
+            return
+        self._q.put(("pose", {
+            "x": msg.pos_x, "y": msg.pos_y, "z": msg.pos_z,
+            "roll": 0.0, "pitch": 0.0, "yaw": math.degrees(msg.yaw),
+            "target_x": msg.target_x, "target_y": msg.target_y,
+            "target_z": msg.target_z,
+            "target_yaw": math.degrees(msg.target_yaw),
+            "origin_x": 0.0, "origin_y": 0.0,
+            "origin_z": 0.0, "origin_yaw": 0.0,
             "stamp": time.time(),
         }))
 
@@ -263,12 +296,36 @@ class ROS2Node(Node):
 
     def _annotated_cb(self, cam: str, msg: RosImage):
         """标注图像回调 — 只传原始数据到 GUI 线程解码。"""
+        self._queue_image(cam, msg.width, msg.height, msg.encoding, msg.data)
+
+    def _stitched_cb(self, camera: str, msg: RosImage):
+        """Split a simulator stitched frame into left/right display images."""
+        if msg.encoding not in ("bgr8", "rgb8") or msg.width < 2:
+            return
+        row_bytes = int(msg.width) * 3
+        if msg.step < row_bytes or len(msg.data) < int(msg.height) * msg.step:
+            return
+        rows = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
+        image = rows[:, :row_bytes].reshape(msg.height, msg.width, 3)
+        midpoint = msg.width // 2
+        self._queue_image(
+            f"{camera}_left", midpoint, msg.height, msg.encoding,
+            image[:, :midpoint].tobytes(),
+        )
+        self._queue_image(
+            f"{camera}_right", msg.width - midpoint, msg.height, msg.encoding,
+            image[:, midpoint:].tobytes(),
+        )
+
+    def _queue_image(self, cam: str, width: int, height: int,
+                     encoding: str, image_data):
+        """Copy an image into the GUI queue with tightly packed rows."""
         self._q.put(("annotated", {
             "cam": cam,
-            "width": msg.width,
-            "height": msg.height,
-            "encoding": msg.encoding,
-            "data": bytes(msg.data),  # copy 出 bytes，避免 GC 问题
+            "width": width,
+            "height": height,
+            "encoding": encoding,
+            "data": bytes(image_data),  # copy 出 bytes，避免 GC 问题
         }))
 
     def _poll_nodes(self):
@@ -372,7 +429,6 @@ class ObjectGraphicsItem(QGraphicsItem):
         self._pen = QPen(color.darker(150), 1.5)
 
         # 标签: class_id:instance_id + 名称
-        name = CLASS_NAMES.get(class_id, f"?")
         self._label = QGraphicsTextItem(self)
         self._label.setDefaultTextColor(color)
         self._label.setFont(QFont("Monospace", 8, QFont.Weight.Bold))
@@ -641,14 +697,14 @@ class ControlPanel(QWidget):
 
     # 按钮 → (Fx, Fy, Fz, Mz) body-force 映射
     _FORCE_MAP = {
-        "Fwd":   ( 1,  0,  0,  0),   # +Fx 前进
-        "Back":  (-1,  0,  0,  0),   # -Fx 后退
-        "Left":  ( 0, -1,  0,  0),   # -Fy 左移
-        "Right": ( 0,  1,  0,  0),   # +Fy 右移
-        "Asc":   ( 0,  0, -1,  0),   # -Fz 上浮 (NED up)
-        "Desc":  ( 0,  0,  1,  0),   # +Fz 下潜 (NED down)
-        "Yaw-L": ( 0,  0,  0,  1),   # +Mz 顺时针
-        "Yaw-R": ( 0,  0,  0, -1),   # -Mz 逆时针
+        "Fwd": (1, 0, 0, 0),      # +Fx 前进
+        "Back": (-1, 0, 0, 0),    # -Fx 后退
+        "Left": (0, -1, 0, 0),    # -Fy 左移
+        "Right": (0, 1, 0, 0),    # +Fy 右移
+        "Asc": (0, 0, -1, 0),     # -Fz 上浮 (NED up)
+        "Desc": (0, 0, 1, 0),     # +Fz 下潜 (NED down)
+        "Yaw-L": (0, 0, 0, 1),    # +Mz 顺时针
+        "Yaw-R": (0, 0, 0, -1),   # -Mz 逆时针
     }
 
     def __init__(self, publish_cb):
@@ -1106,7 +1162,7 @@ class VisualizerGUI(QMainWindow):
         self._obj_table.setRowCount(len(self._objects))
         for row, obj in enumerate(self._objects):
             color = OBJECT_COLORS.get(obj.class_id, DEFAULT_OBJECT_COLOR)
-            name = CLASS_NAMES.get(obj.class_id, f"?")
+            name = CLASS_NAMES.get(obj.class_id, "?")
             id_item = QTableWidgetItem(f"{obj.class_id}:{obj.instance_id}")
             id_item.setForeground(color)
             id_item.setFont(QFont("Monospace", 10, QFont.Weight.Bold))
@@ -1114,9 +1170,11 @@ class VisualizerGUI(QMainWindow):
             name_item = QTableWidgetItem(name)
             name_item.setForeground(color)
             self._obj_table.setItem(row, 1, name_item)
-            for col, val in enumerate([f"{obj.x:.2f}", f"{obj.y:.2f}",
-                                        f"{obj.z:.2f}", f"{obj.confidence:.2f}",
-                                        str(obj.num_obs)], 2):
+            values = [
+                f"{obj.x:.2f}", f"{obj.y:.2f}", f"{obj.z:.2f}",
+                f"{obj.confidence:.2f}", str(obj.num_obs),
+            ]
+            for col, val in enumerate(values, 2):
                 item = QTableWidgetItem(val)
                 item.setForeground(TEXT_COLOR)
                 self._obj_table.setItem(row, col, item)

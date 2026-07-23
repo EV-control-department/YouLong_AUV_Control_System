@@ -688,13 +688,15 @@ void ROS2Interface::PublishEventBasedCamera(rclcpp::PublisherBase::SharedPtr pub
     msg.header.stamp = nh_->get_clock()->now();
     ebc->getResolution(msg.width, msg.height);
     msg.events.resize(ebc->getLastEventCount());
+    const rclcpp::Time base_time(msg.header.stamp);
     for(size_t i=0; i<msg.events.size(); ++i)
     {
         //First 4 bytes - pixel coords
         msg.events[i].x = (unsigned int)(data[i*2] >> 16);
         msg.events[i].y = (unsigned int)(data[i*2] & 0xFFFF); 
         //Next 4 bytes - polarity and time
-        msg.events[i].ts = msg.header.stamp + rclcpp::Duration(0, abs(data[i*2+1]));
+        rclcpp::Duration offset(0, abs(data[i*2+1]));
+        msg.events[i].ts = static_cast<builtin_interfaces::msg::Time>(base_time + offset);
         msg.events[i].polarity = data[i*2+1] > 0;
     }
     std::static_pointer_cast<rclcpp::Publisher<stonefish_ros2::msg::EventArray>>(pub)->publish(msg);

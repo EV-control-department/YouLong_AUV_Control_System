@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AuvState.msg"
   "msg/Detection.msg"
   "msg/DetectionArray.msg"
+  "msg/LineState.msg"
   "msg/ObjectPosition.msg"
   "msg/ObjectPositionArray.msg"
   "msg/PidGains.msg"

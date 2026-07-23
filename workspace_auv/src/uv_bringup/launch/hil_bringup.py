@@ -49,6 +49,10 @@ def generate_launch_description():
         'publish_annotated', default_value='false',
         description='Publish YOLO annotated images with detection boxes'
     )
+    declare_segment_model_path = DeclareLaunchArgument(
+        'segment_model_path', default_value='',
+        description='Path to YOLO-Seg model for pipe line following'
+    )
 
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
@@ -57,6 +61,7 @@ def generate_launch_description():
     serial_dev = LaunchConfiguration('serial_dev')
     serial_baud = LaunchConfiguration('serial_baud')
     publish_annotated = LaunchConfiguration('publish_annotated')
+    segment_model_path = LaunchConfiguration('segment_model_path')
 
     # ── Stonefish simulator ────────────────────────────────────────
     from ament_index_python.packages import get_package_share_directory
@@ -123,7 +128,8 @@ def generate_launch_description():
         executable='vision',
         name='vision',
         output='screen',
-        parameters=[{'publish_annotated': publish_annotated}],
+        parameters=[{'publish_annotated': publish_annotated,
+                      'segment_model_path': segment_model_path}],
         condition=IfCondition(enable_ai),
     )
 
@@ -162,6 +168,7 @@ def generate_launch_description():
         declare_serial_dev,
         declare_serial_baud,
         declare_publish_annotated,
+        declare_segment_model_path,
         LogInfo(msg=['HIL simulation data dir: ', simulation_data_dir]),
         LogInfo(msg=['micro-ROS serial device: ', serial_dev, ' @ ', serial_baud]),
         stonefish_sim,

@@ -11,6 +11,10 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
         ('share/' + package_name + '/config', ['config/front.npz', 'config/down.npz']),
+        ('share/' + package_name + '/resource', [
+            'resource/box_best.pt',
+            'resource/seg_best.pt',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
