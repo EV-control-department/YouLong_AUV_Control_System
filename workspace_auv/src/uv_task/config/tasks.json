@@ -5,6 +5,7 @@
     {"name": "setz", "params": {"z": 0.3}},
     {"name": "wtravelxy", "params": {"x": 2.4, "y": -0.8}},
     {"name": "setrz", "params": {"rz": 50}},
+
     {"name": "follow_line", "params": {
       "timeout": 240.0,
       "triangle_class_id": 5,
@@ -13,7 +14,9 @@
       "stop_when_marker": true,
       "forward_step": 0.30
     }},
+
     {"name": "wtravelxy", "params": {"x": 5, "y": 6}},
+
     {"name": "arrow_surface", "params": {
       "timeout": 300.0,
       "arrow_class_id": 3,
@@ -24,7 +27,16 @@
       "green_class_id": 2,
       "view_yaw": 90
     }},
-    {"name": "wtravelxy", "params": {"x": 0, "y": 0}},
-    {"name": "setz", "params": {"z": -1}}
+    
+    {"name": "wtravelxy", "params": {"x": 0.4, "y": 0.2}},
+
+    {"name": "release_sampler", "params": {
+      "align_yaw": 180.0,
+      "start_class_id": 4,
+      "approach_z": -0.3,
+      "approach_x": -0.3,
+      "approach_timeout": 15.0,
+      "release_angle_rad": -1.57
+    }}
   ]
 }

@@ -59,6 +59,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSPresetProfiles
 from sensor_msgs.msg import Image as RosImage
+from std_msgs.msg import Float32, UInt8
 from uv_msgs.msg import AuvState, ObjectPositionArray, PoseInfo, TaskStatus
 from zit6_interfaces.msg import ZitSetpoint
 
@@ -112,6 +113,31 @@ class TaskSnapshot:
     total: int = 0
     name: str = ""
     error: str = ""
+
+
+@dataclass
+class LightSnapshot:
+    """灯光状态快照。"""
+    value: int = 0  # 0=OFF, 1=YELLOW, 2=GREEN, 3=RED
+
+    @property
+    def color_name(self) -> str:
+        return {0: "OFF", 1: "YELLOW", 2: "GREEN", 3: "RED"}.get(self.value, "?")
+
+    @property
+    def qcolor(self) -> QColor:
+        return {0: QColor("#555555"), 1: QColor("#F1C40F"),
+                2: QColor("#2ECC71"), 3: QColor("#E74C3C")}.get(self.value, QColor("#555"))
+
+
+@dataclass
+class ServoSnapshot:
+    """舵机角度快照。"""
+    angle_rad: float = 0.0
+
+    @property
+    def angle_deg(self) -> float:
+        return math.degrees(self.angle_rad)
 
 
 @dataclass
@@ -199,6 +225,12 @@ class ROS2Node(Node):
         )
         self._sub_task = self.create_subscription(
             TaskStatus, "/task/status", self._task_cb, 10
+        )
+        self._sub_light = self.create_subscription(
+            UInt8, "/zit6/cmd/light", self._light_cb, 10,
+        )
+        self._sub_servo = self.create_subscription(
+            Float32, "/zit6/cmd/servo", self._servo_cb, 10,
         )
 
         # 遥控发布
@@ -293,6 +325,12 @@ class ROS2Node(Node):
             "name": msg.current_task_name,
             "error": msg.error_message,
         }))
+
+    def _light_cb(self, msg: UInt8):
+        self._q.put(("light", {"value": int(msg.data)}))
+
+    def _servo_cb(self, msg: Float32):
+        self._q.put(("servo", {"angle_rad": float(msg.data)}))
 
     def _annotated_cb(self, cam: str, msg: RosImage):
         """标注图像回调 — 只传原始数据到 GUI 线程解码。"""
@@ -811,6 +849,8 @@ class VisualizerGUI(QMainWindow):
         self._pose = PoseSnapshot()
         self._objects: List[ObjectSnapshot] = []
         self._task = TaskSnapshot()
+        self._light = LightSnapshot()
+        self._servo = ServoSnapshot()
         self._nodes: List[NodeInfo] = []
         self._annotated: Dict[str, QPixmap] = {}  # cam_name → pixmap
 
@@ -1049,6 +1089,37 @@ class VisualizerGUI(QMainWindow):
         task_layout.addStretch()
         layout.addWidget(grp_task)
 
+        # 灯光 + 舵机指示
+        grp_hw = QGroupBox("硬件状态")
+        hw_layout = QVBoxLayout(grp_hw)
+
+        # 灯光行
+        light_row = QHBoxLayout()
+        light_row.addWidget(QLabel("灯光:"))
+        self._light_indicator = QLabel("  ●  ")
+        self._light_indicator.setFont(QFont("Monospace", 16, QFont.Weight.Bold))
+        self._light_indicator.setStyleSheet(
+            f"color: {LightSnapshot().qcolor.name()};")
+        light_row.addWidget(self._light_indicator)
+        self._light_label = QLabel("OFF")
+        self._light_label.setStyleSheet("font-weight: bold;")
+        light_row.addWidget(self._light_label)
+        light_row.addStretch()
+        hw_layout.addLayout(light_row)
+
+        # 舵机行
+        servo_row = QHBoxLayout()
+        servo_row.addWidget(QLabel("舵机:"))
+        self._servo_label = QLabel("0.00°")
+        self._servo_label.setStyleSheet(
+            f"color: {AUV_COLOR.name()}; font-weight: bold;")
+        servo_row.addWidget(self._servo_label)
+        servo_row.addStretch()
+        hw_layout.addLayout(servo_row)
+
+        hw_layout.addStretch()
+        layout.addWidget(grp_hw)
+
         return widget
 
     def _create_camera_panel(self) -> QWidget:
@@ -1101,6 +1172,10 @@ class VisualizerGUI(QMainWindow):
                     self._annotated[data["cam"]] = pix
             elif msg_type == "nodes":
                 self._nodes = [NodeInfo(**n) for n in data]
+            elif msg_type == "light":
+                self._light = LightSnapshot(**data)
+            elif msg_type == "servo":
+                self._servo = ServoSnapshot(**data)
 
         # 频率统计（每秒更新）
         now = time.time()
@@ -1198,6 +1273,17 @@ class VisualizerGUI(QMainWindow):
         )
         self._task_error_label.setText(self._task.error or "")
 
+        # 灯光指示
+        self._light_indicator.setText("  ●  ")
+        self._light_indicator.setStyleSheet(
+            f"color: {self._light.qcolor.name()}; font-size: 18px;")
+        self._light_label.setText(self._light.color_name)
+        self._light_label.setStyleSheet(
+            f"color: {self._light.qcolor.name()}; font-weight: bold;")
+
+        # 舵机指示
+        self._servo_label.setText(f"{self._servo.angle_deg:.1f}°")
+
     def _update_camera_panel(self):
         """刷新四个通道的标注图像。"""
         for cam, lbl in self._cam_labels.items():
@@ -1209,7 +1295,8 @@ class VisualizerGUI(QMainWindow):
         self._status_label.setText(
             f"Pose: {self._pose_rate:.1f}Hz | Objects: {self._obj_rate:.1f}Hz | "
             f"Task: {self._task_rate:.1f}Hz | Nodes: {len(self._nodes)} | "
-            f"Scale: {self._map._scale:.0f} px/m"
+            f"Scale: {self._map._scale:.0f} px/m | "
+            f"Light: {self._light.color_name} | Servo: {self._servo.angle_deg:.1f}°"
         )
 
     # ── 清理 ───────────────────────────────────────────────────

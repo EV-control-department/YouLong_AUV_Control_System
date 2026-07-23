@@ -247,7 +247,7 @@ print('SET:', result.success, result.message)
 - **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them (no service call needed)
 - **Task map**: JSON `name` field maps to a method via `task_map` dict. Supports SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL tasks, plus `start`, `navigate`, `wait`, `follow_line`, `arrow_surface`. See `docs/debug_guide.md` for full task list.
 - **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
-- **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
+- **Status publisher** (`/task/status`, 2Hz): publishes current task index, total count, task name, status string
 
 **ActionClient pattern (SingleThreadedExecutor + daemon thread):**
 
@@ -318,7 +318,7 @@ TaskRunnerNode._task_follow_line()
 **前进步长自适应：** 修正量越大前进越慢 `forward = forward_base × (1 - 0.5 × total_correction)`，最少保持 25% 基础步长。
 
 **YOLO 丢帧恢复：**
-- 连续丢帧 ≤ `lost_tolerance`(默认 50 帧) → coast 模式：用最后有效 heading 盲跟，前进步长减半，不更新 I/D 状态
+- 连续丢帧 ≤ `lost_tolerance`(默认 100 帧) → coast 模式：用最后有效 heading 盲跟，前进步长减半，不更新 I/D 状态
 - 超过阈值 → 进入搜索模式
 
 **搜索阶段（8 方向扩展方框螺旋）：**
@@ -447,7 +447,7 @@ TaskRunnerNode._task_arrow_surface()
 
 vision 节点启动后台 daemon 线程（~20Hz），从前视左右半幅检测 ArUco 标记：
 
-- **字典**：`cv2.aruco.DICT_4X4_50`
+- **字典**：`cv2.aruco.DICT_4X4_1000`
 - **输入**：`/auv/front_cam/stitched` → 拆分 → 左右半幅分别检测
 - **输出**：`/perception/aruco/ids`（`std_msgs/Int32MultiArray`），仅含 ID 1-6
 - **线程安全**：`threading.Lock()` 保护共享帧，`copy()` 避免竞争
@@ -458,16 +458,6 @@ vision 节点启动后台 daemon 线程（~20Hz），从前视左右半幅检测
 `auv_msgs/msg/AuvState` is published **only** by `stonefish_ros2` (the simulator). Real AUV hardware does not publish this topic. Nodes running on the real AUV must not depend on it.
 
 For pose feedback, perception nodes use `/basic_motion/pose_info` (`uv_msgs/PoseInfo`, 30Hz) published by `basic_motion`. This works in both simulation and real-hardware modes.
-
-### sim_bridge Known Issues
-
-`workspace_sim/src/uv_sim/uv_sim/sim_bridge.py` line 616:
-
-```python
-cmd_rz = -float(self.pid_yaw_rate.step(eyaw_rate, dt))    # BUG: negation inverts yaw polarity
-```
-
-The `-` sign inverts yaw control polarity, causing the AUV to spin instead of holding depth/yaw. Fix: remove the negation → `cmd_rz = float(...)`.
 
 ### 6-DOF State Feedback (migrated 2026-07-20)
 
@@ -527,7 +517,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_auv/src/uv_task/uv_task/line_follower.py` | LineFollower: 管道巡线视觉伺服子对象 (双通道 PID + 搜索) |
 | `workspace_auv/src/uv_task/uv_task/arrow_surfacer.py` | ArrowSurfacer: 箭头对准+扇区对准+投球子对象 |
 | `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
-| `workspace_auv/src/uv_hm/uv_hm/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
+| `workspace_sim/src/uv_sim/uv_sim/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
 | `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, ArUco detection thread |
 | `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization (now uses full RPY for ray casting) |
 | `visualization/auv_visualizer.py` | PySide6 GUI: 2D map, objects/rays, node list, task status, force remote control |

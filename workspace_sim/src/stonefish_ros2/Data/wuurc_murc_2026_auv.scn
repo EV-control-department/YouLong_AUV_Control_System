@@ -40,7 +40,7 @@
 		<look name="white" rgb="0.98 0.98 0.98" roughness="0.25"/>
 		<look name="basket" rgb="0.12 0.20 0.28" roughness="0.5"/>
 		<look name="yellow_marker" rgb="1.0 0.45 0.0" roughness="0.3" texture="yellow_triangle.png"/>
-		<look name="aruco_tag" gray="1.0" roughness="0.3" texture="aruco_4x4_id4.png"/>
+		<look name="aruco_tag" gray="1.0" roughness="0.3" texture="aruco_4x4_id1.png"/>
 	</looks>
 	<!-- 19x13 rule-coordinate pool scaled by 0.7. Water depth is 2.0 m; NED Z points down and water surface is Z=0. -->
 	<static name="PoolBottomTile00_00" type="box">

@@ -11,22 +11,40 @@ import os
 import threading
 import time
 
+import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from std_msgs.msg import Float32, UInt8
 from std_srvs.srv import Trigger
 
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import ObjectPositionArray, TaskStatus
+from uv_msgs.msg import DetectionArray, ObjectPositionArray, PoseInfo, TaskStatus
 from uv_msgs.srv import ExecTask, RunTask
 
+from uv_task.arrow_surfacer import (
+    _DOWN_CX, _DOWN_CY, _DOWN_FX, _DOWN_FY,
+    _DOWN_OFFSET_LEFT, _DOWN_OFFSET_RIGHT, _DOWN_OPTICAL_TO_BODY,
+    _euler_to_rotation_matrix, _ray_intersection_midpoint,
+)
 from uv_task.arrow_surfacer import ArrowSurfacer
 from uv_task.line_follower import LineFollower
 
 
 class TaskRunnerNode(Node):
     """Task runner: JSON task loader and sequential executor."""
+
+    # ── 灯光常量 (/zit6/cmd/light) ─────────────────────────────────
+    LIGHT_OFF = 0
+    LIGHT_YELLOW = 1
+    LIGHT_GREEN = 2
+    LIGHT_RED = 3
+
+    # ── 舵机角度 (/zit6/cmd/servo, rad) ────────────────────────────
+    ANGLE_DROP_BEACON = math.pi / 2       # ~1.57 rad  投信标
+    ANGLE_SAMPLE_WATER = 0.0               # 采水样
+    ANGLE_RELEASE_SAMPLER = -math.pi / 2   # ~-1.57 rad  释放取水器
 
     def __init__(self):
         super().__init__('task_runner')
@@ -39,6 +57,11 @@ class TaskRunnerNode(Node):
         self._cmd_z = 0.0
         self._cmd_yaw = 0.0
         self.objects = ObjectPositionArray()
+
+        # ── 下视感知（release_sampler 对齐用）──
+        self._perception_lock = threading.RLock()
+        self._down_detections = {}   # camera_name → (monotonic, DetectionArray)
+        self._robot_pose = None      # (x, y, z, roll_deg, pitch_deg, yaw_deg)
 
         self.tasks = []
         self.current_index = 0
@@ -94,6 +117,9 @@ class TaskRunnerNode(Node):
             'wait': self._task_wait,
             'follow_line': self._task_follow_line,
             'arrow_surface': self._task_arrow_surface,
+            'drop_beacon': self._task_drop_beacon,
+            'take_water_sample': self._task_take_water_sample,
+            'release_sampler': self._task_release_sampler,
         }
 
         # Action client
@@ -104,9 +130,17 @@ class TaskRunnerNode(Node):
         # Subscribers
         self.create_subscription(
             ObjectPositionArray, '/perception/objects', self._objects_cb, 10)
+        for cam in ('down_left', 'down_right'):
+            self.create_subscription(
+                DetectionArray, f'/perception/detection/{cam}',
+                lambda msg, c=cam: self._det_cb(c, msg), 10)
+        self.create_subscription(
+            PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10)
 
         # Publishers
         self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
+        self.pub_light = self.create_publisher(UInt8, '/zit6/cmd/light', 10)
+        self.pub_servo = self.create_publisher(Float32, '/zit6/cmd/servo', 10)
 
         # Services
         self.create_service(RunTask, '/task/run', self._run_task_cb)
@@ -121,6 +155,120 @@ class TaskRunnerNode(Node):
 
     def _objects_cb(self, msg: ObjectPositionArray):
         self.objects = msg
+
+    def _det_cb(self, camera_name: str, msg: DetectionArray):
+        with self._perception_lock:
+            self._down_detections[camera_name] = (time.monotonic(), msg)
+
+    def _pose_cb(self, msg: PoseInfo):
+        with self._perception_lock:
+            self._robot_pose = (msg.robot_x, msg.robot_y, msg.robot_z,
+                                msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
+
+    # ── 灯光 / 舵机控制 ────────────────────────────────────────────
+
+    def set_light(self, color: int, label: str):
+        msg = UInt8(data=color)
+        self.pub_light.publish(msg)
+        self.get_logger().info(f'💡 LIGHT ON: {label} (value={color})')
+
+    def light_off(self):
+        msg = UInt8(data=0)
+        self.pub_light.publish(msg)
+        self.get_logger().info('💡 LIGHT OFF')
+
+    def set_servo(self, angle_rad: float, label: str):
+        msg = Float32(data=float(angle_rad))
+        self.pub_servo.publish(msg)
+        self.get_logger().info(
+            f'⚙️  SERVO: {label} (angle={angle_rad:.2f} rad)')
+
+    # ── 下视对齐工具 ───────────────────────────────────────────────
+
+    _SEARCH_DIRS = [
+        (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0),
+        (-1.0, 0.0), (-1.0, -1.0), (0.0, -1.0), (1.0, -1.0),
+    ]
+
+    def _best_down_detection(self, class_id: int):
+        max_age = 0.60; now = time.monotonic(); candidates = []
+        with self._perception_lock:
+            arrays = list(self._down_detections.items())
+        for _n, (t, a) in arrays:
+            if now - t > max_age: continue
+            for d in a.detections:
+                if d.class_id == class_id: candidates.append(d)
+        return max(candidates, key=lambda d: d.confidence) if candidates else None
+
+    def _stereo_pair(self, class_id: int):
+        max_age = 0.60; now = time.monotonic()
+        with self._perception_lock:
+            le = self._down_detections.get('down_left')
+            re = self._down_detections.get('down_right')
+        if le is None or re is None: return None
+        lt, lm = le; rt, rm = re
+        if now - lt > max_age or now - rt > max_age: return None
+        bl = max((d for d in lm.detections if d.class_id == class_id),
+                 key=lambda d: d.confidence, default=None)
+        br = max((d for d in rm.detections if d.class_id == class_id),
+                 key=lambda d: d.confidence, default=None)
+        return (bl, br) if bl and br else None
+
+    def _triangulate(self, class_id: int):
+        pair = self._stereo_pair(class_id)
+        with self._perception_lock: pose = self._robot_pose
+        if pair is None or pose is None: return None
+        ld, rd = pair
+        rx, ry, rz, roll, pitch, yaw = pose
+        R = _euler_to_rotation_matrix(roll, pitch, yaw)
+        rp = np.array([rx, ry, rz])
+        def _ray(px, py, off):
+            vc = np.array([(px - _DOWN_CX) / _DOWN_FX, (py - _DOWN_CY) / _DOWN_FY, 1.0])
+            vc /= np.linalg.norm(vc)
+            vb = _DOWN_OPTICAL_TO_BODY @ vc
+            vw = R @ vb; vw /= np.linalg.norm(vw)
+            return rp + R @ off, vw
+        lo, ld_ray = _ray(ld.pixel_x, ld.pixel_y, _DOWN_OFFSET_LEFT)
+        ro, rd_ray = _ray(rd.pixel_x, rd.pixel_y, _DOWN_OFFSET_RIGHT)
+        pos = _ray_intersection_midpoint(lo, ld_ray, ro, rd_ray)
+        return (float(pos[0]), float(pos[1]), float(pos[2])) if pos is not None else None
+
+    def _search_for_class(self, class_id: int, label: str) -> bool:
+        sd = 0; ss = 0.08; sm = 3.0; sp = 0.30; mi = 0.01
+        while ss <= sm:
+            if self.stopped: return False
+            if self._best_down_detection(class_id):
+                self.get_logger().info(f'Search [{label}]: found'); return True
+            dx, dy = self._SEARCH_DIRS[sd]
+            td, tu = ss * dx, ss * dy
+            dist = math.sqrt(td**2 + tu**2); n = max(1, int(dist / mi))
+            sx, sy = td / n, tu / n
+            for _ in range(n):
+                if self.stopped: return False
+                tx = self._cmd_x + sx; ty = self._cmd_y + sy
+                self._send_action_goal(BasicMotion.Goal.SET,
+                    [tx, ty, self._cmd_z, self._cmd_yaw],
+                    'xy', timeout=0.01, quiet=True)
+                self._cmd_x = tx; self._cmd_y = ty
+                if self._best_down_detection(class_id):
+                    self.get_logger().info(f'Search [{label}]: found!'); return True
+            sd = (sd + 1) % 8
+            if sd == 0: ss += sp
+        return False
+
+    def _align_to_class(self, class_id: int, label: str) -> bool:
+        if self._best_down_detection(class_id) is None:
+            self.get_logger().info(f'Align [{label}]: searching...')
+            if not self._search_for_class(class_id, label): return False
+        for i in range(200):
+            if self.stopped: return False
+            tgt = self._triangulate(class_id)
+            if tgt is None: time.sleep(0.05); continue
+            self._send_action_goal(BasicMotion.Goal.SET,
+                [tgt[0], tgt[1], self._cmd_z, self._cmd_yaw],
+                'xy', timeout=0.04, quiet=True)
+            self._cmd_x = tgt[0]; self._cmd_y = tgt[1]
+        self.get_logger().info(f'Align [{label}]: complete'); return True
 
     # ========================================================================
     # Task loading
@@ -648,6 +796,58 @@ class TaskRunnerNode(Node):
             return surfacer.execute()
         finally:
             surfacer.destroy()
+
+    # ── 投信标 / 采水 / 释放取水器 ─────────────────────────────────
+
+    def _task_drop_beacon(self, p: dict) -> bool:
+        angle = float(p.get('angle_rad', self.ANGLE_DROP_BEACON))
+        self.set_servo(angle, 'drop beacon')
+        self.get_logger().info('🔫 BEACON DROPPED!')
+        return True
+
+    def _task_take_water_sample(self, p: dict) -> bool:
+        angle = float(p.get('angle_rad', self.ANGLE_SAMPLE_WATER))
+        self.set_servo(angle, 'take water sample')
+        self.get_logger().info('💧 WATER SAMPLE TAKEN!')
+        return True
+
+    def _task_release_sampler(self, p: dict) -> bool:
+        """转向 → 对齐 START 标记 → 上浮靠岸 → 释放取水器。"""
+        align_yaw = float(p.get('align_yaw', 180.0))
+        start_cid = int(p.get('start_class_id', 4))
+        approach_z = float(p.get('approach_z', -0.3))
+        approach_x = float(p.get('approach_x', -0.3))
+        approach_timeout = float(p.get('approach_timeout', 15.0))
+        release_angle = float(p.get('release_angle_rad',
+                                    self.ANGLE_RELEASE_SAMPLER))
+
+        self.get_logger().info(
+            f'🧭 release_sampler: turning to rz={align_yaw:.1f}°')
+        self._send_action_goal(
+            BasicMotion.Goal.WMOVE,
+            [self._cmd_x, self._cmd_y, self._cmd_z, align_yaw],
+            'rz', timeout=15.0)
+        self._cmd_yaw = align_yaw
+
+        self.get_logger().info(
+            f'🎯 release_sampler: aligning to START marker (class={start_cid})')
+        self._align_to_class(start_cid, 'START marker')
+
+        self.get_logger().info(
+            f'🌊🏖️  release_sampler: wmove z={approach_z} x={approach_x}')
+        self._send_action_goal(
+            BasicMotion.Goal.WMOVE,
+            [approach_x, self._cmd_y, approach_z, self._cmd_yaw],
+            'xz', timeout=approach_timeout)
+        self._send_action_goal(
+            BasicMotion.Goal.WMOVE,
+            [approach_x, self._cmd_y - 1, approach_z, self._cmd_yaw],
+            'xz', timeout=approach_timeout)
+        self._cmd_x = approach_x; self._cmd_z = approach_z
+
+        self.set_servo(release_angle, 'release water sampler')
+        self.get_logger().info('🗑️  WATER SAMPLER RELEASED!')
+        return True
 
     # ========================================================================
     # Service handlers

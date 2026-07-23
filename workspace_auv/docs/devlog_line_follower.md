@@ -14,7 +14,7 @@
 - 修复控制映射 bug：之前 center_error 错误映射到 dyaw
 
 ### YOLO 丢帧恢复
-- 连续丢帧 ≤ 50 帧 → coast 盲跟模式（最后有效 heading，不更新 I/D）
+- 连续丢帧 ≤ 100 帧 → coast 盲跟模式（最后有效 heading，不更新 I/D）
 - 超过阈值 → 进入搜索模式
 
 ### 搜索策略

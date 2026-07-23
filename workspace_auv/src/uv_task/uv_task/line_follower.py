@@ -283,27 +283,17 @@ class LineFollower:
                             self._logger.info(
                                 f'LineFollower: triangle (class={self._triangle_cid}) detected, '
                                 'approaching')
-                            # 1. 闭环接近 100 次（双目三角测量）
-                            for i in range(100):
-                                if self._stopped:
-                                    return False
-                                target = self._triangulate_object(self._triangle_cid)
-                                if target is None:
-                                    self._logger.warn(
-                                        f'Approach #{i+1}: triangulation '
-                                        f'failed, stopping after {i} iterations')
-                                    break
-                                self._logger.info(
-                                    f'Approach #{i+1}: target='
-                                    f'({target[0]:.2f}, {target[1]:.2f}, '
-                                    f'{target[2]:.2f})')
-                                self._node._send_action_goal(
-                                    BasicMotion.Goal.SET,
-                                    [target[0], target[1],
-                                     self._node._cmd_z, self._node._cmd_yaw],
-                                    'xy', timeout=15.0, quiet=True)
-                                self._node._cmd_x = target[0]
-                                self._node._cmd_y = target[1]
+                            # 1. 对准三角形
+                            self._node._align_to_class(
+                                self._triangle_cid, 'triangle')
+                            # 亮红灯 — 识别到三角形
+                            self._node.set_light(
+                                self._node.LIGHT_RED, 'triangle marker detected')
+                            self._logger.info(
+                                '🚨 LineFollower: RED LIGHT — triangle marker!')
+                            time.sleep(1)
+                            # 关灯
+                            self._node.light_off()
                             # 2. 下沉 0.5m → 上升 0.5m
                             self._node._send_action_goal(
                                 BasicMotion.Goal.BMOVE,
@@ -346,28 +336,21 @@ class LineFollower:
                             self._logger.info(
                                 f'LineFollower: square (class={self._square_cid}) detected, '
                                 'approaching')
-                            # 1. 闭环接近 100 次（双目三角测量）
-                            for i in range(100):
-                                if self._stopped:
-                                    return False
-                                target = self._triangulate_object(self._square_cid)
-                                if target is None:
-                                    self._logger.warn(
-                                        f'Square approach #{i+1}: '
-                                        f'triangulation failed, stopping '
-                                        f'after {i} iterations')
-                                    break
+                            # 1. 对准正方形
+                            self._node._align_to_class(
+                                self._square_cid, 'square')
+                            # 闪两次绿灯 — 识别到正方形
+                            for flash in range(2):
+                                self._node.set_light(
+                                    self._node.LIGHT_GREEN,
+                                    f'square marker — flash #{flash+1}')
                                 self._logger.info(
-                                    f'Square approach #{i+1}: target='
-                                    f'({target[0]:.2f}, {target[1]:.2f}, '
-                                    f'{target[2]:.2f})')
-                                self._node._send_action_goal(
-                                    BasicMotion.Goal.SET,
-                                    [target[0], target[1],
-                                     self._node._cmd_z, self._node._cmd_yaw],
-                                    'xy', timeout=15.0, quiet=True)
-                                self._node._cmd_x = target[0]
-                                self._node._cmd_y = target[1]
+                                    f'🟢 LineFollower: GREEN LIGHT #{flash+1} '
+                                    f'— square marker!')
+                                time.sleep(0.5)
+                                # 关灯
+                                self._node.light_off()
+                                time.sleep(0.5)
                             # 2. 自转 360°（3 × 120° BMOVE rz）
                             self._logger.info(
                                 'LineFollower: rotating 360° (3×120°)')

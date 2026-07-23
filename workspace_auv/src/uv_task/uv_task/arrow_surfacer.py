@@ -403,56 +403,27 @@ class ArrowSurfacer:
 
     def execute(self) -> bool:
         """执行箭头对准 + ArUco 读数 + 短暂出水。"""
-        deadline = time.monotonic() + float(self._params.get('timeout', 120.0))
 
-        # 1. 转向 90°
-        self._logger.info('ArrowSurfacer: rotating to yaw=90°')
+        # 1. 转向 view_yaw
+        self._logger.info(f'ArrowSurfacer: rotating to yaw={self._view_yaw:.1f}°')
         success, msg = self._node._send_action_goal(
             BasicMotion.Goal.SET,
             [self._node._cmd_x, self._node._cmd_y,
-             self._node._cmd_z, 90.0],
+             self._node._cmd_z, self._view_yaw],
             'rz', timeout=15.0)
         if not success:
             self._logger.error(f'ArrowSurfacer: setrz failed: {msg}')
             return False
-        self._node._cmd_yaw = 90.0
-        self._logger.info('ArrowSurfacer: rotation complete, yaw=90°')
-
-        # 2. 搜索箭头
-        self._logger.info(f'ArrowSurfacer: searching for arrow (class={self._arrow_cid})')
-        found = self._search_for_arrow()
-        if not found:
-            self._logger.warn('ArrowSurfacer: arrow not found, aborting')
-            return False
-
-        # 3. 100 次双目接近
+        self._node._cmd_yaw = self._view_yaw
         self._logger.info(
-            'ArrowSurfacer: arrow found, starting 100-iteration approach')
-        for i in range(100):
-            if self._stopped:
-                return False
-            if time.monotonic() >= deadline:
-                self._logger.warn('ArrowSurfacer: approach timeout')
-                return False
+            f'ArrowSurfacer: rotation complete, yaw={self._view_yaw:.1f}°')
 
-            target = self._triangulate_object(self._arrow_cid)
-            if target is None:
-                self._logger.warn(
-                    f'ArrowSurfacer: approach #{i+1}: triangulation failed, '
-                    f'retrying')
-                time.sleep(0.05)
-                continue
-
-            self._logger.info(
-                f'ArrowSurfacer: approach #{i+1}: target='
-                f'({target[0]:.2f}, {target[1]:.2f}, {target[2]:.2f})')
-
-            self._node._send_action_goal(
-                BasicMotion.Goal.SET,
-                [target[0], target[1], self._node._cmd_z, self._node._cmd_yaw],
-                'xy', timeout=15.0, quiet=True)
-            self._node._cmd_x = target[0]
-            self._node._cmd_y = target[1]
+        # 2. 搜索并对准箭头
+        self._logger.info(
+            f'ArrowSurfacer: align to arrow (class={self._arrow_cid})')
+        if not self._node._align_to_class(self._arrow_cid, 'arrow'):
+            self._logger.warn('ArrowSurfacer: arrow align failed')
+            return False
 
         # 4. 短暂出水：setz=-1, timeout=60s
         self._logger.info(
@@ -486,6 +457,22 @@ class ArrowSurfacer:
             f'ArrowSurfacer: ArUco → sector: {color_name} '
             f'(class_id={sector_cid})')
 
+
+        
+
+        # 扇区选定了 — 亮对应颜色灯
+        color_light = {
+            'yellow': self._node.LIGHT_YELLOW,
+            'red':    self._node.LIGHT_RED,
+            'green':  self._node.LIGHT_GREEN,
+        }.get(color_name, 0)
+        if color_light:
+            self._node.set_light(
+                color_light, f'SECTOR {color_name.upper()}')
+            self._logger.info(
+                f'🏮 ArrowSurfacer: {color_name.upper()} LIGHT ON — '
+                f'sector selected!')
+
         # 8. WTRAVEL to sector position
         self._logger.info(
             f'ArrowSurfacer: traveling to sector '
@@ -501,51 +488,19 @@ class ArrowSurfacer:
         self._node._cmd_y = self._sector_y
         self._node._cmd_yaw = self._view_yaw
 
-        # 9. 搜索扇区
+        # 9. 搜索并对准扇区
         self._logger.info(
-            f'ArrowSurfacer: searching for {color_name} sector '
+            f'ArrowSurfacer: aligning to {color_name} sector '
             f'(class={sector_cid})')
-        found = self._search_for_class(sector_cid, f'{color_name} sector')
-        if not found:
-            self._logger.warn(
-                f'ArrowSurfacer: {color_name} sector not found, skipping')
-        else:
-            # 10. 100 次双目接近
-            self._logger.info(
-                f'ArrowSurfacer: approaching {color_name} sector '
-                f'(100 iterations)')
-            for i in range(100):
-                if self._stopped:
-                    return False
-                if time.monotonic() >= deadline:
-                    self._logger.warn(
-                        'ArrowSurfacer: sector approach timeout')
-                    return False
+        self._node._align_to_class(sector_cid, f'{color_name} sector')
 
-                target = self._triangulate_object(sector_cid)
-                if target is None:
-                    self._logger.warn(
-                        f'ArrowSurfacer: sector approach #{i+1}: '
-                        f'triangulation failed, retrying')
-                    time.sleep(0.05)
-                    continue
-
-                self._logger.info(
-                    f'ArrowSurfacer: sector approach #{i+1}: target='
-                    f'({target[0]:.2f}, {target[1]:.2f}, '
-                    f'{target[2]:.2f})')
-
-                self._node._send_action_goal(
-                    BasicMotion.Goal.SET,
-                    [target[0], target[1],
-                     self._node._cmd_z, self._node._cmd_yaw],
-                    'xy', timeout=15.0, quiet=True)
-                self._node._cmd_x = target[0]
-                self._node._cmd_y = target[1]
-
-        # 11. 投球（占位）
+        # 10. 投信标 + 关灯
+        self._node.set_servo(
+            self._node.ANGLE_DROP_BEACON,
+            f'drop beacon to {color_name} sector')
         self._logger.info(
-            f'>>> throwing ball to {color_name} sector <<<')
+            f'🔫 ArrowSurfacer: BEACON DROPPED to {color_name.upper()} sector!')
+        self._node.light_off()
 
         self._logger.info(
             f'ArrowSurfacer: complete. '
