@@ -100,10 +100,10 @@ float32 distance_remaining   # 3D 欧氏距离
 |---|---|---|---|---|
 | **START** | 6 | 忽略 | — | 初始化 odom 原点。必须在所有运动命令之前发送一次 |
 | **SET** | 3 | 绝对坐标 `[x, y, z, yaw]` | `set_world` + `wait_reached` | 直接发往目标，等到达。简单直接 |
-| **WMOVE** | 1 | 世界系偏移 `[dx, dy, dz, dyaw]` | `step_move_world` | 拆分长距离为动态步进段。横向误差大时自动减小步长 |
+| **WMOVE** | 1 | 绝对坐标 `[x, y, z, yaw]` | `step_move_world` | 直接以绝对坐标为目标步进。未指定轴从当前目标 `t` 补齐 |
 | **BMOVE** | 2 | 机体系偏移 `[dx, dy, dz, dyaw]` | `body_to_world` + `step_move_world` | 先将 body 偏移旋转到世界系，再走 WMOVE |
-| **WTRAVEL** | 4 | 世界系偏移 `[dx, dy, dz]` | 转向 + 直线 step_move | 先转向目标方向 (atan2)，再沿 body-X 前进 |
-| **BTRAVEL** | 5 | 机体系偏移 `[dx, dy, dz]` | `body_to_world` + WTRAVEL | 先转 body→world，再走 WTRAVEL |
+| **WTRAVEL** | 4 | 绝对坐标 `[x, y, z, yaw]` | 转向 + 直线 step_move | 先转向目标方向 (atan2)，再沿 body-X 前进。yaw=任务完成后的朝向 |
+| **BTRAVEL** | 5 | 机体系偏移 `[dx, dy, dz, dyaw]` | `body_to_world` + WTRAVEL | 先转 body→world，再走 WTRAVEL |
 
 #### START 命令
 
@@ -134,12 +134,13 @@ goal.target = [5.0, 0.0, -2.0, 90.0]   # odom x=5, y=0, z=-2, yaw=90°(朝东)
 
 ```python
 goal.cmd_type = BasicMotion.Goal.WMOVE
-goal.target = [2.0, 1.0, 0.0, 0.0]     # 世界系：向北 2m，向东 1m
+goal.target = [5.0, 3.0, -2.0, 90.0]    # odom x=5, y=3, z=-2, yaw=90°
 ```
 
-- **世界系步进**：从当前位置加上偏移量为目标
+- **世界系步进**：直接以 odom 系绝对坐标为最终目标
+- 未指定轴从当前目标 `t` 补齐（非当前位置 `p`），连续 WMOVE 不会累积误差
 - 使用动态步进算法：长距离拆成小段，每步根据横向误差动态调整步长
-- 步进参数：STEP_X=0.6m, STEP_Y=0.2m（椭圆模型），STEP_PERIOD=0.3s
+- 步进参数：STEP_X=0.6m, STEP_Y=0.4m（椭圆模型），STEP_PERIOD=0.2s
 - 收敛判据：预估剩余时间 ≤ 0.15s，或前向误差 < 步长×0.3
 
 #### BMOVE 命令
@@ -158,24 +159,26 @@ goal.target = [2.0, 0.0, 0.0, 0.0]     # 机体系：向前 2m（当前朝向）
 
 ```python
 goal.cmd_type = BasicMotion.Goal.WTRAVEL
-goal.target = [3.0, 4.0, 0.0, 0.0]     # 世界系：向 (3,4) 方向直线移动
+goal.target = [3.0, 4.0, -1.0, 45.0]   # 到 odom (3,4,-1)，完成后朝向 45°
 ```
 
-- **世界系直线移动**：先转向目标方向，再沿 body-X 前进
-- 第一步：在当前原地转向至 `atan2(dy, dx)`
-- 第二步：沿 body-X 轴直线前进到目标
-- yaw 被忽略（由方向决定）
+- **世界系直线移动**：以 odom 系绝对坐标为终点，先转向再沿 body-X 前进
+- 第一阶段：从当前目标 `t` 原地转向至目标方向 `atan2(dy, dx)`
+- 第二阶段：沿 body-X 轴直线前进到目标 xy，再调整深度和偏航
+- **yaw 定义任务完成后的最终朝向**（非方向角，方向由 xy 目标决定）
+- 距离 ≤ 0.01m 时跳过转向，直接定位到目标
 - 适用于需要直线轨迹的任务（过门、巡线等）
 
 #### BTRAVEL 命令
 
 ```python
 goal.cmd_type = BasicMotion.Goal.BTRAVEL
-goal.target = [3.0, 0.0, 0.0, 0.0]     # 机体系：向前直线 3m
+goal.target = [3.0, 0.0, 0.0, 45.0]     # 机体系：向前直线 3m，完成后朝向 45°
 ```
 
 - **机体系直线移动**：body 偏移转 world 后走 WTRAVEL
-- 先转 body→world，再转向+前进
+- 先转 body→world（基于 `p` 当前位置），再转向+前进
+- yaw=任务完成后的最终朝向（机体系偏移不包含旋转分量）
 
 #### 结果与反馈
 
@@ -229,10 +232,11 @@ print('SET:', result.success, result.message)
 #### 注意事项
 
 1. **必须先 START**：任何 SET/WMOVE/BMOVE/TRAVEL 之前必须发送 START。如果 odom 原点未设置，server 会 reject goal 并返回 `"odom origin not set, call start() first"`
-2. **target 必须 4 元素**：就算 WTRAVEL/BTRAVEL 忽略 yaw，也必须传 4 个值。否则 server abort
+2. **target 必须 4 元素**：所有命令类型都必须传 4 个值 `[x, y, z, yaw]`。否则 server abort
 3. **timeout ≤ 0** 自动用 60s
-4. **axes 字段**：控制哪些轴生效。SET/WMOVE/WTRAVEL 分支根据 axes 只覆盖指定轴，其余轴从当前目标位姿保留。空字符串或 `"xyzrz"` = 全轴生效。注意 `'z' in 'xyrz'` 误匹配问题，服务端用 `axes.replace('rz', '')` 处理
-5. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行，不阻塞主循环
+4. **axes 字段**：控制哪些轴生效。SET/WMOVE/WTRAVEL 分支根据 axes 只覆盖指定轴，未指定轴从当前目标 `t` 补齐。空字符串或 `"xyzrz"` = 全轴生效。注意 `'z' in 'xyrz'` 误匹配问题，服务端用 `axes.replace('rz', '')` 处理
+5. **运动基准点**：`get_state()` 返回 `(pose p, target t, status)` — `p`=当前位置，`t`=当前目标。WMOVE/WTRAVEL 未指定轴从 `t` 补齐（避免累积误差），BMOVE/BTRAVEL 目标基于 `p`（当前位置偏移）
+6. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行，不阻塞主循环
 
 ### task_runner (`uv_task`)
 
@@ -260,7 +264,7 @@ The main thread runs `rclpy.spin(node)` with SingleThreadedExecutor; the work th
 
 **任务参数约定：**
 - **SET** — 绝对世界坐标 `{x, y, z, rz}`。未指定的轴从 `_cmd_*` 填充
-- **WMOVE / WTRAVEL** (W 前缀) — 绝对世界坐标 `{x, y, z, rz}`。内部计算 `dx = x - _cmd_x` 后发偏移量给 basic_motion
+- **WMOVE / WTRAVEL** (W 前缀) — 绝对世界坐标 `{x, y, z, rz}`。直接发绝对坐标给 basic_motion
 - **BMOVE / BTRAVEL** (B 前缀) — 机体系偏移量 `{dx, dy, dz, drz}`
 
 **Debug 模式：**

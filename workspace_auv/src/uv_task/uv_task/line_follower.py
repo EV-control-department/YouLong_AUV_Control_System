@@ -142,7 +142,7 @@ class LineFollower:
 
         # ── YOLO 丢帧恢复 ──
         self._lost_count = 0           # 连续丢帧计数
-        self._lost_max = int(params.get('lost_tolerance', 50))
+        self._lost_max = int(params.get('lost_tolerance', 100))
         self._last_valid_line = None   # 最后有效的 LineState (用于盲跟)
 
         # ── 搜索状态 ──
@@ -150,9 +150,11 @@ class LineFollower:
         self._search_spiral_dir = 0    # 螺旋方向计数 (0…7)
         self._search_spiral_size = float(params.get('search_spiral_start', 0.02))
 
-        # ── 三角形/正方形标记抑制 ──
+        # ── 三角形/正方形标记抑制 + 任务计数 ──
         self._triangle_approached = False  # True=刚处理过三角形，跳过检测
         self._square_approached = False    # True=刚处理过正方形，跳过检测
+        self._triangle_count = 0           # 已完成三角形任务数（下潜）
+        self._square_count = 0             # 已完成正方形任务数（旋转）
 
         self._logger.info(
             f'LineFollower created: timeout={params.get("timeout", 120)}s')
@@ -311,8 +313,12 @@ class LineFollower:
                             self._node._cmd_z -= 0.5
                             # 3. 标记已处理
                             self._triangle_approached = True
+                            self._triangle_count += 1
+                            total = self._triangle_count + self._square_count
                             self._logger.info(
-                                'LineFollower: triangle handled, flag set to 1')
+                                f'LineFollower: triangle handled, '
+                                f'task #{self._triangle_count} done, '
+                                f'total={total}/4')
 
                 # ── 正方形标记处理 ──
                 # 抑制恢复：正方形 bbox 中心在图像上 1/3 区域 → 新正方形出现
@@ -371,8 +377,12 @@ class LineFollower:
                                 self._node._cmd_yaw += 120.0
                             # 3. 标记已处理
                             self._square_approached = True
+                            self._square_count += 1
+                            total = self._triangle_count + self._square_count
                             self._logger.info(
-                                'LineFollower: square handled, flag set to 1')
+                                f'LineFollower: square handled, '
+                                f'task #{self._square_count} done, '
+                                f'total={total}/4')
             elif self._lost_count < self._lost_max and self._last_valid_line is not None:
                 # 短暂丢帧 → 用最后的有效方向盲跟一小步
                 self._lost_count += 1
@@ -383,7 +393,14 @@ class LineFollower:
                 if not ok:
                     return False
             else:
-                # 持续丢帧 → 进入搜索模式
+                # 持续丢帧 → 已完成 4 个任务则巡线成功
+                total = self._triangle_count + self._square_count
+                if total >= 4:
+                    self._logger.info(
+                        f'LineFollower: {total} tasks completed, '
+                        f'line lost → mission complete')
+                    return True
+                # 否则进入搜索模式
                 self._lost_count = 0
                 self._last_valid_line = None
                 if not self._search_for_line():

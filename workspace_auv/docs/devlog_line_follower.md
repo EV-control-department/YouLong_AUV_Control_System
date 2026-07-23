@@ -57,7 +57,34 @@
 
 两者共享完全相同的触发条件（下 4/5）、抑制恢复条件（上 1/3）、抑制逻辑。
 
+### 任务完成计数 + 提前结束
+- 新增 `_triangle_count` / `_square_count` 两个计数器
+- 每完成一次三角形下潜或正方形旋转，对应计数器 +1
+- 丢线时检查：若已完成 ≥4 个任务 → 返回 `True`（巡线任务成功结束）
+- 不足 4 个任务时仍走原有搜索流程
+
 ### 文档更新
 - CLAUDE.md：新增标记处理章节 + 双目三角测量架构说明
 - debug_guide.md：新增标记处理流程表、常见问题、日志关键字
 - perception.md：新增 YOLO-Seg 管道分割章节 + LineState 数据流
+
+## 2026-07-23
+
+### basic_motion WMOVE/TRAVEL 语义重构
+**问题：** WMOVE 和 TRAVEL 的 target 参数同时存在偏移量和绝对坐标两种语义，在 `p`(pose) 和 `t`(target) 之间混用，导致连续 WMOVE 累积误差、WTRAVEL 偏移→绝对→偏移冗余转换。
+
+**重构内容：**
+- **WMOVE target 改为绝对坐标**：`wmove*` 方法不再做 `t + dx` 叠加，直接将绝对坐标传入 `_step_move_world`
+- **WTRAVEL target 改为绝对坐标**：`_travel_world` 参数从 `(dx_w, dy_w, dz)` 改为 `(x_w, y_w, z, rz)`，接受绝对世界坐标
+- **新增 rz 参数**：TRAVEL 的 `rz` 定义任务完成后的最终朝向。第一阶段转向用 `atan2(dy,dx)` 算方向角，最终定位用 `rz`
+- **删除 TRAVEL 便捷方法**：移除 `wtravel*/btravel*` 系列 wrapper（无外部调用方，action 回调直接调 `_travel_world`）
+- **运动基准点统一**：WMOVE/WTRAVEL 未指定轴从 `t` 补齐，BMOVE/BTRAVEL 从 `p` 补齐
+- **STEP_Y 0.2→0.4**：放宽椭圆横向步长
+- **TRAVEL 距离阈值 0.03→0.01m**：更精确的短距判断
+
+### task_runner 同步适配
+- WMOVE/WTRAVEL 任务不再计算 `dx = p['x'] - _cmd_x`，直接发绝对坐标
+
+### LineFollower 任务计数 + 丢线容限
+- 丢线容忍帧数默认值 50→100
+- 巡线任务完成计数 + ≥4 丢线即结束（详见上节）

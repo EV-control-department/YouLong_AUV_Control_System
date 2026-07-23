@@ -433,103 +433,90 @@ class TaskRunnerNode(Node):
     # --- WMOVE tasks (世界系步进：参数为绝对世界坐标，内部计算偏移) ---
 
     def _task_wmovex(self, p: dict) -> bool:
-        dx = p['x'] - self._cmd_x
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [dx, 0.0, 0.0, 0.0], "x")
+            BasicMotion.Goal.WMOVE, [p['x'], 0.0, 0.0, 0.0], "x")
         self.get_logger().info(f'wmovex: {msg}')
         if success:
             self._cmd_x = p['x']
         return success
 
     def _task_wmovey(self, p: dict) -> bool:
-        dy = p['y'] - self._cmd_y
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, dy, 0.0, 0.0], "y")
+            BasicMotion.Goal.WMOVE, [0.0, p['y'], 0.0, 0.0], "y")
         self.get_logger().info(f'wmovey: {msg}')
         if success:
             self._cmd_y = p['y']
         return success
 
     def _task_wmovez(self, p: dict) -> bool:
-        dz = p['z'] - self._cmd_z
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, 0.0, dz, 0.0], "z")
+            BasicMotion.Goal.WMOVE, [0.0, 0.0, p['z'], 0.0], "z")
         self.get_logger().info(f'wmovez: {msg}')
         if success:
             self._cmd_z = p['z']
         return success
 
     def _task_wmoverz(self, p: dict) -> bool:
-        drz = p['rz'] - self._cmd_yaw
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [0.0, 0.0, 0.0, drz], "rz")
+            BasicMotion.Goal.WMOVE, [0.0, 0.0, 0.0, p['rz']], "rz")
         self.get_logger().info(f'wmoverz: {msg}')
         if success:
             self._cmd_yaw = p['rz']
         return success
 
     def _task_wmovexy(self, p: dict) -> bool:
-        dx, dy = p['x'] - self._cmd_x, p['y'] - self._cmd_y
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [dx, dy, 0.0, 0.0], "xy")
+            BasicMotion.Goal.WMOVE, [p['x'], p['y'], 0.0, 0.0], "xy")
         self.get_logger().info(f'wmovexy: {msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
         return success
 
     def _task_wmovexyz(self, p: dict) -> bool:
-        dx, dy, dz = p['x'] - self._cmd_x, p['y'] - self._cmd_y, p['z'] - self._cmd_z
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WMOVE, [dx, dy, dz, 0.0], "xyz")
+            BasicMotion.Goal.WMOVE, [p['x'], p['y'], p['z'], 0.0], "xyz")
         self.get_logger().info(f'wmovexyz: {msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
         return success
 
-    # --- WTRAVEL tasks (世界系直线：参数为绝对世界坐标，内部计算偏移) ---
+    # --- WTRAVEL tasks (世界系直线：参数为绝对世界坐标) ---
 
     def _task_wtravelx(self, p: dict) -> bool:
-        dx = p['x'] - self._cmd_x
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [dx, 0.0, 0.0, 0.0], "x")
+            BasicMotion.Goal.WTRAVEL, [p['x'], 0.0, 0.0, 0.0], "x")
         self.get_logger().info(f'wtravelx: {msg}')
         if success:
             self._cmd_x = p['x']
         return success
 
     def _task_wtravely(self, p: dict) -> bool:
-        dy = p['y'] - self._cmd_y
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [0.0, dy, 0.0, 0.0], "y")
+            BasicMotion.Goal.WTRAVEL, [0.0, p['y'], 0.0, 0.0], "y")
         self.get_logger().info(f'wtravely: {msg}')
         if success:
             self._cmd_y = p['y']
         return success
 
     def _task_wtravelz(self, p: dict) -> bool:
-        dz = p['z'] - self._cmd_z
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [0.0, 0.0, dz, 0.0], "z")
+            BasicMotion.Goal.WTRAVEL, [0.0, 0.0, p['z'], 0.0], "z")
         self.get_logger().info(f'wtravelz: {msg}')
         if success:
             self._cmd_z = p['z']
         return success
 
     def _task_wtravelxy(self, p: dict) -> bool:
-        dx, dy = p['x'] - self._cmd_x, p['y'] - self._cmd_y
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [dx, dy, 0.0, 0.0], "xy")
+            BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], 0.0, 0.0], "xy")
         self.get_logger().info(f'wtravelxy: {msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
         return success
 
     def _task_wtravelxyz(self, p: dict) -> bool:
-        dx = p['x'] - self._cmd_x
-        dy = p['y'] - self._cmd_y
-        dz = p['z'] - self._cmd_z
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [dx, dy, dz, 0.0], "xyz")
+            BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], p['z'], 0.0], "xyz")
         self.get_logger().info(f'wtravelxyz: {msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
