@@ -75,6 +75,7 @@ ENABLE_GORTC = True                 # 启动 go2rtc 转发客户端视频
 GORTC_HTTP_PORT = 1984               # go2rtc 对外 HTTP/WebRTC API 端口
 VISION_MJPEG_PORT = 8090             # vision 提供给 go2rtc 的本地 MJPEG 端口
 GORTC_EXECUTABLE = 'go2rtc'
+STREAM_ANNOTATED = True              # 通过 go2rtc 额外提供带检测框的视频
 
 # ROS 参数默认值。
 PUBLISH_IMAGES = False               # 发布拆分后的左右原图
@@ -123,11 +124,19 @@ class _MjpegHandler(BaseHTTPRequestHandler):
     """Very small MJPEG source used by go2rtc (and directly by a browser)."""
     node = None
 
-    def do_GET(self):
-        camera = self.path.strip('/').split('?', 1)[0]
-        if camera not in ('front', 'down'):
-            self.send_error(404, 'use /front or /down')
+    def do_GET(self):  # noqa: N802 - required by BaseHTTPRequestHandler
+        stream = self.path.strip('/').split('?', 1)[0]
+        valid_streams = {
+            'front': ('front', False),
+            'down': ('down', False),
+            'front_annotated': ('front', True),
+            'down_annotated': ('down', True),
+        }
+        if stream not in valid_streams:
+            self.send_error(
+                404, 'use /front, /down, /front_annotated or /down_annotated')
             return
+        camera, annotated = valid_streams[stream]
 
         self.send_response(200)
         self.send_header('Cache-Control', 'no-cache, private')
@@ -137,7 +146,9 @@ class _MjpegHandler(BaseHTTPRequestHandler):
         try:
             while rclpy.ok() and self.node is not None:
                 with self.node._stream_lock:
-                    payload = self.node._stream_jpegs.get(camera)
+                    jpeg_cache = (self.node._stream_annotated_jpegs
+                                  if annotated else self.node._stream_jpegs)
+                    payload = jpeg_cache.get(camera)
                 if payload is None:
                     time.sleep(0.02)
                     continue
@@ -182,6 +193,9 @@ class VisionNode(Node):
 
         self.declare_parameter('gortc_executable', GORTC_EXECUTABLE)
         self.declare_parameter('gortc_http_port', GORTC_HTTP_PORT)
+        self.declare_parameter('stream_annotated', STREAM_ANNOTATED)
+        self._stream_annotated = self.get_parameter(
+            'stream_annotated').get_parameter_value().bool_value
 
         self.declare_parameter('enable_front_camera', ENABLE_FRONT_CAMERA)
         self.declare_parameter('enable_down_camera', ENABLE_DOWN_CAMERA)
@@ -226,6 +240,7 @@ class VisionNode(Node):
         self._stream_lock = threading.Lock()
         self._stream_frames = {'front': None, 'down': None}
         self._stream_jpegs = {'front': None, 'down': None}
+        self._stream_annotated_jpegs = {'front': None, 'down': None}
         self._stream_frame_count = {'front': 0, 'down': 0}
         self._capture_frame_logged = {'front': False, 'down': False}
         self._capture_stop = threading.Event()
@@ -359,10 +374,22 @@ class VisionNode(Node):
             f'  front: "http://127.0.0.1:{VISION_MJPEG_PORT}/front"\n'
             f'  down: "http://127.0.0.1:{VISION_MJPEG_PORT}/down"\n'
         )
+        if self._stream_annotated:
+            config += (
+                f'  front_annotated: "http://127.0.0.1:{VISION_MJPEG_PORT}/front_annotated"\n'
+                f'  down_annotated: "http://127.0.0.1:{VISION_MJPEG_PORT}/down_annotated"\n'
+            )
         try:
             with open(self._gortc_config, 'w', encoding='utf-8') as config_file:
                 config_file.write(config)
-            self._gortc_process = subprocess.Popen([executable, '-config', self._gortc_config], stdout=None, stderr=None)
+            self._gortc_process = subprocess.Popen(
+                [executable, '-config', self._gortc_config],
+                stdout=None, stderr=None)
+            streams = 'front, down'
+            if self._stream_annotated:
+                streams += ', front_annotated, down_annotated'
+            self.get_logger().info(
+                f'go2rtc started on port {port}; web UI streams: {streams}')
         except (OSError, ValueError) as e:
             self.get_logger().error(f'Failed to start go2rtc: {e}')
 
@@ -469,13 +496,11 @@ class VisionNode(Node):
         except Exception as e:
             return
 
-        ok, encoded = cv2.imencode('.jpg', cv_img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        with self._stream_lock:
-            self._stream_frames[camera] = cv_img
-            if ok:
-                self._stream_jpegs[camera] = encoded.tobytes()
+        # 给客户端缓存最新原图，不依赖 YOLO 是否加载成功。
+        self._update_stream_frame(camera, cv_img)
 
         if not self._model_loaded:
+            self._update_annotated_stream(camera, cv_img)
             return
 
         K = self._front_K if camera == 'front' else self._down_K
@@ -506,21 +531,49 @@ class VisionNode(Node):
         det_left, polys_left, line_left, debug_info_left = self._detect(msg.header, left_name, left_img)
         self.pub_det[left_name].publish(det_left)
         self.pub_line[left_name].publish(line_left)
+        annotated_left = self._draw_boxes(
+            left_img, det_left, polys_left, line_left, debug_info_left)
         if self._publish_images:
             self.pub_img[left_name].publish(self.bridge.cv2_to_imgmsg(left_img, 'bgr8'))
         if self._publish_annotated:
-            annotated = self._draw_boxes(left_img, det_left, polys_left, line_left, debug_info_left)
-            self.pub_annotated[left_name].publish(self.bridge.cv2_to_imgmsg(annotated, 'bgr8'))
+            self.pub_annotated[left_name].publish(
+                self.bridge.cv2_to_imgmsg(annotated_left, 'bgr8'))
 
         # Run detection & filtering on right half
         det_right, polys_right, line_right, debug_info_right = self._detect(msg.header, right_name, right_img)
         self.pub_det[right_name].publish(det_right)
         self.pub_line[right_name].publish(line_right)
+        annotated_right = self._draw_boxes(
+            right_img, det_right, polys_right, line_right, debug_info_right)
         if self._publish_images:
             self.pub_img[right_name].publish(self.bridge.cv2_to_imgmsg(right_img, 'bgr8'))
         if self._publish_annotated:
-            annotated = self._draw_boxes(right_img, det_right, polys_right, line_right, debug_info_right)
-            self.pub_annotated[right_name].publish(self.bridge.cv2_to_imgmsg(annotated, 'bgr8'))
+            self.pub_annotated[right_name].publish(
+                self.bridge.cv2_to_imgmsg(annotated_right, 'bgr8'))
+
+        # go2rtc 的标注流使用与输入相同的拼接布局。检测完成后再替换
+        # 缓存，因此客户端拿到的是“识别+画框”后的帧。
+        self._update_annotated_stream(
+            camera, np.hstack((annotated_left, annotated_right)))
+
+    def _update_stream_frame(self, camera: str, frame):
+        """Update the raw MJPEG frame cache consumed by go2rtc."""
+        ok, encoded = cv2.imencode(
+            '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        with self._stream_lock:
+            self._stream_frames[camera] = frame
+            if ok:
+                self._stream_jpegs[camera] = encoded.tobytes()
+
+    def _update_annotated_stream(self, camera: str, frame):
+        """Update the annotated MJPEG frame cache consumed by go2rtc."""
+        if not self._stream_annotated:
+            return
+        ok, encoded = cv2.imencode(
+            '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        with self._stream_lock:
+            if ok:
+                self._stream_annotated_jpegs[camera] = encoded.tobytes()
 
     def _detect(self, header, camera_name: str, cv_img) -> tuple:
         """运行 YOLO 并在同一模型上提取 LineState 及调试信息。"""
@@ -703,11 +756,8 @@ class VisionNode(Node):
                 time.sleep(0.01)
                 continue
 
-            ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            self._update_stream_frame(camera, frame)
             with self._stream_lock:
-                self._stream_frames[camera] = frame
-                if ok:
-                    self._stream_jpegs[camera] = encoded.tobytes()
                 self._stream_frame_count[camera] += 1
                 frame_count = self._stream_frame_count[camera]
 

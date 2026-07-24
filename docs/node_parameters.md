@@ -32,6 +32,7 @@
 |---|---|---|---|
 | `publish_images` | bool | `false` | 发布拆分后的原始图像到 `/perception/image/*` |
 | `publish_annotated` | bool | `false` | 发布带 YOLO 检测框的标注图像到 `/perception/annotated/*` |
+| `stream_annotated` | bool | `true` | 通过 go2rtc 提供带检测框的视频流 `front_annotated/down_annotated` |
 
 ### 模型与数据集
 
@@ -149,6 +150,13 @@ ros2 launch uv_perception perception_launch.py publish_annotated:=true
 | `/perception/annotated/front_right` | `Image` | 前视右带框标注（需 enable） |
 | `/perception/annotated/down_left` | `Image` | 下视左带框标注（需 enable） |
 | `/perception/annotated/down_right` | `Image` | 下视右带框标注（需 enable） |
+
+go2rtc 视频流：
+
+| 流名称 | 说明 |
+|---|---|
+| `front` / `down` | 前视/下视原始拼接视频 |
+| `front_annotated` / `down_annotated` | 前视/下视 YOLO 识别后带框拼接视频 |
 
 ### position 发布话题
 

@@ -1,7 +1,8 @@
 # go2rtc 集成
 
-`vision` 节点会自动启动 go2rtc，并将前、下相机的视频注册为 `front` 和
-`down`。go2rtc 的 HTTP/WebRTC 服务默认监听 `1984` 端口。
+`vision` 节点会自动启动 go2rtc，并将前、下相机的原始视频注册为 `front` 和
+`down`，将 YOLO 识别后带框的视频注册为 `front_annotated` 和
+`down_annotated`。go2rtc 的 HTTP/WebRTC 服务默认监听 `1984` 端口。
 
 ## 部署
 
@@ -37,7 +38,11 @@ export GO2RTC_BIN=/opt/go2rtc/go2rtc
 ```text
 http://设备IP:1984/stream.html?src=front
 http://设备IP:1984/stream.html?src=down
+http://设备IP:1984/stream.html?src=front_annotated
+http://设备IP:1984/stream.html?src=down_annotated
 ```
 
 vision 本地 MJPEG 源为 `8090` 端口。go2rtc 不可用时，原始视觉检测仍能运行，
-也可以直接访问 `http://设备IP:8090/front` 或 `http://设备IP:8090/down`。
+也可以直接访问 `http://设备IP:8090/front`、`/down`、`/front_annotated` 或
+`/down_annotated`。如需关闭标注流，可设置 ROS 参数
+`-p stream_annotated:=false`。
