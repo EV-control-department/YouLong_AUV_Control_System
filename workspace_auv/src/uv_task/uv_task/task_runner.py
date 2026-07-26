@@ -429,6 +429,35 @@ class TaskRunnerNode(Node):
     # --- START ---
 
     def _task_start(self, p: dict) -> bool:
+        self.get_logger().info(f'YouLong_AUV_Control_System 准备启动，请做好拔缆准备')
+        self.set_light(3,'LED')
+        time.sleep(1)
+        self.light_off()
+        self.get_logger().info(f'AUV 即将发动，请把缆或发布把缆命令')
+
+        for i in range(1):
+            time.sleep(0.5)
+            self.set_light(1,'LED')
+            time.sleep(0.5)
+            self.light_off()
+        
+        self.get_logger().info(f'AUV 将在6秒后启动，已经可以拔缆了')
+
+        for i in range(7):
+            time.sleep(0.25)
+            self.set_light(2,'LED')
+            time.sleep(0.25)
+            self.light_off()
+
+        
+        self.get_logger().info(f'AUV 将在两秒后启动，如果你能看到这一条信息，说明已经有点晚了')
+        
+        time.sleep(1)
+        self.set_light(2,'LED')
+        time.sleep(1)
+        self.light_off()
+
+
         success, msg = self._send_action_goal(
             BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], timeout=0)
         if success:
