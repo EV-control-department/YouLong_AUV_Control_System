@@ -159,6 +159,7 @@ class VisionNode(Node):
         if self._sim_mode:
             self.create_subscription(Image, '/auv/front_cam/stitched', self._front_img_cb, 10)
             self.create_subscription(Image, '/auv/down_cam/stitched', self._down_img_cb, 10)
+            active_cams = ('front', 'down')
             self.get_logger().info('Vision node started (sim mode: ROS topics)')
         else:
             self.declare_parameter('front_cam_path', '/dev/video0')
@@ -168,54 +169,79 @@ class VisionNode(Node):
 
             self._front_cap = cv2.VideoCapture(front_path)
             self._down_cap = cv2.VideoCapture(down_path)
-            if not self._front_cap.isOpened():
-                self.get_logger().error(f'Failed to open front camera: {front_path}')
-            if not self._down_cap.isOpened():
-                self.get_logger().error(f'Failed to open down camera: {down_path}')
 
-            # 10Hz capture timer
-            self.create_timer(0.1, self._capture_real_cams)
+            # 只把成功打开的相机加入 active_cams（决定发布者/采集）。
+            # 打不开的相机不创建发布者 → 下游可通过话题图检测到缺失。
+            active_cams = []
+            if self._front_cap.isOpened():
+                active_cams.append('front')
+            else:
+                self.get_logger().error(
+                    f'Failed to open front camera: {front_path}')
+            if self._down_cap.isOpened():
+                active_cams.append('down')
+            else:
+                self.get_logger().error(
+                    f'Failed to open down camera: {down_path}')
+
+            if active_cams:
+                # 10Hz capture timer
+                self.create_timer(0.1, self._capture_real_cams)
+            else:
+                self.get_logger().error(
+                    'No camera opened, vision pipeline disabled')
+
             self.get_logger().info(
-                f'Vision node started (real mode: front={front_path}, down={down_path})')
+                f'Vision node started (real mode: front={front_path}, '
+                f'down={down_path}, active={active_cams})')
 
-        # Publishers — 4 detection + 4 image (common to both modes)
+        # ── Active camera channels → publishers ─────────────────────
+        # 每个相机对应左右两个通道；未激活的相机不创建发布者。
+        self._active_channels = set()
+        active_channels = []
+        for cam in active_cams:
+            self._active_channels.add(f'{cam}_left')
+            self._active_channels.add(f'{cam}_right')
+            active_channels += [f'{cam}_left', f'{cam}_right']
+
         self.pub_det = {
-            'front_left': self.create_publisher(
-                DetectionArray, '/perception/detection/front_left', 10),
-            'front_right': self.create_publisher(
-                DetectionArray, '/perception/detection/front_right', 10),
-            'down_left': self.create_publisher(
-                DetectionArray, '/perception/detection/down_left', 10),
-            'down_right': self.create_publisher(
-                DetectionArray, '/perception/detection/down_right', 10),
+            name: self.create_publisher(
+                DetectionArray, f'/perception/detection/{name}', 10)
+            for name in active_channels
         }
         self.pub_img = {
-            'front_left':  self.create_publisher(Image, '/perception/image/front_left', 10),
-            'front_right': self.create_publisher(Image, '/perception/image/front_right', 10),
-            'down_left':   self.create_publisher(Image, '/perception/image/down_left', 10),
-            'down_right':  self.create_publisher(Image, '/perception/image/down_right', 10),
+            name: self.create_publisher(
+                Image, f'/perception/image/{name}', 10)
+            for name in active_channels
         }
         self.pub_annotated = {
-            'front_left':  self.create_publisher(Image, '/perception/annotated/front_left', 10),
-            'front_right': self.create_publisher(Image, '/perception/annotated/front_right', 10),
-            'down_left':   self.create_publisher(Image, '/perception/annotated/down_left', 10),
-            'down_right':  self.create_publisher(Image, '/perception/annotated/down_right', 10),
+            name: self.create_publisher(
+                Image, f'/perception/annotated/{name}', 10)
+            for name in active_channels
         }
         self.pub_line = {
-            name: self.create_publisher(LineState, f'/perception/line/{name}', 10)
-            for name in self.pub_det
+            name: self.create_publisher(
+                LineState, f'/perception/line/{name}', 10)
+            for name in active_channels
         }
 
         # ── ArUco detection ─────────────────────────────────────────
         self._aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
         self._aruco_params = cv2.aruco.DetectorParameters()
         self._aruco_detector = cv2.aruco.ArucoDetector(self._aruco_dict, self._aruco_params)
-        self._aruco_pub = self.create_publisher(Int32MultiArray, '/perception/aruco/ids', 10)
         self._front_lock = threading.Lock()
         self._front_frames = None  # (left_img, right_img) for ArUco thread
-        self._aruco_thread = threading.Thread(target=self._aruco_loop, daemon=True)
-        self._aruco_thread.start()
-        self.get_logger().info('ArUco detection thread started')
+        if 'front' in active_cams:
+            self._aruco_pub = self.create_publisher(
+                Int32MultiArray, '/perception/aruco/ids', 10)
+            self._aruco_thread = threading.Thread(
+                target=self._aruco_loop, daemon=True)
+            self._aruco_thread.start()
+            self.get_logger().info('ArUco detection thread started')
+        else:
+            self._aruco_pub = None
+            self.get_logger().warn(
+                'ArUco detection disabled (no front camera)')
 
     def _init_undistort(self):
         """Load camera matrix and distortion coefficients from parameters.
@@ -377,6 +403,9 @@ class VisionNode(Node):
     def _process_image(self, msg: Image, camera: str):
         """Split stitched image into left/right halves, run YOLO on each."""
         if not self._cv_bridge_ok:
+            return
+        # 未激活相机（打开失败）没有发布者，直接跳过避免 KeyError
+        if f'{camera}_left' not in self._active_channels:
             return
 
         try:

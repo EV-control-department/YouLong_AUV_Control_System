@@ -5,6 +5,7 @@ The task runner is the single source of truth for commanded position,
 tracked locally (not from external topics).
 """
 
+import glob
 import json
 import math
 import os
@@ -18,6 +19,8 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_msgs.msg import Float32, UInt8
 from std_srvs.srv import Trigger
+
+from zit6_interfaces.msg import ZitStatus
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import DetectionArray, ObjectPositionArray, PoseInfo, TaskStatus
@@ -137,6 +140,12 @@ class TaskRunnerNode(Node):
         self.create_subscription(
             PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10)
 
+        # ZIT6 MCU 状态 (status check 用)
+        self._mcu_status = ZitStatus()
+        self._mcu_status_rcvd = False
+        self.create_subscription(
+            ZitStatus, '/zit6/state/status', self._mcu_status_cb, 10)
+
         # Publishers
         self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
         self.pub_light = self.create_publisher(UInt8, '/zit6/cmd/light', 10)
@@ -164,6 +173,10 @@ class TaskRunnerNode(Node):
         with self._perception_lock:
             self._robot_pose = (msg.robot_x, msg.robot_y, msg.robot_z,
                                 msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
+
+    def _mcu_status_cb(self, msg: ZitStatus):
+        self._mcu_status = msg
+        self._mcu_status_rcvd = True
 
     # ── 灯光 / 舵机控制 ────────────────────────────────────────────
 
@@ -428,7 +441,146 @@ class TaskRunnerNode(Node):
 
     # --- START ---
 
+    # ── 启动前状态检查 ──────────────────────────────────────────────
+
+    def _status_check(self) -> bool:
+        """启动前综合检查：MCU 状态 + basic_motion action server + 视觉节点。
+
+        每项失败返回前都会打印一条 `✗ 项名` 日志，全过则打印 `✓ 全部就绪`。
+        返回 False 会终止启动倒计时。
+        """
+        self.get_logger().info('======== 启动前状态检查 ========')
+        all_ok = True
+
+        # ── 1. ZIT6 MCU 状态 ──
+        self._mcu_status_rcvd = False
+        deadline = time.monotonic() + 5.0
+        while rclpy.ok() and not self._mcu_status_rcvd and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if not self._mcu_status_rcvd:
+            self.get_logger().error('✗ MCU 状态：5s 内未收到 /zit6/state/status')
+            all_ok = False
+        else:
+            s = self._mcu_status
+            parts = [f'armed={s.is_armed}', f'nav_ready={s.navigation_ready}',
+                     f'ins_state={s.ins_state}', f'ctrl_lvl={s.control_level}',
+                     f'bat={s.battery_voltage:.1f}V',
+                     f'err=0x{s.error_flags:08X}']
+            self.get_logger().info(
+                f'✓ MCU 状态：{", ".join(parts)}')
+            if not s.navigation_ready:
+                self.get_logger().error('✗ MCU 状态：navigation_ready=False')
+                all_ok = False
+            if s.error_flags != 0:
+                self.get_logger().error(
+                    f'✗ MCU 状态：error_flags=0x{s.error_flags:08X}')
+                all_ok = False
+
+        # ── 2. basic_motion action server ──
+        if not self._action_client.wait_for_server(timeout_sec=3.0):
+            self.get_logger().error('✗ basic_motion：action server 不可用')
+            all_ok = False
+        else:
+            self.get_logger().info('✓ basic_motion：action server 就绪')
+
+        # ── 3. 视觉节点 (/dev/video*) ──
+        try:
+            cams = glob.glob('/dev/video*')
+            if not cams:
+                self.get_logger().error(
+                    '✗ 视觉：未找到 /dev/video* 设备')
+                all_ok = False
+            else:
+                self.get_logger().info(
+                    f'✓ 视觉：检测到 {len(cams)} 个设备 {cams}')
+        except OSError as e:
+            self.get_logger().error(f'✗ 视觉：扫描 /dev/video* 失败 ({e})')
+            all_ok = False
+
+        # ── 4. 视觉话题发布者（vision 节点是否在发消息）──
+        vision_required = [
+            '/perception/line/down_left',
+            '/perception/line/down_right',
+            '/perception/detection/down_left',
+            '/perception/detection/down_right',
+        ]
+        vision_optional = [
+            '/perception/line/front_left',
+            '/perception/line/front_right',
+            '/perception/detection/front_left',
+            '/perception/detection/front_right',
+            '/perception/aruco/ids',
+            '/perception/objects',
+        ]
+
+        def _topic_publishers(topic: str):
+            """查询话题的发布者节点名（带短暂重试，等 graph discovery）。"""
+            for _ in range(10):
+                infos = self.get_publishers_info_by_topic(topic)
+                if infos:
+                    return [f'{i.node_namespace}{i.node_name}' for i in infos]
+                time.sleep(0.2)
+            return []
+
+        for topic in vision_required:
+            pubs = _topic_publishers(topic)
+            if not pubs:
+                self.get_logger().error(
+                    f'✗ 视觉：{topic} 无发布者')
+                all_ok = False
+            else:
+                self.get_logger().info(
+                    f'✓ 视觉：{topic} ← {", ".join(pubs)}')
+
+        for topic in vision_optional:
+            pubs = _topic_publishers(topic)
+            if not pubs:
+                self.get_logger().warn(
+                    f'⚠ 视觉：{topic} 无发布者（可选）')
+            else:
+                self.get_logger().info(
+                    f'✓ 视觉：{topic} ← {", ".join(pubs)}')
+
+        # ── 汇总 ──
+        if all_ok:
+            self.get_logger().info('✓ 全部检查通过，准备启动')
+        else:
+            self.get_logger().error('✗ 状态检查未通过（待操作者确认）')
+        self.get_logger().info('======== 状态检查结束 ========')
+        return all_ok
+
+    def _confirm_force_start(self) -> bool:
+        """状态检查未通过时，等待操作者决定是否强制启动。
+
+        任务在 daemon 线程中执行，`input()` 只阻塞该线程，不会卡住
+        `rclpy.spin()`。操作者输入 'q' 取消，其余输入（含直接回车）
+        视为强制启动。
+        """
+        self.get_logger().warn('‼ 状态检查未通过')
+        self.get_logger().warn('  按 回车 强制启动')
+        self.get_logger().warn('  输入 q + 回车 取消启动')
+        try:
+            line = input('>> ')
+        except EOFError:
+            line = ''
+        if line.strip().lower() in ('q', 'quit', 'exit', 'n', 'no'):
+            self.get_logger().error('操作者取消启动')
+            return False
+        self.get_logger().warn('操作者强制启动，继续...')
+        return True
+
     def _task_start(self, p: dict) -> bool:
+        # ── 启动前状态检查：MCU / basic_motion / 视觉 ──
+
+        time.sleep(3)
+
+        if not self._status_check():
+            # 检查未通过 → 由操作者决定：回车强制启动，或 q 取消
+            if not self._confirm_force_start():
+                return False
+
+        time.sleep(3)
+
         self.get_logger().info(f'YouLong_AUV_Control_System 准备启动，请做好拔缆准备')
         self.set_light(3,'LED')
         time.sleep(1)
@@ -441,7 +593,7 @@ class TaskRunnerNode(Node):
             time.sleep(0.5)
             self.light_off()
         
-        self.get_logger().info(f'AUV 将在6秒后启动，已经可以拔缆了')
+        self.get_logger().info(f'AUV 将在10秒后启动，已经可以拔缆了')
 
         for i in range(7):
             time.sleep(0.25)
@@ -450,12 +602,15 @@ class TaskRunnerNode(Node):
             self.light_off()
 
         
-        self.get_logger().info(f'AUV 将在两秒后启动，如果你能看到这一条信息，说明已经有点晚了')
+        self.get_logger().info(f'AUV 将在5秒后启动，如果你能看到这一条信息，说明已经有点晚了')
         
         time.sleep(1)
         self.set_light(2,'LED')
         time.sleep(1)
         self.light_off()
+
+
+        time.sleep(4)
 
 
         success, msg = self._send_action_goal(
