@@ -585,7 +585,7 @@ class TaskRunnerNode(Node):
         self.set_light(3,'LED')
         time.sleep(1)
         self.light_off()
-        self.get_logger().info(f'AUV 即将发动，请把缆或发布把缆命令')
+        self.get_logger().info(f'AUV 即将发动，请拔缆或发布拔缆命令')
 
         for i in range(1):
             time.sleep(0.5)

@@ -62,6 +62,8 @@ basic_motion ── /basic_motion/pose_info (30Hz) ─────────�
 
 ### 发布
 
+> **real 模式注意**：publisher 只对 `VideoCapture.isOpened()` 成功的相机创建。某摄打开失败 → 对应 `front_*`/`down_*` 话题**不存在**（下游可通过话题图检测）。sim 模式固定发布全部 4 通道。ArUco (`/perception/aruco/ids`) 仅当前视相机激活时发布。
+
 | 主题 | 类型 | 说明 |
 |------|------|------|
 | `/perception/detection/front_left` | `DetectionArray` | 前视左目检测结果 |

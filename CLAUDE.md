@@ -248,6 +248,7 @@ print('SET:', result.success, result.message)
 - **Task map**: JSON `name` field maps to a method via `task_map` dict. Supports SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL tasks, plus `start`, `navigate`, `wait`, `follow_line`, `arrow_surface`. See `docs/debug_guide.md` for full task list.
 - **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
 - **Status publisher** (`/task/status`, 2Hz): publishes current task index, total count, task name, status string
+- **START 前状态检查** (`_status_check` + `_confirm_force_start`): `start` 任务开头检查 MCU 状态 (`/zit6/state/status`)、basic_motion action server、`/dev/video*` 设备、视觉话题发布者 (4 个必需 + 可选)。检查未通过时不中止，而是提示操作者**回车强制启动** / **q 取消**（`input()` 在 daemon 线程中，不阻塞 `rclpy.spin()`；EOF 时自动取消）。通过后进入 LED 拔缆倒计时序列
 
 **ActionClient pattern (SingleThreadedExecutor + daemon thread):**
 
