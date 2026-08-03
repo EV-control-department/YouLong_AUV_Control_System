@@ -246,6 +246,7 @@ class VisionNode(Node):
         self._down_cap = None
         self._gortc_process = None
         self._gortc_config = None
+        self._active_channels = set()
         self._mjpeg_server = None
 
         # 线程锁及流媒体相关
@@ -290,6 +291,11 @@ class VisionNode(Node):
             if self._enable_down_camera:
                 self.create_subscription(Image, '/auv/down_cam/stitched', self._down_img_cb, 10)
             self.get_logger().info('Vision node started (sim mode: ROS topics)')
+            active_cams = []
+            if self._enable_front_camera:
+                active_cams.append('front')
+            if self._enable_down_camera:
+                active_cams.append('down')
         else:
             self.declare_parameter('front_cam_path', FRONT_CAMERA_DEVICE)
             self.declare_parameter('down_cam_path', DOWN_CAMERA_DEVICE)
@@ -309,8 +315,11 @@ class VisionNode(Node):
                 self._down_cap.set(cv2.CAP_PROP_FRAME_WIDTH, DOWN_CAPTURE_RESOLUTION[0])
                 self._down_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, DOWN_CAPTURE_RESOLUTION[1])
 
-            for cap, camera in ((self._front_cap, 'front'), (self._down_cap, 'down')):
+            active_cams = []
+            for cap, camera, path in ((self._front_cap, 'front', front_path),
+                                      (self._down_cap, 'down', down_path)):
                 if cap is not None and cap.isOpened():
+                    active_cams.append(camera)
                     thread = threading.Thread(
                         target=self._capture_camera_loop,
                         args=(cap, camera),
@@ -318,39 +327,43 @@ class VisionNode(Node):
                     self._capture_threads.append(thread)
                     thread.start()
                 elif cap is not None:
-                    self.get_logger().error(f'Cannot open {camera} camera: {front_path if camera == "front" else down_path}')
-            self.get_logger().info(f'Vision node started (real mode: front={front_path}, down={down_path})')
+                    self.get_logger().error(f'Cannot open {camera} camera: {path}')
+            self.get_logger().info(
+                f'Vision node started (real mode: front={front_path}, down={down_path}, active={active_cams})')
 
-        # Detection and state publishers. Image publishers are intentionally
-        # absent: video is served through the local MJPEG endpoint/go2rtc.
-        self.pub_det = {
-            'front_left':  self.create_publisher(DetectionArray, '/perception/detection/front_left', 10),
-            'front_right': self.create_publisher(DetectionArray, '/perception/detection/front_right', 10),
-            'down_left':   self.create_publisher(DetectionArray, '/perception/detection/down_left', 10),
-            'down_right':  self.create_publisher(DetectionArray, '/perception/detection/down_right', 10),
-        }
-        self.pub_line = {
-            name: self.create_publisher(LineState, f'/perception/line/{name}', 10)
-            for name in self.pub_det
-        }
+        # Detection and state publishers — only for active cameras.
+        # Image publishers are intentionally absent: video is served through
+        # the local MJPEG endpoint / go2rtc.
+        for cam in active_cams:
+            self._active_channels.add(f'{cam}_left')
+            self._active_channels.add(f'{cam}_right')
+        self.pub_det = {}
+        self.pub_line = {}
+        for ch in sorted(self._active_channels):
+            self.pub_det[ch] = self.create_publisher(DetectionArray, f'/perception/detection/{ch}', 10)
+            self.pub_line[ch] = self.create_publisher(LineState, f'/perception/line/{ch}', 10)
 
-        # ── ArUco detection (迁移自仿真节点) ─────────────────────────────────────────
+        # ── ArUco detection (迁移自仿真节点，仅当前视相机激活时启用) ──────────────
         self._aruco_detector = None
-        try:
-            aruco = getattr(cv2, 'aruco')
-            aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_1000)
-            aruco_params = aruco.DetectorParameters()
-            self._aruco_detector = aruco.ArucoDetector(aruco_dict, aruco_params)
-        except (AttributeError, cv2.error) as e:
-            self.get_logger().warn(f'OpenCV ArUco unavailable, marker detection disabled: {e}')
-        self._aruco_pub = self.create_publisher(Int32MultiArray, '/perception/aruco/ids', 10)
         self._aruco_lock = threading.Lock()
-        self._aruco_frames = None  # (left_img, right_img) for ArUco thread
+        self._aruco_frames = None
         self._aruco_stop = threading.Event()
         self._aruco_thread = None
-        if self._aruco_detector is not None:
-            self._aruco_thread = threading.Thread(target=self._aruco_loop, daemon=True)
-            self._aruco_thread.start()
+        self._aruco_pub = None
+        if 'front' in active_cams:
+            try:
+                aruco = getattr(cv2, 'aruco')
+                aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_1000)
+                aruco_params = aruco.DetectorParameters()
+                self._aruco_detector = aruco.ArucoDetector(aruco_dict, aruco_params)
+            except (AttributeError, cv2.error) as e:
+                self.get_logger().warn(f'OpenCV ArUco unavailable, marker detection disabled: {e}')
+            self._aruco_pub = self.create_publisher(Int32MultiArray, '/perception/aruco/ids', 10)
+            if self._aruco_detector is not None:
+                self._aruco_thread = threading.Thread(target=self._aruco_loop, daemon=True)
+                self._aruco_thread.start()
+        else:
+            self.get_logger().warn('ArUco detection disabled (no front camera)')
 
     def _aruco_loop(self):
         """Background thread: detect ArUco markers on front camera halves."""
@@ -624,6 +637,9 @@ class VisionNode(Node):
         return frame
 
     def _process_frame(self, header, frame, camera: str, update_raw_stream=True):
+        # 未激活的相机通道没有发布者，直接跳过避免 KeyError
+        if f'{camera}_left' not in self._active_channels:
+            return
         cv_img = self._normalize_frame(frame)
         if cv_img is None:
             self.get_logger().warn(f'Invalid {camera} frame, dropping it')
