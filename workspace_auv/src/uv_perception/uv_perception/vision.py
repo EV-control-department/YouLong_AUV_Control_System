@@ -38,8 +38,8 @@ CvBridge = None
 
 # ── Runtime switches ───────────────────────────────────────────────
 # 真实硬件模式下的 V4L2 设备绑定。
-FRONT_CAMERA_DEVICE = '/dev/video0'
-DOWN_CAMERA_DEVICE = '/dev/video2'
+FRONT_CAMERA_DEVICE = '/dev/video2'
+DOWN_CAMERA_DEVICE = '/dev/video0'
 ENABLE_FRONT_CAMERA = True
 ENABLE_DOWN_CAMERA = True
 

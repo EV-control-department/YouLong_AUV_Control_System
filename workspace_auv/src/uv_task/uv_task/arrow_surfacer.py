@@ -107,6 +107,11 @@ class ArrowSurfacer:
         self._red_cid    = int(params.get('red_class_id', 1))
         self._green_cid  = int(params.get('green_class_id', 2))
         self._view_yaw = float(params.get('view_yaw', 90.0))
+        # 指定扔哪个扇区：'yellow' / 'green' / 'red'，空=按顺序搜索
+        self._target_sector = str(params.get('target_sector', '')).strip().lower()
+        # 对准后 BMOVE 位移（机体系 x/y）：让信号弹撒放器对准扇区中心
+        self._drop_offset_x = float(params.get('drop_offset_x', 0.25))
+        self._drop_offset_y = float(params.get('drop_offset_y', 0.15))
 
         # ── 感知订阅 ──
         self._lock = threading.RLock()
@@ -405,94 +410,140 @@ class ArrowSurfacer:
         """执行箭头对准 + ArUco 读数 + 短暂出水。"""
 
         # 1. 转向 view_yaw
-        self._logger.info(f'ArrowSurfacer: rotating to yaw={self._view_yaw:.1f}°')
-        success, msg = self._node._send_action_goal(
-            BasicMotion.Goal.SET,
-            [self._node._cmd_x, self._node._cmd_y,
-             self._node._cmd_z, self._view_yaw],
-            'rz', timeout=15.0)
-        if not success:
-            self._logger.error(f'ArrowSurfacer: setrz failed: {msg}')
-            return False
-        self._node._cmd_yaw = self._view_yaw
-        self._logger.info(
-            f'ArrowSurfacer: rotation complete, yaw={self._view_yaw:.1f}°')
+        # self._logger.info(f'ArrowSurfacer: rotating to yaw={self._view_yaw:.1f}°')
+        # success, msg = self._node._send_action_goal(
+        #     BasicMotion.Goal.SET,
+        #     [self._node._cmd_x, self._node._cmd_y,
+        #      self._node._cmd_z, self._view_yaw],
+        #     'rz', timeout=15.0)
+        # if not success:
+        #     self._logger.error(f'ArrowSurfacer: setrz failed: {msg}')
+        #     return False
+        # self._node._cmd_yaw = self._view_yaw
+        # self._logger.info(
+        #     f'ArrowSurfacer: rotation complete, yaw={self._view_yaw:.1f}°')
 
-        # 2. 搜索并对准箭头
-        self._logger.info(
-            f'ArrowSurfacer: align to arrow (class={self._arrow_cid})')
-        if not self._node._align_to_class(self._arrow_cid, 'arrow'):
-            self._logger.warn('ArrowSurfacer: arrow align failed')
-            return False
+        # # 2. 搜索并对准箭头
+        # self._logger.info(
+        #     f'ArrowSurfacer: align to arrow (class={self._arrow_cid})')
+        # if not self._node._align_to_class(self._arrow_cid, 'arrow'):
+        #     self._logger.warn('ArrowSurfacer: arrow align failed')
+        #     return False
 
-        # 4. 短暂出水：setz=-1, timeout=60s
-        self._logger.info(
-            f'ArrowSurfacer: surfacing (setz=-1)... '
-            f'ArUco IDs collected: {sorted(self._aruco_ids)}')
-        self._node._send_action_goal(
-            BasicMotion.Goal.WMOVE,
-            [self._node._cmd_x, self._node._cmd_y, -1.0, self._node._cmd_yaw],
-            'z', timeout=15.0, quiet=True)
+        # # 4. 短暂出水：setz=-1, timeout=60s
+        # self._logger.info(
+        #     f'ArrowSurfacer: surfacing (setz=-1)... '
+        #     f'ArUco IDs collected: {sorted(self._aruco_ids)}')
+        # self._node._send_action_goal(
+        #     BasicMotion.Goal.WMOVE,
+        #     [self._node._cmd_x, self._node._cmd_y, -1.0, self._node._cmd_yaw],
+        #     'z', timeout=15.0, quiet=True)
 
-        # 5. 恢复深度 0.4
-        self._logger.info('ArrowSurfacer: recovering depth to 0.4')
-        success, msg = self._node._send_action_goal(
-            BasicMotion.Goal.WMOVE,
-            [self._node._cmd_x, self._node._cmd_y, 0.4, self._node._cmd_yaw],
-            'z', timeout=15.0)
-        if success:
-            self._node._cmd_z = 0.4
+        # # 5. 恢复深度 0.4
+        # self._logger.info('ArrowSurfacer: recovering depth to 0.4')
+        # success, msg = self._node._send_action_goal(
+        #     BasicMotion.Goal.WMOVE,
+        #     [self._node._cmd_x, self._node._cmd_y, 0.4, self._node._cmd_yaw],
+        #     'z', timeout=15.0)
+        # if success:
+        #     self._node._cmd_z = 0.4
 
-        # 6. 如果还没 ArUco ID，前视扫描找 tag
-        self._search_aruco_frontal()
+        # # 6. 如果还没 ArUco ID，前视扫描找 tag
+        # self._search_aruco_frontal()
 
-        # 7. ArUco → 扇区映射；无 ID 默认绿色
-        sector = self._aruco_to_sector()
-        if sector is None:
+        # # 7. ArUco → 扇区映射；无 ID 默认绿色
+        # sector = self._aruco_to_sector()
+        # if sector is None:
+        #     self._logger.warn(
+        #         'ArrowSurfacer: no ArUco ID detected, defaulting to green')
+        #     sector = ('green', self._green_cid)
+        # color_name, sector_cid = sector
+        # ── [TEST] 临时: 搜索扇区，找到哪个对准哪个 ──
+        # 指定 target_sector 则只搜索该颜色，否则按 黄→绿→红 顺序
+        if self._target_sector:
+            order = [(self._target_sector,
+                      {'yellow': self._yellow_cid,
+                       'green': self._green_cid,
+                       'red': self._red_cid}.get(self._target_sector))]
+        else:
+            order = [('yellow', self._yellow_cid),
+                     ('green', self._green_cid),
+                     ('red', self._red_cid)]
+        sector_cid = None
+        for name, cid in order:
+            if cid is None:
+                self._logger.warn(
+                    f'ArrowSurfacer[TEST]: unknown target_sector '
+                    f'{self._target_sector!r}, skipping')
+                continue
+            self._logger.info(
+                f'ArrowSurfacer[TEST]: searching {name} sector (class={cid})')
+            if self._search_for_class(cid, f'{name} sector'):
+                color_name, sector_cid = name, cid
+                break
+        if sector_cid is None:
             self._logger.warn(
-                'ArrowSurfacer: no ArUco ID detected, defaulting to green')
-            sector = ('green', self._green_cid)
-        color_name, sector_cid = sector
+                'ArrowSurfacer[TEST]: no sector found, defaulting green')
+            color_name, sector_cid = 'green', self._green_cid
         self._logger.info(
-            f'ArrowSurfacer: ArUco → sector: {color_name} '
-            f'(class_id={sector_cid})')
+            f'ArrowSurfacer[TEST]: sector selected = {color_name} '
+            f'(class={sector_cid})')
+        # self._logger.info(
+        #     f'ArrowSurfacer: ArUco → sector: {color_name} '
+        #     f'(class_id={sector_cid})')
 
 
         
 
-        # 扇区选定了 — 亮对应颜色灯
-        color_light = {
-            'yellow': self._node.LIGHT_YELLOW,
-            'red':    self._node.LIGHT_RED,
-            'green':  self._node.LIGHT_GREEN,
-        }.get(color_name, 0)
-        if color_light:
-            self._node.set_light(
-                color_light, f'SECTOR {color_name.upper()}')
-            self._logger.info(
-                f'🏮 ArrowSurfacer: {color_name.upper()} LIGHT ON — '
-                f'sector selected!')
+        # # 扇区选定了 — 亮对应颜色灯
+        # color_light = {
+        #     'yellow': self._node.LIGHT_YELLOW,
+        #     'red':    self._node.LIGHT_RED,
+        #     'green':  self._node.LIGHT_GREEN,
+        # }.get(color_name, 0)
+        # if color_light:
+        #     self._node.set_light(
+        #         color_light, f'SECTOR {color_name.upper()}')
+        #     self._logger.info(
+        #         f'🏮 ArrowSurfacer: {color_name.upper()} LIGHT ON — '
+        #         f'sector selected!')
 
         # 8. WTRAVEL to sector position
-        self._logger.info(
-            f'ArrowSurfacer: traveling to sector '
-            f'({self._sector_x:.2f}, {self._sector_y:.2f})')
-        success, msg = self._node._send_action_goal(
-            BasicMotion.Goal.WTRAVEL,
-            [self._sector_x, self._sector_y, 0.4, self._view_yaw],
-            timeout=60.0)
-        if not success:
-            self._logger.error(f'ArrowSurfacer: sector travel failed: {msg}')
-            return False
-        self._node._cmd_x = self._sector_x
-        self._node._cmd_y = self._sector_y
-        self._node._cmd_yaw = self._view_yaw
+        # self._logger.info(
+        #     f'ArrowSurfacer: traveling to sector '
+        #     f'({self._sector_x:.2f}, {self._sector_y:.2f})')
+        # success, msg = self._node._send_action_goal(
+        #     BasicMotion.Goal.WTRAVEL,
+        #     [self._sector_x, self._sector_y, 0.4, self._view_yaw],
+        #     timeout=60.0)
+        # if not success:
+        #     self._logger.error(f'ArrowSurfacer: sector travel failed: {msg}')
+        #     return False
+        # self._node._cmd_x = self._sector_x
+        # self._node._cmd_y = self._sector_y
+        # self._node._cmd_yaw = self._view_yaw
 
         # 9. 搜索并对准扇区
         self._logger.info(
             f'ArrowSurfacer: aligning to {color_name} sector '
             f'(class={sector_cid})')
         self._node._align_to_class(sector_cid, f'{color_name} sector')
+
+        # 9.5 对准后 BMOVE（机体系 x/y）：把信号弹撒放器挪到扇区中心正上方
+        if self._drop_offset_x or self._drop_offset_y:
+            self._logger.info(
+                f'ArrowSurfacer: BMOVE launcher over sector center '
+                f'(dx={self._drop_offset_x:.2f}, dy={self._drop_offset_y:.2f})')
+            success, msg = self._node._send_action_goal(
+                BasicMotion.Goal.BMOVE,
+                [self._drop_offset_x, self._drop_offset_y, 0.0, 0.0],
+                'xy', timeout=10.0, quiet=True)
+            if success:
+                self._node._cmd_x += self._drop_offset_x
+                self._node._cmd_y += self._drop_offset_y
+            else:
+                self._logger.warn(
+                    f'ArrowSurfacer: launcher BMOVE failed: {msg}')
 
         # 10. 投信标 + 关灯
         self._node.set_servo(
@@ -501,6 +552,12 @@ class ArrowSurfacer:
         self._logger.info(
             f'🔫 ArrowSurfacer: BEACON DROPPED to {color_name.upper()} sector!')
         self._node.light_off()
+
+        time.sleep(4)
+        self._node.set_servo(
+            self._node.ANGLE_INIT,
+            f'reset servo')
+
 
         self._logger.info(
             f'ArrowSurfacer: complete. '

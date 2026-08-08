@@ -42,10 +42,10 @@ _DOWN_OPTICAL_TO_BODY = np.array([[0, -1, 0],
 # ==========================================================================
 
 # ── 横向 PID：center_error → dy（把 AUV 推回管道中心）─────────────
-_LINE_PID_P = 0.00009              # 比例增益
+_LINE_PID_P = 0.00013            # 比例增益
 _LINE_PID_I = 0.0                # 积分增益
 _LINE_PID_D = 0.0                # 微分增益
-_LINE_PID_OUTPUT_LIMIT = 0.30    # PID 输出限幅 (m)
+_LINE_PID_OUTPUT_LIMIT = 0.4    # PID 输出限幅 (m)
 _LINE_PID_RESET_DT = 1.0         # dt 超过此值 → 重置积分 (s)
 _LINE_PID_INTEGRAL_LIMIT_PX = 1000.0  # 积分限幅 (像素·s)
 _LINE_LATERAL_SIGN = -1.0        # 横向修正方向符号
@@ -62,7 +62,7 @@ _LINE_YAW_SIGN = 1.0             # 偏航修正方向符号
 _MAX_YAW_STEP = 14.0             # 单步最大偏航 (°)
 
 # ── 前向运动 ─────────────────────────────────────────────────────
-_FORWARD_STEP = 0.05             # 基础前进步长 (m)
+_FORWARD_STEP = 0.04             # 基础前进步长 (m)
 _MIN_FORWARD_STEP = 0.02         # 修正量大时的最小前进步长 (m)
 
 # ── 盲跟 (coast) ─────────────────────────────────────────────────
@@ -70,7 +70,7 @@ _COAST_FORWARD_STEP = 0.05       # 盲跟前进步长 (m)
 _COAST_LATERAL_GAIN = 0.15       # 盲跟横向比例增益
 
 # ── 丢帧恢复 ─────────────────────────────────────────────────────
-_LOST_TOLERANCE = 100            # 连续丢帧容忍帧数，超过则进入搜索
+_LOST_TOLERANCE = 5            # 连续丢帧容忍帧数，超过则进入搜索
 
 # ── 搜索阶段（方框螺旋）──────────────────────────────────────────
 _SEARCH_SPIRAL_START = 0.02      # 初始搜索框大小 (m)
@@ -92,13 +92,13 @@ _MARK_TRIGGER_LOWER_FRAC = 1.0 / 5.0    # bbox 在下方此比例 → 触发
 
 # 三角形标记动作
 _TRIANGLE_XY_ADJUST_DX = 0.1     # 对准后前移 (m)
-_TRIANGLE_XY_ADJUST_DY = 0.05    # 对准后右移 (m)
-_TRIANGLE_SINK_DEPTH = 0.7       # 下沉深度 (m)
+_TRIANGLE_XY_ADJUST_DY = 0.20    # 对准后右移 (m)
+_TRIANGLE_SINK_DEPTH = 0.65       # 下沉深度 (m)
 _TRIANGLE_MIN_DIST = 0.3         # 解除抑制所需最小移动距离 (m)
 
 # 正方形标记动作
-_SQUARE_ROTATION_STEP = 120.0    # 单次 BMOVE rz 角度 (°)
-_SQUARE_ROTATION_COUNT = 3       # 旋转次数 (3×120°=360°)
+_SQUARE_ROTATION_STEP = 179    # 单次 BMOVE rz 角度 (°)
+_SQUARE_ROTATION_COUNT = 2       # 旋转次数 (3×120°=360°)
 _SQUARE_MIN_DIST = 0.3           # 解除抑制所需最小移动距离 (m)
 
 
@@ -614,7 +614,7 @@ class LineFollower:
 
             success, _ = self._node._send_action_goal(
                 BasicMotion.Goal.BMOVE,
-                [forward, dy, 0.0, 0.0], 'xy', timeout=8.0,
+                [forward, dy, 0.0, 0.0], 'xy', timeout=1.0,
                 quiet=True)
             if success:
                 self._node._cmd_x, self._node._cmd_y, \

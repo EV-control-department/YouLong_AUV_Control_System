@@ -7,13 +7,14 @@
     {"name": "wtravelxy", "params": {"x": 0.5, "y": 0.0}},
     {"name": "setrz", "params": {"rz": 60.0}},
 
-    {"name": "follow_line", "params": {
-      "timeout": 240.0,
-      "triangle_class_id": 7,
-      "square_class_id": 5,
-      "marker_class_ids": [7],
-      "stop_when_marker": true,
-      "forward_step": 0.10
+    {"name": "arrow_surface", "params": {
+      "yellow_class_id": 8,
+      "green_class_id": 2,
+      "red_class_id": 4,
+      "arrow_class_id": 0,
+      "sector_x": 0.0,
+      "sector_y": 0.0,
+      "target_sector": "red"
     }}
   ]
 }
