@@ -5,6 +5,7 @@ The task runner is the single source of truth for commanded position,
 tracked locally (not from external topics).
 """
 
+import glob
 import json
 import math
 import os
@@ -18,6 +19,8 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_msgs.msg import Float32, UInt8
 from std_srvs.srv import Trigger
+
+from zit6_interfaces.msg import ZitStatus
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import DetectionArray, ObjectPositionArray, PoseInfo, TaskStatus
@@ -42,9 +45,10 @@ class TaskRunnerNode(Node):
     LIGHT_RED = 3
 
     # ── 舵机角度 (/zit6/cmd/servo, rad) ────────────────────────────
-    ANGLE_DROP_BEACON = math.pi / 2       # ~1.57 rad  投信标
+    ANGLE_DROP_BEACON = 90       #   投信标
     ANGLE_SAMPLE_WATER = 0.0               # 采水样
-    ANGLE_RELEASE_SAMPLER = -math.pi / 2   # ~-1.57 rad  释放取水器
+    ANGLE_RELEASE_SAMPLER = 0   #   释放取水器
+    ANGLE_INIT = 0.0
 
     def __init__(self):
         super().__init__('task_runner')
@@ -137,6 +141,12 @@ class TaskRunnerNode(Node):
         self.create_subscription(
             PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10)
 
+        # ZIT6 MCU 状态 (status check 用)
+        self._mcu_status = ZitStatus()
+        self._mcu_status_rcvd = False
+        self.create_subscription(
+            ZitStatus, '/zit6/state/status', self._mcu_status_cb, 10)
+
         # Publishers
         self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
         self.pub_light = self.create_publisher(UInt8, '/zit6/cmd/light', 10)
@@ -164,6 +174,10 @@ class TaskRunnerNode(Node):
         with self._perception_lock:
             self._robot_pose = (msg.robot_x, msg.robot_y, msg.robot_z,
                                 msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
+
+    def _mcu_status_cb(self, msg: ZitStatus):
+        self._mcu_status = msg
+        self._mcu_status_rcvd = True
 
     # ── 灯光 / 舵机控制 ────────────────────────────────────────────
 
@@ -259,7 +273,7 @@ class TaskRunnerNode(Node):
     def _align_to_class(self, class_id: int, label: str) -> bool:
         if self._best_down_detection(class_id) is None:
             self.get_logger().info(f'Align [{label}]: searching...')
-            if not self._search_for_class(class_id, label): 
+            if not self._search_for_class(class_id, label):
                 return False
         for i in range(200):
             if self.stopped: return False
@@ -268,8 +282,8 @@ class TaskRunnerNode(Node):
             self._send_action_goal(BasicMotion.Goal.SET,
                 [tgt[0], tgt[1], self._cmd_z, self._cmd_yaw],
                 'xy', timeout=0.1, quiet=True)
-            self.get_logger().info(f'Align [{label}]: #{i}靠近，x:{tgt[0]},y:{tgt[1]}')
             self._cmd_x = tgt[0]; self._cmd_y = tgt[1]
+            self.get_logger().info(f'Align [{label}]: #{i}靠近，x:{tgt[0]},y:{tgt[1]}')
         self.get_logger().info(f'Align [{label}]: complete')
         return True
 
@@ -431,37 +445,70 @@ class TaskRunnerNode(Node):
 
     # --- START ---
 
+    # ── 启动前状态检查 ──────────────────────────────────────────────
+
+    def _sleep_or_skip(self, seconds: float, skip: threading.Event) -> bool:
+        """Sleep, but return True early if skip is triggered by Enter press."""
+        deadline = time.time() + seconds
+        while time.time() < deadline and not skip.is_set():
+            time.sleep(min(0.1, deadline - time.time()))
+        return skip.is_set()
+
     def _task_start(self, p: dict) -> bool:
+        # ── 后台监听 Enter 键跳过准备 ──
+        skip = threading.Event()
+
+        def _listen_skip():
+            try:
+                self.get_logger().info('按 回车 跳过检查和准备，直接发车')
+                input()
+                skip.set()
+                self.get_logger().warn('⚠ 跳过准备，直接发车!')
+            except EOFError:
+                pass
+
+        listener = threading.Thread(target=_listen_skip, daemon=True)
+        listener.start()
 
         self.get_logger().info(f'YouLong_AUV_Control_System 准备启动，请做好拔缆准备')
-        self.set_light(3,'LED')
-        time.sleep(1)
+        self.set_light(3, 'LED')
+        if self._sleep_or_skip(1, skip):
+            return self._do_start()
         self.light_off()
         self.get_logger().info(f'AUV 即将发动，请把缆或发布把缆命令')
 
         for i in range(1):
-            time.sleep(0.5)
-            self.set_light(1,'LED')
-            time.sleep(0.5)
+            if self._sleep_or_skip(0.5, skip):
+                return self._do_start()
+            self.set_light(1, 'LED')
+            if self._sleep_or_skip(0.5, skip):
+                return self._do_start()
             self.light_off()
-        
+
         self.get_logger().info(f'AUV 将在6秒后启动，已经可以拔缆了')
 
         for i in range(7):
-            time.sleep(0.25)
-            self.set_light(2,'LED')
-            time.sleep(0.25)
+            if self._sleep_or_skip(0.25, skip):
+                return self._do_start()
+            self.set_light(2, 'LED')
+            if self._sleep_or_skip(0.25, skip):
+                return self._do_start()
             self.light_off()
 
-        
         self.get_logger().info(f'AUV 将在两秒后启动，如果你能看到这一条信息，说明已经有点晚了')
-        
-        time.sleep(1)
-        self.set_light(2,'LED')
-        time.sleep(1)
+
+        if self._sleep_or_skip(1, skip):
+            return self._do_start()
+        self.set_light(2, 'LED')
+        if self._sleep_or_skip(1, skip):
+            return self._do_start()
         self.light_off()
 
-        
+        return self._do_start()
+
+    def _do_start(self) -> bool:
+        """发送 START action goal，初始化 odom 原点。"""
+        self.light_off()
         success, msg = self._send_action_goal(
             BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], timeout=0)
         if success:
