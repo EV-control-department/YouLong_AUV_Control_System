@@ -286,13 +286,13 @@ class TaskRunnerNode(Node):
             self.get_logger().info(f'Align [{label}]: searching...')
             if not self._search_for_class(class_id, label):
                 return False
-        for i in range(300):
+        for i in range(400):
             if self.stopped: return False
             tgt = self._triangulate(class_id)
             if tgt is None: time.sleep(0.05); continue
             self._send_action_goal(BasicMotion.Goal.SET,
                 [tgt[0], tgt[1], self._cmd_z, self._cmd_yaw],
-                'xy', timeout=0.2, quiet=True)
+                'xy', timeout=0.05, quiet=True)
             self._cmd_x = tgt[0]; self._cmd_y = tgt[1]
             self.get_logger().info(f'Align [{label}]: #{i}靠近，x:{tgt[0]},y:{tgt[1]}')
         self.get_logger().info(f'Align [{label}]: complete')
