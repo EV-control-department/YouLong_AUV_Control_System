@@ -92,6 +92,9 @@ class TaskRunnerNode(Node):
         self.declare_parameter('down_image_width', 1280.0)
         self.declare_parameter('down_image_height', 960.0)
 
+        # _align_to_class 对准的 EMA 平滑系数 (1.0=无滤波, 0.1=强平滑)
+        self.declare_parameter('align_ema_alpha', 0.3)
+
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {
             'start': self._task_start,
@@ -353,15 +356,27 @@ class TaskRunnerNode(Node):
             self.get_logger().info(f'Align [{label}]: searching...')
             if not self._search_for_class(class_id, label):
                 return False
+        alpha = float(self.get_parameter('align_ema_alpha').value)
+        filtered = None  # 每个对准任务独立重置
         for i in range(400):
             if self.stopped: return False
             tgt = self._triangulate(class_id)
             if tgt is None: time.sleep(0.05); continue
+            if filtered is None:
+                filtered = (tgt[0], tgt[1])  # 首帧立即跳过去
+            else:
+                # EMA 低通滤波: 新测量只贡献 alpha, 历史平滑值稳住方向
+                filtered = (
+                    alpha * tgt[0] + (1.0 - alpha) * filtered[0],
+                    alpha * tgt[1] + (1.0 - alpha) * filtered[1],
+                )
             self._send_action_goal(BasicMotion.Goal.SET,
-                [tgt[0], tgt[1], self._cmd_z, self._cmd_yaw],
+                [filtered[0], filtered[1], self._cmd_z, self._cmd_yaw],
                 'xy', timeout=0.05, quiet=True)
-            self._cmd_x = tgt[0]; self._cmd_y = tgt[1]
-            self.get_logger().info(f'Align [{label}]: #{i}靠近，x:{tgt[0]},y:{tgt[1]}')
+            self._cmd_x = filtered[0]; self._cmd_y = filtered[1]
+            self.get_logger().info(
+                f'Align [{label}]: #{i}靠近，raw=({tgt[0]:.2f},{tgt[1]:.2f}) '
+                f'filt=({filtered[0]:.2f},{filtered[1]:.2f})')
         self.get_logger().info(f'Align [{label}]: complete')
         return True
 
