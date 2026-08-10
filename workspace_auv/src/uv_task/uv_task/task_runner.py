@@ -93,7 +93,7 @@ class TaskRunnerNode(Node):
         self.declare_parameter('down_image_height', 480.0)
 
         # _align_to_class 对准的 EMA 平滑系数 (1.0=无滤波, 0.1=强平滑)
-        self.declare_parameter('align_ema_alpha', 0.3)
+        self.declare_parameter('align_ema_alpha', 0.1)
 
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {

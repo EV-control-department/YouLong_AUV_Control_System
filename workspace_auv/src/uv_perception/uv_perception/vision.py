@@ -69,7 +69,7 @@ DOWN_CAMERA_MATRIX = (
 )
 DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
-CONFIDENCE = 0.3
+CONFIDENCE = 0.5
 PIPE_CLASS_ID = 3                # 实机模型: pipe=3
 PIPE_CONFIDENCE = 0.7            # pipe 单独的高置信度阈值 (巡线目标需可靠)
 
