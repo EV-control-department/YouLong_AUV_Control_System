@@ -47,7 +47,7 @@
       "start_class_id": 4,
       "approach_z": -0.6,
       "approach_x": -0.5,
-      "approach_timeout": 50.0
+      "approach_timeout": 3.0
     }}
   ]
 }

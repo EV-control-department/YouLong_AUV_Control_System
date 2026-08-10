@@ -34,7 +34,7 @@ from uv_task.arrow_surfacer import (
     _euler_to_rotation_matrix, _ray_intersection_midpoint,
 )
 from uv_task.arrow_surfacer import ArrowSurfacer
-from uv_task.line_follower import LineFollower
+from uv_task.line_follower import LineFollower, _apply_body_delta
 
 
 class TaskRunnerNode(Node):
@@ -1001,17 +1001,24 @@ class TaskRunnerNode(Node):
             f'🎯 release_sampler: aligning to START marker (class={start_cid})')
         self._align_to_class(start_cid, 'START marker')
 
+        # 上浮靠岸 — 机体系相对位移（定位漂移时绝对坐标不可靠）
         self.get_logger().info(
-            f'🌊🏖️  release_sampler: wmove z={approach_z} x={approach_x}')
+            f'🌊🏖️  release_sampler: bmove surfacing z={approach_z}')
         self._send_action_goal(
-            BasicMotion.Goal.WMOVE,
-            [approach_x, self._cmd_y, approach_z, self._cmd_yaw],
-            'xz', timeout=approach_timeout)
+            BasicMotion.Goal.BMOVE,
+            [0.0, 0.0, approach_z, 0.0],
+            'z', timeout=approach_timeout)
+        self._cmd_z += approach_z
+
+        self.get_logger().info(
+            f'🏝️  release_sampler: bmove to shore x={approach_x}')
         self._send_action_goal(
-            BasicMotion.Goal.WMOVE,
-            [approach_x, self._cmd_y - 1, approach_z, self._cmd_yaw],
-            'xz', timeout=approach_timeout)
-        self._cmd_x = approach_x; self._cmd_z = approach_z
+            BasicMotion.Goal.BMOVE,
+            [approach_x, 0.0, 0.0, 0.0],
+            'x', timeout=approach_timeout)
+        self._cmd_x, self._cmd_y, _, _ = _apply_body_delta(
+            self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw,
+            approach_x, 0.0, 0.0, 0.0)
 
         # 释放取水器 — pushrod 推杆伸出（speed>0）
         self._send_pushrod(release_speed, release_duration_ms, 'release water sampler')
