@@ -59,7 +59,7 @@ class HwManagerNode(Node):
         super().__init__('hw_manager')
 
         # ── Parameters ───────────────────────────────────────────
-        self.declare_parameter('heartbeat_rate', 15.0)
+        self.declare_parameter('heartbeat_rate', 5.0)
         self.declare_parameter('watchdog_timeout', 7.0)
         self.declare_parameter('arm_mode', 1)  # 1=normal, 3=force
         self.declare_parameter('battery_low_threshold', 14.0)
