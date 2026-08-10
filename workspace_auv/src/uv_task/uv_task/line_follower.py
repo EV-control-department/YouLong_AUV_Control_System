@@ -38,6 +38,71 @@ _DOWN_OPTICAL_TO_BODY = np.array([[0, -1, 0],
 
 
 # ==========================================================================
+# PID 及运动控制参数（可通过 tasks.json params 覆盖）
+# ==========================================================================
+
+# ── 横向 PID：center_error → dy（把 AUV 推回管道中心）─────────────
+_LINE_PID_P = 0.00023            # 比例增益
+_LINE_PID_I = 0.0                # 积分增益
+_LINE_PID_D = 0.0                # 微分增益
+_LINE_PID_OUTPUT_LIMIT = 0.5    # PID 输出限幅 (m)
+_LINE_PID_RESET_DT = 1.0         # dt 超过此值 → 重置积分 (s)
+_LINE_PID_INTEGRAL_LIMIT_PX = 1000.0  # 积分限幅 (像素·s)
+_LINE_LATERAL_SIGN = -1.0        # 横向修正方向符号
+_MAX_LATERAL_STEP = 0.1         # 单步最大横向移动 (m)
+
+# ── 偏航 PID：heading_error_deg → dyaw（对齐管道方向）─────────────
+_HEADING_PID_P = 0.4            # 比例增益
+_HEADING_PID_I = 0.005           # 积分增益
+_HEADING_PID_D = 0.02            # 微分增益
+_HEADING_PID_OUTPUT_LIMIT = 12.0 # PID 输出限幅 (°)
+_HEADING_PID_RESET_DT = 1.5      # dt 超过此值 → 重置积分 (s)
+_HEADING_INTEGRAL_LIMIT = 60.0   # 积分限幅 (°·s)
+_LINE_YAW_SIGN = 1.0             # 偏航修正方向符号
+_MAX_YAW_STEP = 14.0             # 单步最大偏航 (°)
+
+# ── 前向运动 ─────────────────────────────────────────────────────
+_FORWARD_STEP = 0.06            # 基础前进步长 (m)
+_MIN_FORWARD_STEP = 0.01         # 修正量大时的最小前进步长 (m)
+
+# ── 盲跟 (coast) ─────────────────────────────────────────────────
+_COAST_FORWARD_STEP = 0.05       # 盲跟前进步长 (m)
+_COAST_LATERAL_GAIN = 0.15       # 盲跟横向比例增益
+
+# ── 丢帧恢复 ─────────────────────────────────────────────────────
+_LOST_TOLERANCE = 6           # 连续丢帧容忍帧数，超过则进入搜索
+
+# ── 搜索阶段（方框螺旋）──────────────────────────────────────────
+_SEARCH_SPIRAL_START = 0.02      # 初始搜索框大小 (m)
+_SEARCH_SPIRAL_STEP = 0.30       # 每圈扩展步长 (m)
+_SEARCH_MAX_SPIRAL = 2.0         # 最大搜索范围 (m)
+_SEARCH_MAX_STEP = 0.50          # 单步最大移动 (m)
+
+# ── 感知 ─────────────────────────────────────────────────────────
+_PERCEPTION_MAX_AGE = 0.60       # 感知数据最大有效期 (s)
+
+# ── 标记处理 ─────────────────────────────────────────────────────
+_TRIANGLE_CLASS_ID = 5
+_SQUARE_CLASS_ID = 6
+_TASK_TIMEOUT = 120.0            # 任务总超时 (s)
+
+# 标记触发与抑制区域（bbox 中心 y / 图像高度 的比例）
+_MARK_SUPPRESS_UPPER_FRAC = 1.0 / 5.0   # bbox 在上方此比例 → 解除抑制
+_MARK_TRIGGER_LOWER_FRAC = 1.0 / 5.0    # bbox 在下方此比例 → 触发
+
+# 三角形标记动作
+_TRIANGLE_XY_ADJUST_DX = 0.16    # 对准后前移 (m)
+_TRIANGLE_XY_ADJUST_DY = -0.13    # 对准后右移 (m)
+_TRIANGLE_SINK_DEPTH = 0.72       # 下沉深度 (m)
+_TRIANGLE_MIN_DIST = 0.3         # 解除抑制所需最小移动距离 (m)
+
+# 正方形标记动作
+_SQUARE_ROTATION_STEP = 36    # 单次 BMOVE rz 角度 (°)
+_SQUARE_ROTATION_COUNT = 10       # 旋转次数 (3×120°=360°)
+_SQUARE_MIN_DIST = 0.3           # 解除抑制所需最小移动距离 (m)
+
+
+# ==========================================================================
 # 模块级辅助函数
 # ==========================================================================
 
@@ -131,40 +196,89 @@ class LineFollower:
             PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10))
 
         # ── PID 状态（横向和偏航独立控制）──
-        # 横向 PID: center_error → dy (把 AUV 推回管道中心)
         self._lat_prev_err = None
         self._lat_integral = 0.0
         self._lat_last_t = None
-        # 偏航 PID: heading_error_deg → dyaw (对齐管道方向)
         self._head_prev_err = None
         self._head_integral = 0.0
         self._head_last_t = None
 
-        # ── YOLO 丢帧恢复 ──
-        self._lost_count = 0           # 连续丢帧计数
-        self._lost_max = int(params.get('lost_tolerance', 100))
-        self._last_valid_line = None   # 最后有效的 LineState (用于盲跟)
+        # ── 参数加载（tasks.json params 覆盖模块级默认值）────
+        self._timeout = float(params.get('timeout', _TASK_TIMEOUT))
+        self._perception_max_age = float(params.get('perception_max_age', _PERCEPTION_MAX_AGE))
+        self._lost_max = int(params.get('lost_tolerance', _LOST_TOLERANCE))
 
-        # ── 标记 class_id（可通过 tasks.json 参数覆盖）──
-        self._triangle_cid = int(params.get('triangle_class_id', 5))
-        self._square_cid = int(params.get('square_class_id', 6))
+        # 横向 PID
+        self._line_pid_p = float(params.get('line_pid_p', _LINE_PID_P))
+        self._line_pid_i = float(params.get('line_pid_i', _LINE_PID_I))
+        self._line_pid_d = float(params.get('line_pid_d', _LINE_PID_D))
+        self._line_pid_output_limit = float(params.get('line_pid_output_limit', _LINE_PID_OUTPUT_LIMIT))
+        self._line_pid_reset_dt = float(params.get('line_pid_reset_dt', _LINE_PID_RESET_DT))
+        self._line_pid_integral_limit_px = float(params.get('line_pid_integral_limit_px', _LINE_PID_INTEGRAL_LIMIT_PX))
+        self._line_lateral_sign = float(params.get('line_lateral_sign', _LINE_LATERAL_SIGN))
+        self._max_lateral_step = abs(float(params.get('max_lateral_step', _MAX_LATERAL_STEP)))
+
+        # 偏航 PID
+        self._heading_pid_p = float(params.get('heading_pid_p', _HEADING_PID_P))
+        self._heading_pid_i = float(params.get('heading_pid_i', _HEADING_PID_I))
+        self._heading_pid_d = float(params.get('heading_pid_d', _HEADING_PID_D))
+        self._heading_pid_output_limit = float(params.get('heading_pid_output_limit', _HEADING_PID_OUTPUT_LIMIT))
+        self._heading_pid_reset_dt = float(params.get('heading_pid_reset_dt', _HEADING_PID_RESET_DT))
+        self._heading_integral_limit = float(params.get('heading_integral_limit', _HEADING_INTEGRAL_LIMIT))
+        self._line_yaw_sign = float(params.get('line_yaw_sign', _LINE_YAW_SIGN))
+        self._max_yaw_step = abs(float(params.get('max_yaw_step', _MAX_YAW_STEP)))
+
+        # 前向运动
+        self._forward_step = float(params.get('forward_step', _FORWARD_STEP))
+        self._min_forward_step = max(0.0, float(params.get('min_forward_step', _MIN_FORWARD_STEP)))
+
+        # 盲跟
+        self._coast_forward_step = float(params.get('coast_forward_step', _COAST_FORWARD_STEP))
+        self._coast_lateral_gain = float(params.get('coast_lateral_gain', _COAST_LATERAL_GAIN))
+
+        # 搜索
+        self._search_spiral_size = float(params.get('search_spiral_start', _SEARCH_SPIRAL_START))
+        self._search_spiral_step = float(params.get('search_spiral_step', _SEARCH_SPIRAL_STEP))
+        self._search_max_spiral = float(params.get('search_max_spiral', _SEARCH_MAX_SPIRAL))
+        self._search_max_step = float(params.get('search_max_step', _SEARCH_MAX_STEP))
+
+        # 标记 class_id
+        self._triangle_cid = int(params.get('triangle_class_id', _TRIANGLE_CLASS_ID))
+        self._square_cid = int(params.get('square_class_id', _SQUARE_CLASS_ID))
+
+        # 标记触发/抑制区域
+        self._mark_suppress_upper_frac = float(params.get('mark_suppress_upper_frac', _MARK_SUPPRESS_UPPER_FRAC))
+        self._mark_trigger_lower_frac = float(params.get('mark_trigger_lower_frac', _MARK_TRIGGER_LOWER_FRAC))
+
+        # 三角形动作参数
+        self._triangle_xy_adjust_dx = float(params.get('triangle_xy_adjust_dx', _TRIANGLE_XY_ADJUST_DX))
+        self._triangle_xy_adjust_dy = float(params.get('triangle_xy_adjust_dy', _TRIANGLE_XY_ADJUST_DY))
+        self._triangle_sink_depth = float(params.get('triangle_sink_depth', _TRIANGLE_SINK_DEPTH))
+        self._triangle_min_dist = float(params.get('triangle_min_dist', _TRIANGLE_MIN_DIST))
+
+        # 正方形动作参数
+        self._square_rotation_step = float(params.get('square_rotation_step', _SQUARE_ROTATION_STEP))
+        self._square_rotation_count = int(params.get('square_rotation_count', _SQUARE_ROTATION_COUNT))
+        self._square_min_dist = float(params.get('square_min_dist', _SQUARE_MIN_DIST))
+
+        # ── YOLO 丢帧恢复 ──
+        self._lost_count = 0
+        self._last_valid_line = None
 
         # ── 搜索状态 ──
-        self._step_count = 0           # 巡线步数计数
-        self._search_spiral_dir = 0    # 螺旋方向计数 (0…7)
-        self._search_spiral_size = float(params.get('search_spiral_start', 0.02))
+        self._step_count = 0
+        self._search_spiral_dir = 0
 
         # ── 三角形/正方形标记抑制 + 任务计数 ──
-        self._triangle_approached = False  # True=刚处理过三角形，跳过检测
-        self._square_approached = False    # True=刚处理过正方形，跳过检测
-        self._triangle_count = 0           # 已完成三角形任务数（下潜）
-        self._square_count = 0             # 已完成正方形任务数（旋转）
-
-        self._last_mark_x = 0.0             # 上一次标记任务完成时的 odom x
-        self._last_mark_y = 0.0             # 上一次标记任务完成时的 odom y
+        self._triangle_approached = False
+        self._square_approached = False
+        self._triangle_count = 0
+        self._square_count = 0
+        self._last_mark_x = 0.0
+        self._last_mark_y = 0.0
 
         self._logger.info(
-            f'LineFollower created: timeout={params.get("timeout", 120)}s')
+            f'LineFollower created: timeout={self._timeout}s')
 
     # ── 感知回调 ──────────────────────────────────────────────────────
 
@@ -189,7 +303,7 @@ class LineFollower:
         使用双角度圆周平均，避免 +89° 和 -89° 被错误平均为 0°。
         返回 None 表示当前没有有效的管道检测。
         """
-        max_age = float(self._params.get('perception_max_age', 0.60))
+        max_age = self._perception_max_age
         now = time.monotonic()
         with self._lock:
             states = [
@@ -226,7 +340,7 @@ class LineFollower:
         """
         wanted = None if class_ids is None else set(class_ids)
         candidates = []
-        max_age = float(self._params.get('perception_max_age', 0.60))
+        max_age = self._perception_max_age
         now = time.monotonic()
         with self._lock:
             arrays = list(self._down_detections.items())
@@ -248,11 +362,11 @@ class LineFollower:
         YOLO 丢帧恢复：连续丢帧 ≤ lost_tolerance 时，用最后有效
         LineState 继续盲跟一小段；超过阈值后才进入搜索模式。
         """
-        timeout = float(self._params.get('timeout', 120.0))
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + self._timeout
+        stop_when_marker = self._params.get("stop_when_marker", False)
         self._logger.info(
-            f'LineFollower start: timeout={timeout:.0f}s, '
-            f'stop_when_marker={self._params.get("stop_when_marker", False)}, '
+            f'LineFollower start: timeout={self._timeout:.0f}s, '
+            f'stop_when_marker={stop_when_marker}, '
             f'lost_tolerance={self._lost_max} frames')
 
         while time.monotonic() < deadline and not self._stopped:
@@ -265,7 +379,6 @@ class LineFollower:
                 if not ok:
                     return False
                 # ── 三角形标记处理 ──
-                # 抑制恢复：三角形 bbox 中心在图像上 1/3 区域 → 新三角形出现
                 det = self._best_detection([self._triangle_cid])
                 if det is not None:
                     bbox_center_y = (det[0].bbox_y1 + det[0].bbox_y2) / 2.0
@@ -276,18 +389,21 @@ class LineFollower:
                         dist = math.sqrt(
                             (self._node._cmd_x - self._last_mark_x)**2 +
                             (self._node._cmd_y - self._last_mark_y)**2)
-                        if bbox_center_y < height / 5.0 and dist > 0.3:
+                        if (bbox_center_y < height * self._mark_suppress_upper_frac
+                                and dist > self._triangle_min_dist):
                             self._triangle_approached = False
                             self._logger.info(
-                                f'LineFollower: triangle flag reset (in upper 1/5 and dist > 0.3m)')
+                                'LineFollower: triangle flag reset '
+                                f'(in upper 1/{1.0/self._mark_suppress_upper_frac:.0f} '
+                                f'and dist > {self._triangle_min_dist}m)')
 
                     if (not self._triangle_approached
-                            and bbox_center_y > height / 5.0):
+                            and bbox_center_y > height * self._mark_trigger_lower_frac):
                         det = self._best_detection([self._triangle_cid])
                         if det is not None:
                             self._logger.info(
-                                f'LineFollower: triangle (class={self._triangle_cid}) detected, '
-                                'approaching')
+                                f'LineFollower: triangle (class={self._triangle_cid}) '
+                                'detected, approaching')
                             # 1. 对准三角形
                             self._node._align_to_class(
                                 self._triangle_cid, 'triangle')
@@ -299,17 +415,25 @@ class LineFollower:
                             time.sleep(1)
                             # 关灯
                             self._node.light_off()
-                            # 2. 下沉 0.5m → 上升 0.5m
+                            # 2. 前移 + 右移 (对齐后微调) → 下沉 → 上浮
                             self._node._send_action_goal(
                                 BasicMotion.Goal.BMOVE,
-                                [0.0, 0.0, 0.5, 0.0], 'z',
-                                timeout=15.0, quiet=True)
-                            self._node._cmd_z += 0.5
+                                [self._triangle_xy_adjust_dx,
+                                 self._triangle_xy_adjust_dy, 0.0, 0.0],
+                                'xy', timeout=15.0, quiet=True)
+                            self._node._cmd_x += self._triangle_xy_adjust_dx
+                            self._node._cmd_y += self._triangle_xy_adjust_dy
+
                             self._node._send_action_goal(
                                 BasicMotion.Goal.BMOVE,
-                                [0.0, 0.0, -0.5, 0.0], 'z',
-                                timeout=15.0, quiet=True)
-                            self._node._cmd_z -= 0.5
+                                [0.0, 0.0, self._triangle_sink_depth, 0.0],
+                                'z', timeout=5, quiet=True)
+                            self._node._cmd_z += self._triangle_sink_depth
+                            self._node._send_action_goal(
+                                BasicMotion.Goal.BMOVE,
+                                [0.0, 0.0, -self._triangle_sink_depth, 0.0],
+                                'z', timeout=15, quiet=True)
+                            self._node._cmd_z -= self._triangle_sink_depth
                             # 3. 标记已处理
                             self._triangle_approached = True
                             self._triangle_count += 1
@@ -322,7 +446,6 @@ class LineFollower:
                                 f'total={total}/4')
 
                 # ── 正方形标记处理 ──
-                # 抑制恢复：正方形 bbox 中心在图像上 1/3 区域 → 新正方形出现
                 det = self._best_detection([self._square_cid])
                 if det is not None:
                     bbox_center_y = (det[0].bbox_y1 + det[0].bbox_y2) / 2.0
@@ -333,18 +456,21 @@ class LineFollower:
                         dist = math.sqrt(
                             (self._node._cmd_x - self._last_mark_x)**2 +
                             (self._node._cmd_y - self._last_mark_y)**2)
-                        if bbox_center_y < height / 3.0 and dist > 0.3:
+                        if (bbox_center_y < height * self._mark_suppress_upper_frac
+                                and dist > self._triangle_min_dist):
                             self._square_approached = False
                             self._logger.info(
-                                f'LineFollower: square flag reset (in upper 1/3 and dist > 0.3m)')
+                                'LineFollower: square flag reset '
+                                f'(in upper 1/{1.0/self._mark_suppress_upper_frac:.0f} '
+                                f'and dist > {self._triangle_min_dist}m)')
 
                     if (not self._square_approached
-                            and bbox_center_y > height / 5.0):
+                            and bbox_center_y > height * self._mark_trigger_lower_frac):
                         det = self._best_detection([self._square_cid])
                         if det is not None:
                             self._logger.info(
-                                f'LineFollower: square (class={self._square_cid}) detected, '
-                                'approaching')
+                                f'LineFollower: square (class={self._square_cid}) '
+                                'detected, approaching')
                             # 1. 对准正方形
                             self._node._align_to_class(
                                 self._square_cid, 'square')
@@ -360,17 +486,21 @@ class LineFollower:
                                 # 关灯
                                 self._node.light_off()
                                 time.sleep(2)
-                            # 2. 自转 360°
+                            # 2. 自转 N×M°（BMOVE rz）
+                            total_deg = (self._square_rotation_count
+                                         * self._square_rotation_step)
                             self._logger.info(
-                                'LineFollower: rotating 360° (3×120°)')
-                            for _ in range(3):
+                                f'LineFollower: rotating {total_deg:.0f}° '
+                                f'({self._square_rotation_count}×'
+                                f'{self._square_rotation_step:.0f}°)')
+                            for _ in range(self._square_rotation_count):
                                 if self._stopped:
                                     return False
                                 self._node._send_action_goal(
-                                    BasicMotion.Goal.SET,
-                                    [0.0, 0.0, 0.0, 120.0], 'rz',
-                                    timeout=15.0, quiet=True)
-                                self._node._cmd_yaw += 120.0
+                                    BasicMotion.Goal.BMOVE,
+                                    [0.0, 0.0, 0.0, self._square_rotation_step],
+                                    'rz', timeout=15.0, quiet=True)
+                                self._node._cmd_yaw += self._square_rotation_step
                             # 3. 标记已处理
                             self._square_approached = True
                             self._square_count += 1
@@ -420,12 +550,10 @@ class LineFollower:
         返回 True=执行了移动动作，False=搜索范围已耗尽。
         """
         size = self._search_spiral_size
-        max_spiral = float(self._params.get('search_max_spiral', 2.0))
-        if size > max_spiral:
+        if size > self._search_max_spiral:
             return False
 
-        max_step = float(self._params.get('search_max_step', 0.50))
-        step = min(size, max_step)
+        step = min(size, self._search_max_step)
 
         dirs = [
             (step, 0.0), (step, step), (0.0, step), (-step, step),
@@ -450,9 +578,7 @@ class LineFollower:
 
         self._search_spiral_dir = (self._search_spiral_dir + 1) % 8
         if self._search_spiral_dir == 0:
-            spiral_step = float(
-                self._params.get('search_spiral_step', 0.30))
-            self._search_spiral_size += spiral_step
+            self._search_spiral_size += self._search_spiral_step
             self._logger.info(
                 f'Line search: size increased to '
                 f'{self._search_spiral_size:.2f}m')
@@ -474,11 +600,11 @@ class LineFollower:
         """
         if coast_mode:
             # 盲跟：只用最后有效 center_error 做比例修正，不更新 PID 状态
-            lateral_sign = float(self._params.get('line_lateral_sign', -1.0))
-            max_lateral = abs(float(self._params.get('max_lateral_step', 0.03)))
-            dy = _clamp(lateral_sign * line.center_error * 0.15, -max_lateral, max_lateral)
+            dy = _clamp(
+                self._line_lateral_sign * line.center_error * self._coast_lateral_gain,
+                -self._max_lateral_step, self._max_lateral_step)
             dyaw = 0.0
-            forward = float(self._params.get('coast_forward_step', 0.05))
+            forward = self._coast_forward_step
 
             self._step_count += 1
             self._logger.info(
@@ -488,7 +614,7 @@ class LineFollower:
 
             success, _ = self._node._send_action_goal(
                 BasicMotion.Goal.BMOVE,
-                [forward, dy, 0.0, 0.0], 'xy', timeout=8.0,
+                [forward, dy, 0.0, 0.0], 'xy', timeout=5.0,
                 quiet=True)
             if success:
                 self._node._cmd_x, self._node._cmd_y, \
@@ -511,16 +637,16 @@ class LineFollower:
             prev_err_attr='_lat_prev_err',
             integral_attr='_lat_integral',
             last_t_attr='_lat_last_t',
-            pid_p=self._params.get('line_pid_p', 0.009),
-            pid_i=self._params.get('line_pid_i', 0.0),
-            pid_d=self._params.get('line_pid_d', 0.0),
-            output_limit=self._params.get('line_pid_output_limit', 0.30),
-            reset_dt=self._params.get('line_pid_reset_dt', 1.0),
-            integral_limit_px=self._params.get('line_pid_integral_limit_px', 1000.0),
+            pid_p=self._line_pid_p,
+            pid_i=self._line_pid_i,
+            pid_d=self._line_pid_d,
+            output_limit=self._line_pid_output_limit,
+            reset_dt=self._line_pid_reset_dt,
+            integral_limit_px=self._line_pid_integral_limit_px,
         )
-        lateral_sign = float(self._params.get('line_lateral_sign', -1.0))
-        max_lateral = abs(float(self._params.get('max_lateral_step', 0.03)))
-        dy = -_clamp(lateral_sign * dy, -max_lateral, max_lateral)
+        dy = -_clamp(
+            self._line_lateral_sign * dy,
+            -self._max_lateral_step, self._max_lateral_step)
 
         # ── 偏航 PID：heading_error_deg → dyaw ────────────────────────
         heading_err = line.heading_error_deg  # 管道长轴与竖直方向的夹角
@@ -530,23 +656,22 @@ class LineFollower:
             prev_err_attr='_head_prev_err',
             integral_attr='_head_integral',
             last_t_attr='_head_last_t',
-            pid_p=self._params.get('heading_pid_p', 1.5),
-            pid_i=self._params.get('heading_pid_i', 0.005),
-            pid_d=self._params.get('heading_pid_d', 0.02),
-            output_limit=self._params.get('heading_pid_output_limit', 12.0),
-            reset_dt=self._params.get('heading_pid_reset_dt', 1.5),
-            integral_limit_px=self._params.get('heading_integral_limit', 60.0),
+            pid_p=self._heading_pid_p,
+            pid_i=self._heading_pid_i,
+            pid_d=self._heading_pid_d,
+            output_limit=self._heading_pid_output_limit,
+            reset_dt=self._heading_pid_reset_dt,
+            integral_limit_px=self._heading_integral_limit,
         )
-        yaw_sign = float(self._params.get('line_yaw_sign', 1.0))
-        max_yaw = abs(float(self._params.get('max_yaw_step', 12.0)))
-        dyaw = _clamp(yaw_sign * dyaw, -max_yaw, max_yaw)
+        dyaw = _clamp(
+            self._line_yaw_sign * dyaw,
+            -self._max_yaw_step, self._max_yaw_step)
 
         # ── 前进步长：修正量越大越慢 ──────────────────────────────────
-        forward_base = float(self._params.get('forward_step', 0.05))
-        min_forward = max(0.0, float(self._params.get('min_forward_step', 0.02)))
-        total_correction = abs(dy / max(max_lateral, 0.001)) + abs(dyaw / max(max_yaw, 0.001))
+        total_correction = (abs(dy / max(self._max_lateral_step, 0.001))
+                            + abs(dyaw / max(self._max_yaw_step, 0.001)))
         speed_ratio = max(0.25, 1.0 - 0.5 * total_correction)
-        forward = max(min_forward, forward_base * speed_ratio)
+        forward = max(self._min_forward_step, self._forward_step * speed_ratio)
 
         self._step_count += 1
         self._logger.debug(
@@ -619,7 +744,7 @@ class LineFollower:
 
         任一眼缺失或过期则返回 None。
         """
-        max_age = float(self._params.get('perception_max_age', 0.60))
+        max_age = self._perception_max_age
         now = time.monotonic()
         with self._lock:
             left_entry = self._down_detections.get('down_left')

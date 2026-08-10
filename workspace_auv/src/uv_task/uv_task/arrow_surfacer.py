@@ -531,7 +531,7 @@ class ArrowSurfacer:
             success, msg = self._node._send_action_goal(
                 BasicMotion.Goal.BMOVE,
                 [self._drop_offset_x, self._drop_offset_y, 0.0, 0.0],
-                'xy', timeout=4.0, quiet=True)
+                'xy', timeout=10.0, quiet=True)
             if success:
                 self._node._cmd_x += self._drop_offset_x
                 self._node._cmd_y += self._drop_offset_y

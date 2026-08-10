@@ -38,8 +38,8 @@ CvBridge = None
 
 # ── Runtime switches ───────────────────────────────────────────────
 # 真实硬件模式下的 V4L2 设备绑定。
-FRONT_CAMERA_DEVICE = '/dev/video0'
-DOWN_CAMERA_DEVICE = '/dev/video2'
+FRONT_CAMERA_DEVICE = '/dev/video2'
+DOWN_CAMERA_DEVICE = '/dev/video0'
 ENABLE_FRONT_CAMERA = True
 ENABLE_DOWN_CAMERA = True
 
@@ -68,7 +68,7 @@ DOWN_CAMERA_MATRIX = (
 )
 DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
-CONFIDENCE = 0.8
+CONFIDENCE = 0.3
 
 ENABLE_UNDISTORT = True              # 是否执行相机去畸变
 ENABLE_GORTC = True                 # 启动 go2rtc 转发客户端视频

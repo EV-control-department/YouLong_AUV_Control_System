@@ -40,9 +40,9 @@ class TaskRunnerNode(Node):
 
     # ── 灯光常量 (/zit6/cmd/light) ─────────────────────────────────
     LIGHT_OFF = 0
-    LIGHT_YELLOW = 1
+    LIGHT_YELLOW = 3
     LIGHT_GREEN = 2
-    LIGHT_RED = 3
+    LIGHT_RED = 1
 
     # ── 舵机角度 (/zit6/cmd/servo, rad) ────────────────────────────
     ANGLE_DROP_BEACON = 90       #   投信标
@@ -286,13 +286,13 @@ class TaskRunnerNode(Node):
             self.get_logger().info(f'Align [{label}]: searching...')
             if not self._search_for_class(class_id, label):
                 return False
-        for i in range(200):
+        for i in range(300):
             if self.stopped: return False
             tgt = self._triangulate(class_id)
             if tgt is None: time.sleep(0.05); continue
             self._send_action_goal(BasicMotion.Goal.SET,
                 [tgt[0], tgt[1], self._cmd_z, self._cmd_yaw],
-                'xy', timeout=0.1, quiet=True)
+                'xy', timeout=0.2, quiet=True)
             self._cmd_x = tgt[0]; self._cmd_y = tgt[1]
             self.get_logger().info(f'Align [{label}]: #{i}靠近，x:{tgt[0]},y:{tgt[1]}')
         self.get_logger().info(f'Align [{label}]: complete')
