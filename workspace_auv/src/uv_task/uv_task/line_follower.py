@@ -424,11 +424,16 @@ class LineFollower:
                             self._node._cmd_x += self._triangle_xy_adjust_dx
                             self._node._cmd_y += self._triangle_xy_adjust_dy
 
+
+                            time.sleep(2)
+
                             self._node._send_action_goal(
                                 BasicMotion.Goal.BMOVE,
                                 [0.0, 0.0, self._triangle_sink_depth, 0.0],
-                                'z', timeout=5, quiet=True)
+                                'z', timeout=6.0, quiet=True)
                             self._node._cmd_z += self._triangle_sink_depth
+
+                            time.sleep(1.0)
                             self._node._send_action_goal(
                                 BasicMotion.Goal.BMOVE,
                                 [0.0, 0.0, -self._triangle_sink_depth, 0.0],

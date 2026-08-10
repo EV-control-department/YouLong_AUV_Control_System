@@ -550,12 +550,18 @@ class ArrowSurfacer:
             timeout=15.0, quiet=True)
         self._node._cmd_z += self._dive_offset
 
+
+        time.sleep(self._drop_settle)
+
         self._node.set_servo(
             self._node.ANGLE_DROP_BEACON,
             f'drop beacon to {color_name} sector')
         self._logger.info(
             f'🔫 ArrowSurfacer: BEACON DROPPED to {color_name.upper()} sector!')
         self._node.light_off()
+
+
+        time.sleep(self._servo_reset_delay)
 
         self._node._send_action_goal(
             BasicMotion.Goal.BMOVE,
@@ -564,7 +570,6 @@ class ArrowSurfacer:
         self._node._cmd_z -= self._dive_offset
 
         # 11. [保留用户修改] 延时后复位舵机
-        time.sleep(self._servo_reset_delay)
         self._node.set_servo(self._servo_reset_angle, 'reset servo')
 
         self._logger.info(

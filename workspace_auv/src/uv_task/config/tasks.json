@@ -2,19 +2,52 @@
   "tasks": [
     {"name": "start", "params": {}},
     {"name": "wait", "params": {"duration": 0}},
-    {"name": "setz", "params": {"z": 0.1}},
+    {"name": "setz", "params": {"z": 0.2}},
+    {"name": "wtravelxy", "params": {"x": 0.5, "y": 0.0, "time_out": 20}},
+    {"name": "setrz", "params": {"rz": 90.0}},
 
-    {"name": "wtravelxy", "params": {"x": 0.5, "y": 0.0}},
-    {"name": "setrz", "params": {"rz": 60.0}},
+
+    {"name": "follow_line", "params": {
+      "timeout": 240.0,
+      "triangle_class_id": 7,
+      "square_class_id": 5,
+      "marker_class_ids": [7],
+      "stop_when_marker": true,
+      "forward_step": 0.12
+    }},
+
+    {"name": "wtravelxy", "params": {"x": 0.3, "y": 3.2, "timeout": 20}},
+
 
     {"name": "arrow_surface", "params": {
+      "target_sector": "",
+      "arrow_class_id": 0,
       "yellow_class_id": 8,
       "green_class_id": 2,
       "red_class_id": 4,
-      "arrow_class_id": 0,
-      "sector_x": 0.0,
-      "sector_y": 0.0,
-      "target_sector": "red"
+      "view_yaw": 180,
+      "sector_x": 0.2,
+      "sector_y": 4.0,
+      "sector_travel_z": 0.2,
+      "surface_depth": -1.0,
+      "recover_depth": 0.1,
+      "drop_offset_x": 0.35,
+      "drop_offset_y": 0.15,
+      "servo_reset_delay": 4.0,
+      "servo_reset_angle": 0.0
+    }
+    },
+
+    {"name": "wtravelxy", "params": {"x": 0.0, "y": 0.0, "time_out": 20}},
+    {"name": "wtravelxy", "params": {"x": 0.0, "y": 0.0, "time_out": 20}},
+    {"name": "wtravelxy", "params": {"x": 0.0, "y": 0.0, "time_out": 20}},
+
+    {"name": "release_sampler", "params": {
+      "align_yaw": 0.0,
+      "start_class_id": 4,
+      "approach_z": -0.6,
+      "approach_x": -0.5,
+      "approach_timeout": 50.0
     }}
   ]
 }
