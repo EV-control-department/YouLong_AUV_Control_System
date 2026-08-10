@@ -89,8 +89,8 @@ class TaskRunnerNode(Node):
         self._debug_timeout = -1.0
 
         # Camera parameters (used by LineFollower sub-task via get_parameter)
-        self.declare_parameter('down_image_width', 1280.0)
-        self.declare_parameter('down_image_height', 960.0)
+        self.declare_parameter('down_image_width', 640.0)
+        self.declare_parameter('down_image_height', 480.0)
 
         # _align_to_class 对准的 EMA 平滑系数 (1.0=无滤波, 0.1=强平滑)
         self.declare_parameter('align_ema_alpha', 0.3)

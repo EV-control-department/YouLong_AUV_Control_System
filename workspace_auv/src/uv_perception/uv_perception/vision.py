@@ -44,31 +44,34 @@ ENABLE_FRONT_CAMERA = True
 ENABLE_DOWN_CAMERA = True
 
 # 每个 stitched 相机拆分后的单目图像分辨率。
-# stitched 图像应为：(width * 2, height)，例如前/下相机均为 2560x960。
-FRONT_CAMERA_RESOLUTION = (1280, 960)  # width, height
-DOWN_CAMERA_RESOLUTION = (1280, 960)   # width, height
+# stitched 图像应为：(width * 2, height)，例如前/下相机均为 1280x480。
+FRONT_CAMERA_RESOLUTION = (640, 480)  # width, height
+DOWN_CAMERA_RESOLUTION = (640, 480)   # width, height
 
 # 真实 V4L2 设备的实际采集分辨率；由 v4l2-ctl 检测得到。
-FRONT_CAPTURE_RESOLUTION = (1280, 720)
-DOWN_CAPTURE_RESOLUTION = (2560, 960)
+FRONT_CAPTURE_RESOLUTION = (1280, 480)
+DOWN_CAPTURE_RESOLUTION = (1280, 480)
 
 # 相机标定常量：K 为 3x3 内参矩阵，D 的顺序为
 # (k1, k2, p1, p2, k3)。请用实际标定结果替换 D。
+# 480p (单目 640×480)：原 1280×960 标定按 0.5 缩放。
 FRONT_CAMERA_MATRIX = (
-    2158.4, 0.0, 640.0,
-    0.0, 2158.4, 480.0,
+    1079.2, 0.0, 320.0,
+    0.0, 1079.2, 240.0,
     0.0, 0.0, 1.0,
 )
 FRONT_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
 DOWN_CAMERA_MATRIX = (
-    2307.6, 0.0, 640.0,
-    0.0, 2307.6, 480.0,
+    1153.8, 0.0, 320.0,
+    0.0, 1153.8, 240.0,
     0.0, 0.0, 1.0,
 )
 DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
 CONFIDENCE = 0.3
+PIPE_CLASS_ID = 3                # 实机模型: pipe=3
+PIPE_CONFIDENCE = 0.7            # pipe 单独的高置信度阈值 (巡线目标需可靠)
 
 ENABLE_UNDISTORT = True              # 是否执行相机去畸变
 ENABLE_GORTC = True                 # 启动 go2rtc 转发客户端视频
@@ -778,6 +781,9 @@ class VisionNode(Node):
                 det = Detection()
                 det.class_id = int(boxes.cls[i])
                 det.confidence = float(boxes.conf[i])
+                # pipe 单独高置信度阈值 — 低置信度 pipe 丢弃,避免误检
+                if det.class_id == PIPE_CLASS_ID and det.confidence < PIPE_CONFIDENCE:
+                    continue
                 x1, y1, x2, y2 = boxes.xyxy[i].tolist()
                 det.bbox_x1 = x1
                 det.bbox_y1 = y1

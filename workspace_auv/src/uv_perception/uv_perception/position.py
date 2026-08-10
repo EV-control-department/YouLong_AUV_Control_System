@@ -21,24 +21,25 @@ from uv_msgs.msg import DetectionArray, ObjectPosition, ObjectPositionArray, Pos
 
 # Camera intrinsic + extrinsic parameters (from xunyun_fixed.scn)
 # Each camera has its own body offset; optical_to_body is shared per pair
+# 480p 统一：单目 640×480
 CAM_PARAMS = {
     'front_left': {
-        'width': 1280, 'height': 960, 'hfov': 57.19,
+        'width': 640, 'height': 480, 'hfov': 57.19,
         'offset': np.array([0.23, -0.05, 0.076]),
         'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
     },
     'front_right': {
-        'width': 1280, 'height': 960, 'hfov': 57.19,
+        'width': 640, 'height': 480, 'hfov': 57.19,
         'offset': np.array([0.23, 0.05, 0.076]),
         'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
     },
     'down_left': {
-        'width': 1280, 'height': 960, 'hfov': 87.19,
+        'width': 640, 'height': 480, 'hfov': 87.19,
         'offset': np.array([-0.13, -0.05, 0.0645]),
         'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
     },
     'down_right': {
-        'width': 1280, 'height': 960, 'hfov': 87.19,
+        'width': 640, 'height': 480, 'hfov': 87.19,
         'offset': np.array([-0.13, 0.05, 0.0645]),
         'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
     },
