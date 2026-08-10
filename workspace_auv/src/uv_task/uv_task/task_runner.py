@@ -5,12 +5,14 @@ The task runner is the single source of truth for commanded position,
 tracked locally (not from external topics).
 """
 
+import bisect
 import glob
 import json
 import math
 import os
 import threading
 import time
+from collections import deque
 
 import numpy as np
 import rclpy
@@ -66,6 +68,12 @@ class TaskRunnerNode(Node):
         self._perception_lock = threading.RLock()
         self._down_detections = {}   # camera_name → (monotonic, DetectionArray)
         self._robot_pose = None      # (x, y, z, roll_deg, pitch_deg, yaw_deg)
+
+        # Pose 历史缓冲 — 按帧时间戳对齐位姿，消除视觉链路延迟误差
+        # 每条: (stamp_sec, x, y, z, roll_deg, pitch_deg, yaw_deg)
+        self._pose_buffer = deque()
+        self._pose_buffer_duration = 2.0   # 保留 2 秒历史
+        self._pose_buffer_max = 150        # 30Hz 输入上限
 
         self.tasks = []
         self.current_index = 0
@@ -174,8 +182,46 @@ class TaskRunnerNode(Node):
 
     def _pose_cb(self, msg: PoseInfo):
         with self._perception_lock:
-            self._robot_pose = (msg.robot_x, msg.robot_y, msg.robot_z,
-                                msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
+            t = msg.stamp.sec + msg.stamp.nanosec * 1e-9
+            entry = (t, msg.robot_x, msg.robot_y, msg.robot_z,
+                     msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
+            self._pose_buffer.append(entry)
+
+            # 修剪过期条目（按时间衰减，不按 monotonic）
+            cutoff = t - self._pose_buffer_duration
+            while self._pose_buffer and self._pose_buffer[0][0] < cutoff:
+                self._pose_buffer.popleft()
+            while len(self._pose_buffer) > self._pose_buffer_max:
+                self._pose_buffer.popleft()
+
+            # 最新位姿（兼容旧逻辑 / fallback）
+            self._robot_pose = entry[1:]
+
+    def _lookup_pose(self, t_target: float) -> tuple:
+        """按检测帧时间戳二分查最近位姿，消除视觉链路延迟误差。
+
+        Args:
+            t_target: 检测帧的 header.stamp 秒数（epoch 秒）。
+
+        Returns:
+            (x, y, z, roll_deg, pitch_deg, yaw_deg) — 时间对齐的位姿；
+            buffer 为空或 t_target<=0（无效时间戳）时返回最新位姿。
+        """
+        with self._perception_lock:
+            buffer = list(self._pose_buffer)
+        if not buffer or t_target <= 0:
+            return self._robot_pose
+        timestamps = [e[0] for e in buffer]
+        idx = bisect.bisect_left(timestamps, t_target)
+
+        # 取 idx-1 与 idx 中更近者
+        candidates = []
+        if idx > 0:
+            candidates.append(buffer[idx - 1])
+        if idx < len(buffer):
+            candidates.append(buffer[idx])
+        best = min(candidates, key=lambda e: abs(e[0] - t_target))
+        return best[1:]
 
     def _mcu_status_cb(self, msg: ZitStatus):
         self._mcu_status = msg
@@ -226,6 +272,10 @@ class TaskRunnerNode(Node):
         return max(candidates, key=lambda d: d.confidence) if candidates else None
 
     def _stereo_pair(self, class_id: int):
+        """返回 (left_stamp_sec, left_det, right_stamp_sec, right_det) 或 None。
+
+        左右目各自帧的 header.stamp 用于时间戳对齐位姿。
+        """
         max_age = 0.60; now = time.monotonic()
         with self._perception_lock:
             le = self._down_detections.get('down_left')
@@ -237,24 +287,41 @@ class TaskRunnerNode(Node):
                  key=lambda d: d.confidence, default=None)
         br = max((d for d in rm.detections if d.class_id == class_id),
                  key=lambda d: d.confidence, default=None)
-        return (bl, br) if bl and br else None
+        if not (bl and br): return None
+        lt_sec = lm.header.stamp.sec + lm.header.stamp.nanosec * 1e-9
+        rt_sec = rm.header.stamp.sec + rm.header.stamp.nanosec * 1e-9
+        return (lt_sec, bl, rt_sec, br)
 
     def _triangulate(self, class_id: int):
+        """双目三角测量 — 左右目各自用帧时刻的位姿建射线，消除视觉延迟。
+
+        帧时间戳 vs 位姿历史时间对齐后，即使 AUV 在运动中，
+        像素也配拍摄时刻的姿态，而非当前最新姿态。
+        """
         pair = self._stereo_pair(class_id)
-        with self._perception_lock: pose = self._robot_pose
-        if pair is None or pose is None: return None
-        ld, rd = pair
-        rx, ry, rz, roll, pitch, yaw = pose
-        R = _euler_to_rotation_matrix(roll, pitch, yaw)
+        if pair is None: return None
+        lt_sec, ld, rt_sec, rd = pair
+
+        lpose = self._lookup_pose(lt_sec)
+        rpose = self._lookup_pose(rt_sec)
+        if lpose is None or rpose is None: return None
+
+        lx, ly, lz, lroll, lpitch, lyaw = lpose
+        rx, ry, rz, rroll, rpitch, ryaw = rpose
+        LR = _euler_to_rotation_matrix(lroll, lpitch, lyaw)
+        RR = _euler_to_rotation_matrix(rroll, rpitch, ryaw)
+        lp = np.array([lx, ly, lz])
         rp = np.array([rx, ry, rz])
-        def _ray(px, py, off):
+
+        def _ray(px, py, off, R, org):
             vc = np.array([(px - _DOWN_CX) / _DOWN_FX, (py - _DOWN_CY) / _DOWN_FY, 1.0])
             vc /= np.linalg.norm(vc)
             vb = _DOWN_OPTICAL_TO_BODY @ vc
             vw = R @ vb; vw /= np.linalg.norm(vw)
-            return rp + R @ off, vw
-        lo, ld_ray = _ray(ld.pixel_x, ld.pixel_y, _DOWN_OFFSET_LEFT)
-        ro, rd_ray = _ray(rd.pixel_x, rd.pixel_y, _DOWN_OFFSET_RIGHT)
+            return org + R @ off, vw
+
+        lo, ld_ray = _ray(ld.pixel_x, ld.pixel_y, _DOWN_OFFSET_LEFT, LR, lp)
+        ro, rd_ray = _ray(rd.pixel_x, rd.pixel_y, _DOWN_OFFSET_RIGHT, RR, rp)
         pos = _ray_intersection_midpoint(lo, ld_ray, ro, rd_ray)
         return (float(pos[0]), float(pos[1]), float(pos[2])) if pos is not None else None
 
@@ -915,7 +982,7 @@ class TaskRunnerNode(Node):
     def _task_release_sampler(self, p: dict) -> bool:
         """转向 → 对齐 START 标记 → 上浮靠岸 → pushrod 释放取水器。"""
         align_yaw = float(p.get('align_yaw', 180.0))
-        start_cid = int(p.get('start_class_id', 4))
+        start_cid = int(p.get('start_class_id', 6))   # 实机模型: start=6
         approach_z = float(p.get('approach_z', -0.3))
         approach_x = float(p.get('approach_x', -0.3))
         approach_timeout = float(p.get('approach_timeout', 25.0))

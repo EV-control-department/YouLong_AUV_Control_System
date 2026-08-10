@@ -97,14 +97,15 @@ class ArrowSurfacer:
         self._logger = node.get_logger()
         self._stopped = False
 
-        # ── 箭头 class_id（可通过 tasks.json 参数覆盖）──
-        self._arrow_cid = int(params.get('arrow_class_id', 3))
+        # ── 箭头 class_id（可通过 tasks.json 参数覆盖）
+        # 默认值为实机模型顺序: arrow=0, yellow=8, red=4, green=2
+        self._arrow_cid = int(params.get('arrow_class_id', 0))
 
         # ── 扇区参数 ──
         self._sector_x = float(params.get('sector_x', 0.0))
         self._sector_y = float(params.get('sector_y', 0.0))
-        self._yellow_cid = int(params.get('yellow_class_id', 0))
-        self._red_cid    = int(params.get('red_class_id', 1))
+        self._yellow_cid = int(params.get('yellow_class_id', 8))
+        self._red_cid    = int(params.get('red_class_id', 4))
         self._green_cid  = int(params.get('green_class_id', 2))
         self._view_yaw = float(params.get('view_yaw', 90.0))
         # 指定投掷扇区：'yellow' / 'green' / 'red'，空=ArUco 读取映射

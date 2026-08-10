@@ -5,6 +5,8 @@ Implements ray accumulation, median filtering, and pairwise intersection.
 Tracks and remembers object world positions.
 """
 
+from __future__ import annotations  # Python 3.10 的 `X | None` 注解，兼容机器人 3.8/3.9
+
 import bisect
 import math
 from collections import deque
@@ -63,14 +65,15 @@ def _euler_to_rotation_matrix(rx_deg: float, ry_deg: float, rz_deg: float) -> np
 
 
 CLASS_NAMES = {
-    0: "yellow_sector", 1: "red_sector", 2: "green_sector",
-    3: "arrow", 4: "start", 5: "triangle",
-    6: "square", 7: "basket", 8: "aruco_tag",
+    0: "arrow", 1: "basket", 2: "green_sector",
+    3: "pipe", 4: "red_sector", 5: "square",
+    6: "start", 7: "triangle", 8: "yellow_sector",
 }
 
 # Class IDs that may appear multiple times in the same scene.
 # Only these use angle-based instance matching; all others always go to instance 0.
-MULTI_INSTANCE_CLASSES = {3, 5, 6}   # arrow, triangle, square
+# 实机模型顺序: arrow=0, triangle=7, square=5
+MULTI_INSTANCE_CLASSES = {0, 7, 5}   # arrow, triangle, square
 
 
 class PositionNode(Node):

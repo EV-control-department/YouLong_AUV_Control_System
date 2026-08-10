@@ -1,5 +1,7 @@
 """Robust decoder for the WUURC simulated 4x4_1000 ArUco signs."""
 
+from __future__ import annotations  # Python 3.10 的 `X | None` 注解，兼容机器人 3.8/3.9
+
 from collections import Counter
 
 import cv2

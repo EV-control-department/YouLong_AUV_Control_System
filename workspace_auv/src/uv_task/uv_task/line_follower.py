@@ -82,8 +82,9 @@ _SEARCH_MAX_STEP = 0.50          # 单步最大移动 (m)
 _PERCEPTION_MAX_AGE = 0.60       # 感知数据最大有效期 (s)
 
 # ── 标记处理 ─────────────────────────────────────────────────────
-_TRIANGLE_CLASS_ID = 5
-_SQUARE_CLASS_ID = 6
+# 默认值为实机模型顺序: triangle=7, square=5
+_TRIANGLE_CLASS_ID = 7
+_SQUARE_CLASS_ID = 5
 _TASK_TIMEOUT = 120.0            # 任务总超时 (s)
 
 # 标记触发与抑制区域（bbox 中心 y / 图像高度 的比例）
