@@ -360,14 +360,14 @@ class LineFollower:
                                 # 关灯
                                 self._node.light_off()
                                 time.sleep(2)
-                            # 2. 自转 360°（3 × 120° BMOVE rz）
+                            # 2. 自转 360°
                             self._logger.info(
                                 'LineFollower: rotating 360° (3×120°)')
                             for _ in range(3):
                                 if self._stopped:
                                     return False
                                 self._node._send_action_goal(
-                                    BasicMotion.Goal.BMOVE,
+                                    BasicMotion.Goal.SET,
                                     [0.0, 0.0, 0.0, 120.0], 'rz',
                                     timeout=15.0, quiet=True)
                                 self._node._cmd_yaw += 120.0

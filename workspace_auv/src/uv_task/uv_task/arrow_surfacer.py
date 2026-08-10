@@ -107,6 +107,21 @@ class ArrowSurfacer:
         self._red_cid    = int(params.get('red_class_id', 1))
         self._green_cid  = int(params.get('green_class_id', 2))
         self._view_yaw = float(params.get('view_yaw', 90.0))
+        # 指定投掷扇区：'yellow' / 'green' / 'red'，空=ArUco 读取映射
+        self._target_sector = str(params.get('target_sector', '')).strip().lower()
+        # 对准后 BMOVE 位移（机体系 x/y）：让信号弹撒放器对准扇区中心
+        self._drop_offset_x = float(params.get('drop_offset_x', 0.25))
+        self._drop_offset_y = float(params.get('drop_offset_y', 0.15))
+        # 完整流程参数
+        self._surface_depth = float(params.get('surface_depth', -1.0))    # 出水深度偏移
+        self._recover_depth = float(params.get('recover_depth', 0.4))     # 出水后恢复深度
+        self._sector_travel_z = float(params.get('sector_travel_z', 0.4)) # 前往扇区深度
+        self._servo_reset_delay = float(params.get('servo_reset_delay', 4.0))  # 投球后复位延时
+        self._servo_reset_angle = float(params.get('servo_reset_angle',
+                                                    getattr(node, 'ANGLE_INIT', 0.0)))
+        # 投球前下潜/投球后回升量（NED z 正=下）与中间稳定延时
+        self._dive_offset = float(params.get('dive_offset', 0.5))
+        self._drop_settle = float(params.get('drop_settle', 1.0))
 
         # ── 感知订阅 ──
         self._lock = threading.RLock()
@@ -402,7 +417,7 @@ class ArrowSurfacer:
     # ── 主执行 ────────────────────────────────────────────────────────
 
     def execute(self) -> bool:
-        """执行箭头对准 + ArUco 读数 + 短暂出水。"""
+        """完整箭头对准 + ArUco 读数 + 出水 + 扇区投信标任务。"""
 
         # 1. 转向 view_yaw
         self._logger.info(f'ArrowSurfacer: rotating to yaw={self._view_yaw:.1f}°')
@@ -425,42 +440,54 @@ class ArrowSurfacer:
             self._logger.warn('ArrowSurfacer: arrow align failed')
             return False
 
-        # 4. 短暂出水：setz=-1, timeout=60s
+        # 3. 短暂出水：读取水面 ArUco
         self._logger.info(
-            f'ArrowSurfacer: surfacing (setz=-1)... '
+            f'ArrowSurfacer: surfacing (setz={self._surface_depth})... '
             f'ArUco IDs collected: {sorted(self._aruco_ids)}')
         self._node._send_action_goal(
             BasicMotion.Goal.WMOVE,
-            [self._node._cmd_x, self._node._cmd_y, -1.0, self._node._cmd_yaw],
-            'z', timeout=15.0, quiet=True)
+            [self._node._cmd_x, self._node._cmd_y, self._surface_depth,
+             self._node._cmd_yaw],
+            'z', timeout=10.0, quiet=True)
 
-        # 5. 恢复深度 0.4
-        self._logger.info('ArrowSurfacer: recovering depth to 0.4')
+        # 4. 恢复深度
+        self._logger.info(
+            f'ArrowSurfacer: recovering depth to {self._recover_depth}')
         success, msg = self._node._send_action_goal(
             BasicMotion.Goal.WMOVE,
-            [self._node._cmd_x, self._node._cmd_y, 0.4, self._node._cmd_yaw],
+            [self._node._cmd_x, self._node._cmd_y, self._recover_depth,
+             self._node._cmd_yaw],
             'z', timeout=15.0)
         if success:
-            self._node._cmd_z = 0.4
+            self._node._cmd_z = self._recover_depth
 
-        # 6. 如果还没 ArUco ID，前视扫描找 tag
-        self._search_aruco_frontal()
+        # 5. 若未指定 target_sector 且无 ArUco ID，前视扫描找 tag
+        if not self._target_sector:
+            self._search_aruco_frontal()
 
-        # 7. ArUco → 扇区映射；无 ID 默认绿色
-        sector = self._aruco_to_sector()
-        if sector is None:
-            self._logger.warn(
-                'ArrowSurfacer: no ArUco ID detected, defaulting to green')
-            sector = ('green', self._green_cid)
-        color_name, sector_cid = sector
+        # 6. 扇区选择：target_sector 优先，否则 ArUco → 映射，默认绿色
+        if self._target_sector:
+            color_name = self._target_sector
+            sector_cid = {'yellow': self._yellow_cid,
+                          'green': self._green_cid,
+                          'red': self._red_cid}.get(color_name)
+            if sector_cid is None:
+                self._logger.warn(
+                    f'ArrowSurfacer: unknown target_sector {self._target_sector!r}, '
+                    f'defaulting to green')
+                color_name, sector_cid = 'green', self._green_cid
+        else:
+            sector = self._aruco_to_sector()
+            if sector is None:
+                self._logger.warn(
+                    'ArrowSurfacer: no ArUco ID detected, defaulting to green')
+                sector = ('green', self._green_cid)
+            color_name, sector_cid = sector
         self._logger.info(
-            f'ArrowSurfacer: ArUco → sector: {color_name} '
+            f'ArrowSurfacer: sector selected = {color_name} '
             f'(class_id={sector_cid})')
 
-
-        
-
-        # 扇区选定了 — 亮对应颜色灯
+        # 7. 亮对应颜色灯
         color_light = {
             'yellow': self._node.LIGHT_YELLOW,
             'red':    self._node.LIGHT_RED,
@@ -476,10 +503,12 @@ class ArrowSurfacer:
         # 8. WTRAVEL to sector position
         self._logger.info(
             f'ArrowSurfacer: traveling to sector '
-            f'({self._sector_x:.2f}, {self._sector_y:.2f})')
+            f'({self._sector_x:.2f}, {self._sector_y:.2f}, '
+            f'z={self._sector_travel_z:.2f})')
         success, msg = self._node._send_action_goal(
             BasicMotion.Goal.WTRAVEL,
-            [self._sector_x, self._sector_y, 0.4, self._view_yaw],
+            [self._sector_x, self._sector_y, self._sector_travel_z,
+             self._view_yaw],
             timeout=60.0)
         if not success:
             self._logger.error(f'ArrowSurfacer: sector travel failed: {msg}')
@@ -494,13 +523,49 @@ class ArrowSurfacer:
             f'(class={sector_cid})')
         self._node._align_to_class(sector_cid, f'{color_name} sector')
 
-        # 10. 投信标 + 关灯
+        # 9.5 对准后 BMOVE（机体系 x/y）：把信号弹撒放器挪到扇区中心正上方
+        if self._drop_offset_x or self._drop_offset_y:
+            self._logger.info(
+                f'ArrowSurfacer: BMOVE launcher over sector center '
+                f'(dx={self._drop_offset_x:.2f}, dy={self._drop_offset_y:.2f})')
+            success, msg = self._node._send_action_goal(
+                BasicMotion.Goal.BMOVE,
+                [self._drop_offset_x, self._drop_offset_y, 0.0, 0.0],
+                'xy', timeout=4.0, quiet=True)
+            if success:
+                self._node._cmd_x += self._drop_offset_x
+                self._node._cmd_y += self._drop_offset_y
+            else:
+                self._logger.warn(
+                    f'ArrowSurfacer: launcher BMOVE failed: {msg}')
+
+        time.sleep(self._drop_settle)
+
+        # 10. 投信标前下潜，让撒放器更靠近扇区中心；投后回升
+        self._logger.info(
+            f'ArrowSurfacer: diving {self._dive_offset:.2f}m before drop')
+        self._node._send_action_goal(
+            BasicMotion.Goal.BMOVE,
+            [0.0, 0.0, self._dive_offset, 0.0], 'z',
+            timeout=15.0, quiet=True)
+        self._node._cmd_z += self._dive_offset
+
         self._node.set_servo(
             self._node.ANGLE_DROP_BEACON,
             f'drop beacon to {color_name} sector')
         self._logger.info(
             f'🔫 ArrowSurfacer: BEACON DROPPED to {color_name.upper()} sector!')
         self._node.light_off()
+
+        self._node._send_action_goal(
+            BasicMotion.Goal.BMOVE,
+            [0.0, 0.0, -self._dive_offset, 0.0], 'z',
+            timeout=15.0, quiet=True)
+        self._node._cmd_z -= self._dive_offset
+
+        # 11. [保留用户修改] 延时后复位舵机
+        time.sleep(self._servo_reset_delay)
+        self._node.set_servo(self._servo_reset_angle, 'reset servo')
 
         self._logger.info(
             f'ArrowSurfacer: complete. '

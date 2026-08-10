@@ -20,7 +20,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32, UInt8
 from std_srvs.srv import Trigger
 
-from zit6_interfaces.msg import ZitStatus
+from zit6_interfaces.msg import ZitPushrod, ZitStatus
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import DetectionArray, ObjectPositionArray, PoseInfo, TaskStatus
@@ -123,6 +123,7 @@ class TaskRunnerNode(Node):
             'arrow_surface': self._task_arrow_surface,
             'drop_beacon': self._task_drop_beacon,
             'take_water_sample': self._task_take_water_sample,
+            'get_sample': self._task_get_sample,
             'release_sampler': self._task_release_sampler,
         }
 
@@ -151,6 +152,7 @@ class TaskRunnerNode(Node):
         self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
         self.pub_light = self.create_publisher(UInt8, '/zit6/cmd/light', 10)
         self.pub_servo = self.create_publisher(Float32, '/zit6/cmd/servo', 10)
+        self.pub_pushrod = self.create_publisher(ZitPushrod, '/zit6/cmd/pushrod', 10)
 
         # Services
         self.create_service(RunTask, '/task/run', self._run_task_cb)
@@ -196,6 +198,15 @@ class TaskRunnerNode(Node):
         self.pub_servo.publish(msg)
         self.get_logger().info(
             f'⚙️  SERVO: {label} (angle={angle_rad:.2f} rad)')
+
+    def _send_pushrod(self, speed: float, duration_ms: int, label: str):
+        """发推杆命令 (ZitPushrod): speed 归一化(-1..1), duration_ms 持续时间。"""
+        msg = ZitPushrod()
+        msg.speed = float(speed)
+        msg.duration_ms = int(duration_ms)
+        self.pub_pushrod.publish(msg)
+        self.get_logger().info(
+            f'🚀 PUSHROD: {label} (speed={speed:+.1f}, duration={duration_ms}ms)')
 
     # ── 下视对齐工具 ───────────────────────────────────────────────
 
@@ -737,8 +748,10 @@ class TaskRunnerNode(Node):
         return success
 
     def _task_wtravelxy(self, p: dict) -> bool:
+        timeout = float(p.get('timeout', p.get('time_out', 60.0)))
         success, msg = self._send_action_goal(
-            BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], 0.0, 0.0], "xy")
+            BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], 0.0, 0.0], "xy",
+            timeout=timeout)
         self.get_logger().info(f'wtravelxy: {msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
@@ -891,15 +904,23 @@ class TaskRunnerNode(Node):
         self.get_logger().info('💧 WATER SAMPLE TAKEN!')
         return True
 
+    def _task_get_sample(self, p: dict) -> bool:
+        """取水 — 发 pushrod 推杆收聚（speed<0）。独立任务，按需调用。"""
+        speed = float(p.get('pushrod_speed', -1.0))
+        duration_ms = int(p.get('pushrod_duration_ms', 20000))
+        self._send_pushrod(speed, duration_ms, 'get water sample')
+        self.get_logger().info('💧 WATER SAMPLE TAKEN!')
+        return True
+
     def _task_release_sampler(self, p: dict) -> bool:
-        """转向 → 对齐 START 标记 → 上浮靠岸 → 释放取水器。"""
+        """转向 → 对齐 START 标记 → 上浮靠岸 → pushrod 释放取水器。"""
         align_yaw = float(p.get('align_yaw', 180.0))
         start_cid = int(p.get('start_class_id', 4))
         approach_z = float(p.get('approach_z', -0.3))
         approach_x = float(p.get('approach_x', -0.3))
-        approach_timeout = float(p.get('approach_timeout', 15.0))
-        release_angle = float(p.get('release_angle_rad',
-                                    self.ANGLE_RELEASE_SAMPLER))
+        approach_timeout = float(p.get('approach_timeout', 25.0))
+        release_speed = float(p.get('release_pushrod_speed', 1.0))
+        release_duration_ms = int(p.get('release_pushrod_duration_ms', 20000))
 
         self.get_logger().info(
             f'🧭 release_sampler: turning to rz={align_yaw:.1f}°')
@@ -925,7 +946,8 @@ class TaskRunnerNode(Node):
             'xz', timeout=approach_timeout)
         self._cmd_x = approach_x; self._cmd_z = approach_z
 
-        self.set_servo(release_angle, 'release water sampler')
+        # 释放取水器 — pushrod 推杆伸出（speed>0）
+        self._send_pushrod(release_speed, release_duration_ms, 'release water sampler')
         self.get_logger().info('🗑️  WATER SAMPLER RELEASED!')
         return True
 
