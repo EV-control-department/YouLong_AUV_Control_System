@@ -2,6 +2,10 @@
   "tasks": [
     {"name": "start", "params": {}},
     {"name": "wait", "params": {"duration": 0}},
+    {"name": "get_sample", "params": {
+    "pushrod_speed": -1.0,
+    "pushrod_duration_ms": 30000
+    }},
     {"name": "setz", "params": {"z": 0.2}},
     {"name": "wtravelxy", "params": {"x": 0.5, "y": 0.0, "time_out": 20}},
     {"name": "setrz", "params": {"rz": 90.0}},
@@ -13,7 +17,9 @@
       "square_class_id": 5,
       "marker_class_ids": [7],
       "stop_when_marker": true,
-      "forward_step": 0.12
+      "forward_step": 0.12,
+      "triangle_sink_depth": 0.8,
+      "align_ema_alpha":0.1
     }},
 
     {"name": "wtravelxy", "params": {"x": 0.3, "y": 3.2, "timeout": 20}},
@@ -30,9 +36,9 @@
       "sector_y": 4.0,
       "sector_travel_z": 0.2,
       "surface_depth": -1.0,
-      "recover_depth": 0.1,
+      "recover_depth": 0.2,
       "drop_offset_x": 0.35,
-      "drop_offset_y": 0.15,
+      "drop_offset_y": 0.18,
       "servo_reset_delay": 4.0,
       "servo_reset_angle": 0.0
     }
@@ -47,7 +53,8 @@
       "start_class_id": 4,
       "approach_z": -0.6,
       "approach_x": -0.5,
-      "approach_timeout": 3.0
+      "approach_timeout": 2.0,
+      "release_pushrod_duration_ms": 40000
     }}
   ]
 }

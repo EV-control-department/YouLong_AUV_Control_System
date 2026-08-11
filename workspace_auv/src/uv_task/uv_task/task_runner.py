@@ -358,7 +358,7 @@ class TaskRunnerNode(Node):
                 return False
         alpha = float(self.get_parameter('align_ema_alpha').value)
         filtered = None  # 每个对准任务独立重置
-        for i in range(400):
+        for i in range(200):
             if self.stopped: return False
             tgt = self._triangulate(class_id)
             if tgt is None: time.sleep(0.05); continue
@@ -372,7 +372,7 @@ class TaskRunnerNode(Node):
                 )
             self._send_action_goal(BasicMotion.Goal.SET,
                 [filtered[0], filtered[1], self._cmd_z, self._cmd_yaw],
-                'xy', timeout=0.05, quiet=True)
+                'xy', timeout=0.02, quiet=True)
             self._cmd_x = filtered[0]; self._cmd_y = filtered[1]
             self.get_logger().info(
                 f'Align [{label}]: #{i}靠近，raw=({tgt[0]:.2f},{tgt[1]:.2f}) '

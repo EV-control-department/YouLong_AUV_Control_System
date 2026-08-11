@@ -38,8 +38,8 @@ CvBridge = None
 
 # ── Runtime switches ───────────────────────────────────────────────
 # 真实硬件模式下的 V4L2 设备绑定。
-FRONT_CAMERA_DEVICE = '/dev/video2'
-DOWN_CAMERA_DEVICE = '/dev/video0'
+FRONT_CAMERA_DEVICE = '/dev/video0'
+DOWN_CAMERA_DEVICE = '/dev/video2'
 ENABLE_FRONT_CAMERA = True
 ENABLE_DOWN_CAMERA = True
 
@@ -51,6 +51,10 @@ DOWN_CAMERA_RESOLUTION = (1280, 960)   # width, height
 # 真实 V4L2 设备的实际采集分辨率；由 v4l2-ctl 检测得到。
 FRONT_CAPTURE_RESOLUTION = (1280, 720)
 DOWN_CAPTURE_RESOLUTION = (2560, 960)
+
+PIPE_CLASS_ID = 3                # 实机模型: pipe=3
+PIPE_CONFIDENCE = 0.7            # pipe 单独的高置信度阈值 (巡线目标需可靠)
+
 
 # 相机标定常量：K 为 3x3 内参矩阵，D 的顺序为
 # (k1, k2, p1, p2, k3)。请用实际标定结果替换 D。
@@ -778,6 +782,9 @@ class VisionNode(Node):
                 det = Detection()
                 det.class_id = int(boxes.cls[i])
                 det.confidence = float(boxes.conf[i])
+                # pipe 单独高置信度阈值 — 低置信度 pipe 丢弃,避免误检
+                if det.class_id == PIPE_CLASS_ID and det.confidence < PIPE_CONFIDENCE:
+                    continue
                 x1, y1, x2, y2 = boxes.xyxy[i].tolist()
                 det.bbox_x1 = x1
                 det.bbox_y1 = y1
