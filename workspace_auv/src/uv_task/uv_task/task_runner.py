@@ -1025,6 +1025,9 @@ class TaskRunnerNode(Node):
             'z', timeout=approach_timeout)
         self._cmd_z += approach_z
 
+
+        self._send_pushrod(release_speed, release_duration_ms, 'release water sampler')
+
         self.get_logger().info(
             f'🏝️  release_sampler: bmove to shore x={approach_x}')
         self._send_action_goal(
@@ -1036,7 +1039,6 @@ class TaskRunnerNode(Node):
             approach_x, 0.0, 0.0, 0.0)
 
         # 释放取水器 — pushrod 推杆伸出（speed>0）
-        self._send_pushrod(release_speed, release_duration_ms, 'release water sampler')
         self.get_logger().info('🗑️  WATER SAMPLER RELEASED!')
         return True
 
