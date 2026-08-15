@@ -300,14 +300,17 @@ class TaskRunnerNode(Node):
 
         帧时间戳 vs 位姿历史时间对齐后，即使 AUV 在运动中，
         像素也配拍摄时刻的姿态，而非当前最新姿态。
+        只有单目看到时，回退为机器人位置 + 视野方位偏置（0.1m）。
         """
         pair = self._stereo_pair(class_id)
-        if pair is None: return None
+        if pair is None:
+            return self._single_eye_estimate(class_id)
         lt_sec, ld, rt_sec, rd = pair
 
         lpose = self._lookup_pose(lt_sec)
         rpose = self._lookup_pose(rt_sec)
-        if lpose is None or rpose is None: return None
+        if lpose is None or rpose is None:
+            return None
 
         lx, ly, lz, lroll, lpitch, lyaw = lpose
         rx, ry, rz, rroll, rpitch, ryaw = rpose
@@ -327,6 +330,53 @@ class TaskRunnerNode(Node):
         ro, rd_ray = _ray(rd.pixel_x, rd.pixel_y, _DOWN_OFFSET_RIGHT, RR, rp)
         pos = _ray_intersection_midpoint(lo, ld_ray, ro, rd_ray)
         return (float(pos[0]), float(pos[1]), float(pos[2])) if pos is not None else None
+
+    def _single_eye_estimate(self, class_id: int):
+        """单目兜底：只有单眼看到时，返回机器人位置 + 视野方位偏置（0.1m）。
+
+        物体在视野左 → body y-0.1；左上 → body x+0.1, y-0.1（上=前，左=左）。
+        都看不到或机器人位姿未知时返回 None。
+        """
+        max_age = 0.60
+        now = time.monotonic()
+        with self._perception_lock:
+            le = self._down_detections.get('down_left')
+            re = self._down_detections.get('down_right')
+
+        def _best(entry):
+            if entry is None:
+                return None
+            t, arr = entry
+            if now - t > max_age:
+                return None
+            return max((d for d in arr.detections if d.class_id == class_id),
+                       key=lambda d: d.confidence, default=None)
+
+        bl = _best(le)
+        br = _best(re)
+        if bl is not None and br is None:
+            det = bl
+        elif br is not None and bl is None:
+            det = br
+        else:
+            return None  # 都看不到（双目都看到时不会走到这里）
+
+        robot = self._robot_pose
+        if robot is None:
+            return None
+        rx, ry, rz, _, _, ryaw = robot
+
+        # 视野方位 → body 偏置（0.1m）：图像上=前(x+)，图像左=左(y-)
+        dx = det.pixel_x - _DOWN_CX
+        dy = det.pixel_y - _DOWN_CY
+        body_dx = 0.1 if dy < 0 else (-0.1 if dy > 0 else 0.0)
+        body_dy = -0.1 if dx < 0 else (0.1 if dx > 0 else 0.0)
+
+        # body → world
+        yaw = math.radians(ryaw)
+        wx = rx + math.cos(yaw) * body_dx - math.sin(yaw) * body_dy
+        wy = ry + math.sin(yaw) * body_dx + math.cos(yaw) * body_dy
+        return (float(wx), float(wy), float(rz))
 
     def _search_for_class(self, class_id: int, label: str) -> bool:
         sd = 0; ss = 0.08; sm = 3.0; sp = 0.30; mi = 0.01

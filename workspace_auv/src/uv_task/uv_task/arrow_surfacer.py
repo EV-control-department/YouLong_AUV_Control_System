@@ -330,27 +330,27 @@ class ArrowSurfacer:
         return self._search_for_class(self._arrow_cid, 'arrow')
 
     def _search_sector(self, color_name: str, sector_cid: int) -> bool:
-        """左右横移搜索扇区（世界 x 轴，非阻塞微步）。
+        """左右横移搜索扇区（世界 y 轴，非阻塞微步）。
 
-        左（x+1m）→回中→右（x-1m）→回中，步间查扇区。
+        左（y+1m）→回中→右（y-1m）→回中，步间查扇区。
         找到返回 True；找不到按颜色兜底偏置（red→+1m/yellow→-1m/green→0）返回 False。
         """
         sweep = 1.0          # 横移幅度 (m)
         micro_step = 0.01    # 微步 (m)
 
-        def _sweep(dx_total, label):
-            n = max(1, round(abs(dx_total) / micro_step))
-            step = dx_total / n
+        def _sweep(dy_total, label):
+            n = max(1, round(abs(dy_total) / micro_step))
+            step = dy_total / n
             for _ in range(n):
                 if self._stopped:
                     return False
-                tx = self._node._cmd_x + step
+                ty = self._node._cmd_y + step
                 self._node._send_action_goal(
                     BasicMotion.Goal.SET,
-                    [tx, self._node._cmd_y, self._node._cmd_z,
+                    [self._node._cmd_x, ty, self._node._cmd_z,
                      self._node._cmd_yaw],
-                    'x', timeout=0.01, quiet=True)
-                self._node._cmd_x = tx
+                    'y', timeout=0.01, quiet=True)
+                self._node._cmd_y = ty
                 if self._best_detection([sector_cid]) is not None:
                     self._logger.info(
                         f'ArrowSurfacer: {color_name} sector found '
@@ -358,10 +358,10 @@ class ArrowSurfacer:
                     return True
             return False
 
-        # 左（x+1）→回中→右（x-1）→回中
-        for label, dx in (('left', sweep), ('return', -sweep),
+        # 左（y+1）→回中→右（y-1）→回中
+        for label, dy in (('left', sweep), ('return', -sweep),
                           ('right', -sweep), ('center', sweep)):
-            if self._sweep(dx, label):
+            if self._sweep(dy, label):
                 return True
 
         # 找不到 → 按颜色兜底偏置（红左/黄右/绿原地）
@@ -369,11 +369,10 @@ class ArrowSurfacer:
         if offset != 0.0:
             self._logger.warn(
                 f'ArrowSurfacer: {color_name} sector not found, '
-                f'offset x{offset:+.1f}m')
-            self._sweep(offset, 'fallback')
-        else:
-            self._logger.warn(
-                f'ArrowSurfacer: {color_name} sector not found, drop in place')
+                f'offset y{offset:+.1f}m')
+            return self._sweep(offset, 'fallback')
+        self._logger.warn(
+            f'ArrowSurfacer: {color_name} sector not found, drop in place')
         return False
 
     # ── ArUco → 扇区映射 ───────────────────────────────────────────
@@ -483,12 +482,17 @@ class ArrowSurfacer:
         self._logger.info(
             f'ArrowSurfacer: rotation complete, yaw={self._view_yaw:.1f}°')
 
-        # 2. 搜索并对准箭头
-        self._logger.info(
-            f'ArrowSurfacer: align to arrow (class={self._arrow_cid})')
-        if not self._node._align_to_class(self._arrow_cid, 'arrow'):
-            self._logger.warn('ArrowSurfacer: arrow align failed')
-            return False
+        # 2. 看见箭头才搜索并对准；看不见则跳过搜索，直接上浮
+        if self._best_detection([self._arrow_cid]) is not None:
+            self._logger.info(
+                f'ArrowSurfacer: align to arrow (class={self._arrow_cid})')
+            if not self._node._align_to_class(self._arrow_cid, 'arrow'):
+                self._logger.warn('ArrowSurfacer: arrow align failed')
+                return False
+        else:
+            self._logger.warn(
+                'ArrowSurfacer: arrow not visible, skipping search, '
+                'surfacing directly')
 
         # 3. 短暂出水：读取水面 ArUco
         self._logger.info(
