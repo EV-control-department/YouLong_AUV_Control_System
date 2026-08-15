@@ -44,6 +44,15 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def _wrap_degrees(angle: float) -> float:
+    """将角度归一化到 [-180, 180]。"""
+    while angle > 180.0:
+        angle -= 360.0
+    while angle < -180.0:
+        angle += 360.0
+    return angle
+
+
 def _euler_to_rotation_matrix(rx_deg: float, ry_deg: float,
                                rz_deg: float) -> np.ndarray:
     """ZYX 欧拉角 (度) → 旋转矩阵（与 position.py 一致）。"""
@@ -123,6 +132,10 @@ class ArrowSurfacer:
         # 投球前下潜/投球后回升量（NED z 正=下）与中间稳定延时
         self._dive_offset = float(params.get('dive_offset', 0.3))
         self._drop_settle = float(params.get('drop_settle', 3.0))
+
+        # 前视 ArUco 搜索微步（非阻塞）
+        self._aruco_rot_step = float(params.get('aruco_rot_step', 1.0))    # 旋转微步 (°/步)
+        self._aruco_z_step = float(params.get('aruco_z_step', 0.01))       # 深度微步 (m/步)
 
         # ── 感知订阅 ──
         self._lock = threading.RLock()
@@ -340,78 +353,67 @@ class ArrowSurfacer:
     # ── 前视 ArUco 搜索 ────────────────────────────────────────────
 
     def _search_aruco_frontal(self):
-        """前视搜索 ArUco tag：左右扫 ±15° + 下潜上升 0.2m，最多 2 轮。"""
+        """前视搜索 ArUco tag（非阻塞微步）：旋转 ±15° + 下潜上升 0.2m，最多 2 轮。
+
+        每步 SET/BMOVE + timeout 0.01s，步间检查 _aruco_ids，发现即返回。
+        """
         if self._aruco_ids:
             return  # 已有数据，无需搜索
 
         self._logger.info(
             'ArrowSurfacer: no ArUco ID yet, starting frontal search')
 
+        yaw_amp = 15.0                       # 旋转幅度 (°)
+        z_amp = 0.2                          # 深度幅度 (m)
+        rot_step = self._aruco_rot_step      # 旋转微步 (°/步)
+        z_step = self._aruco_z_step          # 深度微步 (m/步)
+
         for rnd in range(2):
             if self._stopped or self._aruco_ids:
                 return
-
             self._logger.info(f'ArrowSurfacer: ArUco search round {rnd + 1}/2')
 
-            # 右转 15°
-            self._node._send_action_goal(
-                BasicMotion.Goal.SET,
-                [self._node._cmd_x, self._node._cmd_y,
-                 self._node._cmd_z, self._view_yaw + 15.0],
-                'rz', timeout=10.0, quiet=True)
-            self._node._cmd_yaw = self._view_yaw + 15.0
-            time.sleep(0.5)
-            if self._aruco_ids:
-                self._logger.info(
-                    f'ArrowSurfacer: ArUco found at +15°: '
-                    f'{sorted(self._aruco_ids)}')
-                return
+            # ── 旋转扫描：view_yaw → +15° → -15° → view_yaw ──
+            for target_yaw in (self._view_yaw + yaw_amp,
+                               self._view_yaw - yaw_amp,
+                               self._view_yaw):
+                cur = self._node._cmd_yaw
+                delta = _wrap_degrees(target_yaw - cur)
+                n = max(1, round(abs(delta) / rot_step))
+                step = delta / n
+                for _ in range(n):
+                    if self._stopped or self._aruco_ids:
+                        return
+                    cur = _wrap_degrees(cur + step)
+                    self._node._send_action_goal(
+                        BasicMotion.Goal.SET,
+                        [self._node._cmd_x, self._node._cmd_y,
+                         self._node._cmd_z, cur],
+                        'rz', timeout=0.01, quiet=True)
+                    self._node._cmd_yaw = cur
+                if self._aruco_ids:
+                    self._logger.info(
+                        f'ArrowSurfacer: ArUco found at yaw≈{cur:.1f}°: '
+                        f'{sorted(self._aruco_ids)}')
+                    return
 
-            # 左转 15°
-            self._node._send_action_goal(
-                BasicMotion.Goal.SET,
-                [self._node._cmd_x, self._node._cmd_y,
-                 self._node._cmd_z, self._view_yaw - 15.0],
-                'rz', timeout=10.0, quiet=True)
-            self._node._cmd_yaw = self._view_yaw - 15.0
-            time.sleep(0.5)
-            if self._aruco_ids:
-                self._logger.info(
-                    f'ArrowSurfacer: ArUco found at -15°: '
-                    f'{sorted(self._aruco_ids)}')
-                return
-
-            # 恢复朝向
-            self._node._send_action_goal(
-                BasicMotion.Goal.SET,
-                [self._node._cmd_x, self._node._cmd_y,
-                 self._node._cmd_z, self._view_yaw],
-                'rz', timeout=10.0, quiet=True)
-            self._node._cmd_yaw = self._view_yaw
-
-            # 下潜 0.2m
-            self._node._send_action_goal(
-                BasicMotion.Goal.BMOVE,
-                [0.0, 0.0, 0.2, 0.0], 'z', timeout=10.0, quiet=True)
-            self._node._cmd_z += 0.2
-            time.sleep(0.5)
-            if self._aruco_ids:
-                self._logger.info(
-                    f'ArrowSurfacer: ArUco found after dive: '
-                    f'{sorted(self._aruco_ids)}')
-                return
-
-            # 上升 0.2m
-            self._node._send_action_goal(
-                BasicMotion.Goal.BMOVE,
-                [0.0, 0.0, -0.2, 0.0], 'z', timeout=10.0, quiet=True)
-            self._node._cmd_z -= 0.2
-            time.sleep(0.5)
-            if self._aruco_ids:
-                self._logger.info(
-                    f'ArrowSurfacer: ArUco found after rise: '
-                    f'{sorted(self._aruco_ids)}')
-                return
+            # ── 深度扫描：下潜 0.2 → 上升 0.2 ──
+            for dz_total in (z_amp, -z_amp):
+                n = max(1, round(abs(dz_total) / z_step))
+                step = dz_total / n
+                for _ in range(n):
+                    if self._stopped or self._aruco_ids:
+                        return
+                    self._node._send_action_goal(
+                        BasicMotion.Goal.BMOVE,
+                        [0.0, 0.0, step, 0.0], 'z', timeout=0.01, quiet=True)
+                    self._node._cmd_z += step
+                if self._aruco_ids:
+                    self._logger.info(
+                        f'ArrowSurfacer: ArUco found after '
+                        f'{"dive" if dz_total > 0 else "rise"}: '
+                        f'{sorted(self._aruco_ids)}')
+                    return
 
         self._logger.warn('ArrowSurfacer: ArUco frontal search exhausted')
 

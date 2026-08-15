@@ -72,11 +72,9 @@ _COAST_LATERAL_GAIN = 0.15       # 盲跟横向比例增益
 # ── 丢帧恢复 ─────────────────────────────────────────────────────
 _LOST_TOLERANCE = 6           # 连续丢帧容忍帧数，超过则进入搜索
 
-# ── 搜索阶段（方框螺旋）──────────────────────────────────────────
-_SEARCH_SPIRAL_START = 0.02      # 初始搜索框大小 (m)
-_SEARCH_SPIRAL_STEP = 0.30       # 每圈扩展步长 (m)
-_SEARCH_MAX_SPIRAL = 2.0         # 最大搜索范围 (m)
-_SEARCH_MAX_STEP = 0.50          # 单步最大移动 (m)
+# ── 搜索阶段（左右横扫）──────────────────────────────────────────
+_SEARCH_SWEEP = 0.50             # 左右扫描幅度 (m)
+_SEARCH_MICRO_STEP = 0.01        # 搜索微步步长 (m)
 
 # ── 感知 ─────────────────────────────────────────────────────────
 _PERCEPTION_MAX_AGE = 0.60       # 感知数据最大有效期 (s)
@@ -237,11 +235,9 @@ class LineFollower:
         self._coast_forward_step = float(params.get('coast_forward_step', _COAST_FORWARD_STEP))
         self._coast_lateral_gain = float(params.get('coast_lateral_gain', _COAST_LATERAL_GAIN))
 
-        # 搜索
-        self._search_spiral_size = float(params.get('search_spiral_start', _SEARCH_SPIRAL_START))
-        self._search_spiral_step = float(params.get('search_spiral_step', _SEARCH_SPIRAL_STEP))
-        self._search_max_spiral = float(params.get('search_max_spiral', _SEARCH_MAX_SPIRAL))
-        self._search_max_step = float(params.get('search_max_step', _SEARCH_MAX_STEP))
+        # 搜索（左右横扫）
+        self._search_sweep = float(params.get('search_sweep', _SEARCH_SWEEP))
+        self._search_micro_step = float(params.get('search_micro_step', _SEARCH_MICRO_STEP))
 
         # 标记 class_id
         self._triangle_cid = int(params.get('triangle_class_id', _TRIANGLE_CLASS_ID))
@@ -268,7 +264,6 @@ class LineFollower:
 
         # ── 搜索状态 ──
         self._step_count = 0
-        self._search_spiral_dir = 0
 
         # ── 三角形/正方形标记抑制 + 任务计数 ──
         self._triangle_approached = False
@@ -527,9 +522,9 @@ class LineFollower:
                 if not ok:
                     return False
             else:
-                # 持续丢帧 → 已完成 4 个任务则巡线成功
+                # 持续丢帧 → 已完成 3 个任务则巡线成功，允许少做一个
                 total = self._triangle_count + self._square_count
-                if total >= 4:
+                if total >= 3:
                     self._logger.info(
                         f'LineFollower: {total} tasks completed, '
                         f'line lost → mission complete')
@@ -538,7 +533,9 @@ class LineFollower:
                 self._lost_count = 0
                 self._last_valid_line = None
                 if not self._search_for_line():
-                    time.sleep(0.05)
+                    self._logger.warn(
+                        'LineFollower: line search failed, giving up task')
+                    return False
 
         expired = time.monotonic() >= deadline
         self._logger.info(
@@ -548,48 +545,41 @@ class LineFollower:
     # ── 搜索阶段 ──────────────────────────────────────────────────────
 
     def _search_for_line(self) -> bool:
-        """方框螺旋搜索 — 仅平移，不旋转。
+        """左右横扫找线：向左 0.5m → 回中 → 向右 0.5m → 回中，只扫一次。
 
-        按 8 方向循环走方框：前→右前→右→右后→后→左后→左→左前，
-        每完成一圈 (8 步) 后框大小增加 ``search_spiral_step``，
-        直到达到 ``search_max_spiral``。
-        返回 True=执行了移动动作，False=搜索范围已耗尽。
+        非阻塞微步：每步 SET 0.01m + timeout 0.01s，步间检查线是否恢复。
+        找到立即返回 True；全程未找到返回 False（放弃巡线任务，回到起点）。
         """
-        size = self._search_spiral_size
-        if size > self._search_max_spiral:
-            return False
+        sweep = self._search_sweep              # 左右扫描幅度 (m)
+        micro_step = self._search_micro_step    # 每步 0.01m
 
-        step = min(size, self._search_max_step)
+        for label, dy_total in (('left', -sweep),
+                                ('return', sweep),
+                                ('right', sweep),
+                                ('center', -sweep)):
+            n_steps = max(1, round(abs(dy_total) / micro_step))
+            step_dy = dy_total / n_steps
+            for _ in range(n_steps):
+                if self._stopped:
+                    return False
+                # 一步机体系横移 → 世界系绝对坐标
+                tx, ty, tz, tyaw = _apply_body_delta(
+                    self._node._cmd_x, self._node._cmd_y,
+                    self._node._cmd_z, self._node._cmd_yaw,
+                    0.0, step_dy, 0.0, 0.0)
+                self._node._send_action_goal(
+                    BasicMotion.Goal.SET,
+                    [tx, ty, tz, tyaw], 'xy', timeout=0.01, quiet=True)
+                self._node._cmd_x = tx
+                self._node._cmd_y = ty
+                if self._latest_line() is not None:
+                    self._logger.info(
+                        f'LineFollower: line recovered during {label} sweep')
+                    return True
 
-        dirs = [
-            (step, 0.0), (step, step), (0.0, step), (-step, step),
-            (-step, 0.0), (-step, -step), (0.0, -step), (step, -step),
-        ]
-        dx, dy = dirs[self._search_spiral_dir]
-
-        self._logger.info(
-            f'Line search: dir={self._search_spiral_dir} '
-            f'size={size:.2f}m step=({dx:.2f}, {dy:.2f})')
-
-        success, _ = self._node._send_action_goal(
-            BasicMotion.Goal.BMOVE,
-            [float(dx), float(dy), 0.0, 0.0], 'xy', timeout=8.0,
-            quiet=True)
-        if success:
-            self._node._cmd_x, self._node._cmd_y, \
-            self._node._cmd_z, self._node._cmd_yaw = _apply_body_delta(
-                self._node._cmd_x, self._node._cmd_y,
-                self._node._cmd_z, self._node._cmd_yaw,
-                dx, dy, 0.0, 0.0)
-
-        self._search_spiral_dir = (self._search_spiral_dir + 1) % 8
-        if self._search_spiral_dir == 0:
-            self._search_spiral_size += self._search_spiral_step
-            self._logger.info(
-                f'Line search: size increased to '
-                f'{self._search_spiral_size:.2f}m')
-
-        return success
+        self._logger.warn(
+            'LineFollower: left-right sweep exhausted, line not found')
+        return False
 
     # ── PID 巡线步 ────────────────────────────────────────────────────
 
