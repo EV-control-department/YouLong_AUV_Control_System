@@ -329,6 +329,53 @@ class ArrowSurfacer:
     def _search_for_arrow(self) -> bool:
         return self._search_for_class(self._arrow_cid, 'arrow')
 
+    def _search_sector(self, color_name: str, sector_cid: int) -> bool:
+        """左右横移搜索扇区（世界 x 轴，非阻塞微步）。
+
+        左（x+1m）→回中→右（x-1m）→回中，步间查扇区。
+        找到返回 True；找不到按颜色兜底偏置（red→+1m/yellow→-1m/green→0）返回 False。
+        """
+        sweep = 1.0          # 横移幅度 (m)
+        micro_step = 0.01    # 微步 (m)
+
+        def _sweep(dx_total, label):
+            n = max(1, round(abs(dx_total) / micro_step))
+            step = dx_total / n
+            for _ in range(n):
+                if self._stopped:
+                    return False
+                tx = self._node._cmd_x + step
+                self._node._send_action_goal(
+                    BasicMotion.Goal.SET,
+                    [tx, self._node._cmd_y, self._node._cmd_z,
+                     self._node._cmd_yaw],
+                    'x', timeout=0.01, quiet=True)
+                self._node._cmd_x = tx
+                if self._best_detection([sector_cid]) is not None:
+                    self._logger.info(
+                        f'ArrowSurfacer: {color_name} sector found '
+                        f'during {label} sweep')
+                    return True
+            return False
+
+        # 左（x+1）→回中→右（x-1）→回中
+        for label, dx in (('left', sweep), ('return', -sweep),
+                          ('right', -sweep), ('center', sweep)):
+            if self._sweep(dx, label):
+                return True
+
+        # 找不到 → 按颜色兜底偏置（红左/黄右/绿原地）
+        offset = {'red': sweep, 'yellow': -sweep}.get(color_name, 0.0)
+        if offset != 0.0:
+            self._logger.warn(
+                f'ArrowSurfacer: {color_name} sector not found, '
+                f'offset x{offset:+.1f}m')
+            self._sweep(offset, 'fallback')
+        else:
+            self._logger.warn(
+                f'ArrowSurfacer: {color_name} sector not found, drop in place')
+        return False
+
     # ── ArUco → 扇区映射 ───────────────────────────────────────────
 
     _ARUCO_SECTOR = {
@@ -521,27 +568,32 @@ class ArrowSurfacer:
         self._node._cmd_y = self._sector_y
         self._node._cmd_yaw = self._view_yaw
 
-        # 9. 搜索并对准扇区
-        self._logger.info(
-            f'ArrowSurfacer: aligning to {color_name} sector '
-            f'(class={sector_cid})')
-        self._node._align_to_class(sector_cid, f'{color_name} sector')
+        # 9. 搜索扇区（左右横移，找不到按颜色兜底偏置）
+        found = self._search_sector(color_name, sector_cid)
 
-        # 9.5 对准后 BMOVE（机体系 x/y）：把信号弹撒放器挪到扇区中心正上方
-        if self._drop_offset_x or self._drop_offset_y:
+        if found:
+            # 9.1 找到 → EMA 对准
             self._logger.info(
-                f'ArrowSurfacer: BMOVE launcher over sector center '
-                f'(dx={self._drop_offset_x:.2f}, dy={self._drop_offset_y:.2f})')
-            success, msg = self._node._send_action_goal(
-                BasicMotion.Goal.BMOVE,
-                [self._drop_offset_x, self._drop_offset_y, 0.0, 0.0],
-                'xy', timeout=10.0, quiet=True)
-            if success:
-                self._node._cmd_x += self._drop_offset_x
-                self._node._cmd_y += self._drop_offset_y
-            else:
-                self._logger.warn(
-                    f'ArrowSurfacer: launcher BMOVE failed: {msg}')
+                f'ArrowSurfacer: aligning to {color_name} sector '
+                f'(class={sector_cid})')
+            self._node._align_to_class(sector_cid, f'{color_name} sector')
+
+            # 9.5 对准后 BMOVE（机体系 x/y）：把信号弹撒放器挪到扇区中心正上方
+            if self._drop_offset_x or self._drop_offset_y:
+                self._logger.info(
+                    f'ArrowSurfacer: BMOVE launcher over sector center '
+                    f'(dx={self._drop_offset_x:.2f}, dy={self._drop_offset_y:.2f})')
+                success, msg = self._node._send_action_goal(
+                    BasicMotion.Goal.BMOVE,
+                    [self._drop_offset_x, self._drop_offset_y, 0.0, 0.0],
+                    'xy', timeout=10.0, quiet=True)
+                if success:
+                    self._node._cmd_x += self._drop_offset_x
+                    self._node._cmd_y += self._drop_offset_y
+                else:
+                    self._logger.warn(
+                        f'ArrowSurfacer: launcher BMOVE failed: {msg}')
+        # 找不到 → 已在 _search_sector 内偏置，跳过对准和 drop_offset
 
         time.sleep(self._drop_settle)
 

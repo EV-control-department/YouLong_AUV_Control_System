@@ -72,7 +72,7 @@ DOWN_CAMERA_MATRIX = (
 )
 DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
-CONFIDENCE = 0.4
+CONFIDENCE = 0.55
 
 ENABLE_UNDISTORT = True              # 是否执行相机去畸变
 ENABLE_GORTC = True                 # 启动 go2rtc 转发客户端视频
@@ -85,7 +85,7 @@ STREAM_ANNOTATED = True              # 通过 go2rtc 额外提供带检测框的
 SIM_MODE = False                      # False=V4L2，True=ROS stitched 话题
 SAVE_DATASET = True                  # 是否保存训练数据帧
 DATASET_DIR = ''                      # 空字符串=自动使用工程下的 img/
-DEFAULT_MODEL_FILENAME = 'WUURC2026FINAL003.pt'
+DEFAULT_MODEL_FILENAME = 'WUURC2026FINAL0052.pt'
 
 import ultralytics.utils.loss
 
