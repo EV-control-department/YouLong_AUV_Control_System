@@ -830,7 +830,7 @@ class TaskRunnerNode(Node):
         return success
 
     def _task_wtravelxy(self, p: dict) -> bool:
-        timeout = float(p.get('timeout', p.get('time_out', 60.0)))
+        timeout = float(p.get('timeout', p.get('time_out', 120.0)))
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], 0.0, 0.0], "xy",
             timeout=timeout)

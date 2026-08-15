@@ -122,7 +122,7 @@ class ArrowSurfacer:
                                                     getattr(node, 'ANGLE_INIT', 0.0)))
         # 投球前下潜/投球后回升量（NED z 正=下）与中间稳定延时
         self._dive_offset = float(params.get('dive_offset', 0.3))
-        self._drop_settle = float(params.get('drop_settle', 1.0))
+        self._drop_settle = float(params.get('drop_settle', 3.0))
 
         # ── 感知订阅 ──
         self._lock = threading.RLock()
@@ -340,7 +340,7 @@ class ArrowSurfacer:
     # ── 前视 ArUco 搜索 ────────────────────────────────────────────
 
     def _search_aruco_frontal(self):
-        """前视搜索 ArUco tag：左右扫 ±15° + 下潜上升 0.5m，最多 2 轮。"""
+        """前视搜索 ArUco tag：左右扫 ±15° + 下潜上升 0.2m，最多 2 轮。"""
         if self._aruco_ids:
             return  # 已有数据，无需搜索
 
@@ -389,11 +389,11 @@ class ArrowSurfacer:
                 'rz', timeout=10.0, quiet=True)
             self._node._cmd_yaw = self._view_yaw
 
-            # 下潜 0.5m
+            # 下潜 0.2m
             self._node._send_action_goal(
                 BasicMotion.Goal.BMOVE,
-                [0.0, 0.0, 0.5, 0.0], 'z', timeout=10.0, quiet=True)
-            self._node._cmd_z += 0.5
+                [0.0, 0.0, 0.2, 0.0], 'z', timeout=10.0, quiet=True)
+            self._node._cmd_z += 0.2
             time.sleep(0.5)
             if self._aruco_ids:
                 self._logger.info(
@@ -401,11 +401,11 @@ class ArrowSurfacer:
                     f'{sorted(self._aruco_ids)}')
                 return
 
-            # 上升 0.5m
+            # 上升 0.2m
             self._node._send_action_goal(
                 BasicMotion.Goal.BMOVE,
-                [0.0, 0.0, -0.5, 0.0], 'z', timeout=10.0, quiet=True)
-            self._node._cmd_z -= 0.5
+                [0.0, 0.0, -0.2, 0.0], 'z', timeout=10.0, quiet=True)
+            self._node._cmd_z -= 0.2
             time.sleep(0.5)
             if self._aruco_ids:
                 self._logger.info(
@@ -502,6 +502,7 @@ class ArrowSurfacer:
                 f'sector selected!')
 
         # 8. WTRAVEL to sector position
+        
         self._logger.info(
             f'ArrowSurfacer: traveling to sector '
             f'({self._sector_x:.2f}, {self._sector_y:.2f}, '

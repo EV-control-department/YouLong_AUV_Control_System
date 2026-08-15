@@ -1,68 +1,120 @@
 {
   "tasks": [
-    {"name": "start", "params": {}},
-    {"name": "get_sample", "params": {
-    "pushrod_speed": -1.0,
-    "pushrod_duration_ms": 30000
-    }},
-    {"name": "setz", "params": {"z": 0.2}},
-    {"name": "wtravelxy", "params": {"x": 0.5, "y": 0.0, "time_out": 20}},
-    {"name": "setrz", "params": {"rz": 90.0}},
-
-
-    {"name": "follow_line", "params": {
-      "timeout": 240.0,
-      "triangle_class_id": 7,
-      "square_class_id": 5,
-      "marker_class_ids": [7],
-      "stop_when_marker": true,
-      "forward_step": 0.12,
-      "triangle_sink_depth": 0.7,
-      "align_ema_alpha": 0.08,
-      "triangle_xy_adjust_dx": 0.19,
-      "triangle_xy_adjust_dy": -0.13
-
-    }},
-
-    {"name": "wtravelxy", "params": {"x": 0.3, "y": 3.2, "timeout": 20}},
-
-
-    
-    {"name": "wait", "params": {"duration": 0}},
-
-
-
-    {"name": "arrow_surface", "params": {
-      "target_sector": "",
-      "arrow_class_id": 0,
-      "yellow_class_id": 8,
-      "green_class_id": 2,
-      "red_class_id": 4,
-      "view_yaw": 180,
-      "sector_x": 0.2,
-      "sector_y": 4.0,
-      "sector_travel_z": 0.2,
-      "surface_depth": -1.0,
-      "recover_depth": 0.2,
-      "drop_offset_x": 0.32,
-      "drop_offset_y": 0.19,
-      "servo_reset_delay": 4.0,
-      "servo_reset_angle": 0.0,
-      "dive_offset": 0.3
-    }
+    {
+      "name": "start",
+      "params": {}
     },
-
-    {"name": "wtravelxy", "params": {"x": 0.0, "y": 0.0, "time_out": 20}},
-    {"name": "wtravelxy", "params": {"x": 0.0, "y": 0.0, "time_out": 20}},
-    {"name": "wtravelxy", "params": {"x": 0.0, "y": 0.0, "time_out": 20}},
-
-    {"name": "release_sampler", "params": {
-      "align_yaw": 0.0,
-      "start_class_id": 4,
-      "approach_z": -0.6,
-      "approach_x": -0.5,
-      "approach_timeout": 2.0,
-      "release_pushrod_duration_ms": 40000
-    }}
+    {
+      "name": "get_sample",
+      "params": {
+        "pushrod_speed": -1.0,
+        "pushrod_duration_ms": 30000
+      }
+    },
+    {
+      "name": "setz",
+      "params": {
+        "z": 0.2
+      }
+    },
+    {
+      "name": "wtravelxy",
+      "params": {
+        "x": 0.3,
+        "y": 0.8,
+        "time_out": 20
+      }
+    },
+    {
+      "name": "setrz",
+      "params": {
+        "rz": 103.0
+      }
+    },
+    {
+      "name": "follow_line",
+      "params": {
+        "timeout": 300.0,
+        "triangle_class_id": 7,
+        "square_class_id": 5,
+        "marker_class_ids": [
+          7
+        ],
+        "stop_when_marker": true,
+        "forward_step": 0.15,
+        "triangle_sink_depth": 0.23,
+        "align_ema_alpha": 0.15
+      }
+    },
+    {
+      "name": "wtravelxy",
+      "params": {
+        "x": 3.9,
+        "y": -3.1,
+        "timeout": 20
+      }
+    },
+    {
+      "name": "wait",
+      "params": {
+        "duration": 0.0
+      }
+    },
+    {
+      "name": "arrow_surface",
+      "params": {
+        "target_sector": "",
+        "arrow_class_id": 0,
+        "yellow_class_id": 8,
+        "green_class_id": 2,
+        "red_class_id": 4,
+        "view_yaw": -90,
+        "sector_x": 0.0,
+        "sector_y": -3.1,
+        "sector_travel_z": 0.2,
+        "surface_depth": -1.0,
+        "recover_depth": 0.2,
+        "drop_offset_x": 0.32,
+        "drop_offset_y": 0.19,
+        "servo_reset_delay": 4.0,
+        "servo_reset_angle": 0.0,
+        "dive_offset": 0.15
+      }
+    },
+    {
+      "name": "wtravelxy",
+      "params": {
+        "x": 0.4,
+        "y": 0.0,
+        "time_out": 20
+      }
+    },
+    {
+      "name": "wtravelxy",
+      "params": {
+        "x": 0.4,
+        "y": 0.0,
+        "time_out": 20
+      }
+    },
+    {
+      "name": "wtravelxy",
+      "params": {
+        "x": 0.4,
+        "y": 0.0,
+        "time_out": 20
+      }
+    },
+    {
+      "name": "release_sampler",
+      "params": {
+        "align_yaw": 0.0,
+        "start_class_id": 4,
+        "approach_z": -0.6,
+        "approach_x": -1.0,
+        "approach_timeout": 2.0,
+        "release_pushrod_duration_ms": 40000
+      }
+    }
   ]
 }

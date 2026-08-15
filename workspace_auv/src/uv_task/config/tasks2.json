@@ -5,26 +5,23 @@
     "pushrod_speed": -1.0,
     "pushrod_duration_ms": 30000
     }},
-    {"name": "setz", "params": {"z": 0.2}},
+    {"name": "setz", "params": {"z": 0.24}},
     {"name": "wtravelxy", "params": {"x": 0.5, "y": 0.0, "time_out": 20}},
     {"name": "setrz", "params": {"rz": 90.0}},
 
 
     {"name": "follow_line", "params": {
-      "timeout": 240.0,
+      "timeout": 150.0,
       "triangle_class_id": 7,
       "square_class_id": 5,
       "marker_class_ids": [7],
       "stop_when_marker": true,
       "forward_step": 0.12,
-      "triangle_sink_depth": 0.7,
-      "align_ema_alpha": 0.08,
-      "triangle_xy_adjust_dx": 0.19,
-      "triangle_xy_adjust_dy": -0.13
-
+      "triangle_sink_depth": 0.8,
+      "align_ema_alpha": 0.08
     }},
 
-    {"name": "wtravelxy", "params": {"x": 0.3, "y": 3.2, "timeout": 20}},
+    {"name": "wtravelxy", "params": {"x": 0.15, "y": 3.4, "timeout": 20}},
 
 
     
@@ -39,8 +36,8 @@
       "green_class_id": 2,
       "red_class_id": 4,
       "view_yaw": 180,
-      "sector_x": 0.2,
-      "sector_y": 4.0,
+      "sector_x": 0.9,
+      "sector_y": 3.8,
       "sector_travel_z": 0.2,
       "surface_depth": -1.0,
       "recover_depth": 0.2,
@@ -60,7 +57,7 @@
       "align_yaw": 0.0,
       "start_class_id": 4,
       "approach_z": -0.6,
-      "approach_x": -0.5,
+      "approach_x": -1,
       "approach_timeout": 2.0,
       "release_pushrod_duration_ms": 40000
     }}

@@ -72,7 +72,7 @@ DOWN_CAMERA_MATRIX = (
 )
 DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
-CONFIDENCE = 0.3
+CONFIDENCE = 0.4
 
 ENABLE_UNDISTORT = True              # 是否执行相机去畸变
 ENABLE_GORTC = True                 # 启动 go2rtc 转发客户端视频
@@ -83,10 +83,25 @@ STREAM_ANNOTATED = True              # 通过 go2rtc 额外提供带检测框的
 
 # ROS 参数默认值。
 SIM_MODE = False                      # False=V4L2，True=ROS stitched 话题
-SAVE_DATASET = False                  # 是否保存训练数据帧
+SAVE_DATASET = True                  # 是否保存训练数据帧
 DATASET_DIR = ''                      # 空字符串=自动使用工程下的 img/
-DEFAULT_MODEL_FILENAME = 'WUURC2026REAL11nano--001.pt'
+DEFAULT_MODEL_FILENAME = 'WUURC2026FINAL003.pt'
 
+import ultralytics.utils.loss
+
+# 1. 定义所有可能缺失的损失类（占位）
+class BCEDiceLoss:
+    pass
+
+class MultiChannelDiceLoss:
+    pass
+
+# 可能还有更多，例如 VFLoss, BboxLoss 等（根据你的训练版本）
+# 如果你不确定，可以全部定义为空类
+
+# 2. 注册到 ultralytics.utils.loss 模块中
+ultralytics.utils.loss.BCEDiceLoss = BCEDiceLoss
+ultralytics.utils.loss.MultiChannelDiceLoss = MultiChannelDiceLoss
 
 class _ScalarKalman:
     """不依赖第三方库的一维 Kalman 滤波器 (用于平滑管道中心和角度)。"""
