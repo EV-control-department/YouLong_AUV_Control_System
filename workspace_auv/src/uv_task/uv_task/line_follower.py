@@ -83,7 +83,7 @@ _PERCEPTION_MAX_AGE = 0.60       # 感知数据最大有效期 (s)
 # 默认值为实机模型顺序: triangle=7, square=5
 _TRIANGLE_CLASS_ID = 7
 _SQUARE_CLASS_ID = 5
-_TASK_TIMEOUT = 120.0            # 任务总超时 (s)
+_TASK_TIMEOUT = 180.0            # 任务总超时 (s)
 
 # 标记触发与抑制区域（bbox 中心 y / 图像高度 的比例）
 _MARK_SUPPRESS_UPPER_FRAC = 1.0 / 5.0   # bbox 在上方此比例 → 解除抑制
@@ -522,9 +522,9 @@ class LineFollower:
                 if not ok:
                     return False
             else:
-                # 持续丢帧 → 已完成 3 个任务则巡线成功，允许少做一个
+                # 持续丢帧 → 已完成 2 个任务则巡线成功，允许少做2个
                 total = self._triangle_count + self._square_count
-                if total >= 3:
+                if total >= 2:
                     self._logger.info(
                         f'LineFollower: {total} tasks completed, '
                         f'line lost → mission complete')
