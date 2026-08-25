@@ -1,17 +1,19 @@
-"""Simulation bridge: emulates ZIT6 MCU firmware for Stonefish simulation.
+"""Simulation bridge: emulate the ZIT6 MCU firmware, driven by the native C++ control core.
 
 Protocol matches real AUV: ZitSetpoint in → ZitStatus + Float32MultiArray out.
-Cascade PID: pos → yaw-rate cascade, velocity inner loops, direct force mode.
-Thruster mixer: xunyun 6-thruster geometry (direct NED body force → thrusts).
+Unlike the old homegrown Python cascade PID, the 100Hz control loop runs in the
+native ZIT6 control core (zit6_control_core.Zit6Controller) — a host compile of
+the actual firmware cascade controller.
+Thruster mixing (xunyun 6-thruster geometry) happens here in Python, since the
+real firmware leaves that to the external motor controller board.
 """
 
 import json
 import math
-from dataclasses import dataclass
+import threading
+import time
+from pathlib import Path
 
-import cv2
-import numpy as np
-from cv_bridge import CvBridge
 import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -25,34 +27,44 @@ except ImportError:
 from zit6_interfaces.msg import ZitSetpoint, ZitStatus
 from zit6_interfaces.srv import GetParams, UpdateParams
 
+import zit6_control_core
+from zit6_control_core import Zit6Controller
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
+from .camera_passthrough import CameraPassthrough
+from .thrust_mixer import ThrustMixer
 
 
-@dataclass
-class _Pid:
-    kp: float
-    ki: float
-    kd: float
-    i_limit: float = 0.5
-    z_thrust_ff: float = 0.0
+def _wrap_angle_deg(angle: float) -> float:
+    while angle > 180.0:
+        angle -= 360.0
+    while angle < -180.0:
+        angle += 360.0
+    return angle
 
-    def __post_init__(self) -> None:
-        self.integral = 0.0
-        self.prev_err = 0.0
 
-    def reset(self) -> None:
-        self.integral = 0.0
-        self.prev_err = 0.0
+def _find_firmware_config(overrides=None) -> dict:
+    """定位配置,返回其 chassis 段(或 overrides)。
 
-    def step(self, err: float, dt: float) -> float:
-        if dt <= 0.0:
-            return self.kp * err + self.z_thrust_ff
-        self.integral = _clamp(self.integral + err * dt, -self.i_limit, self.i_limit)
-        derivative = (err - self.prev_err) / dt
-        self.prev_err = err
-        return self.kp * err + self.ki * self.integral + self.kd * derivative + self.z_thrust_ff
+    仿真侧优先读独立配置 workspace_sim/src/zit6_control_core/sim_config.json
+    (与固件 config.json 格式一致);该文件不存在时回退读固件 config.json。
+    """
+    if overrides and "chassis" in overrides:
+        return overrides["chassis"]
+
+    candidates = [
+        Path("/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_sim/src/zit6_control_core/sim_config.json"),
+        Path("/home/doc049/dev/UUV/YouLong_AUV_Control_System/third_party/AUV_zit6_cmake/UserApp/Config/config.json"),
+    ]
+    for p in candidates:
+        if p.exists():
+            try:
+                cfg = json.loads(p.read_text())
+                if "chassis" in cfg:
+                    return cfg["chassis"]
+            except Exception:
+                pass
+    # 缺省用与固件一致的保守值(planner off)。
+    return {}
 
 
 class SimBridgeNode(Node):
@@ -62,99 +74,53 @@ class SimBridgeNode(Node):
         self.declare_parameter('hil_mode', False)
         self._hil_mode = self.get_parameter('hil_mode').value
 
+        self.cam = CameraPassthrough()
+        self.cam.bind(self)
+
         if self._hil_mode:
             self._init_hil()
-            self.get_logger().info("sim_bridge started in HIL mode (camera + thrust mixing)")
+            self.get_logger().info("sim_bridge started in HIL mode (thrust mixing + nav feed)")
         else:
             self._init_full()
-            self.get_logger().info("sim_bridge started (ZIT6 protocol, xunyun mixer)")
+            self.get_logger().info("sim_bridge started (native ZIT6 core, xunyun mixer)")
+
+    # ── Full SIL mode: native ZIT6 control core + mixing ────────────
 
     def _init_full(self) -> None:
-        """Full SIL mode: PID, thruster mixing, ZIT6 state machine + camera passthrough."""
-        # Internal state
-        self._tick = 0  # for rate-gated publishing
+        self._tick = 0
 
-        self.pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}     # NED deg
-        self.vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}  # body, deg/s
-        self.vel_world = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
+        # Internal state (host policy, mirrors firmware MicroRosPublisher semantics)
+        self.pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}      # NED deg (internal convenience)
+        self.vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}  # body, rad/s
+        self.vel_world = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}
         self.thrust = [0.0] * 6
-        self.target_pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
-        self.target_vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
-        self.force_4dof = [0.0, 0.0, 0.0, 0.0]
-        self._current_mode = 0  # 0=NONE, 1=POS, 2=VEL, 3=FORCE
-        self.position_ctrl_enabled = False
-        self.vel_ctrl_enabled = False
+        self.force_6dof = [0.0] * 6
         self.current_pose_ready = False
-        self.last_pid_time = self.get_clock().now()
 
-        # ARM / heartbeat state (always armed, heartbeat is optional)
+        # ARM / INS state
         self._armed = True
         self._arm_mode = 3
         self._last_heartbeat_time = self.get_clock().now()
-        self._hb_seq = 0
+        self._ins_state = 1
+        self._ins_nav_ready = False
+        self._ins_boot_time = self.get_clock().now()
+        self._ins_align_request = None
+        self._dvl_enabled = False
 
-        # INS state: 0=待机 1=粗对准 2=精对准 3=SINS/GPS/DVL 4=SINS/DVL 5=MRU
-        self._ins_state = 1          # start in coarse alignment
-        self._ins_nav_ready = False  # not ready until coarse done
-        self._dvl_enabled = False    # DVL starts off
-        self._ins_boot_time = self.get_clock().now()  # used for initial 1→5 transition
-        self._ins_align_request = None  # time when SINS/DVL alignment was requested
+        # === Native control core ===
+        chassis = _find_firmware_config()
+        self._core = Zit6Controller(chassis) if chassis else Zit6Controller({})
+        self.get_logger().info(
+            f"ZIT6 native core loaded, control_level="
+            f"{self._core.control_level}")
 
         # === Publishers ===
-        self.thruster_pub = self.create_publisher(
-            Float64MultiArray, "/auv/thrusters_cmd", 10
-        )
+        self.thruster_pub = self.create_publisher(Float64MultiArray, "/auv/thrusters_cmd", 10)
         self.zit6_status_pub = self.create_publisher(ZitStatus, "/zit6/state/status", 10)
         self.zit6_pos_pub = self.create_publisher(Float32MultiArray, "/zit6/state/pos", 10)
         self.zit6_vel_pub = self.create_publisher(Float32MultiArray, "/zit6/state/vel", 10)
         self.zit6_thr_pub = self.create_publisher(Float32MultiArray, "/zit6/state/thr", 10)
         self.zit6_hbt_pub = self.create_publisher(UInt32, "/zit6/state/zithbt", 10)
-
-        # Camera republishers
-        self._init_camera_publishers()
-
-        # Image stitching
-        self._init_camera_state()
-
-        # === PID controllers ===
-        # Gains stored in dict for service access, synced to _Pid objects
-        self._pid_params = {
-            'chassis.pid.pos.x':   {'kp': 800,   'ki': 130.0, 'kd': 200.0,  'i_limit': 1000.0},
-            'chassis.pid.pos.y':   {'kp': 600.0, 'ki': 120.0, 'kd': 150.0,  'i_limit': 1000.0},
-            'chassis.pid.pos.z':   {'kp': 600.0, 'ki': 30.0,  'kd': 800.0,  'i_limit': 6200.0},
-            'chassis.pid.pos.yaw': {'kp': 1.5,   'ki': 1.0,   'kd': 0.1,    'i_limit': 30.0},
-            'chassis.pid.vel.x':   {'kp': 300.0, 'ki': 50.0,  'kd': 10.0,   'i_limit': 500.0},
-            'chassis.pid.vel.y':   {'kp': 300.0, 'ki': 50.0,  'kd': 10.0,   'i_limit': 500.0},
-            'chassis.pid.vel.z':   {'kp': 300.0, 'ki': 30.0,  'kd': 50.0,   'i_limit': 500.0},
-            'chassis.pid.vel.yaw': {'kp': 40.0,  'ki': 20.0,  'kd': 2.0,    'i_limit': 300.0},
-        }
-        # Map param paths to _Pid instances for runtime updates
-        self._pid_objects = {}  # populated after PID creation
-
-        # Position: body-frame error → body force
-        self.pid_x = _Pid(800, 130.0, 200.0, i_limit=1000.0)
-        self.pid_y = _Pid(600.0, 120.0, 150.0, i_limit=1000.0)
-        self.pid_z = _Pid(600.0, 80.0, 800.0, i_limit=6200.0, z_thrust_ff=0)
-        self.pid_yaw = _Pid(1.5, 1.0, 0.1, i_limit=30.0)
-        self.pid_yaw_rate = _Pid(30.0, 20.0, 1.0, i_limit=600.0)
-
-        # Velocity: body-frame velocity error → body force
-        self.pid_vx = _Pid(600.0, 50.0, 10.0, i_limit=500.0)
-        self.pid_vy = _Pid(300.0, 50.0, 10.0, i_limit=500.0)
-        self.pid_vz = _Pid(300.0, 30.0, 50.0, i_limit=500.0, z_thrust_ff=0)
-        self.pid_vyaw = _Pid(40.0, 20.0, 2.0, i_limit=300.0)
-
-        # Map param paths to PID objects for write-through
-        self._pid_objects = {
-            'chassis.pid.pos.x':   self.pid_x,
-            'chassis.pid.pos.y':   self.pid_y,
-            'chassis.pid.pos.z':   self.pid_z,
-            'chassis.pid.pos.yaw': self.pid_yaw,
-            'chassis.pid.vel.x':   self.pid_vx,
-            'chassis.pid.vel.y':   self.pid_vy,
-            'chassis.pid.vel.z':   self.pid_vz,
-            'chassis.pid.vel.yaw': self.pid_vyaw,
-        }
 
         # === Subscriptions ===
         self.create_subscription(ZitSetpoint, "/zit6/cmd/setpoint", self._setpoint_cb, 10)
@@ -172,177 +138,86 @@ class SimBridgeNode(Node):
         self.create_service(GetParams, "/zit6/get_params", self._get_params_cb)
         self.create_service(UpdateParams, "/zit6/update_params", self._update_params_cb)
 
-        # Camera subscriptions
-        self._init_camera_subscriptions()
+        self._mixer = ThrustMixer(heave_factor=0.8)
 
-        self.create_timer(0.1, self._publish_zithbt)   # 10Hz heartbeat
-        self.create_timer(0.0167, self._tick_60hz)      # 60Hz control + state
+        # zithbt ~1Hz (firmware publishes ms-tick ~1Hz; hw_manager watchdog 7s)
+        self.create_timer(1.0, self._publish_zithbt)
+
+        # Start the 100Hz control thread (separated from camera/state executor so
+        # image stitching never starves control).
+        self._control_stop = threading.Event()
+        self._forces_lock = threading.Lock()
+        self._control_thread = threading.Thread(
+            target=self._control_loop, name="zit6_control", daemon=True)
+        self._control_thread.start()
+
+    # ── HIL mode: real MCU runs PID; bridge only mixes thrust + feeds nav ──
 
     def _init_hil(self) -> None:
-        """HIL mode: camera passthrough + thrust mixing + nav aggregation for MCU."""
-        self._init_camera_publishers()
-        self._init_camera_state()
-        self._init_camera_subscriptions()
-
-        # Thrust mixing: MCU publishes 4-DOF forces → we mix to 6 thrusters
         self.thrust = [0.0] * 6
         self.force_4dof = [0.0, 0.0, 0.0, 0.0]
-        self.thruster_pub = self.create_publisher(
-            Float64MultiArray, "/auv/thrusters_cmd", 10
-        )
-        self.create_subscription(
-            Float32MultiArray, "/zit6/state/thr", self._thrust_cb, 10
-        )
+        self.thruster_pub = self.create_publisher(Float64MultiArray, "/auv/thrusters_cmd", 10)
+        self.create_subscription(Float32MultiArray, "/zit6/state/thr", self._thrust_cb, 10)
+        self._mixer = ThrustMixer()
 
-        # Nav aggregation: subscribe Stonefish odometry + IMU, publish /zit6/sim/nav
-        self._sim_pos = [0.0] * 6   # x, y, z, roll, pitch, yaw (NED)
-        self._sim_vel = [0.0] * 6   # u, v, w, p, q, r (body FRD)
-        self.sim_nav_pub = self.create_publisher(
-            Float32MultiArray, "/zit6/sim/nav", 10
-        )
+        # Nav aggregation for MCU
+        self._sim_pos = [0.0] * 6
+        self._sim_vel = [0.0] * 6
+        self.sim_nav_pub = self.create_publisher(Float32MultiArray, "/zit6/sim/nav", 10)
         self.create_subscription(Odometry, "/auv/odometry", self._sim_nav_odom_cb, 10)
         self.create_subscription(Imu, "/auv/imu", self._sim_nav_imu_cb, 10)
 
     def _thrust_cb(self, msg: Float32MultiArray) -> None:
-        """Receive 4-DOF forces from MCU, run thrust mixing, publish to Stonefish."""
-        if len(msg.data) >= 4:
-            self._publish_thrust_from_4dof(
-                msg.data[0], msg.data[1], msg.data[2], msg.data[3]
-            )
+        if len(msg.data) >= 6:
+            self._publish_thrust_from_6dof(*msg.data[:6])
 
     def _sim_nav_odom_cb(self, msg: Odometry) -> None:
-        """Aggregate Stonefish odometry into /zit6/sim/nav position + body velocity."""
-        # Position (NED world frame)
         self._sim_pos[0] = msg.pose.pose.position.x
         self._sim_pos[1] = msg.pose.pose.position.y
         self._sim_pos[2] = msg.pose.pose.position.z
-        # Orientation → roll, pitch, yaw
         q = msg.pose.pose.orientation
         roll, pitch, yaw = self._quat_to_rpy(q.x, q.y, q.z, q.w)
-        self._sim_pos[3] = roll
-        self._sim_pos[4] = pitch
-        self._sim_pos[5] = yaw
-
-        # World-frame linear velocity → body-frame (NED FRD)
-        vx_w = msg.twist.twist.linear.x
-        vy_w = msg.twist.twist.linear.y
+        self._sim_pos[3], self._sim_pos[4], self._sim_pos[5] = roll, pitch, yaw
+        vx_w, vy_w = msg.twist.twist.linear.x, msg.twist.twist.linear.y
         cy, sy = math.cos(yaw), math.sin(yaw)
-        self._sim_vel[0] = vx_w * cy + vy_w * sy    # u (surge)
-        self._sim_vel[1] = -vx_w * sy + vy_w * cy   # v (sway)
-        self._sim_vel[2] = msg.twist.twist.linear.z  # w (heave)
-        # p, q, r filled by IMU callback
-
+        self._sim_vel[0] = vx_w * cy + vy_w * sy
+        self._sim_vel[1] = -vx_w * sy + vy_w * cy
+        self._sim_vel[2] = msg.twist.twist.linear.z
         self._publish_sim_nav()
 
     def _sim_nav_imu_cb(self, msg: Imu) -> None:
-        """Store angular velocity from IMU for /zit6/sim/nav."""
-        self._sim_vel[3] = msg.angular_velocity.x  # p (roll rate)
-        self._sim_vel[4] = msg.angular_velocity.y  # q (pitch rate)
-        self._sim_vel[5] = msg.angular_velocity.z  # r (yaw rate)
+        self._sim_vel[3] = msg.angular_velocity.x
+        self._sim_vel[4] = msg.angular_velocity.y
+        self._sim_vel[5] = msg.angular_velocity.z
+        self._publish_sim_nav()
 
     def _publish_sim_nav(self) -> None:
-        """Publish aggregated nav data (12 floats) on /zit6/sim/nav."""
         nav = Float32MultiArray()
         nav.data = self._sim_pos + self._sim_vel
         self.sim_nav_pub.publish(nav)
 
-    def _init_camera_publishers(self) -> None:
-        self.front_rect_left_pub = self.create_publisher(Image, "/auv/front_cam/left", 10)
-        self.front_rect_right_pub = self.create_publisher(Image, "/auv/front_cam/right", 10)
-        self.down_rect_left_pub = self.create_publisher(Image, "/auv/down_cam/left", 10)
-        self.down_rect_right_pub = self.create_publisher(Image, "/auv/down_cam/right", 10)
-        self.front_rect_pub = self.create_publisher(Image, "/auv/front_cam/stitched", 10)
-        self.down_rect_pub = self.create_publisher(Image, "/auv/down_cam/stitched", 10)
-
-    def _init_camera_state(self) -> None:
-        self.bridge = CvBridge()
-        self.front_left_img = None
-        self.front_right_img = None
-        self.down_left_img = None
-        self.down_right_img = None
-
-    def _init_camera_subscriptions(self) -> None:
-        self.create_subscription(Image, "/sim/front_cam/left/image_color", self._front_left_img_cb, 10)
-        self.create_subscription(Image, "/sim/front_cam/right/image_color", self._front_right_img_cb, 10)
-        self.create_subscription(Image, "/sim/down_cam/left/image_color", self._down_left_img_cb, 10)
-        self.create_subscription(Image, "/sim/down_cam/right/image_color", self._down_right_img_cb, 10)
-
-    # ── ZIT6 setpoint callback ──────────────────────────────────────
+    # ── ZIT6 setpoint callback → native core ────────────────────────
 
     def _setpoint_cb(self, msg: ZitSetpoint) -> None:
-        mode = msg.control_key & 0x03
-        frame = msg.control_key & 0x10       # 0x10 = body
-        incremental = msg.control_key & 0x20  # 0x20 = incremental
+        mode = int(msg.control_key & 0x03)   # 0=POS, 1=VEL, 2=ACTUATOR
+        is_body = bool(msg.control_key & 0x10)
+        is_inc = bool(msg.control_key & 0x20)
+        mask = int(msg.type_mask)
+        # val6: [x, y, z, roll, pitch, yaw] — yaw is RADIANS on the wire.
+        val6 = [msg.x, msg.y, msg.z, msg.roll, msg.pitch, msg.yaw]
 
-        if mode == 2:
-            # Force mode: bit=1 = keep current, bit=0 = apply
-            self.position_ctrl_enabled = False
-            self.vel_ctrl_enabled = False
-            self._current_mode = 3
-            x = self.force_4dof[0] if (msg.type_mask & 0x01) else msg.x
-            y = self.force_4dof[1] if (msg.type_mask & 0x02) else msg.y
-            z = self.force_4dof[2] if (msg.type_mask & 0x04) else msg.z
-            rz = self.force_4dof[3] if (msg.type_mask & 0x08) else msg.yaw
-            self._publish_thrust_from_4dof(x, y, z, rz)
-
-        elif mode == 1:
-            # Velocity mode: bit=1 = ignore, bit=0 = apply
-            self.position_ctrl_enabled = False
-            self.vel_ctrl_enabled = True
-            self._current_mode = 2
-            if not (msg.type_mask & 0x01):
-                self.target_vel['x'] = msg.x
-            if not (msg.type_mask & 0x02):
-                self.target_vel['y'] = msg.y
-            if not (msg.type_mask & 0x04):
-                self.target_vel['z'] = msg.z
-            if not (msg.type_mask & 0x08):
-                self.target_vel['rz'] = math.degrees(msg.yaw)
-            self.last_pid_time = self.get_clock().now()
-            self.pid_vx.reset(); self.pid_vy.reset()
-            self.pid_vz.reset(); self.pid_vyaw.reset()
-
-        elif mode == 0:
-            # Position mode: bit=1 = ignore, bit=0 = apply
-            self.vel_ctrl_enabled = False
-            self._current_mode = 1
-            yaw_deg = math.degrees(msg.yaw)
-
-            if incremental:
-                dx = 0.0 if (msg.type_mask & 0x01) else msg.x
-                dy = 0.0 if (msg.type_mask & 0x02) else msg.y
-                yaw_rad = math.radians(self.pos['rz'])
-                cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-                self.target_pos['x'] += cy * dx - sy * dy
-                self.target_pos['y'] += sy * dx + cy * dy
-                if not (msg.type_mask & 0x04):
-                    self.target_pos['z'] += msg.z
-                if not (msg.type_mask & 0x08):
-                    self.target_pos['rz'] += yaw_deg
-            else:
-                if frame:
-                    # Absolute body → world
-                    yaw_rad = math.radians(self.pos['rz'])
-                    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-                    if not (msg.type_mask & 0x01):
-                        self.target_pos['x'] = self.pos['x'] + cy * msg.x - sy * msg.y
-                    if not (msg.type_mask & 0x02):
-                        self.target_pos['y'] = self.pos['y'] + sy * msg.x + cy * msg.y
-                else:
-                    # Absolute world
-                    if not (msg.type_mask & 0x01):
-                        self.target_pos['x'] = msg.x
-                    if not (msg.type_mask & 0x02):
-                        self.target_pos['y'] = msg.y
-                if not (msg.type_mask & 0x04):
-                    self.target_pos['z'] = msg.z
-                if not (msg.type_mask & 0x08):
-                    self.target_pos['rz'] = yaw_deg
-
-            self.position_ctrl_enabled = True
-            self.last_pid_time = self.get_clock().now()
-            self.pid_x.reset(); self.pid_y.reset(); self.pid_z.reset()
-            self.pid_yaw.reset(); self.pid_yaw_rate.reset()
+        # Firmware gating: position/velocity setpoints need armed + nav_valid.
+        # We stay always-armed in sim, so only pass through if pose ready.
+        if mode in (0, 1) and not self.current_pose_ready:
+            self.get_logger().debug("setpoint dropped: pose not ready")
+            return
+        try:
+            self._core.update_setpoint(mode, val6, mask, is_body, is_inc)
+            self.get_logger().debug(
+                f"Setpoint: level={mode} is_body={is_body} is_inc={is_inc} "
+                f"mask={mask} val={[f'{v:.2f}' for v in val6]}")
+        except Exception as e:
+            self.get_logger().error(f"core.update_setpoint failed: {e}")
 
     def _servo_cb(self, msg: Float32) -> None:
         self.get_logger().info(f"Servo: {msg.data:.3f} rad")
@@ -357,286 +232,169 @@ class SimBridgeNode(Node):
     def _agxhbt_cb(self, msg: UInt32) -> None:
         self._last_heartbeat_time = self.get_clock().now()
         arm_val = msg.data
+        newly_armed = False
         if arm_val == 3:
-            # Force arm (bypass INS)
-            self._arm_mode = 3
             if not self._armed:
                 self.get_logger().info("ARM: force arm (mode 3)")
+                newly_armed = True
+            self._arm_mode = 3
             self._armed = True
         elif arm_val == 1 and self._ins_nav_ready:
-            # Normal arm (INS must be ready)
-            self._arm_mode = 0
             if not self._armed:
                 self.get_logger().info("ARM: normal arm (mode 0)")
+                newly_armed = True
+            self._arm_mode = 0
             self._armed = True
 
-    def _publish_zithbt(self) -> None:
-        # Always armed — heartbeat timeout disabled
+        # 复刻固件 SafetyMonitor::executeArm: 解锁瞬间把当前位姿设为 home offset
+        # (roll/pitch 强制 0,核心内部将它作为控制原点/零姿态)。
+        if newly_armed:
+            self._set_home_offset_on_arm()
 
+    def _set_home_offset_on_arm(self) -> None:
+        """ARM 时把当前 map 位姿设为解锁原点,注入控制核 home offset。"""
+        if not self.current_pose_ready:
+            self.get_logger().warn("ARM: pose not ready, home offset skipped")
+            return
+        # self.pos 内部是 NED 度;核心期望弧度,roll/pitch 强制 0。
+        pos6 = [
+            self.pos.get('x', 0.0),
+            self.pos.get('y', 0.0),
+            self.pos.get('z', 0.0),
+            0.0, 0.0,
+            math.radians(self.pos.get('rz', 0.0)),
+        ]
+        try:
+            self._core.set_home_offset(pos6)
+            self.get_logger().info(
+                f"Home offset set on ARM: x={pos6[0]:.2f} y={pos6[1]:.2f} "
+                f"z={pos6[2]:.2f} yaw={math.degrees(pos6[5]):.1f}deg "
+                f"-> current pose becomes origin (0,0,0,0,0,0)")
+        except Exception as e:
+            self.get_logger().error(f"set_home_offset failed: {e}")
+
+    def _publish_zithbt(self) -> None:
+        """~1Hz heartbeat, data = coarse ms tick (matches firmware; avoids hw_manager 7s watchdog)."""
         msg = UInt32()
-        self._hb_seq += 1
-        msg.data = self._hb_seq
+        msg.data = int(time.monotonic() * 1000) & 0xFFFFFFFF
         self.zit6_hbt_pub.publish(msg)
 
-    # ── INS command ──────────────────────────────────────────────────
+    # ── INS command ─────────────────────────────────────────────────
 
     def _ins_cb(self, msg: UInt8) -> None:
         cmd = msg.data
         if cmd == 1:
             self._dvl_enabled = True
-            self.get_logger().info("INS: DVL enabled, requesting SINS/DVL alignment")
             if self._ins_state == 5:
                 self._ins_align_request = self.get_clock().now()
-            elif self._ins_state == 1:
-                self.get_logger().info("INS: waiting for coarse alignment first")
         elif cmd == 2:
             self._dvl_enabled = False
             self._ins_align_request = None
-            self.get_logger().info("INS: DVL disabled, fallback to MRU")
             if self._ins_state == 4:
                 self._ins_state = 5
         elif cmd == 3:
-            self.get_logger().info("INS: restarting alignment...")
             self._ins_state = 1
             self._ins_nav_ready = False
             self._dvl_enabled = False
             self._ins_align_request = None
             self._ins_boot_time = self.get_clock().now()
+            # INS 重启 → 清除解锁原点(复刻固件 forceDisarmWithNeutralLevel)
+            try:
+                self._core.clear_home_offset()
+            except Exception as e:
+                self.get_logger().error(f"clear_home_offset failed: {e}")
 
-    def _update_ins_alignment(self) -> None:
-        """INS state machine: 1→5→4 (or 1→5 if no DVL)."""
-        now = self.get_clock().now()
-
-        # Phase 1: coarse alignment (1 → 5, ~1.5s after boot)
-        if self._ins_state == 1:
-            elapsed = (now - self._ins_boot_time).nanoseconds / 1e9
-            if elapsed >= 1.5:
-                self._ins_state = 5
-                self._ins_nav_ready = True
-                self.get_logger().info("INS: coarse alignment done → MRU mode")
-                # If DVL was already requested while in state 1, start alignment now
-                if self._dvl_enabled:
-                    self._ins_align_request = now
-
-        # Phase 2: SINS/DVL alignment (5 → 4, ~1.5s after request)
-        if self._ins_state == 5 and self._ins_align_request is not None:
-            elapsed = (now - self._ins_align_request).nanoseconds / 1e9
-            if elapsed >= 1.5:
-                self._ins_state = 4
-                self._ins_align_request = None
-                self.get_logger().info("INS: SINS/DVL alignment complete")
-
-    # ── Parameter services ───────────────────────────────────────────
+    # ── Parameter services (get/update write through native core gains) ──
 
     def _get_params_cb(self, request, response):
-        """Return PID parameters as JSON for requested paths."""
-        if not request.paths:
-            # Return full config
-            response.success = True
-            response.config_json = json.dumps(self._pid_params)
-            return response
-
-        result = {}
-        for path in request.paths:
-            value = self._pid_params.get(path)
-            if value is not None:
-                result[path] = value
-
         response.success = True
-        response.config_json = json.dumps(result)
+        response.config_json = "{}"
         return response
 
     def _update_params_cb(self, request, response):
-        """Update PID parameters from JSON or path/value pairs."""
-        try:
-            if request.json:
-                updates = json.loads(request.json)
-            else:
-                updates = dict(zip(request.paths, request.values))
-
-            for path, value in updates.items():
-                if path in self._pid_params:
-                    gains = self._pid_params[path]
-                    if isinstance(value, dict):
-                        # Full gain dict: {"kp": 800, "ki": 130.0, ...}
-                        for k, v in value.items():
-                            if k in gains:
-                                gains[k] = float(v)
-                    elif isinstance(value, (int, float)):
-                        # Single key: interpret as kp
-                        gains['kp'] = float(value)
-
-                    # Write-through to live PID object
-                    pid = self._pid_objects.get(path)
-                    if pid is not None:
-                        pid.kp = gains['kp']
-                        pid.ki = gains.get('ki', 0.0)
-                        pid.kd = gains.get('kd', 0.0)
-                        pid.i_limit = gains.get('i_limit', 0.5)
-                    self.get_logger().info(f"Params: {path} → {gains}")
-
-            response.success = True
-            response.message = "Parameters updated"
-        except Exception as e:
-            response.success = False
-            response.message = str(e)
-
+        # Runtime PID gain write-through into the native core is possible via
+        # configure_pid; kept minimal — map firmware 'chassis.pid.*' paths here.
+        response.success = True
+        response.message = "No-op (params live in firmware config.json)"
         return response
 
-    # ── Image callbacks ─────────────────────────────────────────────
+    # ── 100Hz control thread ────────────────────────────────────────
 
-    def _front_left_img_cb(self, msg: Image) -> None:
-        self.front_rect_left_pub.publish(msg)
-        self.front_left_img = msg
-        self._publish_stitched_front()
+    def _control_loop(self) -> None:
+        """Drive the native core at 100Hz: update_nav -> step -> mix -> publish states."""
+        last = time.monotonic()
+        while rclpy.ok() and not self._control_stop.is_set():
+            now = time.monotonic()
+            elapsed = now - last
+            if elapsed >= 0.01:  # ≥10ms guard, mirror firmware kDt
+                self._control_tick()
+                last = now
+            time.sleep(0.001)
 
-    def _front_right_img_cb(self, msg: Image) -> None:
-        self.front_rect_right_pub.publish(msg)
-        self.front_right_img = msg
-        self._publish_stitched_front()
-
-    def _down_left_img_cb(self, msg: Image) -> None:
-        self.down_rect_left_pub.publish(msg)
-        self.down_left_img = msg
-        self._publish_stitched_down()
-
-    def _down_right_img_cb(self, msg: Image) -> None:
-        self.down_rect_right_pub.publish(msg)
-        self.down_right_img = msg
-        self._publish_stitched_down()
-
-    def _publish_stitched_front(self) -> None:
-        if self.front_left_img and self.front_right_img:
-            try:
-                left = self.bridge.imgmsg_to_cv2(self.front_left_img, "bgr8")
-                right = self.bridge.imgmsg_to_cv2(self.front_right_img, "bgr8")
-                stitched = np.hstack((left, right))
-                out = self.bridge.cv2_to_imgmsg(stitched, "bgr8")
-                out.header = self.front_left_img.header
-                self.front_rect_pub.publish(out)
-            except Exception as e:
-                self.get_logger().error(f"Front stitch failed: {e}")
-
-    def _publish_stitched_down(self) -> None:
-        if self.down_left_img and self.down_right_img:
-            try:
-                left = self.bridge.imgmsg_to_cv2(self.down_left_img, "bgr8")
-                right = self.bridge.imgmsg_to_cv2(self.down_right_img, "bgr8")
-                stitched = np.hstack((left, right))
-                out = self.bridge.cv2_to_imgmsg(stitched, "bgr8")
-                out.header = self.down_left_img.header
-                self.down_rect_pub.publish(out)
-            except Exception as e:
-                self.get_logger().error(f"Down stitch failed: {e}")
-
-    # ── Thruster mixer (xunyun 6-thruster geometry) ────────────────
-
-    def _publish_thrust_from_4dof(self, x: float, y: float, z: float, rz: float) -> None:
-        # DISABLED: always armed for now
-        # if not self._armed:
-        #     x = y = z = rz = 0.0
-        self.force_4dof = [x, y, z, rz]
-        MAX_T = 1000.0
-        if self._hil_mode:
-            MAX_T = 1.0  # HIL mode: forces are normalized to [-1, 1]
-
-        # NED body force → 6 thrusters (xunyun geometry)
-        h0 = (x + y - rz )     # T0: aft-stbd diagonal
-        h1 = (x - y + rz )     # T1: aft-port diagonal
-        h4 = -(x - y - rz )    # T4: fwd-stbd diagonal
-        h5 = -(x + y + rz )    # T5: fwd-port diagonal
-        h2 = z*0.8;                        # HeaveBow
-        h3 = z*0.8;                        # HeaveStern
-
-        raw = [h0, h1, h2, h3, h4, h5]
-        for i in range(len(raw)):
-            raw[i] = _clamp(raw[i] / MAX_T, -1.0, 1.0)
-
-        cmd = Float64MultiArray()
-        cmd.data = raw
-        self.thruster_pub.publish(cmd)
-
-        for i in range(6):
-            self.thrust[i] = float(raw[i])
-
-    # ── Control step ────────────────────────────────────────────────
-
-    def _tick_60hz(self) -> None:
-        """60Hz control step + rate-gated state publishing."""
+    def _control_tick(self) -> None:
         self._tick = (self._tick + 1) % 60
 
-        # State publishing (gate by tick count)
-        #   status: 10Hz (every 6 ticks, tick 0)
-        #   pos:    30Hz (every 2 ticks, tick 0,2,4...)
-        #   vel:    60Hz (every tick)
-        #   thr:    30Hz (every 2 ticks, tick 0,2,4...)
+        # Pose-ready gate for state publishing
+        pos_world = [0.0] * 6
+        vel_body = [0.0] * 6
+        if self.current_pose_ready:
+            # World NED position (radians for angular) — note pos stores deg internally
+            pos_world = [
+                self.pos['x'], self.pos['y'], self.pos['z'],
+                math.radians(self.pos.get('rx', 0.0)),
+                math.radians(self.pos.get('ry', 0.0)),
+                math.radians(self.pos['rz']),
+            ]
+            vel_body = [
+                self.vel['x'], self.vel['y'], self.vel['z'],
+                self.vel['rx'], self.vel['ry'], self.vel['rz'],
+            ]
+
+            # Update INS alignment (1 → 5 → 4) using clock time
+            self._update_ins_alignment()
+
+            # Feed native core and step
+            try:
+                self._core.update_nav(pos_world, vel_body)
+                forces = self._core.step()  # [Fx,Fy,Fz,Mroll,Mpitch,Myaw]
+            except Exception as e:
+                self.get_logger().error(f"core.step failed: {e}")
+                forces = [0.0] * 6
+        else:
+            forces = [0.0] * 6
+
+        with self._forces_lock:
+            self.force_6dof = list(forces)
+            self.thrust = self._mixer.mix6(*forces)
+
+        # Rate-gated publishing (status 10Hz, pos 30Hz, vel 60Hz, thr 30Hz)
         if self._tick % 6 == 0:
             self._publish_state()
         if self._tick % 2 == 0:
-            self._publish_pos()
+            self._publish_pos(pos_world)
             self._publish_thr()
-        self._publish_vel()
+        self._publish_vel(vel_body)
 
-        # Control step
-        self._update_ins_alignment()
-        if not self.current_pose_ready:
-            return
+        # Thrust to Stonefish
+        cmd = Float64MultiArray()
+        cmd.data = self.thrust
+        self.thruster_pub.publish(cmd)
 
-        now = self.get_clock().now()
-        dt = (now - self.last_pid_time).nanoseconds / 1e9
-        self.last_pid_time = now
-        dt = _clamp(dt, 0.001, 0.2)
+    def _publish_thrust_from_6dof(self, fx, fy, fz, mroll, mpitch, myaw) -> None:
+        """Mixin (HIL): forces come from real MCU via /zit6/state/thr."""
+        with self._forces_lock:
+            self.force_6dof = [fx, fy, fz, mroll, mpitch, myaw]
+            self.thrust = self._mixer.mix6(fx, fy, fz, mroll, mpitch, myaw)
+        cmd = Float64MultiArray()
+        cmd.data = self.thrust
+        self.thruster_pub.publish(cmd)
 
-        if self.position_ctrl_enabled:
-            self._position_pid_step(dt)
-        elif self.vel_ctrl_enabled:
-            self._velocity_pid_step(dt)
-
-    def _position_pid_step(self, dt: float) -> None:
-        x, y, z, yaw = self.pos['x'], self.pos['y'], self.pos['z'], self.pos['rz']
-
-        ex_w = self.target_pos['x'] - x
-        ey_w = self.target_pos['y'] - y
-
-        yaw_rad = math.radians(yaw)
-        cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-        ex_body = cy * ex_w + sy * ey_w
-        ey_body = -sy * ex_w + cy * ey_w
-
-        ez = self.target_pos['z'] - z
-        eyaw = self._wrap_angle_deg(self.target_pos['rz'] - yaw)
-
-        target_yaw_rate = self.pid_yaw.step(eyaw, dt)
-        target_yaw_rate = _clamp(target_yaw_rate, -45.0, 45.0)
-        eyaw_rate = target_yaw_rate - self.vel['rz']
-
-        cmd_x = float(self.pid_x.step(ex_body, dt))
-        cmd_y = float(self.pid_y.step(ey_body, dt))
-        cmd_z = float(self.pid_z.step(ez, dt))
-        cmd_rz = float(self.pid_yaw_rate.step(eyaw_rate, dt))
-
-        self._publish_thrust_from_4dof(cmd_x, cmd_y, cmd_z, cmd_rz)
-
-    def _velocity_pid_step(self, dt: float) -> None:
-        evx = self.target_vel['x'] - self.vel['x']
-        evy = self.target_vel['y'] - self.vel['y']
-        evz = self.target_vel['z'] - self.vel['z']
-        evyaw = self.target_vel['rz'] - self.vel['rz']
-
-        cmd_x = float(self.pid_vx.step(evx, dt))
-        cmd_y = float(self.pid_vy.step(evy, dt))
-        cmd_z = float(self.pid_vz.step(evz, dt))
-        cmd_rz = float(self.pid_vyaw.step(evyaw, dt))
-
-        self._publish_thrust_from_4dof(cmd_x, cmd_y, cmd_z, cmd_rz)
-
-    # ── Sensor callbacks ────────────────────────────────────────────
+    # ── Sensor callbacks → NavState ────────────────────────────────
 
     def _odom_cb(self, msg: Odometry) -> None:
         self.pos['x'] = msg.pose.pose.position.x
         self.pos['y'] = msg.pose.pose.position.y
         self.pos['z'] = msg.pose.pose.position.z
-
         q = msg.pose.pose.orientation
         roll, pitch, yaw = self._quat_to_rpy(q.x, q.y, q.z, q.w)
         self.pos['rx'] = math.degrees(roll)
@@ -645,14 +403,13 @@ class SimBridgeNode(Node):
 
         vx_w = msg.twist.twist.linear.x
         vy_w = msg.twist.twist.linear.y
-        self.vel_world['x'] = vx_w
-        self.vel_world['y'] = vy_w
-        self.vel_world['z'] = msg.twist.twist.linear.z
-        self.vel_world['rx'] = math.degrees(msg.twist.twist.angular.x)
-        self.vel_world['ry'] = math.degrees(msg.twist.twist.angular.y)
-        self.vel_world['rz'] = math.degrees(msg.twist.twist.angular.z)
+        self.vel_world['x'], self.vel_world['y'], self.vel_world['z'] = (
+            vx_w, vy_w, msg.twist.twist.linear.z)
+        self.vel_world['rx'] = msg.twist.twist.angular.x
+        self.vel_world['ry'] = msg.twist.twist.angular.y
+        self.vel_world['rz'] = msg.twist.twist.angular.z
 
-        # World → body velocity rotation (yaw-only for XY linear, direct for angular)
+        # World → body linear velocity (yaw rotation, NED FRD)
         cy, sy = math.cos(yaw), math.sin(yaw)
         self.vel['x'] = vx_w * cy + vy_w * sy
         self.vel['y'] = -vx_w * sy + vy_w * cy
@@ -664,9 +421,9 @@ class SimBridgeNode(Node):
         self.current_pose_ready = True
 
     def _imu_cb(self, msg: Imu) -> None:
-        self.vel['rx'] = math.degrees(msg.angular_velocity.x)
-        self.vel['ry'] = math.degrees(msg.angular_velocity.y)
-        self.vel['rz'] = math.degrees(msg.angular_velocity.z)
+        self.vel['rx'] = msg.angular_velocity.x
+        self.vel['ry'] = msg.angular_velocity.y
+        self.vel['rz'] = msg.angular_velocity.z
 
     def _dvl_cb(self, msg: DVL) -> None:
         self.vel['x'] = msg.velocity.x
@@ -676,54 +433,55 @@ class SimBridgeNode(Node):
     def _pressure_cb(self, msg: FluidPressure) -> None:
         pass
 
-    # ── ZIT6 state publishing ───────────────────────────────────────
-    # Published at different rates: status=10Hz, pos=30Hz, vel=60Hz, thr=30Hz
+    # ── State publishing ────────────────────────────────────────────
+
+    def _update_ins_alignment(self) -> None:
+        now = self.get_clock().now()
+        if self._ins_state == 1:
+            elapsed = (now - self._ins_boot_time).nanoseconds / 1e9
+            if elapsed >= 1.5:
+                self._ins_state = 5
+                self._ins_nav_ready = True
+                self.get_logger().info("INS: coarse alignment done → MRU mode")
+                if self._dvl_enabled:
+                    self._ins_align_request = now
+        if self._ins_state == 5 and self._ins_align_request is not None:
+            elapsed = (now - self._ins_align_request).nanoseconds / 1e9
+            if elapsed >= 1.5:
+                self._ins_state = 4
+                self._ins_align_request = None
+                self.get_logger().info("INS: SINS/DVL alignment complete")
 
     def _publish_state(self) -> None:
-        """Publish ZitStatus (10Hz)."""
         status = ZitStatus()
         status.is_armed = self._armed
         status.arm_mode = self._arm_mode
-        status.control_level = self._current_mode
+        # control_level from native core (1=POS, 2=VEL, 3=ACTUATOR)
+        status.control_level = self._core.control_level
         status.ins_state = self._ins_state
         status.navigation_ready = self._ins_nav_ready
-        status.forces = [self.force_4dof[0], self.force_4dof[1], self.force_4dof[2],
-                          0.0, 0.0, self.force_4dof[3]]
-        status.cycle_time_ms = 50.0
+        with self._forces_lock:
+            f = list(self.force_6dof)
+        status.forces = [f[0], f[1], f[2], f[3], f[4], f[5]]
+        status.cycle_time_ms = 10.0
         status.battery_voltage = 16.8
         status.error_flags = 0
         self.zit6_status_pub.publish(status)
 
-    def _publish_pos(self) -> None:
-        """Publish position (30Hz). 6-DOF: [x, y, z, roll_rad, pitch_rad, yaw_rad]."""
+    def _publish_pos(self, pos_world) -> None:
         pos_msg = Float32MultiArray()
-        pos_msg.data = [
-            self.pos['x'], self.pos['y'], self.pos['z'],
-            math.radians(self.pos.get('rx', 0.0)),
-            math.radians(self.pos.get('ry', 0.0)),
-            math.radians(self.pos['rz']),
-        ]
+        pos_msg.data = pos_world  # [x,y,z,roll_rad,pitch_rad,yaw_rad]
         self.zit6_pos_pub.publish(pos_msg)
 
-    def _publish_vel(self) -> None:
-        """Publish body velocity 6-DOF [vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad] (60Hz)."""
+    def _publish_vel(self, vel_body) -> None:
         vel_msg = Float32MultiArray()
-        vel_msg.data = [
-            self.vel['x'], self.vel['y'], self.vel['z'],
-            math.radians(self.vel['rx']),
-            math.radians(self.vel['ry']),
-            math.radians(self.vel['rz']),
-        ]
+        vel_msg.data = vel_body  # body [u,v,w,p,q,r]
         self.zit6_vel_pub.publish(vel_msg)
 
     def _publish_thr(self) -> None:
-        """Publish thrust 6-DOF [Fx, Fy, Fz, Mx(roll), My(pitch), Mz(yaw)] (30Hz)."""
         thr_msg = Float32MultiArray()
-        # force_4dof = [Fx, Fy, Fz, Mz] → 6 元素, Mx/My 留空填 0
-        thr_msg.data = [
-            self.force_4dof[0], self.force_4dof[1], self.force_4dof[2],
-            0.0, 0.0, self.force_4dof[3],
-        ]
+        with self._forces_lock:
+            thr_msg.data = list(self.force_6dof)
         self.zit6_thr_pub.publish(thr_msg)
 
     # ── Utilities ───────────────────────────────────────────────────
@@ -733,22 +491,21 @@ class SimBridgeNode(Node):
         sinr_cosp = 2.0 * (w * x + y * z)
         cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
         roll = math.atan2(sinr_cosp, cosr_cosp)
-
         sinp = 2.0 * (w * y - z * x)
-        pitch = math.asin(_clamp(sinp, -1.0, 1.0))
-
+        pitch = math.asin(max(-1.0, min(1.0, sinp)))
         siny_cosp = 2.0 * (w * z + x * y)
         cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
         yaw = math.atan2(siny_cosp, cosy_cosp)
         return roll, pitch, yaw
 
-    @staticmethod
-    def _wrap_angle_deg(angle: float) -> float:
-        while angle > 180.0:
-            angle -= 360.0
-        while angle < -180.0:
-            angle += 360.0
-        return angle
+    def destroy_node(self) -> None:
+        # Stop the 100Hz control thread first and join it, so no native-call or
+        # publisher runs after rclpy tears down (avoids 'terminate called
+        # without an active exception' at shutdown).
+        self._control_stop.set()
+        if getattr(self, '_control_thread', None) is not None:
+            self._control_thread.join(timeout=2.0)
+        super().destroy_node()
 
 
 def main(args=None) -> None:

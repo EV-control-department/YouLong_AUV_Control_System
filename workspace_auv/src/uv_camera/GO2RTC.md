@@ -24,7 +24,7 @@ V4L2 → OpenCV（进程内）→ YOLO
 cd /path/to/YouLong_AUV_Control_System
 bash third_party/go2rtc/download_go2rtc.sh
 cd workspace_auv
-colcon build --packages-select uv_perception --symlink-install
+colcon build --packages-select uv_camera --symlink-install
 source install/setup.bash
 ```
 

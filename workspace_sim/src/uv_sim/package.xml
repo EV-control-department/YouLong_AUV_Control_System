@@ -15,6 +15,7 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>stonefish_ros2</exec_depend>
   <exec_depend>zit6_interfaces</exec_depend>
+  <exec_depend>zit6_control_core</exec_depend>
 
   <test_depend>pytest</test_depend>
 

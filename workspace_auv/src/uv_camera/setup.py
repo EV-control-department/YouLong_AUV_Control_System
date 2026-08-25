@@ -2,7 +2,7 @@ import os
 
 from setuptools import setup
 
-package_name = 'uv_perception'
+package_name = 'uv_camera'
 
 data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
@@ -20,13 +20,13 @@ setup(
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',
-    description='Perception package for YouLong AUV',
+    description='Camera + AI perception package for YouLong AUV (uv_sensor + uv_ai + position)',
     license='GPL-3.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'vision = uv_perception.vision:main',
-            'position = uv_perception.position:main',
+            'uv_camera = uv_camera.composed:main',
+            'position = uv_camera.position:main',
         ],
     },
 )

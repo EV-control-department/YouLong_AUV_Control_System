@@ -113,16 +113,16 @@ def generate_launch_description():
 
     # ── Perception (optional) ──────────────────────────────────────
     vision = Node(
-        package='uv_perception',
-        executable='vision',
-        name='vision',
+        package='uv_camera',
+        executable='uv_camera',
+        name='uv_camera',
         output='screen',
         parameters=[{'sim_mode': True}],
         condition=IfCondition(enable_ai),
     )
 
     position = Node(
-        package='uv_perception',
+        package='uv_camera',
         executable='position',
         name='position',
         output='screen',

@@ -62,7 +62,7 @@ This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater
 | 0 | `stonefish_ros2` (C++) | Stonefish 1.6 marine physics simulator, GPU mode (runs `stonefish_simulator`) |
 | 1 | `uv_hm` | Cascaded PID + thruster mixing → 6 thrusters. `sim_bridge` for simulation, `hw_manager` placeholder for STM32 MCU |
 | 2 | `uv_control` | Motion API: SET/WMOVE/BMOVE/TRAVEL. Only entry point is `basic_motion` |
-| 3 | `uv_perception` | 4 通道双目 YOLO 检测 + 多帧单目射线交会 3D 定位。sim/real 模式切换，发布 PoseInfo 位姿源 |
+| 3 | `uv_camera` | 4 通道双目 YOLO 检测 + 多帧单目射线交会 3D 定位。`uv_sensor`(源选择+go2rtc 预览)+ `uv_ai`(YOLO)同进程，sim/real 切换，发布 PoseInfo 位姿源 |
 | 4 | `uv_nav` | A* pathfinding + obstacle avoidance waypoint following |
 | 5 | `uv_task` | JSON-based competition task runner |
 
@@ -319,7 +319,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 
 ## Package Types
 
-- **ament_python**: `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_bringup`
+- **ament_python**: `uv_control`, `uv_hm`, `uv_nav`, `uv_camera`, `uv_task`, `uv_bringup`
 - **ament_cmake**: `uv_msgs`, `zit6_interfaces`, `stonefish_ros2` (define custom `.msg`/`.srv` files)
 
 ## Key Files
@@ -330,8 +330,8 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_auv/src/uv_task/uv_task/task_runner.py` | Task executor, BasicMotion action client |
 | `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
 | `workspace_auv/src/uv_hm/uv_hm/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
-| `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, dataset capture |
-| `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization (now uses full RPY for ray casting) |
+| `workspace_auv/src/uv_camera/uv_camera/composed.py` | uv_camera node: uv_sensor(源选择+go2rtc预览) + uv_ai(YOLO 检测) 同进程 (A3 FrameGate) |
+| `workspace_auv/src/uv_camera/uv_camera/position.py` | Position node: multi-ray 3D localization (now uses full RPY for ray casting) |
 | `visualization/auv_visualizer.py` | PySide6 GUI: 2D map, objects/rays, node list, task status, force remote control |
 | `workspace_auv/docs/basic_motion_action.md` | BasicMotion action interface reference |
 | `workspace_auv/docs/perception.md` | Perception system architecture + data flow |
