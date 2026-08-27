@@ -1,0 +1,458 @@
+<?xml version="1.0"?>
+<scenario>
+	<!--
+	  中国机器人大赛暨 RoboCup 机器人世界杯中国赛 2026：机器人水中巡游。
+	  Fixed training layout. NED coordinates: X in [0.0, 9.5], Y in [-2.25, 2.25],
+	  water surface Z=0.0 and pool-floor top Z=1.30. The scene is visual/physical
+	  training only: it contains no automatic scoring or grasping constraints.
+
+		  Authoritative object table (metres; X is mirrored about the pool centre
+		  so the configured Stonefish overhead view matches the rule sketch):
+		    Start zone:              centre (8.95, -1.80), 0.80 x 0.80 at water surface
+		    Impact balls:            Blue (8.95, 1.55, 0.70), Red (8.45, 1.55, 0.70)
+		    Gates, low/high/low/high: (7.30, 0.80), (5.80, -0.40),
+		                              (4.15, 0.85), (2.75, 1.15)
+		    Target rack:             centre (0.95, -0.45, 1.00), 0.50 x 0.50
+		    Collection frame:        centre (1.55, -1.65, 0.94), 0.40 x 0.30
+	  The launcher supplies target_id as metadata (yellow_golf, pink_golf, red_ring);
+	  all three acquisition targets intentionally remain visible in this scene.
+	-->
+
+	<environment>
+		<ned latitude="40.0" longitude="3.0"/>
+		<ocean>
+			<!-- A calm pool with mild optical attenuation rather than ideal clear water. -->
+			<water density="1000.0" jerlov="0.28"/>
+			<waves height="0.0"/>
+			<current type="uniform">
+				<velocity xyz="0.0 0.0 0.0"/>
+			</current>
+		</ocean>
+		<!-- Low sun elevation gives the cameras non-uniform lighting across the pool. -->
+		<atmosphere>
+			<sun azimuth="125.0" elevation="38.0" gain="2.8"/>
+		</atmosphere>
+	</environment>
+
+	<materials>
+		<material name="Neutral" density="1000.0" restitution="0.5"/>
+		<material name="Concrete" density="2400.0" restitution="0.2"/>
+		<material name="PVC" density="1380.0" restitution="0.3"/>
+		<material name="Plastic" density="1100.0" restitution="0.3"/>
+		<friction_table>
+			<friction material1="Neutral" material2="Neutral" static="0.4" dynamic="0.2"/>
+			<friction material1="Neutral" material2="Concrete" static="0.3" dynamic="0.2"/>
+			<friction material1="Neutral" material2="PVC" static="0.4" dynamic="0.2"/>
+			<friction material1="Neutral" material2="Plastic" static="0.4" dynamic="0.2"/>
+			<friction material1="Concrete" material2="Concrete" static="0.8" dynamic="0.7"/>
+			<friction material1="Concrete" material2="PVC" static="0.5" dynamic="0.4"/>
+			<friction material1="Concrete" material2="Plastic" static="0.5" dynamic="0.4"/>
+			<friction material1="PVC" material2="PVC" static="0.5" dynamic="0.4"/>
+			<friction material1="PVC" material2="Plastic" static="0.5" dynamic="0.4"/>
+			<friction material1="Plastic" material2="Plastic" static="0.5" dynamic="0.4"/>
+		</friction_table>
+	</materials>
+
+	<looks>
+		<!-- Same tiled pool background textures used by wuurc_murc_2026_auv.scn. -->
+		<look name="pool_floor" gray="1.0" roughness="0.65" texture="guoshui_2026_pool_floor_tiled.png"/>
+		<look name="pool_wall_long" gray="1.0" roughness="0.45" texture="guoshui_2026_pool_wall_long_tiled.png"/>
+		<look name="pool_wall_side" gray="1.0" roughness="0.45" texture="guoshui_2026_pool_wall_side_tiled.png"/>
+		<!-- Rule reference sample: orange-red guide line, sampled as approximately #C70102. -->
+		<look name="guide_line" rgb="0.78 0.01 0.01" roughness="0.30"/>
+		<look name="gate_red" rgb="0.92 0.03 0.03" roughness="0.30"/>
+		<look name="gate_support" rgb="0.96 0.97 0.98" roughness="0.38"/>
+		<look name="gate_sleeve_white" rgb="1.0 1.0 1.0" roughness="0.28"/>
+		<look name="ball_blue" rgb="0.04 0.18 0.95" roughness="0.18"/>
+		<look name="ball_red" rgb="0.95 0.04 0.04" roughness="0.18"/>
+		<look name="golf_yellow" rgb="1.0 0.82 0.02" roughness="0.22"/>
+		<look name="golf_pink" rgb="1.0 0.12 0.58" roughness="0.22"/>
+		<look name="ring_red" rgb="0.90 0.02 0.02" roughness="0.25"/>
+		<look name="ring_weight" rgb="0.12 0.12 0.14" roughness="0.65"/>
+		<!-- White PVC target-rack frame and grid, matching the reference fixture. -->
+		<look name="target_rack_white" rgb="0.95 0.97 1.0" roughness="0.35"/>
+		<look name="target_rack_coupler" rgb="1.0 1.0 1.0" roughness="0.28"/>
+		<look name="collection_red" rgb="1.0 0.04 0.02" roughness="0.28"/>
+		<look name="collection_white" rgb="0.88 0.90 0.92" roughness="0.42"/>
+		<look name="collection_coupler" rgb="1.0 1.0 1.0" roughness="0.28"/>
+		<!-- White net strips are intentionally opaque and 6 mm wide for camera visibility. -->
+		<!-- Bright white look keeps the thin net readable under the pool's directional shadow. -->
+		<look name="collection_net" rgb="2.0 2.0 2.0" roughness="0.05"/>
+		<look name="tether" rgb="0.08 0.08 0.08" roughness="0.70"/>
+		<look name="start_marker" rgb="0.02 0.90 0.85" roughness="0.38"/>
+	</looks>
+
+	<!-- Pool: internal dimensions 9.50 x 4.50 x 1.30 m. -->
+	<!-- uv_mode=2 keeps the external high-resolution tile texture aligned to pool dimensions. -->
+	<static name="PoolBottom" type="box" uv_mode="2">
+		<dimensions xyz="9.50 4.50 0.04"/>
+		<material name="Concrete"/>
+		<look name="pool_floor"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.75 0.0 1.32"/>
+	</static>
+	<static name="PoolWallNorth" type="box">
+		<dimensions xyz="9.70 0.10 1.30"/>
+		<material name="Concrete"/>
+		<look name="pool_wall_long"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.75 2.30 0.65"/>
+	</static>
+	<static name="PoolWallSouth" type="box">
+		<dimensions xyz="9.70 0.10 1.30"/>
+		<material name="Concrete"/>
+		<look name="pool_wall_long"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.75 -2.30 0.65"/>
+	</static>
+	<static name="PoolWallWest" type="box">
+		<dimensions xyz="0.10 4.50 1.30"/>
+		<material name="Concrete"/>
+		<look name="pool_wall_side"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.05 0.0 0.65"/>
+	</static>
+	<static name="PoolWallEast" type="box">
+		<dimensions xyz="0.10 4.50 1.30"/>
+		<material name="Concrete"/>
+		<look name="pool_wall_side"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="9.55 0.0 0.65"/>
+	</static>
+
+	<!-- Simulator-only projection of the rule-defined 80 x 80 cm surface start zone. -->
+	<static name="StartZoneNorth" type="box">
+		<dimensions xyz="0.80 0.03 0.006"/>
+		<material name="PVC"/><look name="start_marker"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.95 -1.40 1.293"/>
+	</static>
+	<static name="StartZoneSouth" type="box">
+		<dimensions xyz="0.80 0.03 0.006"/>
+		<material name="PVC"/><look name="start_marker"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.95 -2.20 1.293"/>
+	</static>
+	<static name="StartZoneEast" type="box">
+		<dimensions xyz="0.03 0.80 0.006"/>
+		<material name="PVC"/><look name="start_marker"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.55 -1.80 1.293"/>
+	</static>
+	<static name="StartZoneWest" type="box">
+		<dimensions xyz="0.03 0.80 0.006"/>
+		<material name="PVC"/><look name="start_marker"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="9.35 -1.80 1.293"/>
+	</static>
+
+	<!-- Exactly six 0.35 x 0.10 m guide lines.  Each one is at the geometric
+	     midpoint of its two adjacent task centers and points from the earlier
+	     task toward the next one.  There are intentionally no lines after the
+	     target display rack. -->
+	<static name="GuideStartToImpact" type="box"><dimensions xyz="0.35 0.10 0.008"/><material name="PVC"/><look name="guide_line"/><world_transform rpy="0.0 0.0 1.645285" xyz="8.825 -0.125 1.294"/></static>
+	<static name="GuideImpactToGate1" type="box"><dimensions xyz="0.35 0.10 0.008"/><material name="PVC"/><look name="guide_line"/><world_transform rpy="0.0 0.0 -2.649783" xyz="8.000 1.175 1.294"/></static>
+	<static name="GuideGate1ToGate2" type="box"><dimensions xyz="0.35 0.10 0.008"/><material name="PVC"/><look name="guide_line"/><world_transform rpy="0.0 0.0 -2.466852" xyz="6.550 0.200 1.294"/></static>
+	<static name="GuideGate2ToGate3" type="box"><dimensions xyz="0.35 0.10 0.008"/><material name="PVC"/><look name="guide_line"/><world_transform rpy="0.0 0.0 2.493261" xyz="4.975 0.225 1.294"/></static>
+	<static name="GuideGate3ToGate4" type="box"><dimensions xyz="0.35 0.10 0.008"/><material name="PVC"/><look name="guide_line"/><world_transform rpy="0.0 0.0 2.930499" xyz="3.450 1.000 1.294"/></static>
+	<static name="GuideGate4ToTargetRack" type="box"><dimensions xyz="0.35 0.10 0.008"/><material name="PVC"/><look name="guide_line"/><world_transform rpy="0.0 0.0 -2.414950" xyz="1.850 0.350 1.294"/></static>
+
+	<!-- Suspended impact targets. Cable world anchors are expressed in Stonefish's
+	     cable frame, whose X direction is opposite to the mirrored scene layout. -->
+	<dynamic name="ImpactBallBlue" type="sphere" physics="submerged" buoyant="true">
+		<dimensions radius="0.10"/>
+		<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		<material name="Neutral"/><look name="ball_blue"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.95 1.55 0.70"/>
+	</dynamic>
+	<dynamic name="ImpactBallRed" type="sphere" physics="submerged" buoyant="true">
+		<dimensions radius="0.10"/>
+		<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		<material name="Neutral"/><look name="ball_red"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.45 1.55 0.70"/>
+	</dynamic>
+	<!-- Visible fixed-length rope segments. Their X/Y exactly follow the mirrored balls.
+	     These are static visual ropes because Stonefish's dynamic cable parser produces
+	     an AABB overflow for this pair of submerged tethered spheres. -->
+	<static name="ImpactBallBlueVisibleTether" type="cylinder">
+		<dimensions radius="0.004" height="0.59"/>
+		<material name="PVC"/><look name="tether"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.95 1.55 0.995"/>
+	</static>
+	<static name="ImpactBallRedVisibleTether" type="cylinder">
+		<dimensions radius="0.004" height="0.59"/>
+		<material name="PVC"/><look name="tether"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="8.45 1.55 0.995"/>
+	</static>
+	<!-- Four fixed 0.70 x 0.50 m gates.  They are split by visual class because
+	     one Stonefish model node can carry only one look.  The positions and
+	     dimensions are maintained in generate_guoshui_gate_parts.py. -->
+	<static name="Guoshui2026GateRedPipes" type="model">
+		<physical>
+			<mesh filename="guoshui_2026_gate_red_pipes.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</physical>
+		<material name="PVC"/>
+		<look name="gate_red"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+	</static>
+	<static name="Guoshui2026GateWhiteSupports" type="model">
+		<physical>
+			<mesh filename="guoshui_2026_gate_white_supports.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</physical>
+		<material name="PVC"/>
+		<look name="gate_support"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+	</static>
+	<static name="Guoshui2026GateRedSleeves" type="model">
+		<physical>
+			<mesh filename="guoshui_2026_gate_red_sleeves.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</physical>
+		<material name="PVC"/>
+		<look name="gate_red"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+	</static>
+	<static name="Guoshui2026GateWhiteSleeves" type="model">
+		<physical>
+			<mesh filename="guoshui_2026_gate_white_sleeves.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</physical>
+		<material name="PVC"/>
+		<look name="gate_sleeve_white"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+	</static>
+
+	<!--
+		Target display rack: 0.50 x 0.50 m overall, with its upper grid
+		0.30 m above the pool bottom.  There is deliberately no solid shelf:
+		four white PVC legs support a white perimeter frame and a regular
+		diagonal wire grid, as in the rule-book illustration.
+	-->
+	<!-- Four white support legs; floor z=1.30, rack grid z=1.00. -->
+	<static name="TargetRackLegNW" type="cylinder"><dimensions radius="0.015" height="0.30"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 0.0 0.0" xyz="1.17 -0.67 1.15"/></static>
+	<static name="TargetRackLegNE" type="cylinder"><dimensions radius="0.015" height="0.30"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 0.0 0.0" xyz="0.73 -0.67 1.15"/></static>
+	<static name="TargetRackLegSW" type="cylinder"><dimensions radius="0.015" height="0.30"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 0.0 0.0" xyz="1.17 -0.23 1.15"/></static>
+	<static name="TargetRackLegSE" type="cylinder"><dimensions radius="0.015" height="0.30"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 0.0 0.0" xyz="0.73 -0.23 1.15"/></static>
+	<!-- 8 mm outer PVC perimeter: x span=0.44 m, y span=0.44 m. -->
+	<static name="TargetRackFrameNorth" type="cylinder"><dimensions radius="0.008" height="0.44"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.0" xyz="0.95 -0.67 1.00"/></static>
+	<static name="TargetRackFrameSouth" type="cylinder"><dimensions radius="0.008" height="0.44"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.0" xyz="0.95 -0.23 1.00"/></static>
+	<static name="TargetRackFrameWest" type="cylinder"><dimensions radius="0.008" height="0.44"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="1.5708 0.0 0.0" xyz="0.73 -0.45 1.00"/></static>
+	<static name="TargetRackFrameEast" type="cylinder"><dimensions radius="0.008" height="0.44"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.17 -0.45 1.00"/></static>
+	<!-- Matching lower support frame on the pool floor; the dark floor remains visible through it. -->
+	<static name="TargetRackBaseNorth" type="cylinder"><dimensions radius="0.008" height="0.44"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.0" xyz="0.95 -0.67 1.294"/></static>
+	<static name="TargetRackBaseSouth" type="cylinder"><dimensions radius="0.008" height="0.44"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.0" xyz="0.95 -0.23 1.294"/></static>
+	<static name="TargetRackBaseWest" type="cylinder"><dimensions radius="0.008" height="0.44"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="1.5708 0.0 0.0" xyz="0.73 -0.45 1.294"/></static>
+	<static name="TargetRackBaseEast" type="cylinder"><dimensions radius="0.008" height="0.44"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.17 -0.45 1.294"/></static>
+	<!-- Hollow PVC right-angle sleeves at the four upper pipe junctions. -->
+	<static name="TargetRackTopSocketNWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.145 -0.67 1.00"/></static>
+	<static name="TargetRackTopSocketNWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.17 -0.645 1.00"/></static>
+	<static name="TargetRackTopSocketNEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="0.755 -0.67 1.00"/></static>
+	<static name="TargetRackTopSocketNEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="0.73 -0.645 1.00"/></static>
+	<static name="TargetRackTopSocketSWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.145 -0.23 1.00"/></static>
+	<static name="TargetRackTopSocketSWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.17 -0.255 1.00"/></static>
+	<static name="TargetRackTopSocketSEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="0.755 -0.23 1.00"/></static>
+	<static name="TargetRackTopSocketSEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="0.73 -0.255 1.00"/></static>
+	<static name="TargetRackTopSleeveNW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.17 -0.67 1.00"/></static>
+	<static name="TargetRackTopSleeveNE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="0.73 -0.67 1.00"/></static>
+	<static name="TargetRackTopSleeveSW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.17 -0.23 1.00"/></static>
+	<static name="TargetRackTopSleeveSE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="0.73 -0.23 1.00"/></static>
+	<!-- Hollow PVC right-angle sleeves at the four floor junctions. -->
+	<static name="TargetRackBaseSocketNWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.145 -0.67 1.294"/></static>
+	<static name="TargetRackBaseSocketNWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.17 -0.645 1.294"/></static>
+	<static name="TargetRackBaseSocketNEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="0.755 -0.67 1.294"/></static>
+	<static name="TargetRackBaseSocketNEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="0.73 -0.645 1.294"/></static>
+	<static name="TargetRackBaseSocketSWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.145 -0.23 1.294"/></static>
+	<static name="TargetRackBaseSocketSWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.17 -0.255 1.294"/></static>
+	<static name="TargetRackBaseSocketSEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="0.755 -0.23 1.294"/></static>
+	<static name="TargetRackBaseSocketSEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="0.73 -0.255 1.294"/></static>
+	<static name="TargetRackBaseSleeveNW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.17 -0.67 1.294"/></static>
+	<static name="TargetRackBaseSleeveNE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="0.73 -0.67 1.294"/></static>
+	<static name="TargetRackBaseSleeveSW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.17 -0.23 1.294"/></static>
+	<static name="TargetRackBaseSleeveSE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="target_rack_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="0.73 -0.23 1.294"/></static>
+	<!-- 3 mm-diameter white wires: 15+15 diagonal lines, twice the previous mesh density. -->
+	<static name="TargetRackGridDiagP01" type="cylinder"><dimensions radius="0.0015" height="0.0778"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="1.1425 -0.6425 1.00"/></static>
+	<static name="TargetRackGridDiagP02" type="cylinder"><dimensions radius="0.0015" height="0.1556"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="1.115 -0.615 1.00"/></static>
+	<static name="TargetRackGridDiagP03" type="cylinder"><dimensions radius="0.0015" height="0.2333"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="1.0875 -0.5875 1.00"/></static>
+	<static name="TargetRackGridDiagP04" type="cylinder"><dimensions radius="0.0015" height="0.3111"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="1.06 -0.56 1.00"/></static>
+	<static name="TargetRackGridDiagP05" type="cylinder"><dimensions radius="0.0015" height="0.3889"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="1.0325 -0.5325 1.00"/></static>
+	<static name="TargetRackGridDiagP06" type="cylinder"><dimensions radius="0.0015" height="0.4667"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="1.005 -0.505 1.00"/></static>
+	<static name="TargetRackGridDiagP07" type="cylinder"><dimensions radius="0.0015" height="0.5445"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.9775 -0.4775 1.00"/></static>
+	<static name="TargetRackGridDiagP08" type="cylinder"><dimensions radius="0.0015" height="0.6223"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.95 -0.45 1.00"/></static>
+	<static name="TargetRackGridDiagP09" type="cylinder"><dimensions radius="0.0015" height="0.5445"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.9225 -0.4225 1.00"/></static>
+	<static name="TargetRackGridDiagP10" type="cylinder"><dimensions radius="0.0015" height="0.4667"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.895 -0.395 1.00"/></static>
+	<static name="TargetRackGridDiagP11" type="cylinder"><dimensions radius="0.0015" height="0.3889"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.8675 -0.3675 1.00"/></static>
+	<static name="TargetRackGridDiagP12" type="cylinder"><dimensions radius="0.0015" height="0.3111"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.84 -0.34 1.00"/></static>
+	<static name="TargetRackGridDiagP13" type="cylinder"><dimensions radius="0.0015" height="0.2333"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.8125 -0.3125 1.00"/></static>
+	<static name="TargetRackGridDiagP14" type="cylinder"><dimensions radius="0.0015" height="0.1556"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.785 -0.285 1.00"/></static>
+	<static name="TargetRackGridDiagP15" type="cylinder"><dimensions radius="0.0015" height="0.0778"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 0.7854" xyz="0.7575 -0.2575 1.00"/></static>
+	<static name="TargetRackGridDiagN01" type="cylinder"><dimensions radius="0.0015" height="0.0778"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.7575 -0.6425 1.00"/></static>
+	<static name="TargetRackGridDiagN02" type="cylinder"><dimensions radius="0.0015" height="0.1556"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.785 -0.615 1.00"/></static>
+	<static name="TargetRackGridDiagN03" type="cylinder"><dimensions radius="0.0015" height="0.2333"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.8125 -0.5875 1.00"/></static>
+	<static name="TargetRackGridDiagN04" type="cylinder"><dimensions radius="0.0015" height="0.3111"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.84 -0.56 1.00"/></static>
+	<static name="TargetRackGridDiagN05" type="cylinder"><dimensions radius="0.0015" height="0.3889"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.8675 -0.5325 1.00"/></static>
+	<static name="TargetRackGridDiagN06" type="cylinder"><dimensions radius="0.0015" height="0.4667"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.895 -0.505 1.00"/></static>
+	<static name="TargetRackGridDiagN07" type="cylinder"><dimensions radius="0.0015" height="0.5445"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.9225 -0.4775 1.00"/></static>
+	<static name="TargetRackGridDiagN08" type="cylinder"><dimensions radius="0.0015" height="0.6223"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.95 -0.45 1.00"/></static>
+	<static name="TargetRackGridDiagN09" type="cylinder"><dimensions radius="0.0015" height="0.5445"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="0.9775 -0.4225 1.00"/></static>
+	<static name="TargetRackGridDiagN10" type="cylinder"><dimensions radius="0.0015" height="0.4667"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="1.005 -0.395 1.00"/></static>
+	<static name="TargetRackGridDiagN11" type="cylinder"><dimensions radius="0.0015" height="0.3889"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="1.0325 -0.3675 1.00"/></static>
+	<static name="TargetRackGridDiagN12" type="cylinder"><dimensions radius="0.0015" height="0.3111"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="1.06 -0.34 1.00"/></static>
+	<static name="TargetRackGridDiagN13" type="cylinder"><dimensions radius="0.0015" height="0.2333"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="1.0875 -0.3125 1.00"/></static>
+	<static name="TargetRackGridDiagN14" type="cylinder"><dimensions radius="0.0015" height="0.1556"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="1.115 -0.285 1.00"/></static>
+	<static name="TargetRackGridDiagN15" type="cylinder"><dimensions radius="0.0015" height="0.0778"/><material name="PVC"/><look name="target_rack_white"/><world_transform rpy="0.0 1.5708 -0.7854" xyz="1.1425 -0.2575 1.00"/></static>
+	<static name="TargetYellowGolf" type="sphere"><dimensions radius="0.02135"/><material name="Plastic"/><look name="golf_yellow"/><world_transform rpy="0.0 0.0 0.0" xyz="1.05 -0.62 0.964"/></static>
+	<static name="TargetPinkGolf" type="sphere"><dimensions radius="0.02135"/><material name="Plastic"/><look name="golf_pink"/><world_transform rpy="0.0 0.0 0.0" xyz="1.05 -0.40 0.964"/></static>
+	<!-- Red ring: outer diameter 0.12 m, visually thickened pneumatic-tube outer diameter 0.014 m.
+	     The tube centreline radius is 0.053 m, so the outside remains 0.060 m from the ring centre.
+	     A 32-segment round tube and matching spherical joints keep the ring continuous.
+	     NED uses increasing Z toward the pool floor; the gray counterweight visibly penetrates
+	     the larger-Z bottom tube and hangs below it. -->
+	<static name="TargetRedRingJoint00" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.177000 0.925000"/></static>
+	<static name="TargetRedRingJoint01" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.178018 0.935340"/></static>
+	<static name="TargetRedRingJoint02" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.181034 0.945282"/></static>
+	<static name="TargetRedRingJoint03" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.185932 0.954445"/></static>
+	<static name="TargetRedRingJoint04" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.192523 0.962477"/></static>
+	<static name="TargetRedRingJoint05" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.200555 0.969068"/></static>
+	<static name="TargetRedRingJoint06" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.209718 0.973966"/></static>
+	<static name="TargetRedRingJoint07" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.219660 0.976982"/></static>
+	<static name="TargetRedRingJoint08" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.230000 0.978000"/></static>
+	<static name="TargetRedRingJoint09" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.240340 0.976982"/></static>
+	<static name="TargetRedRingJoint10" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.250282 0.973966"/></static>
+	<static name="TargetRedRingJoint11" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.259445 0.969068"/></static>
+	<static name="TargetRedRingJoint12" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.267477 0.962477"/></static>
+	<static name="TargetRedRingJoint13" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.274068 0.954445"/></static>
+	<static name="TargetRedRingJoint14" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.278966 0.945282"/></static>
+	<static name="TargetRedRingJoint15" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.281982 0.935340"/></static>
+	<static name="TargetRedRingJoint16" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.283000 0.925000"/></static>
+	<static name="TargetRedRingJoint17" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.281982 0.914660"/></static>
+	<static name="TargetRedRingJoint18" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.278966 0.904718"/></static>
+	<static name="TargetRedRingJoint19" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.274068 0.895555"/></static>
+	<static name="TargetRedRingJoint20" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.267477 0.887523"/></static>
+	<static name="TargetRedRingJoint21" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.259445 0.880932"/></static>
+	<static name="TargetRedRingJoint22" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.250282 0.876034"/></static>
+	<static name="TargetRedRingJoint23" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.240340 0.873018"/></static>
+	<static name="TargetRedRingJoint24" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.230000 0.872000"/></static>
+	<static name="TargetRedRingJoint25" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.219660 0.873018"/></static>
+	<static name="TargetRedRingJoint26" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.209718 0.876034"/></static>
+	<static name="TargetRedRingJoint27" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.200555 0.880932"/></static>
+	<static name="TargetRedRingJoint28" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.192523 0.887523"/></static>
+	<static name="TargetRedRingJoint29" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.185932 0.895555"/></static>
+	<static name="TargetRedRingJoint30" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.181034 0.904718"/></static>
+	<static name="TargetRedRingJoint31" type="sphere"><dimensions radius="0.007000"/><material name="Plastic"/><look name="ring_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.178018 0.914660"/></static>
+	<static name="TargetRedRingTube00" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="0.098175 0.0 0.0" xyz="1.000000 -0.177255 0.930195"/></static>
+	<static name="TargetRedRingTube01" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="0.294524 0.0 0.0" xyz="1.000000 -0.179282 0.940385"/></static>
+	<static name="TargetRedRingTube02" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="0.490874 0.0 0.0" xyz="1.000000 -0.183258 0.949984"/></static>
+	<static name="TargetRedRingTube03" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="0.687223 0.0 0.0" xyz="1.000000 -0.189030 0.958623"/></static>
+	<static name="TargetRedRingTube04" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="0.883573 0.0 0.0" xyz="1.000000 -0.196377 0.965970"/></static>
+	<static name="TargetRedRingTube05" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="1.079922 0.0 0.0" xyz="1.000000 -0.205016 0.971742"/></static>
+	<static name="TargetRedRingTube06" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="1.276272 0.0 0.0" xyz="1.000000 -0.214615 0.975718"/></static>
+	<static name="TargetRedRingTube07" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="1.472622 0.0 0.0" xyz="1.000000 -0.224805 0.977745"/></static>
+	<static name="TargetRedRingTube08" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="1.668971 0.0 0.0" xyz="1.000000 -0.235195 0.977745"/></static>
+	<static name="TargetRedRingTube09" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="1.865321 0.0 0.0" xyz="1.000000 -0.245385 0.975718"/></static>
+	<static name="TargetRedRingTube10" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="2.061670 0.0 0.0" xyz="1.000000 -0.254984 0.971742"/></static>
+	<static name="TargetRedRingTube11" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="2.258020 0.0 0.0" xyz="1.000000 -0.263623 0.965970"/></static>
+	<static name="TargetRedRingTube12" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="2.454369 0.0 0.0" xyz="1.000000 -0.270970 0.958623"/></static>
+	<static name="TargetRedRingTube13" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="2.650719 0.0 0.0" xyz="1.000000 -0.276742 0.949984"/></static>
+	<static name="TargetRedRingTube14" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="2.847068 0.0 0.0" xyz="1.000000 -0.280718 0.940385"/></static>
+	<static name="TargetRedRingTube15" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="3.043418 0.0 0.0" xyz="1.000000 -0.282745 0.930195"/></static>
+	<static name="TargetRedRingTube16" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="3.239767 0.0 0.0" xyz="1.000000 -0.282745 0.919805"/></static>
+	<static name="TargetRedRingTube17" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="3.436117 0.0 0.0" xyz="1.000000 -0.280718 0.909615"/></static>
+	<static name="TargetRedRingTube18" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="3.632467 0.0 0.0" xyz="1.000000 -0.276742 0.900016"/></static>
+	<static name="TargetRedRingTube19" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="3.828816 0.0 0.0" xyz="1.000000 -0.270970 0.891377"/></static>
+	<static name="TargetRedRingTube20" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="4.025166 0.0 0.0" xyz="1.000000 -0.263623 0.884030"/></static>
+	<static name="TargetRedRingTube21" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="4.221515 0.0 0.0" xyz="1.000000 -0.254984 0.878258"/></static>
+	<static name="TargetRedRingTube22" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="4.417865 0.0 0.0" xyz="1.000000 -0.245385 0.874282"/></static>
+	<static name="TargetRedRingTube23" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="4.614214 0.0 0.0" xyz="1.000000 -0.235195 0.872255"/></static>
+	<static name="TargetRedRingTube24" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="4.810564 0.0 0.0" xyz="1.000000 -0.224805 0.872255"/></static>
+	<static name="TargetRedRingTube25" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="5.006913 0.0 0.0" xyz="1.000000 -0.214615 0.874282"/></static>
+	<static name="TargetRedRingTube26" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="5.203263 0.0 0.0" xyz="1.000000 -0.205016 0.878258"/></static>
+	<static name="TargetRedRingTube27" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="5.399612 0.0 0.0" xyz="1.000000 -0.196377 0.884030"/></static>
+	<static name="TargetRedRingTube28" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="5.595962 0.0 0.0" xyz="1.000000 -0.189030 0.891377"/></static>
+	<static name="TargetRedRingTube29" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="5.792311 0.0 0.0" xyz="1.000000 -0.183258 0.900016"/></static>
+	<static name="TargetRedRingTube30" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="5.988661 0.0 0.0" xyz="1.000000 -0.179282 0.909615"/></static>
+	<static name="TargetRedRingTube31" type="cylinder"><dimensions radius="0.007000" height="0.010390"/><material name="PVC"/><look name="ring_red"/><world_transform rpy="6.185011 0.0 0.0" xyz="1.000000 -0.177255 0.919805"/></static>
+	<static name="TargetRedRingWeight" type="box"><dimensions xyz="0.020 0.030 0.032"/><material name="Plastic"/><look name="ring_weight"/><world_transform rpy="0.0 0.0 0.0" xyz="1.000000 -0.230000 0.991000"/></static>
+
+	<!-- Collection frame: outer size 0.40 x 0.30 m; red frame spans 0.20-0.50 m above the pool floor.
+	     There is no bottom plate: the dark area seen in the reference is a shadow.
+	     White 12 mm support rods raise the red frame from the pool floor to its lower rail. -->
+	<static name="CollectionFramePostNW" type="cylinder"><dimensions radius="0.006" height="0.300"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.794 0.950"/></static>
+	<static name="CollectionFramePostNE" type="cylinder"><dimensions radius="0.006" height="0.300"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.794 0.950"/></static>
+	<static name="CollectionFramePostSW" type="cylinder"><dimensions radius="0.006" height="0.300"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.506 0.950"/></static>
+	<static name="CollectionFramePostSE" type="cylinder"><dimensions radius="0.006" height="0.300"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.506 0.950"/></static>
+	<static name="CollectionSupportNW" type="cylinder"><dimensions radius="0.006" height="0.200"/><material name="PVC"/><look name="collection_white"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.794 1.200"/></static>
+	<static name="CollectionSupportNE" type="cylinder"><dimensions radius="0.006" height="0.200"/><material name="PVC"/><look name="collection_white"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.794 1.200"/></static>
+	<static name="CollectionSupportSW" type="cylinder"><dimensions radius="0.006" height="0.200"/><material name="PVC"/><look name="collection_white"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.506 1.200"/></static>
+	<static name="CollectionSupportSE" type="cylinder"><dimensions radius="0.006" height="0.200"/><material name="PVC"/><look name="collection_white"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.506 1.200"/></static>
+	<!-- Two-level red collection frame: top at 0.50 m and lower rail at 0.20 m above the pool floor.
+	     Red posts connect only these two levels. White supports continue from the lower red rail
+	     to the pool floor; the white base rods are supports, not a bottom plate. -->
+	<static name="CollectionLowerNorth" type="cylinder"><dimensions radius="0.006" height="0.388"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.550 -1.794 1.100"/></static>
+	<static name="CollectionLowerSouth" type="cylinder"><dimensions radius="0.006" height="0.388"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.550 -1.506 1.100"/></static>
+	<static name="CollectionLowerWest" type="cylinder"><dimensions radius="0.006" height="0.288"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.650 1.100"/></static>
+	<static name="CollectionLowerEast" type="cylinder"><dimensions radius="0.006" height="0.288"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.650 1.100"/></static>
+	<!-- Lower-level hollow 90-degree PVC elbows plus vertical hollow sleeves. -->
+	<static name="CollectionLowerSocketNWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.719 -1.794 1.100"/></static>
+	<static name="CollectionLowerSocketNWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.769 1.100"/></static>
+	<static name="CollectionLowerSocketNEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.381 -1.794 1.100"/></static>
+	<static name="CollectionLowerSocketNEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.769 1.100"/></static>
+	<static name="CollectionLowerSocketSWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.719 -1.506 1.100"/></static>
+	<static name="CollectionLowerSocketSWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.531 1.100"/></static>
+	<static name="CollectionLowerSocketSEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.381 -1.506 1.100"/></static>
+	<static name="CollectionLowerSocketSEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.531 1.100"/></static>
+	<static name="CollectionLowerSleeveNW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.794 1.100"/></static>
+	<static name="CollectionLowerSleeveNE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.794 1.100"/></static>
+	<static name="CollectionLowerSleeveSW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.506 1.100"/></static>
+	<static name="CollectionLowerSleeveSE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.506 1.100"/></static>
+	<static name="CollectionTopNorth" type="cylinder"><dimensions radius="0.006" height="0.388"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.550 -1.794 0.800"/></static>
+	<static name="CollectionTopSouth" type="cylinder"><dimensions radius="0.006" height="0.388"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.550 -1.506 0.800"/></static>
+	<static name="CollectionTopWest" type="cylinder"><dimensions radius="0.006" height="0.288"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.650 0.800"/></static>
+	<static name="CollectionTopEast" type="cylinder"><dimensions radius="0.006" height="0.288"/><material name="PVC"/><look name="collection_red"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.650 0.800"/></static>
+	<!-- Upper-level hollow 90-degree PVC elbows plus vertical hollow sleeves. -->
+	<static name="CollectionTopSocketNWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.719 -1.794 0.800"/></static>
+	<static name="CollectionTopSocketNWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.769 0.800"/></static>
+	<static name="CollectionTopSocketNEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.381 -1.794 0.800"/></static>
+	<static name="CollectionTopSocketNEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.769 0.800"/></static>
+	<static name="CollectionTopSocketSWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.719 -1.506 0.800"/></static>
+	<static name="CollectionTopSocketSWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.531 0.800"/></static>
+	<static name="CollectionTopSocketSEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.381 -1.506 0.800"/></static>
+	<static name="CollectionTopSocketSEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.531 0.800"/></static>
+	<static name="CollectionTopSleeveNW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.794 0.800"/></static>
+	<static name="CollectionTopSleeveNE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.794 0.800"/></static>
+	<static name="CollectionTopSleeveSW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.506 0.800"/></static>
+	<static name="CollectionTopSleeveSE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.506 0.800"/></static>
+	<static name="CollectionSupportBaseNorth" type="cylinder"><dimensions radius="0.006" height="0.388"/><material name="PVC"/><look name="collection_white"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.550 -1.794 1.294"/></static>
+	<static name="CollectionSupportBaseSouth" type="cylinder"><dimensions radius="0.006" height="0.388"/><material name="PVC"/><look name="collection_white"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.550 -1.506 1.294"/></static>
+	<static name="CollectionSupportBaseWest" type="cylinder"><dimensions radius="0.006" height="0.288"/><material name="PVC"/><look name="collection_white"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.650 1.294"/></static>
+	<static name="CollectionSupportBaseEast" type="cylinder"><dimensions radius="0.006" height="0.288"/><material name="PVC"/><look name="collection_white"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.650 1.294"/></static>
+	<!-- Base-level hollow 90-degree PVC elbows plus vertical hollow sleeves. -->
+	<static name="CollectionBaseSocketNWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.719 -1.794 1.294"/></static>
+	<static name="CollectionBaseSocketNWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.769 1.294"/></static>
+	<static name="CollectionBaseSocketNEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.381 -1.794 1.294"/></static>
+	<static name="CollectionBaseSocketNEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.769 1.294"/></static>
+	<static name="CollectionBaseSocketSWX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.719 -1.506 1.294"/></static>
+	<static name="CollectionBaseSocketSWY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.744 -1.531 1.294"/></static>
+	<static name="CollectionBaseSocketSEX" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 1.5708 0.0" xyz="1.381 -1.506 1.294"/></static>
+	<static name="CollectionBaseSocketSEY" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="1.5708 0.0 0.0" xyz="1.356 -1.531 1.294"/></static>
+	<static name="CollectionBaseSleeveNW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.794 1.294"/></static>
+	<static name="CollectionBaseSleeveNE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.794 1.294"/></static>
+	<static name="CollectionBaseSleeveSW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.506 1.294"/></static>
+	<static name="CollectionBaseSleeveSE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.506 1.294"/></static>
+
+	<!-- One fixed net entity: white OBJ for rendering, thin invisible box for collision. -->
+	<animated name="CollectionNetVisual" type="model" collisions="true">
+		<physical>
+			<mesh filename="guoshui_2026_collection_collision_plane.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</physical>
+		<visual>
+			<mesh filename="guoshui_2026_collection_net_diagonal.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</visual>
+		<material name="PVC"/><look name="collection_net"/>
+		<trajectory type="spline" playback="repeat">
+			<keypoint time="0.0" xyz="1.55 -1.65 0.95" rpy="0.0 0.0 0.0"/>
+			<keypoint time="1.0" xyz="1.55 -1.65 0.95" rpy="0.0 0.0 0.0"/>
+		</trajectory>
+	</animated>
+
+	<!-- Same six-thruster vehicle and ROS sensor interfaces as the previous default scenario. -->
+	<include file="xunyun_fixed.scn">
+		<arg name="robot_name" value="XUNYUN"/>
+		<arg name="robot_position" value="8.95 -1.80 0.12"/>
+		<arg name="robot_orientation" value="0.0 0.0 0.0"/>
+	</include>
+</scenario>

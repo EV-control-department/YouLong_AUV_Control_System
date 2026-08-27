@@ -47,13 +47,18 @@ def generate_launch_description():
         description='Enable task runner'
     )
     declare_scenario = DeclareLaunchArgument(
-        'scenario_desc', default_value='wuurc_murc_2026_auv.scn',
+        'scenario_desc', default_value='guoshui_2026_cruise.scn',
         description='Stonefish scenario file name (in Data/ directory)'
+    )
+    declare_target_id = DeclareLaunchArgument(
+        'target_id', default_value='yellow_golf',
+        description='Competition target metadata: yellow_golf, pink_golf, or red_ring'
     )
     enable_ai = LaunchConfiguration('enable_ai')
     enable_nav = LaunchConfiguration('enable_nav')
     enable_task = LaunchConfiguration('enable_task')
     scenario_desc = LaunchConfiguration('scenario_desc')
+    target_id = LaunchConfiguration('target_id')
 
     # Stonefish simulator paths
     # Use source directory path for Data (simulator needs direct filesystem access)
@@ -93,8 +98,8 @@ def generate_launch_description():
             simulation_data_dir,
             PathJoinSubstitution([simulation_data_dir, scenario_desc]),
             '100.0',
-            '1280',
-            '720',
+            '1600',
+            '900',
             'high',
         ],
         output='screen',
@@ -148,6 +153,7 @@ def generate_launch_description():
         executable='task_runner',
         name='task_runner',
         output='screen',
+        parameters=[{'target_id': target_id}],
         condition=IfCondition(enable_task),
     )
 
@@ -163,6 +169,7 @@ def generate_launch_description():
         declare_enable_nav,
         declare_enable_task,
         declare_scenario,
+        declare_target_id,
         # 仅在检测到可用 NVIDIA GPU 时启用 NVIDIA OpenGL/PRIME 渲染。
         *render_environment,
         LogInfo(msg=['Simulation data: ', simulation_data_dir]),

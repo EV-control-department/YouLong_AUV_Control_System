@@ -31,6 +31,7 @@
 namespace sf
 {
     class ROS2SimulationManager;
+    class OpenGLTrackball;
 
     class ROS2GraphicalSimulationApp : public GraphicalSimulationApp
     {
@@ -38,6 +39,12 @@ namespace sf
         ROS2GraphicalSimulationApp(std::string title, std::string dataPath, RenderSettings s, HelperSettings h, ROS2SimulationManager* sim);
         void Startup();
         void Tick();
+
+    private:
+        void ConfigureInitialPoolView(OpenGLTrackball* trackball);
+
+        ROS2SimulationManager* sim_;
+        OpenGLTrackball* configuredTrackball_;
     };
 }
 
