@@ -16,13 +16,14 @@ executable in this package and consumes /perception/detection/*.
 import os
 import subprocess
 import threading
+import math
 
 import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
 
-from std_msgs.msg import Header
+from std_msgs.msg import Float32MultiArray, Header
 
 from . import ai as ai_mod
 from . import sensor as sensor_mod
@@ -60,6 +61,14 @@ class CameraAiNode(Node):
         self._mjpeg_server = None
         self._gortc_process = None
         self._gortc_config = None
+
+        # Latest ZIT6 pose used for the small telemetry overlay on all streams.
+        # /zit6/state/pos has no header, so the newest received sample is the
+        # closest available pose for the frame being encoded.
+        self._pose_lock = threading.Lock()
+        self._pose_overlay = None
+        self._pose_sub = self.create_subscription(
+            Float32MultiArray, '/zit6/state/pos', self._pose_cb, 10)
 
         # determine active cameras
         active = []
@@ -143,6 +152,57 @@ class CameraAiNode(Node):
     def _rclpy_ok(self):
         return rclpy.ok()
 
+    def _pose_cb(self, msg):
+        """Cache the latest ZIT6 position for video telemetry.
+
+        Supported formats are the current 4-element [x, y, z, yaw_rad]
+        format and the 6-element [x, y, z, roll_rad, pitch_rad, yaw_rad]
+        format used by newer ZIT6 firmware.
+        """
+        if len(msg.data) >= 6:
+            values = (msg.data[0], msg.data[1], msg.data[2], msg.data[5])
+        elif len(msg.data) >= 4:
+            values = (msg.data[0], msg.data[1], msg.data[2], msg.data[3])
+        else:
+            return
+        if not all(math.isfinite(float(value)) for value in values):
+            return
+        with self._pose_lock:
+            self._pose_overlay = tuple(float(value) for value in values)
+
+    def _draw_pose_overlay(self, frame):
+        """Render the latest x/y/z/yaw in the lower-right corner."""
+        overlay = frame.copy()
+        with self._pose_lock:
+            pose = self._pose_overlay
+
+        if pose is None:
+            text = 'POS unavailable'
+        else:
+            x, y, z, yaw_rad = pose
+            text = (f'x={x:.2f} y={y:.2f} z={z:.2f} '
+                    f'yaw={math.degrees(yaw_rad):.1f} deg')
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.45
+        thickness = 1
+        margin = 12
+        (text_width, text_height), baseline = cv2.getTextSize(
+            text, font, font_scale, thickness)
+        x0 = max(margin, overlay.shape[1] - text_width - margin)
+        y0 = overlay.shape[0] - margin
+
+        # A compact black backing keeps the small white text readable over any
+        # underwater image without changing the rest of the video.
+        cv2.rectangle(
+            overlay,
+            (x0 - 6, y0 - text_height - baseline - 6),
+            (min(overlay.shape[1] - 1, x0 + text_width + 6), y0 + 4),
+            (0, 0, 0), -1)
+        cv2.putText(overlay, text, (x0, y0), font, font_scale,
+                    (255, 255, 255), thickness, cv2.LINE_AA)
+        return overlay
+
     # ── sensor connector: ROS->BGR gate submission + raw preview ────────
     def submit_image(self, camera, msg):
         """Called from uv_sensor when a ROS Image arrives (sim mode).
@@ -167,6 +227,7 @@ class CameraAiNode(Node):
         self._gate.submit(camera, ('opencv', frame, stamp, True))
 
     def update_raw_preview(self, camera, frame):
+        frame = self._draw_pose_overlay(frame)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
             return
@@ -178,6 +239,7 @@ class CameraAiNode(Node):
     def update_annotated_stream(self, camera, frame):
         if not self._stream_annotated:
             return
+        frame = self._draw_pose_overlay(frame)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
             return

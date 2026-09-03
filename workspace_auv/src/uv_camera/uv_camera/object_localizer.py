@@ -1,15 +1,16 @@
-"""Downward-stereo static target localization node.
+"""Independent front/down stereo static target localization node.
 
 This node deliberately replaces the legacy monocular position implementation.
 It consumes timestamped detection metadata, loads the stereo calibration profiles,
-and fuses valid downward-stereo observations into one static 3-D position per target:
+and fuses valid observations into independent front/down static 3-D estimates:
 
-* DOWN_DIRECT: a down-camera plane intersection or a down stereo measurement.
+* FRONT_STEREO: a valid front-camera stereo measurement.
+* FRONT_MULTI_VIEW: an intersection of front-camera rays from different poses.
+* DOWN_DIRECT: a down-camera stereo measurement (or optional plane intersection).
 
-The current competition localization policy intentionally uses only the
-downward camera.  The old front-stereo and front-multi-view implementation is
-kept below for compatibility with old offline tests, but it is not subscribed
-or executed by this node.
+The two camera pairs have separate observation pools, 2-D horizontal K-means
+clusters, and per-instance Kalman windows.  A front estimate never gates,
+reanchors, or updates a down estimate, and vice versa.
 
 The public compatibility output is ObjectPositionArray on /perception/objects.
 TargetPositionArray additionally exposes covariance and observation provenance.
@@ -31,6 +32,7 @@ import cv2
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo
 
@@ -200,6 +202,18 @@ class DownDirectObservation:
 
 
 @dataclass
+class FrontPositionObservation:
+    """One front stereo or multi-view 3-D observation in the front pool."""
+
+    stamp: float
+    position: np.ndarray
+    covariance: np.ndarray
+    confidence: float
+    form: int
+    class_id: int = -1
+
+
+@dataclass
 class TargetTrack:
     """One physical static target, possibly seen by two detector labels."""
 
@@ -211,8 +225,12 @@ class TargetTrack:
     covariance: np.ndarray | None = None
     rays: deque[RayObservation] = field(default_factory=deque)
     down_observations: deque[DownDirectObservation] = field(default_factory=deque)
+    front_observations: deque[FrontPositionObservation] = field(
+        default_factory=deque)
     down_filter_position: np.ndarray | None = None
     down_filter_covariance: np.ndarray | None = None
+    front_filter_position: np.ndarray | None = None
+    front_filter_covariance: np.ndarray | None = None
     last_stamp: float = 0.0
     last_confidence: float = 0.0
     observation_count: int = 0
@@ -239,6 +257,7 @@ class ObservationRecord:
     covariance: np.ndarray | None = None
     ray_origin: np.ndarray | None = None
     ray_direction: np.ndarray | None = None
+    source: str = "down"
 
 
 @dataclass
@@ -477,22 +496,30 @@ class ObjectLocalizer(Node):
             "down_left": deque(),
             "down_right": deque(),
         }
-        # Key by physical semantic class, never by a camera-specific YOLO ID.
-        # For example, collection_frame_front/collection_frame_down share the
-        # same "collection_frame" instance namespace.
+        # Downward estimates.  Front and down deliberately have separate
+        # namespaces: a same-class front estimate must not consume or move a
+        # down estimate.
         self._tracks: dict[tuple[str, int], TargetTrack] = {}
         self._next_instance_id: dict[str, int] = {}
-        # Large class-separated pool of geometrically valid down observations.
-        # Instance association consumes this pool into each track's bounded
-        # down_observations Kalman window.
+        self._front_tracks: dict[tuple[str, int], TargetTrack] = {}
+        self._front_next_instance_id: dict[str, int] = {}
+        # Large class-separated pools of geometrically valid observations.
+        # Each pool is reclustered in the horizontal N/E plane and then fitted
+        # by a bounded per-instance Kalman window.
         self._down_observation_pool: dict[
             str, deque[DownDirectObservation]] = {}
+        self._front_observation_pool: dict[
+            str, deque[FrontPositionObservation]] = {}
         self._warned: set[str] = set()
         self._counters = {
             "front_stereo_accepted": 0,
             "front_stereo_rejected": 0,
             "front_pair_invalid": 0,
             "front_multi_view_rays": 0,
+            "front_multi_view_points": 0,
+            "front_pool_observations": 0,
+            "front_cluster_updates": 0,
+            "front_duplicate_merged": 0,
             "front_multi_view_angle_rejected": 0,
             "down_direct_accepted": 0,
             "down_direct_rejected": 0,
@@ -533,9 +560,10 @@ class ObjectLocalizer(Node):
         self.create_timer(0.05, self._flush_stale_pending)
         self.create_timer(5.0, self._summary)
 
-        if self._calibration_ready:
+        if self._calibration_ready or self._front_calibration_ready:
             self.get_logger().info(
-                "object_localizer started with down-only stereo calibration")
+                "object_localizer started with independent front/down stereo "
+                "estimation")
         elif self.calibration_source == "sim_camera_info":
             self.get_logger().info(
                 "object_localizer waiting for Stonefish CameraInfo calibration")
@@ -576,7 +604,7 @@ class ObjectLocalizer(Node):
         self.declare_parameter("min_disparity_px", 2.0)
         self.declare_parameter("min_depth_m", 0.05)
         self.declare_parameter("max_depth_m", 50.0)
-        self.declare_parameter("use_rejected_front_pairs_for_multiview", False)
+        self.declare_parameter("use_rejected_front_pairs_for_multiview", True)
 
         self.declare_parameter("down_plane_enabled", False)
         self.declare_parameter("down_plane_normal", [0.0, 0.0, 1.0])
@@ -604,6 +632,9 @@ class ObjectLocalizer(Node):
         self.declare_parameter("front_multi_view_max_rays", 20)
         self.declare_parameter("front_multi_view_min_angle_deg", 5.0)
         self.declare_parameter("front_multi_view_max_line_error_m", 1.0)
+        self.declare_parameter("front_observation_pool_size", 2000)
+        self.declare_parameter("front_direct_queue_size", 50)
+        self.declare_parameter("front_duplicate_merge_distance_m", 0.25)
         self.declare_parameter("ray_association_angle_deg", 25.0)
         self.declare_parameter("ray_association_distance_m", 1.0)
         self.declare_parameter("position_gate_chi2", 16.0)
@@ -716,6 +747,12 @@ class ObjectLocalizer(Node):
         self.front_multi_scale = float(
             get("front_multi_view_noise_scale").value)
         self.down_direct_scale = float(get("down_direct_noise_scale").value)
+        self.front_observation_pool_size = max(
+            50, int(get("front_observation_pool_size").value))
+        self.front_direct_queue_size = max(
+            1, int(get("front_direct_queue_size").value))
+        self.front_duplicate_merge_distance = max(
+            0.01, float(get("front_duplicate_merge_distance_m").value))
 
         self.max_rays = int(get("front_multi_view_max_rays").value)
         self.min_ray_angle_rad = math.radians(
@@ -814,14 +851,13 @@ class ObjectLocalizer(Node):
 
     def _initialise_calibrations(self):
         if self.calibration_source == "npz":
-            # Front calibration is intentionally not loaded: front detections
-            # are not part of the current localization policy.
-            self._front_calibration = None
+            self._front_calibration = self._load_calibration(
+                "front", self.front_calibration_file)
             self._down_calibration = self._load_calibration(
                 "down", self.down_calibration_file)
-        # ``sim_camera_info`` is completed after both downward CameraInfo
-        # messages arrive.  Do not fall back to a hardware NPZ: that would
-        # silently apply the wrong focal length and baseline in sim.
+        # In sim_camera_info mode these are completed after both CameraInfo
+        # messages of each pair arrive.  Never silently fall back to an NPZ.
+        self._front_calibration_ready = self._front_calibration is not None
         self._calibration_ready = self._down_calibration is not None
 
     @staticmethod
@@ -850,9 +886,7 @@ class ObjectLocalizer(Node):
             "front" if camera.startswith("front") else "down")
 
     def _refresh_sim_calibration(self, camera_pair: str):
-        if camera_pair != "down":
-            # The current localizer deliberately uses only downward stereo.
-            return
+        was_ready = self._calibration_ready or self._front_calibration_ready
         left_key = f"{camera_pair}_left"
         right_key = f"{camera_pair}_right"
         left_info = self._camera_info_messages[left_key]
@@ -869,15 +903,19 @@ class ObjectLocalizer(Node):
         except (ValueError, cv2.error, np.linalg.LinAlgError) as error:
             if camera_pair == "front":
                 self._front_calibration = None
+                self._front_calibration_ready = False
             else:
                 self._down_calibration = None
-            self._calibration_ready = False
+            self._front_calibration_ready = (
+                self._front_calibration is not None)
+            self._calibration_ready = self._down_calibration is not None
             self.get_logger().error(
                 f"Failed to build {camera_pair} simulator calibration: {error}")
             return
 
         if camera_pair == "front":
             self._front_calibration = calibration
+            self._front_calibration_ready = True
             self.front_width = int(left_info.width)
             self.front_height = int(left_info.height)
         else:
@@ -885,7 +923,7 @@ class ObjectLocalizer(Node):
             self.down_width = int(left_info.width)
             self.down_height = int(left_info.height)
 
-        was_ready = self._calibration_ready
+        self._front_calibration_ready = self._front_calibration is not None
         self._calibration_ready = self._down_calibration is not None
         self.get_logger().info(
             f"Loaded simulator {camera_pair} calibration from CameraInfo: "
@@ -893,13 +931,21 @@ class ObjectLocalizer(Node):
             f"baseline={calibration.baseline_m:.5f} m, "
             f"fx={calibration.camera_matrix_left[0, 0]:.4f}, "
             f"fy={calibration.camera_matrix_left[1, 1]:.4f}")
-        if self._calibration_ready and not was_ready:
+        if ((self._calibration_ready or self._front_calibration_ready)
+                and not was_ready):
             self.get_logger().info(
-                "Simulator stereo calibration ready; target localization enabled")
+                "Simulator stereo calibration ready; front/down localization "
+                "enabled")
 
     def _create_subscriptions(self):
         self.create_subscription(
             PoseInfo, "/basic_motion/pose_info", self._pose_callback, 20)
+        self.create_subscription(
+            DetectionArray, "/perception/detection/front_left",
+            self._front_left_callback, 20)
+        self.create_subscription(
+            DetectionArray, "/perception/detection/front_right",
+            self._front_right_callback, 20)
         self.create_subscription(
             DetectionArray, "/perception/detection/down_left",
             self._down_left_callback, 20)
@@ -907,7 +953,8 @@ class ObjectLocalizer(Node):
             DetectionArray, "/perception/detection/down_right",
             self._down_right_callback, 20)
         if self.calibration_source == "sim_camera_info":
-            for camera in ("down_left", "down_right"):
+            for camera in ("front_left", "front_right", "down_left",
+                           "down_right"):
                 topic = self.camera_info_topics[camera]
                 topic = topic.strip()
                 if not topic:
@@ -955,13 +1002,9 @@ class ObjectLocalizer(Node):
         self._queue_detection("down_right", message)
 
     def _queue_detection(self, camera: str, message: DetectionArray):
-        if camera.startswith("front"):
-            # Defensive guard in case an external caller invokes the legacy
-            # callback directly.  No front detection subscription is created.
-            return
         arrival = time.monotonic()
         self._pending[camera].append((arrival, message))
-        self._try_pair("down")
+        self._try_pair("front" if camera.startswith("front") else "down")
 
     @staticmethod
     def _pop_deque_index(values: deque, index: int):
@@ -972,7 +1015,7 @@ class ObjectLocalizer(Node):
         return result
 
     def _try_pair(self, camera_pair: str):
-        if camera_pair != "down":
+        if camera_pair not in ("front", "down"):
             return
         left_key = f"{camera_pair}_left"
         right_key = f"{camera_pair}_right"
@@ -1003,13 +1046,16 @@ class ObjectLocalizer(Node):
 
     def _flush_stale_pending(self):
         now = time.monotonic()
-        for side in ("left", "right"):
-            key = f"down_{side}"
-            queue = self._pending[key]
-            while queue and now - queue[0][0] > self.pending_timeout:
-                _, message = queue.popleft()
-                if self.down_plane_enabled:
-                    self._process_down_single(message, side)
+        for camera_pair in ("front", "down"):
+            for side in ("left", "right"):
+                key = f"{camera_pair}_{side}"
+                queue = self._pending[key]
+                while queue and now - queue[0][0] > self.pending_timeout:
+                    _, message = queue.popleft()
+                    if camera_pair == "front":
+                        self._process_front_single(message, side)
+                    elif self.down_plane_enabled:
+                        self._process_down_single(message, side)
 
     def _lookup_pose(self, stamp: float) -> PoseAt | None:
         if not self._pose_buffer:
@@ -1080,7 +1126,7 @@ class ObjectLocalizer(Node):
                             right_message: DetectionArray):
         stamp = self._pair_stamp(left_message, right_message)
         pose = self._lookup_pose(stamp)
-        if pose is None or not self._calibration_ready:
+        if pose is None or not self._front_calibration_ready:
             return
         calibration = self._front_calibration
         left_detections = self._detections_for_camera(
@@ -1109,7 +1155,7 @@ class ObjectLocalizer(Node):
                     valid = False
                     reason = f"triangulation: {error}"
                 if valid:
-                    accepted = self._handle_position_measurement(
+                    accepted = self._handle_front_position_measurement(
                         int(left.class_id), point, covariance, pose,
                         FORM_FRONT_STEREO, min(
                             float(left.confidence), float(right.confidence)),
@@ -1149,7 +1195,7 @@ class ObjectLocalizer(Node):
     def _process_front_single(self, message: DetectionArray, side: str):
         stamp = self._message_stamp(message)
         pose = self._lookup_pose(stamp)
-        if pose is None or not self._calibration_ready:
+        if pose is None or not self._front_calibration_ready:
             return
         for detection in self._detections_for_camera("front", message.detections):
             self._process_front_mono_detection(detection, side, pose)
@@ -1351,46 +1397,55 @@ class ObjectLocalizer(Node):
         )
 
     def _front_stereo_valid(self, left: Detection, right: Detection):
+        """Check only the visual correspondence conditions for front stereo.
+
+        Front stereo is intentionally permissive: epipolar residual, disparity
+        and range are quality indicators, not pair-admission gates.  A pair
+        with weak geometry is still attempted and its covariance is inflated
+        below.  Non-finite or behind-camera triangulation cannot form a valid
+        3-D point and falls back to the front multi-view ray path.
+        """
         if self._bbox_at_edge(left) or self._bbox_at_edge(right):
             return False, "front pair rejected: bbox touches image edge", {}
         lw, lh = self._bbox_size(left)
         rw, rh = self._bbox_size(right)
-        if min(lw, lh, rw, rh) < 2.0:
-            return False, "front pair rejected: bbox too small", {}
+        if min(lw, lh, rw, rh) <= 0.0:
+            return False, "front pair rejected: invalid bbox", {}
         width_ratio = max(lw / rw, rw / lw)
         height_ratio = max(lh / rh, rh / lh)
-        area_ratio = max((lw * lh) / (rw * rh), (rw * rh) / (lw * lh))
         if width_ratio > self.bbox_width_ratio_max:
             return False, "front pair rejected: bbox width mismatch", {}
         if height_ratio > self.bbox_height_ratio_max:
             return False, "front pair rejected: bbox height mismatch", {}
-        if area_ratio > self.bbox_area_ratio_max:
-            return False, "front pair rejected: bbox area mismatch", {}
 
-        geometry_valid, geometry_reason, metrics = (
-            self._stereo_geometry_valid(
-                left, right, self._front_calibration))
+        try:
+            metrics = self._stereo_geometry_metrics(
+                left, right, self._front_calibration)
+        except (ValueError, cv2.error, np.linalg.LinAlgError):
+            metrics = {}
         metrics.update({
             "bbox_width_ratio": width_ratio,
             "bbox_height_ratio": height_ratio,
-            "bbox_area_ratio": area_ratio,
         })
-        if not geometry_valid:
-            return False, geometry_reason, metrics
         return True, "", metrics
 
-    def _stereo_geometry_valid(self, left: Detection, right: Detection,
-                               calibration: StereoCalibration):
+    @staticmethod
+    def _stereo_geometry_metrics(left: Detection, right: Detection,
+                                 calibration: StereoCalibration):
         left_rect = calibration.rectified_pixel(
             "left", np.array([left.pixel_x, left.pixel_y]))
         right_rect = calibration.rectified_pixel(
             "right", np.array([right.pixel_x, right.pixel_y]))
-        epipolar_error = abs(float(left_rect[1] - right_rect[1]))
-        disparity = abs(float(left_rect[0] - right_rect[0]))
-        metrics = {
-            "epipolar_error_px": epipolar_error,
-            "disparity_px": disparity,
+        return {
+            "epipolar_error_px": abs(float(left_rect[1] - right_rect[1])),
+            "disparity_px": abs(float(left_rect[0] - right_rect[0])),
         }
+
+    def _stereo_geometry_valid(self, left: Detection, right: Detection,
+                               calibration: StereoCalibration):
+        metrics = self._stereo_geometry_metrics(left, right, calibration)
+        epipolar_error = metrics["epipolar_error_px"]
+        disparity = metrics["disparity_px"]
         if epipolar_error > self.epipolar_error_max:
             return False, "stereo pair rejected: epipolar error", metrics
         if disparity < self.min_disparity:
@@ -1526,13 +1581,39 @@ class ObjectLocalizer(Node):
             else self.down_direct_scale)
         covariance = _regularize_covariance(covariance * scale**2)
         depth_left = float(point_rectified[2])
-        depth_right = float(
-            calibration.triangulate_left_rectified(
-                pixels[:2], pixels[2:])[2])
-        if depth_left <= self.min_depth or depth_left > self.max_depth:
-            raise ValueError(f"stereo depth {depth_left:.3f}m out of range")
+        depth_right = depth_left
         if not np.isfinite(depth_right):
             raise ValueError("right depth is non-finite")
+
+        if camera_pair == "front":
+            # Do not reject front pairs for a particular epipolar or disparity
+            # threshold.  Their geometry is represented by the covariance so
+            # weak pairs have less influence in the front pool/filter.  A
+            # non-positive or almost-zero depth is not a quality preference:
+            # it cannot represent a point in front of the camera, so the
+            # caller falls back to a mono multi-view ray instead.
+            if depth_left <= 1e-6:
+                raise ValueError(
+                    f"front stereo depth {depth_left:.3f}m is not usable")
+            try:
+                metrics = self._stereo_geometry_metrics(
+                    left, right, calibration)
+                epipolar_scale = max(
+                    1.0,
+                    metrics["epipolar_error_px"]
+                    / max(self.epipolar_error_max, 1e-6),
+                )
+                disparity_scale = max(
+                    1.0,
+                    self.min_disparity
+                    / max(metrics["disparity_px"], 1e-6),
+                )
+                covariance = _regularize_covariance(
+                    covariance * max(epipolar_scale, disparity_scale)**2)
+            except (ValueError, cv2.error, np.linalg.LinAlgError):
+                pass
+        elif depth_left <= self.min_depth or depth_left > self.max_depth:
+            raise ValueError(f"stereo depth {depth_left:.3f}m out of range")
         return point_world, covariance, {
             "depth_m": depth_left,
             "baseline_m": calibration.baseline_m,
@@ -1666,7 +1747,7 @@ class ObjectLocalizer(Node):
     def _add_front_ray(self, class_id: int, ray, confidence: float,
                        stamp: float):
         origin, direction, sigma_angle = ray
-        track = self._associate_ray(class_id, origin, direction)
+        track = self._associate_front_ray(class_id, origin, direction)
         if track is None:
             self._reject_instance_limit(class_id)
             return
@@ -1691,18 +1772,33 @@ class ObjectLocalizer(Node):
         track.last_update_monotonic = time.monotonic()
         track.last_stamp = max(track.last_stamp, stamp)
         self._counters["front_multi_view_rays"] += 1
-        self._record_ray_observation(
+        ray_record = self._record_ray_observation(
             track, class_id, stamp, origin, direction, confidence)
 
-        if track.position is None:
-            result = self._solve_rays(track)
-            if result is not None:
-                position, covariance = result
-                track.position = position
-                track.covariance = covariance
-                track.last_stamp = stamp
-        else:
-            self._fuse_ray(track, origin, direction, sigma_angle)
+        result = self._solve_rays(track)
+        if result is None:
+            return
+        position, covariance = result
+        # A ray hypothesis becomes a normal front-pool hypothesis as soon as
+        # two sufficiently different views define a 3-D point.  Seeding the
+        # hypothesis position lets reclustering keep its instance ID and its
+        # retained ray history.
+        track.position = position.copy()
+        track.covariance = covariance.copy()
+        front_track = self._handle_front_position_measurement(
+            class_id, position, covariance,
+            PoseAt(
+                stamp=stamp,
+                position=track.rays[-1].origin.copy(),
+                rotation=np.eye(3),
+                covariance=np.zeros((6, 6), dtype=np.float64),
+                age_sec=0.0,
+            ),
+            FORM_FRONT_MULTI_VIEW, confidence,
+            {"multi_view": True})
+        if front_track is not None:
+            ray_record.instance_id = front_track.instance_id
+            self._counters["front_multi_view_points"] += 1
 
     def _front_ray_has_new_baseline(self, track: TargetTrack,
                                     direction: np.ndarray) -> bool:
@@ -1723,11 +1819,11 @@ class ObjectLocalizer(Node):
             for ray in track.rays)
         return nearest_angle > self.min_ray_angle_rad
 
-    def _associate_ray(self, class_id: int, origin: np.ndarray,
-                       direction: np.ndarray) -> TargetTrack | None:
+    def _associate_front_ray(self, class_id: int, origin: np.ndarray,
+                             direction: np.ndarray) -> TargetTrack | None:
         candidates = []
         semantic_class = self._semantic_class(class_id)
-        for track in self._tracks.values():
+        for track in self._front_tracks.values():
             if self._semantic_class(track.class_id) != semantic_class:
                 continue
             if track.position is not None:
@@ -1751,7 +1847,14 @@ class ObjectLocalizer(Node):
                     candidates.append((best_angle + 0.5, track))
         if candidates:
             return min(candidates, key=lambda item: item[0])[1]
-        return self._new_track(class_id)
+        return self._new_front_track(class_id)
+
+    # Kept as a small compatibility alias for offline callers of the old
+    # helper.  It is intentionally front-only; it no longer touches down
+    # tracks.
+    def _associate_ray(self, class_id: int, origin: np.ndarray,
+                       direction: np.ndarray) -> TargetTrack | None:
+        return self._associate_front_ray(class_id, origin, direction)
 
     def _solve_rays(self, track: TargetTrack):
         if len(track.rays) < 2:
@@ -1803,6 +1906,18 @@ class ObjectLocalizer(Node):
                 return None
 
         if position is None or not np.all(np.isfinite(position)):
+            return None
+        # The least-squares solve uses unoriented line projectors.  Two
+        # bearing lines can therefore intersect behind both cameras; that is
+        # not a valid multi-view target and was the source of rearward ball
+        # estimates after a rejected front stereo pair.
+        ray_depths = [
+            float(np.dot(position - ray.origin, ray.direction))
+            for ray in inliers
+        ]
+        if (not ray_depths
+                or any(not np.isfinite(depth) or depth <= self.min_depth
+                       for depth in ray_depths)):
             return None
         covariance = _regularize_covariance(
             _safe_inverse(normal_matrix) * self.front_multi_scale**2)
@@ -2178,6 +2293,290 @@ class ObjectLocalizer(Node):
             track, class_id, pose.stamp, position, covariance, form, confidence)
         return True
 
+    def _handle_front_position_measurement(
+            self, class_id: int, position: np.ndarray,
+            covariance: np.ndarray, pose: PoseAt | None, form: int,
+            confidence: float, quality: dict,
+            stamp: float | None = None) -> TargetTrack | None:
+        """Put one valid front 3-D factor through pool/K-means/Kalman.
+
+        ``pose`` is present for a front stereo pair.  A multi-view point is
+        already expressed in world coordinates and only needs its ray stamp,
+        so that path passes ``pose=None`` and supplies ``stamp`` explicitly.
+        """
+        if not np.all(np.isfinite(position)):
+            return None
+        if pose is not None:
+            distance = float(np.linalg.norm(position - pose.position))
+            observation_stamp = float(pose.stamp)
+        else:
+            distance = float(np.linalg.norm(position))
+            observation_stamp = float(stamp or 0.0)
+        if not np.isfinite(distance) or distance < self.min_depth:
+            return None
+        covariance = _regularize_covariance(covariance)
+        observation = self._add_front_observation_pool(
+            class_id, position, covariance, observation_stamp, confidence, form)
+        track = self._recluster_front_class(class_id, observation)
+        if track is None:
+            return None
+        self._last_detection_stamp = max(
+            self._last_detection_stamp, observation_stamp)
+        self._record_position_observation(
+            track, class_id, observation_stamp, position, covariance, form,
+            confidence, source="front")
+        self._counters["front_pool_observations"] += 1
+        return track
+
+    def _add_front_observation_pool(
+            self, class_id: int, position: np.ndarray,
+            covariance: np.ndarray, stamp: float, confidence: float,
+            form: int) -> FrontPositionObservation:
+        semantic_class = self._semantic_class(class_id)
+        pool = self._front_observation_pool.setdefault(
+            semantic_class,
+            deque(maxlen=self.front_observation_pool_size),
+        )
+        observation = FrontPositionObservation(
+            stamp=float(stamp),
+            position=np.asarray(position, dtype=np.float64).copy(),
+            covariance=_regularize_covariance(covariance),
+            confidence=float(confidence),
+            form=int(form),
+            class_id=int(class_id),
+        )
+        pool.append(observation)
+        return observation
+
+    def _front_duplicate_merge_radius(self, semantic_class: str) -> float:
+        if semantic_class == "guide_line":
+            return self.guide_line_min_spacing
+        return self.front_duplicate_merge_distance
+
+    def _merge_close_front_cluster_centers(
+            self, observations, assignments, centers, semantic_class: str):
+        """Merge K-means centers that cannot be separate front instances."""
+        radius = self._front_duplicate_merge_radius(semantic_class)
+        while len(centers) > 1:
+            distance_matrix = np.linalg.norm(
+                centers[:, None, :] - centers[None, :, :], axis=2)
+            distance_matrix += np.eye(len(centers)) * 1e9
+            first, second = np.unravel_index(
+                int(np.argmin(distance_matrix)), distance_matrix.shape)
+            if distance_matrix[first, second] >= radius:
+                break
+            centers = np.delete(centers, second, axis=0)
+            assignments = np.argmin(
+                np.sum((np.asarray([observation.position[:2]
+                                     for observation in observations])[:, None, :]
+                        - centers[None, :, :])**2, axis=2), axis=1)
+        return assignments, centers
+
+    def _recluster_front_class(
+            self, class_id: int,
+            current_observation: FrontPositionObservation) -> TargetTrack | None:
+        """Cluster the complete front pool and update one track per cluster."""
+        semantic_class = self._semantic_class(class_id)
+        observations = list(self._front_observation_pool.get(semantic_class, ()))
+        if not observations:
+            return None
+        cluster_count = min(self._instance_limit(class_id), len(observations))
+        assignments, centers = self._kmeans_horizontal(
+            observations, cluster_count)
+        assignments, centers = self._merge_close_front_cluster_centers(
+            observations, assignments, centers, semantic_class)
+
+        existing_tracks = [
+            track for track in self._front_tracks.values()
+            if track.physical_class_name == semantic_class
+            and track.position is not None
+        ]
+        cluster_tracks = self._cluster_to_existing_tracks(
+            centers, existing_tracks)
+        used_track_keys = {
+            (track.physical_class_name, track.instance_id)
+            for track in cluster_tracks.values()
+        }
+        for track in existing_tracks:
+            key = (track.physical_class_name, track.instance_id)
+            if key not in used_track_keys:
+                self._front_tracks.pop(key, None)
+
+        # A ray-only hypothesis is promoted to a positioned track before this
+        # method is called by _add_front_ray.  Remove only stale ray-only
+        # hypotheses here if no cluster can reuse them, so they cannot consume
+        # an instance slot forever.
+        for key, track in list(self._front_tracks.items()):
+            if (track.physical_class_name == semantic_class
+                    and track.position is None):
+                self._front_tracks.pop(key, None)
+
+        for cluster_index in range(len(centers)):
+            if cluster_index not in cluster_tracks:
+                track = self._new_front_track(class_id)
+                if track is None:
+                    continue
+                cluster_tracks[cluster_index] = track
+
+        for cluster_index, track in cluster_tracks.items():
+            members = [
+                observations[index] for index, assignment
+                in enumerate(assignments) if int(assignment) == cluster_index
+            ]
+            if members:
+                self._update_track_from_front_cluster(
+                    track, class_id, members)
+
+        self._remap_front_observation_history(
+            semantic_class, observations, assignments, cluster_tracks)
+        current_index = min(
+            range(len(observations)),
+            key=lambda index: abs(
+                observations[index].stamp - current_observation.stamp)
+                + float(np.linalg.norm(
+                    observations[index].position[:2]
+                    - current_observation.position[:2])) * 1e-6,
+        )
+        self._counters["front_cluster_updates"] += 1
+        return cluster_tracks.get(int(assignments[current_index]))
+
+    def _update_track_from_front_cluster(
+            self, track: TargetTrack, class_id: int,
+            observations: list[FrontPositionObservation]):
+        """Fit the newest 50 members of one horizontal front cluster."""
+        ordered = sorted(observations, key=lambda observation: observation.stamp)
+        window = ordered[-self.front_direct_queue_size:]
+        track.class_id = int(class_id)
+        track.physical_class_name = self._semantic_class(class_id)
+        track.observed_class_ids = {
+            observation.class_id for observation in observations
+            if observation.class_id >= 0
+        } or {int(class_id)}
+        track.front_observations = deque(window)
+        (track.front_filter_position,
+         track.front_filter_covariance) = self._fit_front_window(
+             track.front_observations)
+        track.position = track.front_filter_position.copy()
+        track.covariance = track.front_filter_covariance.copy()
+        track.observation_count = len(observations)
+        track.front_stereo_count = sum(
+            observation.form == FORM_FRONT_STEREO for observation in observations)
+        track.front_multi_view_count = sum(
+            observation.form == FORM_FRONT_MULTI_VIEW
+            for observation in observations)
+        track.down_direct_count = 0
+        track.observation_form_mask = 0
+        for observation in observations:
+            track.observation_form_mask |= int(observation.form)
+        track.last_observation_form = int(window[-1].form)
+        track.last_confidence = max(
+            float(observation.confidence) for observation in observations)
+        track.last_stamp = max(
+            float(observation.stamp) for observation in observations)
+        track.last_update_monotonic = time.monotonic()
+
+    @staticmethod
+    def _trim_extreme_front_observations(
+            observations, min_samples: int = 20,
+            trim_fraction: float = 0.20):
+        """Remove the most distant front samples once the window is large.
+
+        Front observations are expected to be static in the world frame, so
+        the component-wise median is a robust center for the retained window.
+        Using distance from that center avoids letting a small number of bad
+        triangulations pull the identity-measurement filter toward an extreme
+        position.  The original time order is preserved for the remaining
+        samples.
+        """
+        values = list(observations)
+        count = len(values)
+        if count <= int(min_samples):
+            return values
+
+        fraction = float(np.clip(trim_fraction, 0.0, 0.5))
+        remove_count = min(count - 1, max(1, int(math.floor(count * fraction))))
+        positions = np.asarray([
+            np.asarray(observation.position, dtype=np.float64)
+            for observation in values
+        ])
+        if positions.ndim != 2 or positions.shape[1] != 3 \
+                or not np.all(np.isfinite(positions)):
+            return values
+
+        center = np.median(positions, axis=0)
+        distances = np.linalg.norm(positions - center, axis=1)
+        keep_count = count - remove_count
+        keep_indices = np.argsort(distances, kind="stable")[:keep_count]
+        # Keep the chronological order used by the Kalman pass.
+        keep_indices = np.sort(keep_indices)
+        return [values[int(index)] for index in keep_indices]
+
+    @staticmethod
+    def _fit_front_window(
+            observations: deque[FrontPositionObservation]):
+        """Identity-measurement Kalman filter for a front cluster window."""
+        filtered = ObjectLocalizer._trim_extreme_front_observations(observations)
+        first = filtered[0]
+        position = first.position.copy()
+        covariance = first.covariance.copy()
+        identity = np.eye(3)
+        for observation in filtered[1:]:
+            measurement_covariance = observation.covariance
+            innovation = observation.position - position
+            innovation_covariance = _regularize_covariance(
+                covariance + measurement_covariance)
+            gain = covariance @ _safe_inverse(innovation_covariance)
+            prior_covariance = covariance.copy()
+            position = position + gain @ innovation
+            covariance = _regularize_covariance(
+                (identity - gain) @ prior_covariance @ (identity - gain).T
+                + gain @ measurement_covariance @ gain.T)
+        return position, covariance
+
+    def _remap_front_observation_history(
+            self, semantic_class: str, observations, assignments,
+            cluster_tracks):
+        history = getattr(self, "_observation_history", ())
+        if not history or not observations:
+            return
+        for record in history:
+            if (record.source != "front"
+                    or record.physical_class_name != semantic_class
+                    or record.position is None):
+                continue
+            matching = [
+                index for index, observation in enumerate(observations)
+                if abs(float(record.stamp) - float(observation.stamp)) < 1e-6
+            ]
+            if not matching:
+                continue
+            index = min(
+                matching,
+                key=lambda item: float(np.linalg.norm(
+                    record.position[:2] - observations[item].position[:2])))
+            track = cluster_tracks.get(int(assignments[index]))
+            if track is not None:
+                record.instance_id = track.instance_id
+
+    def _new_front_track(self, class_id: int) -> TargetTrack | None:
+        semantic_class = self._semantic_class(class_id)
+        existing = sum(
+            1 for track in self._front_tracks.values()
+            if self._semantic_class(track.class_id) == semantic_class
+        )
+        if existing >= self._instance_limit(class_id):
+            return None
+        instance_id = self._front_next_instance_id.get(semantic_class, 0)
+        self._front_next_instance_id[semantic_class] = instance_id + 1
+        track = TargetTrack(
+            class_id=class_id,
+            instance_id=instance_id,
+            physical_class_name=semantic_class,
+            observed_class_ids={class_id},
+        )
+        self._front_tracks[(semantic_class, instance_id)] = track
+        return track
+
     def _add_down_observation_pool(self, class_id: int,
                                    position: np.ndarray,
                                    covariance: np.ndarray,
@@ -2430,9 +2829,10 @@ class ObjectLocalizer(Node):
                                      observed_class_id: int, stamp: float,
                                      position: np.ndarray,
                                      covariance: np.ndarray, form: int,
-                                     confidence: float):
+                                     confidence: float,
+                                     source: str = "down"):
         """Retain a direct 3-D factor; this is not the fused track state."""
-        self._observation_history.append(ObservationRecord(
+        record = ObservationRecord(
             observation_id=self._next_observation_id,
             stamp=stamp,
             class_id=observed_class_id,
@@ -2442,15 +2842,19 @@ class ObjectLocalizer(Node):
             confidence=confidence,
             position=np.asarray(position, dtype=np.float64).copy(),
             covariance=np.asarray(covariance, dtype=np.float64).copy(),
-        ))
+            source=source,
+        )
+        self._observation_history.append(record)
         self._next_observation_id += 1
+        return record
 
     def _record_ray_observation(self, track: TargetTrack,
                                 observed_class_id: int, stamp: float,
                                 origin: np.ndarray, direction: np.ndarray,
-                                confidence: float):
+                                confidence: float,
+                                source: str = "front"):
         """Retain a front bearing as a ray, without inventing a 3-D point."""
-        self._observation_history.append(ObservationRecord(
+        record = ObservationRecord(
             observation_id=self._next_observation_id,
             stamp=stamp,
             class_id=observed_class_id,
@@ -2460,8 +2864,11 @@ class ObjectLocalizer(Node):
             confidence=confidence,
             ray_origin=np.asarray(origin, dtype=np.float64).copy(),
             ray_direction=np.asarray(direction, dtype=np.float64).copy(),
-        ))
+            source=source,
+        )
+        self._observation_history.append(record)
         self._next_observation_id += 1
+        return record
 
     def _linear_update(self, track: TargetTrack, measurement: np.ndarray,
                        jacobian: np.ndarray, covariance: np.ndarray,
@@ -2615,49 +3022,56 @@ class ObjectLocalizer(Node):
         observation_array.header.stamp = now_msg
         observation_array.header.frame_id = "odom"
 
-        for track in self._tracks.values():
-            if track.position is None or track.covariance is None:
-                continue
-            age = self._track_age(track)
-            status = self._track_status(track, age)
-            target = TargetPosition()
-            target.class_id = int(track.class_id)
-            target.instance_id = int(track.instance_id)
-            target.class_name = self._class_name(track.class_id)
-            target.physical_class_name = track.physical_class_name
-            target.observed_class_ids = sorted(track.observed_class_ids)
-            target.world_x = float(track.position[0])
-            target.world_y = float(track.position[1])
-            target.world_z = float(track.position[2])
-            target.position_covariance = [
-                float(value) for value in track.covariance.reshape(-1)
-            ]
-            target.confidence = float(self._track_confidence(track))
-            target.num_observations = int(track.observation_count)
-            target.front_stereo_count = int(track.front_stereo_count)
-            target.front_multi_view_count = int(track.front_multi_view_count)
-            target.down_direct_count = int(track.down_direct_count)
-            target.observation_form_mask = int(track.observation_form_mask)
-            target.last_observation_form = int(track.last_observation_form)
-            target.status = status
-            target.age_sec = float(age)
-            if track.last_stamp > 0.0:
-                target.last_observation_stamp.sec = int(track.last_stamp)
-                target.last_observation_stamp.nanosec = int(
-                    (track.last_stamp - int(track.last_stamp)) * 1e9)
-            target_array.targets.append(target)
+        for estimate_source, tracks in (
+                ("down", self._tracks), ("front", self._front_tracks)):
+            for track in tracks.values():
+                if track.position is None or track.covariance is None:
+                    continue
+                age = self._track_age(track)
+                status = self._track_status(track, age)
+                target = TargetPosition()
+                target.class_id = int(track.class_id)
+                target.instance_id = int(track.instance_id)
+                target.class_name = self._class_name(track.class_id)
+                target.physical_class_name = track.physical_class_name
+                target.observed_class_ids = sorted(track.observed_class_ids)
+                target.estimate_source = estimate_source
+                target.world_x = float(track.position[0])
+                target.world_y = float(track.position[1])
+                target.world_z = float(track.position[2])
+                target.position_covariance = [
+                    float(value) for value in track.covariance.reshape(-1)
+                ]
+                target.confidence = float(self._track_confidence(track))
+                target.num_observations = int(track.observation_count)
+                target.front_stereo_count = int(track.front_stereo_count)
+                target.front_multi_view_count = int(track.front_multi_view_count)
+                target.down_direct_count = int(track.down_direct_count)
+                target.observation_form_mask = int(track.observation_form_mask)
+                target.last_observation_form = int(track.last_observation_form)
+                target.status = status
+                target.age_sec = float(age)
+                if track.last_stamp > 0.0:
+                    target.last_observation_stamp.sec = int(track.last_stamp)
+                    target.last_observation_stamp.nanosec = int(
+                        (track.last_stamp - int(track.last_stamp)) * 1e9)
+                target_array.targets.append(target)
 
-            if status != int(TargetPosition.STATUS_STALE):
-                compat_object = ObjectPosition()
-                compat_object.class_id = int(track.class_id)
-                compat_object.instance_id = int(track.instance_id)
-                compat_object.class_name = self._class_name(track.class_id)
-                compat_object.world_x = float(track.position[0])
-                compat_object.world_y = float(track.position[1])
-                compat_object.world_z = float(track.position[2])
-                compat_object.confidence = float(self._track_confidence(track))
-                compat_object.num_observations = int(track.observation_count)
-                compat.objects.append(compat_object)
+                # Keep TaskRunner/Navigator compatibility output conservative:
+                # only the trusted down estimator is exposed on /objects.
+                if (estimate_source == "down"
+                        and status != int(TargetPosition.STATUS_STALE)):
+                    compat_object = ObjectPosition()
+                    compat_object.class_id = int(track.class_id)
+                    compat_object.instance_id = int(track.instance_id)
+                    compat_object.class_name = self._class_name(track.class_id)
+                    compat_object.world_x = float(track.position[0])
+                    compat_object.world_y = float(track.position[1])
+                    compat_object.world_z = float(track.position[2])
+                    compat_object.confidence = float(
+                        self._track_confidence(track))
+                    compat_object.num_observations = int(track.observation_count)
+                    compat.objects.append(compat_object)
 
         for record in self._observation_history:
             observation = TargetObservation()
@@ -2669,6 +3083,7 @@ class ObjectLocalizer(Node):
             observation.instance_id = int(record.instance_id)
             observation.class_name = self._class_name(record.class_id)
             observation.physical_class_name = record.physical_class_name
+            observation.estimate_source = record.source
             observation.confidence = float(record.confidence)
             observation.observation_form = int(record.form)
             observation.has_position = record.position is not None
@@ -2707,10 +3122,14 @@ class ObjectLocalizer(Node):
             return
         self._last_summary_monotonic = time.monotonic()
         self.get_logger().info(
-            "localizer: tracks=%d down_pool=%s %s" % (
+            "localizer: down_tracks=%d front_tracks=%d down_pool=%s "
+            "front_pool=%s %s" % (
                 len(self._tracks),
+                len(self._front_tracks),
                 {key: len(value) for key, value in
                  self._down_observation_pool.items()},
+                {key: len(value) for key, value in
+                 self._front_observation_pool.items()},
                 ", ".join(f"{key}={value}" for key, value in self._counters.items()),
             ))
 
@@ -2729,8 +3148,12 @@ def main(args=None):
     node = ObjectLocalizer()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # launch may already have shut down this context while delivering a
+        # process-wide shutdown signal.  Calling rclpy.shutdown() twice turns
+        # an otherwise normal stop into exit code 1.
+        if rclpy.ok():
+            rclpy.shutdown()

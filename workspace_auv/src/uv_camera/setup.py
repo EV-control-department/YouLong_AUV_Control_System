@@ -8,7 +8,10 @@ data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml', 'GO2RTC.md']),
     ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
-    ('share/' + package_name + '/config', ['config/front.npz', 'config/down.npz']),
+    ('share/' + package_name + '/config', [
+        'config/front.npz', 'config/down.npz',
+        'config/robotcup_front.npz', 'config/robotcup_down.npz',
+    ]),
 ]
 
 setup(

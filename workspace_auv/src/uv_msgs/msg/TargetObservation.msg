@@ -14,6 +14,7 @@ string class_name
 # Raw class_id/class_name identifies this detector output; this field identifies
 # the physical target track shared by xxx_front and xxx_down observations.
 string physical_class_name
+string estimate_source  # "front" or "down"
 float32 confidence
 uint8 observation_form
 

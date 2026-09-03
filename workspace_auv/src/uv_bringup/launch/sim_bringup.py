@@ -189,18 +189,37 @@ def generate_launch_description():
         executable='object_localizer',
         name='object_localizer',
         output='screen',
+        respawn=True,
+        respawn_delay=1.0,
         **python_node_kwargs,
-        # Use the downward CameraInfo emitted by Stonefish, not the
-        # real-camera .npz profiles.  Values below are the two down-camera
-        # <origin> entries in xunyun_fixed.scn, including the 0.10 m baseline.
+        # Build simulated profiles from Stonefish CameraInfo and these camera
+        # origins, so the P2 baseline sign follows the simulator optical axes.
         parameters=[{
             'calibration_source': 'sim_camera_info',
+            'front_left_camera_info_topic':
+                '/sim/front_cam/left/camera_info',
+            'front_right_camera_info_topic':
+                '/sim/front_cam/right/camera_info',
             'down_left_camera_info_topic':
                 '/sim/down_cam/left/camera_info',
             'down_right_camera_info_topic':
                 '/sim/down_cam/right/camera_info',
+            'front_left_translation': [0.23, -0.05, 0.276],
+            'front_right_translation': [0.23, 0.05, 0.276],
+            # Stonefish ColorCamera: local +Z is forward, +X is image-right,
+            # +Y is image-down.  The front sensor rpy is 1.5708,0,1.5708.
+            'front_left_rotation': [0.0, 0.0, 1.0,
+                                    1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0],
+            'front_right_rotation': [0.0, 0.0, 1.0,
+                                     1.0, 0.0, 0.0,
+                                     0.0, 1.0, 0.0],
             'down_left_translation': [-0.13, -0.05, 0.2645],
             'down_right_translation': [-0.13, 0.05, 0.2645],
+            'use_rejected_front_pairs_for_multiview': True,
+            'front_observation_pool_size': 2000,
+            'front_direct_queue_size': 50,
+            'front_duplicate_merge_distance_m': 0.25,
             'down_observation_pool_size': 2000,
             'down_direct_queue_size': 50,
             'guide_line_min_spacing_m': 0.5,

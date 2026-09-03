@@ -17,6 +17,10 @@ string class_name
 # detector label for compatibility with legacy consumers.
 string physical_class_name
 uint16[] observed_class_ids
+# Independent estimator that produced this target state: "front" or "down".
+# The two entries may describe the same physical target and are intentionally
+# published separately for visual comparison.
+string estimate_source
 
 float32 world_x       # North (m)
 float32 world_y       # East (m)

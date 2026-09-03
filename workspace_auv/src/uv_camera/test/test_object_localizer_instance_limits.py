@@ -8,6 +8,8 @@ import numpy as np
 
 from uv_camera.object_localizer import (
     FORM_DOWN_DIRECT,
+    FORM_FRONT_MULTI_VIEW,
+    FORM_FRONT_STEREO,
     ObjectLocalizer,
     RayObservation,
     StereoCalibration,
@@ -30,6 +32,9 @@ def _localizer_for_association():
     node.down_direct_reanchor_chi2 = 9.0
     node.guide_line_min_spacing = 0.5
     node.ray_assoc_distance = 1.0
+    node.ray_assoc_angle_rad = math.radians(25.0)
+    node.max_line_error = 1.0
+    node.front_multi_scale = 1.5
     node.min_ray_angle_rad = math.radians(5.0)
     node.min_depth = 0.05
     node.max_depth = 50.0
@@ -38,13 +43,29 @@ def _localizer_for_association():
     node.observation_history_size = 100
     node._observation_history = deque(maxlen=node.observation_history_size)
     node._down_observation_pool = {}
+    node._front_tracks = {}
+    node._front_next_instance_id = {}
+    node._front_observation_pool = {}
     node.down_observation_pool_size = 2000
+    node.front_observation_pool_size = 2000
     node.down_direct_queue_size = 50
+    node.front_direct_queue_size = 50
     node.down_direct_queue_gate_chi2 = 16.0
     node.down_duplicate_merge_distance = 0.25
+    node.front_duplicate_merge_distance = 0.25
     node._next_observation_id = 1
     node._last_detection_stamp = 0.0
-    node._counters = {"camera_label_rejected": 0}
+    node._counters = {
+        "camera_label_rejected": 0,
+        "front_cluster_updates": 0,
+        "front_pool_observations": 0,
+        "front_multi_view_points": 0,
+        "front_multi_view_angle_rejected": 0,
+        "front_multi_view_rays": 0,
+        "association_rejected": 0,
+        "instance_limit_rejected": 0,
+    }
+    node.max_rays = 20
     return node
 
 
@@ -245,6 +266,87 @@ def test_each_instance_keeps_fifty_down_samples_and_rejects_an_outlier():
     assert node._counters["down_direct_queue_rejected"] == 1
 
 
+def test_front_pool_fuses_stereo_and_multiview_without_touching_down_tracks():
+    node = _localizer_for_association()
+    covariance = np.eye(3) * 0.01
+    pose = SimpleNamespace(position=np.zeros(3), stamp=1.0)
+
+    stereo = node._handle_front_position_measurement(
+        0, np.array([3.0, 1.0, 0.8]), covariance, pose,
+        FORM_FRONT_STEREO, 0.8, {})
+    multi_view = node._handle_front_position_measurement(
+        0, np.array([3.04, 1.02, 0.8]), covariance,
+        SimpleNamespace(position=np.zeros(3), stamp=2.0),
+        FORM_FRONT_MULTI_VIEW, 0.9, {})
+
+    assert stereo is not None
+    assert multi_view is stereo
+    assert len(node._front_observation_pool["red_ball"]) == 2
+    assert len(node._front_tracks) == 1
+    track = next(iter(node._front_tracks.values()))
+    assert track.front_stereo_count == 1
+    assert track.front_multi_view_count == 1
+    assert track.down_direct_count == 0
+    assert node._tracks == {}
+
+
+def test_front_pool_kmeans_uses_horizontal_plane_for_six_guide_lines():
+    node = _localizer_for_association()
+    covariance = np.eye(3) * 0.01
+    locations = [np.array([0.8 * index, 0.0, 0.5])
+                 for index in range(6)]
+
+    for stamp, location in enumerate(locations * 3, start=1):
+        assert node._handle_front_position_measurement(
+            4, location, covariance,
+            SimpleNamespace(position=np.zeros(3), stamp=float(stamp)),
+            FORM_FRONT_STEREO, 0.9, {}) is not None
+
+    assert len(node._front_tracks) == 6
+    horizontal_positions = sorted(
+        track.position[0] for track in node._front_tracks.values())
+    assert np.allclose(horizontal_positions,
+                       [location[0] for location in locations], atol=0.05)
+    assert node._tracks == {}
+
+
+def test_front_filter_trims_farthest_twenty_percent_after_twenty_samples():
+    good = [SimpleNamespace(
+        stamp=float(index),
+        position=np.array([3.0 + 0.005 * (index % 3), 1.0, 0.8]),
+        covariance=np.eye(3) * 0.01,
+    ) for index in range(20)]
+    outliers = [SimpleNamespace(
+        stamp=float(20 + index),
+        position=np.array([12.0 + index, -4.0, 3.0]),
+        covariance=np.eye(3) * 0.01,
+    ) for index in range(5)]
+    observations = deque(good + outliers)
+
+    filtered = ObjectLocalizer._trim_extreme_front_observations(observations)
+    assert len(filtered) == 20
+    assert len(ObjectLocalizer._trim_extreme_front_observations(
+        deque(list(observations)[:20]))) == 20
+
+    position, _ = ObjectLocalizer._fit_front_window(observations)
+    assert np.linalg.norm(position - np.array([3.0, 1.0, 0.8])) < 0.05
+
+
+def test_front_multiview_ray_intersection_enters_front_pool_only():
+    node = _localizer_for_association()
+    node._add_front_ray(
+        0, (np.array([0.0, 0.0, 0.0]),
+            np.array([1.0, 0.0, 0.0]), 0.01), 0.9, 1.0)
+    node._add_front_ray(
+        0, (np.array([0.0, 1.0, 0.0]),
+            np.array([1.0, -0.2, 0.0]) / math.sqrt(1.04), 0.01), 0.9, 2.0)
+
+    assert node._counters["front_multi_view_points"] == 1
+    assert len(node._front_observation_pool["red_ball"]) == 1
+    assert len(node._front_tracks) == 1
+    assert node._tracks == {}
+
+
 def test_camera_specific_labels_are_rejected_on_the_wrong_camera():
     node = _localizer_for_association()
     detections = [
@@ -294,8 +396,8 @@ def test_simulator_stereo_profiles_use_scene_intrinsics_and_baselines():
     """xunyun_fixed.scn defines 0.10 m pairs and the two FOV values."""
     front_rotation = np.array([
         [0.0, 0.0, 1.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
     ])
     down_rotation = np.array([
         [0.0, -1.0, 0.0],
