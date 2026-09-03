@@ -6,11 +6,27 @@ Launches Stonefish simulator + all control/perception/nav/task nodes.
 import os
 import shutil
 import subprocess
+import sys
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+
+
+def _workspace_python_runtime():
+    """Find the repository-local Python runtime, if it was bootstrapped."""
+    from pathlib import Path
+
+    candidates = []
+    launch_file = Path(__file__).resolve()
+    for parent in (launch_file.parent, *launch_file.parents):
+        candidates.append(parent / '.venv' / 'bin' / 'python')
+
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
 
 def _nvidia_available() -> bool:
@@ -47,8 +63,12 @@ def generate_launch_description():
         description='Enable task runner'
     )
     declare_scenario = DeclareLaunchArgument(
-        'scenario_desc', default_value='guoshui_2026_cruise.scn',
-        description='Stonefish scenario file name (in Data/ directory)'
+        'scenario_desc', default_value='guoshui_2026_cruise_seeded.scn',
+        description='Stonefish scenario file name (in Data/ directory); generated from scene_seed by default'
+    )
+    declare_scene_seed = DeclareLaunchArgument(
+        'scene_seed', default_value='0',
+        description='Deterministic Guoshui scene seed; 0 keeps the fixed baseline layout'
     )
     declare_target_id = DeclareLaunchArgument(
         'target_id', default_value='yellow_golf',
@@ -58,7 +78,14 @@ def generate_launch_description():
     enable_nav = LaunchConfiguration('enable_nav')
     enable_task = LaunchConfiguration('enable_task')
     scenario_desc = LaunchConfiguration('scenario_desc')
+    scene_seed = LaunchConfiguration('scene_seed')
     target_id = LaunchConfiguration('target_id')
+
+    # Python ROS nodes that touch images must use the workspace-local NumPy
+    # runtime. Otherwise a user-site NumPy 2.x can be selected before ROS 2
+    # Jazzy's NumPy 1.x-built cv_bridge and crash sim_bridge.
+    workspace_python = _workspace_python_runtime()
+    python_node_kwargs = {'prefix': workspace_python} if workspace_python else {}
 
     # Stonefish simulator paths
     # Use source directory path for Data (simulator needs direct filesystem access)
@@ -87,6 +114,30 @@ def generate_launch_description():
     simulation_data_dir = _find_stonefish_data_dir()
     stonefish_source_dir = str(_Path(simulation_data_dir).parent)
 
+    def _generate_seeded_scene(context):
+        seed_text = scene_seed.perform(context)
+        try:
+            int(seed_text)
+        except ValueError as error:
+            raise RuntimeError(f'scene_seed must be an integer, got {seed_text!r}') from error
+
+        generator = _Path(simulation_data_dir) / 'generate_guoshui_2026_scene.py'
+        template = _Path(simulation_data_dir) / 'guoshui_2026_cruise.scn'
+        output = _Path(simulation_data_dir) / 'guoshui_2026_cruise_seeded.scn'
+        subprocess.run(
+            [
+                sys.executable, str(generator),
+                '--seed', seed_text,
+                '--template', str(template),
+                '--output', str(output),
+            ],
+            check=True,
+        )
+        return [LogInfo(msg=[
+            'Generated Guoshui scene with seed ', seed_text,
+            ': ', str(output),
+        ])]
+
     # Build the stonefish simulator node (GPU version — with rendering window)
     # The simulator expects: simulation_data, scenario_desc, rate, res_x, res_y, quality
     stonefish_sim = Node(
@@ -111,6 +162,7 @@ def generate_launch_description():
         executable='sim_bridge',
         name='sim_bridge',
         output='screen',
+        **python_node_kwargs,
     )
 
     basic_motion = Node(
@@ -118,23 +170,42 @@ def generate_launch_description():
         executable='basic_motion',
         name='basic_motion',
         output='screen',
+        **python_node_kwargs,
     )
 
-    # Perception: uv_camera node (uv_sensor + uv_ai, same process) + position
+    # Perception: uv_camera node (uv_sensor + uv_ai, same process) + object_localizer
     vision = Node(
         package='uv_camera',
         executable='uv_camera',
         name='uv_camera',
         output='screen',
+        **python_node_kwargs,
         parameters=[{'sim_mode': True}],
         condition=IfCondition(enable_ai),
     )
 
-    position = Node(
+    object_localizer = Node(
         package='uv_camera',
-        executable='position',
-        name='position',
+        executable='object_localizer',
+        name='object_localizer',
         output='screen',
+        **python_node_kwargs,
+        # Use the downward CameraInfo emitted by Stonefish, not the
+        # real-camera .npz profiles.  Values below are the two down-camera
+        # <origin> entries in xunyun_fixed.scn, including the 0.10 m baseline.
+        parameters=[{
+            'calibration_source': 'sim_camera_info',
+            'down_left_camera_info_topic':
+                '/sim/down_cam/left/camera_info',
+            'down_right_camera_info_topic':
+                '/sim/down_cam/right/camera_info',
+            'down_left_translation': [-0.13, -0.05, 0.2645],
+            'down_right_translation': [-0.13, 0.05, 0.2645],
+            'down_observation_pool_size': 2000,
+            'down_direct_queue_size': 50,
+            'guide_line_min_spacing_m': 0.5,
+            'down_duplicate_merge_distance_m': 0.25,
+        }],
         condition=IfCondition(enable_ai),
     )
 
@@ -144,6 +215,7 @@ def generate_launch_description():
         executable='navigator',
         name='navigator',
         output='screen',
+        **python_node_kwargs,
         condition=IfCondition(enable_nav),
     )
 
@@ -153,6 +225,7 @@ def generate_launch_description():
         executable='task_runner',
         name='task_runner',
         output='screen',
+        **python_node_kwargs,
         parameters=[{'target_id': target_id}],
         condition=IfCondition(enable_task),
     )
@@ -169,16 +242,18 @@ def generate_launch_description():
         declare_enable_nav,
         declare_enable_task,
         declare_scenario,
+        declare_scene_seed,
         declare_target_id,
         # 仅在检测到可用 NVIDIA GPU 时启用 NVIDIA OpenGL/PRIME 渲染。
         *render_environment,
+        OpaqueFunction(function=_generate_seeded_scene),
         LogInfo(msg=['Simulation data: ', simulation_data_dir]),
         LogInfo(msg=['Scenario: ', PathJoinSubstitution([simulation_data_dir, scenario_desc])]),
         stonefish_sim,
         sim_bridge,
         basic_motion,
         vision,
-        position,
+        object_localizer,
         navigator,
         task_runner,
     ])

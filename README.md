@@ -41,6 +41,9 @@ YouLong_AUV_Control_System/
 ## 构建与运行
 
 ```bash
+# 首次使用仿真环境时，创建工作空间本地 Python 运行时
+bash scripts/setup_workspace_python.sh
+
 # AUV 控制栈
 cd workspace_auv
 colcon build --symlink-install && source install/setup.bash
@@ -51,6 +54,9 @@ cd workspace_sim
 colcon build && source install/setup.bash
 ros2 launch uv_bringup sim_bringup.py
 ```
+
+仿真 Python 节点会自动使用 `workspace_auv/.venv`，其中固定了
+`numpy==1.26.4`，以匹配 ROS 2 Jazzy 的 `cv_bridge`。
 
 ## 一键部署到 AUV 电脑
 

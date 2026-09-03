@@ -16,16 +16,20 @@ setup(
     version='0.1.0',
     packages=[package_name],
     data_files=data_files,
-    install_requires=['setuptools'],
+    # Keep cv_bridge and NumPy on the same (1.x) ABI used by ROS 2 Jazzy.
+    install_requires=['setuptools', 'numpy==1.26.4'],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',
-    description='Camera + AI perception package for YouLong AUV (uv_sensor + uv_ai + position)',
+    description='Camera + AI perception package for YouLong AUV (uv_sensor + uv_ai + object_localizer)',
     license='GPL-3.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'uv_camera = uv_camera.composed:main',
+            'object_localizer = uv_camera.object_localizer:main',
+            'target_position_gui = uv_camera.target_position_gui:main',
+            # Kept as a compatibility entry point; bringup no longer starts it.
             'position = uv_camera.position:main',
         ],
     },

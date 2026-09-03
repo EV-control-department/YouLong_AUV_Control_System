@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=X-AnyLabeling 4.0.2
+Comment=Image and video annotation tool
+Exec=/home/doc049/dev/UUV/YouLong_AUV_Control_System/scripts/x-anylabeling %F
+Terminal=false
+Categories=Graphics;
+MimeType=image/jpeg;image/png;image/bmp;image/tiff;video/mp4;video/avi;
+StartupNotify=true
+StartupWMClass=X-AnyLabeling

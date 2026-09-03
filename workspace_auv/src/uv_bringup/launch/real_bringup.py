@@ -51,10 +51,10 @@ def generate_launch_description():
         condition=IfCondition(enable_ai),
     )
 
-    position = Node(
+    object_localizer = Node(
         package='uv_camera',
-        executable='position',
-        name='position',
+        executable='object_localizer',
+        name='object_localizer',
         output='screen',
         condition=IfCondition(enable_ai),
     )
@@ -82,7 +82,7 @@ def generate_launch_description():
         hw_manager,
         basic_motion,
         vision,
-        position,
+        object_localizer,
         navigator,
         task_runner,
     ])

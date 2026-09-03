@@ -432,20 +432,37 @@
 	<static name="CollectionBaseSleeveSW" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.744 -1.506 1.294"/></static>
 	<static name="CollectionBaseSleeveSE" type="model"><physical><mesh filename="guoshui_2026_pvc_sleeve.obj" scale="1.0"/><origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/></physical><material name="PVC"/><look name="collection_coupler"/><world_transform rpy="0.0 0.0 0.0" xyz="1.356 -1.506 1.294"/></static>
 
-	<!-- One fixed net entity: white OBJ for rendering, thin invisible box for collision. -->
+	<!-- Side net stays at the original middle height; only the bottom panel is lower. -->
+	<animated name="CollectionNetSideVisual" type="model" collisions="false">
+		<physical>
+			<mesh filename="guoshui_2026_collection_net_side_diagonal.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</physical>
+		<visual>
+			<mesh filename="guoshui_2026_collection_net_side_diagonal.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</visual>
+		<material name="PVC"/><look name="collection_net"/>
+		<trajectory type="spline" playback="repeat">
+        <keypoint time="0.0" xyz="1.55 -1.65 0.95" rpy="0.0 0.0 0.0"/>
+        <keypoint time="1.0" xyz="1.55 -1.65 0.95" rpy="0.0 0.0 0.0"/>
+		</trajectory>
+	</animated>
+
+	<!-- Bottom net: place the visual mesh and its collision plane on the lowest red rail. -->
 	<animated name="CollectionNetVisual" type="model" collisions="true">
 		<physical>
 			<mesh filename="guoshui_2026_collection_collision_plane.obj" scale="1.0"/>
 			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
 		</physical>
 		<visual>
-			<mesh filename="guoshui_2026_collection_net_diagonal.obj" scale="1.0"/>
+			<mesh filename="guoshui_2026_collection_net_bottom_diagonal.obj" scale="1.0"/>
 			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
 		</visual>
 		<material name="PVC"/><look name="collection_net"/>
 		<trajectory type="spline" playback="repeat">
-			<keypoint time="0.0" xyz="1.55 -1.65 0.95" rpy="0.0 0.0 0.0"/>
-			<keypoint time="1.0" xyz="1.55 -1.65 0.95" rpy="0.0 0.0 0.0"/>
+        <keypoint time="0.0" xyz="1.55 -1.65 1.10" rpy="0.0 0.0 0.0"/>
+        <keypoint time="1.0" xyz="1.55 -1.65 1.10" rpy="0.0 0.0 0.0"/>
 		</trajectory>
 	</animated>
 
@@ -453,6 +470,7 @@
 	<include file="xunyun_fixed.scn">
 		<arg name="robot_name" value="XUNYUN"/>
 		<arg name="robot_position" value="8.95 -1.80 0.12"/>
-		<arg name="robot_orientation" value="0.0 0.0 0.0"/>
+		<!-- AUV 初始航向：相对原 180° 姿态逆时针旋转 90°，即 90°。 -->
+		<arg name="robot_orientation" value="0.0 0.0 1.57079632679"/>
 	</include>
 </scenario>

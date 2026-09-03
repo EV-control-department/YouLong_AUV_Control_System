@@ -12,6 +12,7 @@ Runs in the SAME process as uv_sensor. uv_ai is the FrameGate consumer:
 import os
 import threading
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -114,23 +115,31 @@ class Ai:
     def load_model(self, model_path=''):
         try:
             from ultralytics import YOLO
-            if not model_path:
-                repo_dir = os.path.abspath(
-                    os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-                candidates = [
-                    os.path.expanduser(
-                        f'~/_UUV_AV/workspace_auv/src/datas/{DEFAULT_MODEL_FILENAME}'),
-                    os.path.expanduser(
-                        f'~/YouLong_AUV_Control_System/workspace_auv/src/datas/{DEFAULT_MODEL_FILENAME}'),
-                    os.path.join(repo_dir, 'workspace_auv', 'src', 'datas', DEFAULT_MODEL_FILENAME),
-                    os.path.join(repo_dir, 'datas', DEFAULT_MODEL_FILENAME),
-                ]
+            if model_path:
+                model_path = os.path.expanduser(str(model_path))
+            else:
+                # ``__file__`` can point into colcon's build-space symlink.
+                # Resolve it before walking up; otherwise the repository root
+                # is calculated one level too high and the weights in
+                # workspace_auv/src/datas are missed.
+                module_path = Path(__file__).resolve()
+                candidates = []
+                for parent in (module_path.parent, *module_path.parents):
+                    candidates.extend((
+                        parent / 'workspace_auv' / 'src' / 'datas' / DEFAULT_MODEL_FILENAME,
+                        parent / 'datas' / DEFAULT_MODEL_FILENAME,
+                    ))
+                candidates.append(
+                    Path.cwd() / 'workspace_auv' / 'src' / 'datas' / DEFAULT_MODEL_FILENAME)
+                candidates.append(Path.cwd() / 'datas' / DEFAULT_MODEL_FILENAME)
+
                 for candidate in candidates:
-                    if os.path.exists(candidate):
-                        model_path = candidate
+                    if candidate.is_file():
+                        model_path = str(candidate)
                         break
-            if model_path and os.path.exists(model_path):
-                self._model = YOLO(model_path)
+
+            if model_path and os.path.isfile(model_path):
+                self._model = YOLO(str(model_path))
                 self._model_loaded = True
                 self.node.get_logger().info(f'YOLO model loaded: {model_path}')
             else:

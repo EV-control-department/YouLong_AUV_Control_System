@@ -1,0 +1,3 @@
+# ROS 2 Jazzy's cv_bridge in this workspace is built against the NumPy 1.x ABI.
+# Keep this pinned until cv_bridge is rebuilt for NumPy 2.x.
+numpy==1.26.4

@@ -1,15 +1,19 @@
-"""Camera passthrough: republish Stonefish stereo camera images + hstack stitch.
+"""Camera passthrough: republish Stonefish stereo camera images + synchronized stitch.
 
 从原 sim_bridge 抽出,行为保持一致:
 - 订阅 /sim/front_cam/{left,right}/image_color, /sim/down_cam/{left,right}/image_color
 - 重发布为 /auv/front_cam/{left,right}, /auv/down_cam/{left,right}
-- 左右拼接后发布 /auv/front_cam/stitched, /auv/down_cam/stitched
+- 仅将同一时刻的左右图拼接后发布 /auv/front_cam/stitched,
+  /auv/down_cam/stitched
 供 uv_camera 使用,与控制逻辑正交。
 """
 
 import numpy as np
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
+
+
+STEREO_STITCH_SLOP_SEC = 0.04
 
 
 class CameraPassthrough:
@@ -21,6 +25,8 @@ class CameraPassthrough:
         self.front_right_img = None
         self.down_left_img = None
         self.down_right_img = None
+        self._last_front_pair_key = None
+        self._last_down_pair_key = None
 
     def bind(self, node):
         self.node = node
@@ -58,25 +64,51 @@ class CameraPassthrough:
         self._publish_stitched_down()
 
     def _publish_stitched_front(self):
-        if self.front_left_img and self.front_right_img:
-            try:
-                left = self.bridge.imgmsg_to_cv2(self.front_left_img, "bgr8")
-                right = self.bridge.imgmsg_to_cv2(self.front_right_img, "bgr8")
-                stitched = np.hstack((left, right))
-                out = self.bridge.cv2_to_imgmsg(stitched, "bgr8")
-                out.header = self.front_left_img.header
-                self.front_rect_pub.publish(out)
-            except Exception as e:
-                self.node.get_logger().error(f"Front stitch failed: {e}")
+        self._last_front_pair_key = self._publish_stitched(
+            "Front", self.front_left_img, self.front_right_img,
+            self.front_rect_pub, self._last_front_pair_key)
 
     def _publish_stitched_down(self):
-        if self.down_left_img and self.down_right_img:
-            try:
-                left = self.bridge.imgmsg_to_cv2(self.down_left_img, "bgr8")
-                right = self.bridge.imgmsg_to_cv2(self.down_right_img, "bgr8")
-                stitched = np.hstack((left, right))
-                out = self.bridge.cv2_to_imgmsg(stitched, "bgr8")
-                out.header = self.down_left_img.header
-                self.down_rect_pub.publish(out)
-            except Exception as e:
-                self.node.get_logger().error(f"Down stitch failed: {e}")
+        self._last_down_pair_key = self._publish_stitched(
+            "Down", self.down_left_img, self.down_right_img,
+            self.down_rect_pub, self._last_down_pair_key)
+
+    @staticmethod
+    def _stamp_seconds(message: Image) -> float:
+        stamp = message.header.stamp
+        return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+    @classmethod
+    def _synchronized_pair_key(cls, left_message: Image | None,
+                               right_message: Image | None):
+        """Return a unique pair key only when the two images are contemporaneous."""
+        if left_message is None or right_message is None:
+            return None
+        left_stamp = cls._stamp_seconds(left_message)
+        right_stamp = cls._stamp_seconds(right_message)
+        if abs(left_stamp - right_stamp) > STEREO_STITCH_SLOP_SEC:
+            return None
+        return (
+            int(left_message.header.stamp.sec),
+            int(left_message.header.stamp.nanosec),
+            int(right_message.header.stamp.sec),
+            int(right_message.header.stamp.nanosec),
+        )
+
+    def _publish_stitched(self, camera_name: str, left_message: Image | None,
+                          right_message: Image | None, publisher, last_pair_key):
+        """Publish each timestamp-matched pair once; never mix adjacent frames."""
+        pair_key = self._synchronized_pair_key(left_message, right_message)
+        if pair_key is None or pair_key == last_pair_key:
+            return last_pair_key
+        try:
+            left = self.bridge.imgmsg_to_cv2(left_message, "bgr8")
+            right = self.bridge.imgmsg_to_cv2(right_message, "bgr8")
+            stitched = np.hstack((left, right))
+            out = self.bridge.cv2_to_imgmsg(stitched, "bgr8")
+            out.header = left_message.header
+            publisher.publish(out)
+            return pair_key
+        except Exception as error:
+            self.node.get_logger().error(f"{camera_name} stitch failed: {error}")
+            return last_pair_key

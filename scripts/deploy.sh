@@ -294,6 +294,7 @@ rsync_options=(
     --exclude=.git/
     --exclude=.codex/
     --exclude=.agents/
+    --exclude=.venv/
     --exclude='**/__pycache__/'
     --exclude='*.py[cod]'
     --exclude='build/'

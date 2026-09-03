@@ -12,8 +12,8 @@ def generate_launch_description():
         ),
         Node(
             package='uv_camera',
-            executable='position',
-            name='position',
+            executable='object_localizer',
+            name='object_localizer',
             output='screen',
         ),
     ])

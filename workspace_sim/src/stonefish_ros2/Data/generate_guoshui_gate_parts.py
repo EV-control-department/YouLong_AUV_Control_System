@@ -223,12 +223,30 @@ GATES = (
     ("GateHigh2", (2.75, 1.15), 0.40, 0.90),
 )
 
+BASE_PATH_POINTS = ((8.70, 1.55),) + tuple(gate[1] for gate in GATES) + ((0.95, -0.45),)
+
 
 def point(xy: tuple[float, float], z: float) -> Vec:
     return (xy[0], xy[1], z)
 
 
-def build() -> tuple[Mesh, Mesh, Mesh, Mesh]:
+def rotate_xy(vector: Vec, yaw: float) -> Vec:
+    """Rotate a horizontal vector about the NED Z axis."""
+
+    cosine = math.cos(yaw)
+    sine = math.sin(yaw)
+    return (
+        cosine * vector[0] - sine * vector[1],
+        sine * vector[0] + cosine * vector[1],
+        vector[2],
+    )
+
+
+def build(
+    gates: tuple[tuple[str, tuple[float, float], float, float], ...] = GATES,
+    path_points: tuple[tuple[float, float], ...] | None = None,
+    opening_yaw_offsets: tuple[float, ...] | None = None,
+) -> tuple[Mesh, Mesh, Mesh, Mesh]:
     red_pipes = Mesh()
     white_supports = Mesh()
     red_sleeves = Mesh()
@@ -236,13 +254,20 @@ def build() -> tuple[Mesh, Mesh, Mesh, Mesh]:
     pipe_radius = 0.020
     down = (0.0, 0.0, 1.0)
 
+    if path_points is None:
+        path_points = BASE_PATH_POINTS
+    if len(path_points) != len(gates) + 2:
+        raise ValueError("path_points must contain the impact area, every gate, and the rack")
+    if opening_yaw_offsets is None:
+        opening_yaw_offsets = (0.0,) * len(gates)
+    if len(opening_yaw_offsets) != len(gates):
+        raise ValueError("opening_yaw_offsets must have one value per gate")
+
     # The path enters the first gate from the impact-ball area and leaves the
     # fourth gate toward the target display rack.  A gate's opening normal is
     # the angle bisector of the incoming and outgoing path directions; its
     # horizontal rails are perpendicular to that normal.
-    path_points = ((8.70, 1.55),) + tuple(gate[1] for gate in GATES) + ((0.95, -0.45),)
-
-    for index, (_, center_xy, top_z, bottom_z) in enumerate(GATES):
+    for index, (_, center_xy, top_z, bottom_z) in enumerate(gates):
         previous_xy = path_points[index]
         next_xy = path_points[index + 2]
         incoming = unit(
@@ -253,6 +278,7 @@ def build() -> tuple[Mesh, Mesh, Mesh, Mesh]:
         )
         opening_normal = unit(add(incoming, outgoing))
         rail_direction = unit((-opening_normal[1], opening_normal[0], 0.0))
+        rail_direction = unit(rotate_xy(rail_direction, opening_yaw_offsets[index]))
         left_xy = (
             center_xy[0] - 0.35 * rail_direction[0],
             center_xy[1] - 0.35 * rail_direction[1],
@@ -282,24 +308,37 @@ def build() -> tuple[Mesh, Mesh, Mesh, Mesh]:
     return red_pipes, white_supports, red_sleeves, white_sleeves
 
 
-def main() -> None:
-    output_dir = Path(__file__).resolve().parent
-    meshes = build()
+def write_gate_parts(
+    output_dir: Path,
+    gates: tuple[tuple[str, tuple[float, float], float, float], ...] = GATES,
+    path_points: tuple[tuple[float, float], ...] | None = None,
+    opening_yaw_offsets: tuple[float, ...] | None = None,
+    names: tuple[str, str, str, str] | None = None,
+) -> None:
+    """Write all color-separated gate models for one deterministic scene."""
+
+    meshes = build(gates, path_points, opening_yaw_offsets)
     descriptions = (
         "Guoshui 2026 four gates: red PVC frame pipes.",
         "Guoshui 2026 four gates: white PVC support columns.",
         "Guoshui 2026 four gates: hollow red 90-degree PVC elbows.",
         "Guoshui 2026 four gates: hollow white 90-degree PVC elbows.",
     )
-    names = (
-        "guoshui_2026_gate_red_pipes.obj",
-        "guoshui_2026_gate_white_supports.obj",
-        "guoshui_2026_gate_red_sleeves.obj",
-        "guoshui_2026_gate_white_sleeves.obj",
-    )
+    if names is None:
+        names = (
+            "guoshui_2026_gate_red_pipes.obj",
+            "guoshui_2026_gate_white_supports.obj",
+            "guoshui_2026_gate_red_sleeves.obj",
+            "guoshui_2026_gate_white_sleeves.obj",
+        )
     for mesh, name, description in zip(meshes, names, descriptions):
         mesh.write(output_dir / name, description)
         print(f"{name}: {len(mesh.vertices)} vertices, {len(mesh.faces)} triangles")
+
+
+def main() -> None:
+    output_dir = Path(__file__).resolve().parent
+    write_gate_parts(output_dir)
 
 
 if __name__ == "__main__":

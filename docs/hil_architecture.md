@@ -107,7 +107,7 @@ MCU 通过 micro-ROS 订阅以下主题，获取仿真传感器数据和控制�
 | 主题                   | 消息类型                        | 频率  | 说明                                                                                       |
 | ---------------------- | ------------------------------- | ----- | ------------------------------------------------------------------------------------------ |
 | `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 按需  | 运动设定值；`control_key` 决定 POS/VEL/FORCE 模式；`type_mask` 决定忽略哪些轴 (1=忽略) |
-| `/auv/odometry`      | `nav_msgs/Odometry`           | 30 Hz | Stonefish 真值里程计；`pose` = NED 世界坐标系位姿；`twist` = 世界坐标系线速度 + 角速度 |
+| `/auv/odometry`      | `nav_msgs/Odometry`           | 30 Hz | Stonefish 原始场景真值；`sim_bridge` 将其转换为项目 `odom/NED` 后再供控制与定位使用 |
 | `/auv/imu`           | `sensor_msgs/Imu`             | 20 Hz | 角速度 (用于替代真实 IMU 的 gyro 数据)                                                     |
 | `/auv/dvl`           | `stonefish_ros2/DVL`          | 20 Hz | 4 波束 DVL 机体坐标系速度                                                                  |
 | `/zit6/cmd/agxhbt`   | `std_msgs/UInt32`             | 10 Hz | 心跳 + 布防：`1` = 正常布防 (需 INS 就绪)，`3` = 强制布防 (绕过 INS)                   |
@@ -124,7 +124,7 @@ MCU 通过 micro-ROS 发布以下主题：
 | ---------------------- | ------------------------------ | ----- | ------------------------------------------------------------------------ |
 | `/auv/thrusters_cmd` | `std_msgs/Float64MultiArray` | 60 Hz | 6 路归一化推力值`[-1.0, 1.0]`，直接驱动 Stonefish 推进器               |
 | `/zit6/state/status` | `zit6_interfaces/ZitStatus`  | 10 Hz | 布防状态、控制模式、INS 状态、力输出、电池电压、错误标志                 |
-| `/zit6/state/pos`    | `std_msgs/Float32MultiArray` | 30 Hz | 地图坐标系位置`[x, y, z, yaw_rad]`；`uv_control` 依赖此话题          |
+| `/zit6/state/pos`    | `std_msgs/Float32MultiArray` | 30 Hz | 项目 `odom/NED` 位置`[North, East, Down, roll, pitch, yaw]`；`uv_control` 依赖此话题 |
 | `/zit6/state/vel`    | `std_msgs/Float32MultiArray` | 60 Hz | 机体坐标系速度`[vx, vy, vz, vyaw_rate_rad]`；`uv_control` 依赖此话题 |
 | `/zit6/state/thr`    | `std_msgs/Float32MultiArray` | 30 Hz | 当前施加的 4-DOF 力`[Fx, Fy, Fz, Mz]`                                  |
 | `/zit6/state/zithbt` | `std_msgs/UInt32`            | 10 Hz | 心跳序列号，用于上层心跳监控                                             |

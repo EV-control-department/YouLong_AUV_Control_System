@@ -222,9 +222,27 @@
 				<origin rpy="0 0 3.14159" xyz="0 0 0"/>
 				<material name="Neutral"/>
                 <!-- 定义该舱室的质量 (如果设定好各个舱室的质量和偏移位置，求解器会自动积分算出整船的质量中心) -->
-				<mass value="7.2552"/>
+				<!-- Simulation calibration: total vehicle mass is about 35 kg after adding the neutral buoyancy volume below. -->
+				<mass value="24.5350"/>
 				<look name="manipulator"/>
 				<compound_transform rpy="0 1.571 3.14159" xyz="0.0495 0 0.1805"/>
+			</internal_part>
+
+			<!--
+				Neutral buoyancy compensation for the 35 kg simulation model.
+				The original buoyant parts displace about 17.7192 L. This hidden
+				internal volume adds 17.2808 L, bringing the total displacement to
+				approximately 35.000 L in 1000 kg/m^3 water. Its small explicit mass
+				keeps the rigid body well-defined; BatteryCylinder carries the actual
+				vehicle mass, so the centre of gravity is not moved appreciably.
+			-->
+			<internal_part name="NeutralBuoyancyCompensation" type="box" physics="submerged" buoyant="true">
+				<dimensions xyz="0.320 0.180 0.3000133"/>
+				<origin rpy="0 0 0" xyz="0 0 0"/>
+				<material name="Neutral"/>
+				<mass value="0.001"/>
+				<look name="manipulator"/>
+				<compound_transform rpy="0 0 0" xyz="0 0 0"/>
 			</internal_part>
 
 			<internal_part name="PortCylinder" type="cylinder" physics="submerged" buoyant="true">
@@ -261,7 +279,6 @@
         	<!-- 自动Ping测频 -->
             <autoping rate="10.0"/>
             <!-- 传感器固有噪声(模拟真实世界误差)：测距、水平角误差和垂直角误差 -->
-        	<noise range="0.01" horizontal_angle="0.05" vertical_angle="0.1"/>
 			<resolution range="0.1" angle="0.1"/>
         </comm>
 		
@@ -277,7 +294,6 @@
 		<sensor name="pressure" type="pressure" rate="5.0">
 			<link name="Vehicle"/>
 			<origin rpy="0 0 -2.65359e-06" xyz="-0.24 0.175 -0.2"/>
-			<noise pressure="5.0"/>
 			<ros_publisher topic="/auv/pressure"/>
 		</sensor>
 
@@ -292,8 +308,7 @@
 			<range velocity="9.0 9.0 9.0" altitude_min="0.5" altitude_max="81.0"/>
             <!-- 对水流层（如果无法打海底，打杂质跟踪水流）的要求 -->
 			<water_layer minimum_layer_size="5.0" boundary_near="10.0" boundary_far="30.0"/>
-			<noise velocity="0.0015" altitude="0.001"/> <!-- 速度及高度白噪声 -->
-            <!-- 将测量数值通过 Topic 发布 -->
+	            <!-- 将测量数值通过 Topic 发布 -->
 			<ros_publisher topic="/auv/dvl" altitude_topic="/auv/dvl_altitude"/>
 		</sensor>
 
@@ -347,16 +362,11 @@
 				<material name="Neutral" />
 				<look name="propeller" />
 			</propeller>
-            <!-- 电机闭环动态响应 PI 调参参数 (模拟真实螺旋桨响应并非瞬间达到目标转速) -->
-			<rotor_dynamics type="mechanical_pi">
-				<rotor_inertia value="0.05"/>
-				<kp value="1.0"/>
-				<ki value="0.5"/>
-				<ilimit value="2.0"/>
-			</rotor_dynamics>
+            <!-- 理想电机：零阶直通，指令转速立即生效；水动力推力模型仍然保留 -->
+			<rotor_dynamics type="zero_order"/>
             <!-- 推力模型设定：从转速映射到推力和扭矩 (CT计算参数) -->
 			<thrust_model type="fluid_dynamics">
-				<thrust_coeff forward="1" reverse="1"/>
+				<thrust_coeff forward="0.5" reverse="0.5"/>
 				<torque_coeff value="0.05"/>
 			</thrust_model>
 		</actuator>
@@ -373,16 +383,11 @@
 				<material name="Neutral" />
 				<look name="propeller" />
 			</propeller>
-            <!-- 电机闭环动态响应 PI 调参参数 (模拟真实螺旋桨响应并非瞬间达到目标转速) -->
-			<rotor_dynamics type="mechanical_pi">
-				<rotor_inertia value="0.05"/>
-				<kp value="1.0"/>
-				<ki value="0.5"/>
-				<ilimit value="2.0"/>
-			</rotor_dynamics>
+            <!-- 理想电机：零阶直通，指令转速立即生效；水动力推力模型仍然保留 -->
+			<rotor_dynamics type="zero_order"/>
             <!-- 推力模型设定：从转速映射到推力和扭矩 (CT计算参数) -->
 			<thrust_model type="fluid_dynamics">
-				<thrust_coeff forward="1" reverse="1"/>
+				<thrust_coeff forward="0.5" reverse="0.5"/>
 				<torque_coeff value="0.05"/>
 			</thrust_model>
 		</actuator>
@@ -398,16 +403,11 @@
 				<material name="Neutral" />
 				<look name="propeller" />
 			</propeller>
-            <!-- 电机闭环动态响应 PI 调参参数 (模拟真实螺旋桨响应并非瞬间达到目标转速) -->
-			<rotor_dynamics type="mechanical_pi">
-				<rotor_inertia value="0.05"/>
-				<kp value="1.0"/>
-				<ki value="0.5"/>
-				<ilimit value="2.0"/>
-			</rotor_dynamics>
+            <!-- 理想电机：零阶直通，指令转速立即生效；水动力推力模型仍然保留 -->
+			<rotor_dynamics type="zero_order"/>
             <!-- 推力模型设定：从转速映射到推力和扭矩 (CT计算参数) -->
 			<thrust_model type="fluid_dynamics">
-				<thrust_coeff forward="1" reverse="1"/>
+				<thrust_coeff forward="0.5" reverse="0.5"/>
 				<torque_coeff value="0.05"/>
 			</thrust_model>
 		</actuator>
@@ -423,16 +423,11 @@
 				<material name="Neutral" />
 				<look name="propeller" />
 			</propeller>
-            <!-- 电机闭环动态响应 PI 调参参数 (模拟真实螺旋桨响应并非瞬间达到目标转速) -->
-			<rotor_dynamics type="mechanical_pi">
-				<rotor_inertia value="0.05"/>
-				<kp value="1.0"/>
-				<ki value="0.5"/>
-				<ilimit value="2.0"/>
-			</rotor_dynamics>
+            <!-- 理想电机：零阶直通，指令转速立即生效；水动力推力模型仍然保留 -->
+			<rotor_dynamics type="zero_order"/>
             <!-- 推力模型设定：从转速映射到推力和扭矩 (CT计算参数) -->
 			<thrust_model type="fluid_dynamics">
-				<thrust_coeff forward="1" reverse="1"/>
+				<thrust_coeff forward="0.5" reverse="0.5"/>
 				<torque_coeff value="0.05"/>
 			</thrust_model>
 		</actuator>
@@ -449,16 +444,11 @@
 				<material name="Neutral" />
 				<look name="propeller" />
 			</propeller>
-            <!-- 电机闭环动态响应 PI 调参参数 (模拟真实螺旋桨响应并非瞬间达到目标转速) -->
-			<rotor_dynamics type="mechanical_pi">
-				<rotor_inertia value="0.05"/>
-				<kp value="1.0"/>
-				<ki value="0.5"/>
-				<ilimit value="2.0"/>
-			</rotor_dynamics>
+            <!-- 理想电机：零阶直通，指令转速立即生效；水动力推力模型仍然保留 -->
+			<rotor_dynamics type="zero_order"/>
             <!-- 推力模型设定：从转速映射到推力和扭矩 (CT计算参数) -->
 			<thrust_model type="fluid_dynamics">
-				<thrust_coeff forward="1" reverse="1"/>
+				<thrust_coeff forward="0.5" reverse="0.5"/>
 				<torque_coeff value="0.05"/>
 			</thrust_model>
 		</actuator>
@@ -475,16 +465,11 @@
 				<material name="Neutral" />
 				<look name="propeller" />
 			</propeller>
-            <!-- 电机闭环动态响应 PI 调参参数 (模拟真实螺旋桨响应并非瞬间达到目标转速) -->
-			<rotor_dynamics type="mechanical_pi">
-				<rotor_inertia value="0.05"/>
-				<kp value="1.0"/>
-				<ki value="0.5"/>
-				<ilimit value="2.0"/>
-			</rotor_dynamics>
+            <!-- 理想电机：零阶直通，指令转速立即生效；水动力推力模型仍然保留 -->
+			<rotor_dynamics type="zero_order"/>
             <!-- 推力模型设定：从转速映射到推力和扭矩 (CT计算参数) -->
 			<thrust_model type="fluid_dynamics">
-				<thrust_coeff forward="1" reverse="1"/>
+				<thrust_coeff forward="0.5" reverse="0.5"/>
 				<torque_coeff value="0.05"/>
 			</thrust_model>
 		</actuator>

@@ -49,7 +49,7 @@ STREAM_ANNOTATED = True
 SIM_MODE = False
 SAVE_DATASET = False
 DATASET_DIR = ''
-DEFAULT_MODEL_FILENAME = 'WUURC2026REAL11nano--001.pt'
+DEFAULT_MODEL_FILENAME = 'robotcup20260901.pt'
 
 
 class _ScalarKalman:
@@ -223,4 +223,3 @@ class FrameGate:
     def shutdown(self):
         self._stop.set()
         self._pool.shutdown(wait=True, cancel_futures=True)
-

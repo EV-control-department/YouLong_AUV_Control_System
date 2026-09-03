@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Stable launcher for the portable X-AnyLabeling bundle.
+# The current desktop session does not expose a usable GLX/EGL context, so
+# force Qt's software path to avoid the bundled application's GLX abort.
+set -euo pipefail
+
+APP="/home/doc049/下载/X-AnyLabeling-v4.0.2-Linux-CPU"
+
+if [[ ! -x "$APP" ]]; then
+    printf 'X-AnyLabeling executable not found: %s\n' "$APP" >&2
+    exit 1
+fi
+
+export QT_XCB_GL_INTEGRATION="${QT_XCB_GL_INTEGRATION:-none}"
+export QT_OPENGL="${QT_OPENGL:-software}"
+export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+
+exec "$APP" "$@"

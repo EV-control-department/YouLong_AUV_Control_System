@@ -41,8 +41,15 @@ fi
 mkdir -p "$OUT_DIR"
 
 # ── 探测目标是否在线 ─────────────────────────────────────────────
-if ! curl -s --max-time 2 "http://${GORTC_HOST}:${GORTC_PORT}/front" \
-     -o /dev/null 2>/dev/null; then
+# MJPEG 是不会主动结束的长连接，不能用 curl 的退出码判断：--max-time
+# 到期时正常流也会返回 28。只检查已经收到的 HTTP 状态和 Content-Type。
+probe_headers="$(
+  curl -sS --max-time 2 -D - \
+    "http://${GORTC_HOST}:${GORTC_PORT}/front" \
+    -o /dev/null 2>/dev/null || true
+)"
+if ! grep -Eiq '^HTTP/[0-9.]+[[:space:]]+200([[:space:]]|$)' <<<"$probe_headers" \
+   || ! grep -Eiq '^Content-[Tt]ype:[[:space:]]*multipart/x-mixed-replace' <<<"$probe_headers"; then
   echo "提示:/front 探测失败。确认 uv_camera 在 ${GORTC_HOST}:${GORTC_PORT} 已运行;" >&2
   echo "     仍将尝试(若 ffmpeg 能连上即可)。" >&2
 fi
@@ -50,6 +57,22 @@ fi
 ts="$(date +%Y%m%d_%H%M%S)"
 declare -A PIDS
 declare -A FILES
+
+stop_recording() {
+  local stream
+  for stream in "${!PIDS[@]}"; do
+    kill -INT "${PIDS[$stream]}" 2>/dev/null || true
+  done
+}
+
+wait_for_recorders() {
+  local stream
+  for stream in "${!PIDS[@]}"; do
+    wait "${PIDS[$stream]}" 2>/dev/null || true
+  done
+}
+
+trap stop_recording INT TERM
 
 record_one() {
   local stream="$1"
@@ -73,16 +96,16 @@ done
 
 if [ "$DURATION_SEC" -gt 0 ]; then
   echo "录制 ${DURATION_SEC}s 后自动停止..."
-  sleep "$DURATION_SEC"
+  sleep "$DURATION_SEC" || true
   # SIGINT 让 ffmpeg 优雅收尾 TS;即便强杀,TS 已写部分也可播。
-  for s in "${!PIDS[@]}"; do kill -INT "${PIDS[$s]}" 2>/dev/null || true; done
+  stop_recording
 else
   echo "无限录制,按 Ctrl-C 停止。"
-  wait
+  wait_for_recorders
 fi
 
+trap - INT TERM
 for s in "${!PIDS[@]}"; do
-  wait "${PIDS[$s]}" 2>/dev/null || true
   if [ -f "${FILES[$s]}" ]; then
     echo "✓ ${FILES[$s]} ($(du -h "${FILES[$s]}" | cut -f1))"
   fi

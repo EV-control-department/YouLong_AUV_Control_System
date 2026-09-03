@@ -1,6 +1,30 @@
 #!/usr/bin/env python3
-"""Entry point for sim_bridge node."""
+"""Entry point for sim_bridge node.
+
+Re-executes itself with the repository-local Python runtime when available,
+so ``ros2 run uv_sim sim_bridge`` gets the same NumPy/cv_bridge environment as
+the simulation launch file.
+"""
+import os
+from pathlib import Path
 import sys
+
+
+def _workspace_python():
+    for parent in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
+        candidate = parent / 'workspace_auv' / '.venv' / 'bin' / 'python'
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+workspace_python = _workspace_python()
+if workspace_python is not None:
+    current_environment = Path(sys.prefix).resolve()
+    workspace_environment = workspace_python.parent.parent.resolve()
+    if current_environment != workspace_environment:
+        os.execv(str(workspace_python), [str(workspace_python), __file__, *sys.argv[1:]])
+
 from uv_sim.sim_bridge import main
 
 if __name__ == '__main__':

@@ -31,6 +31,7 @@ import zit6_control_core
 from zit6_control_core import Zit6Controller
 
 from .camera_passthrough import CameraPassthrough
+from .coordinate_convention import scene_to_odom_ned, scene_yaw_to_odom_ned
 from .thrust_mixer import ThrustMixer
 
 
@@ -70,6 +71,13 @@ def _find_firmware_config(overrides=None) -> dict:
 class SimBridgeNode(Node):
     def __init__(self) -> None:
         super().__init__("sim_bridge")
+
+        # The position reported by Stonefish is in the scene/world frame.
+        # Keep the spawn position as the simulation ``pos`` origin so the
+        # simulated vehicle has the same local reference after every launch.
+        # Only translation is removed; the initial attitude remains in pos.
+        self._position_origin = None
+        self._position_origin_lock = threading.Lock()
 
         self.declare_parameter('hil_mode', False)
         self._hil_mode = self.get_parameter('hil_mode').value
@@ -172,13 +180,17 @@ class SimBridgeNode(Node):
             self._publish_thrust_from_6dof(*msg.data[:6])
 
     def _sim_nav_odom_cb(self, msg: Odometry) -> None:
-        self._sim_pos[0] = msg.pose.pose.position.x
-        self._sim_pos[1] = msg.pose.pose.position.y
-        self._sim_pos[2] = msg.pose.pose.position.z
+        self._sim_pos[0], self._sim_pos[1], self._sim_pos[2] = self._relative_position(
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            msg.pose.pose.position.z,
+        )
         q = msg.pose.pose.orientation
-        roll, pitch, yaw = self._quat_to_rpy(q.x, q.y, q.z, q.w)
+        roll, pitch, scene_yaw = self._quat_to_rpy(q.x, q.y, q.z, q.w)
+        yaw = scene_yaw_to_odom_ned(scene_yaw)
         self._sim_pos[3], self._sim_pos[4], self._sim_pos[5] = roll, pitch, yaw
-        vx_w, vy_w = msg.twist.twist.linear.x, msg.twist.twist.linear.y
+        vx_w, vy_w, _ = scene_to_odom_ned(
+            msg.twist.twist.linear.x, msg.twist.twist.linear.y, 0.0)
         cy, sy = math.cos(yaw), math.sin(yaw)
         self._sim_vel[0] = vx_w * cy + vy_w * sy
         self._sim_vel[1] = -vx_w * sy + vy_w * cy
@@ -391,20 +403,42 @@ class SimBridgeNode(Node):
 
     # ── Sensor callbacks → NavState ────────────────────────────────
 
+    def _relative_position(self, x: float, y: float, z: float) -> tuple[float, float, float]:
+        """Return Stonefish position relative to the AUV spawn position.
+
+        The first odometry sample is the spawn pose for the simulation.  The
+        origin is shared by SIL and HIL so ``/zit6/state/pos`` and
+        ``/zit6/sim/nav`` expose the same local position convention.
+        """
+        with self._position_origin_lock:
+            if self._position_origin is None:
+                self._position_origin = (float(x), float(y), float(z))
+                self.get_logger().info(
+                    'Simulation pos origin set to Stonefish spawn: '
+                    f'x={x:.3f}, y={y:.3f}, z={z:.3f}')
+            ox, oy, oz = self._position_origin
+        return scene_to_odom_ned(float(x) - ox, float(y) - oy, float(z) - oz)
+
     def _odom_cb(self, msg: Odometry) -> None:
-        self.pos['x'] = msg.pose.pose.position.x
-        self.pos['y'] = msg.pose.pose.position.y
-        self.pos['z'] = msg.pose.pose.position.z
+        self.pos['x'], self.pos['y'], self.pos['z'] = self._relative_position(
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            msg.pose.pose.position.z,
+        )
         q = msg.pose.pose.orientation
-        roll, pitch, yaw = self._quat_to_rpy(q.x, q.y, q.z, q.w)
+        roll, pitch, scene_yaw = self._quat_to_rpy(q.x, q.y, q.z, q.w)
+        yaw = scene_yaw_to_odom_ned(scene_yaw)
         self.pos['rx'] = math.degrees(roll)
         self.pos['ry'] = math.degrees(pitch)
         self.pos['rz'] = math.degrees(yaw)
 
-        vx_w = msg.twist.twist.linear.x
-        vy_w = msg.twist.twist.linear.y
+        vx_w, vy_w, vz_w = scene_to_odom_ned(
+            msg.twist.twist.linear.x,
+            msg.twist.twist.linear.y,
+            msg.twist.twist.linear.z,
+        )
         self.vel_world['x'], self.vel_world['y'], self.vel_world['z'] = (
-            vx_w, vy_w, msg.twist.twist.linear.z)
+            vx_w, vy_w, vz_w)
         self.vel_world['rx'] = msg.twist.twist.angular.x
         self.vel_world['ry'] = msg.twist.twist.angular.y
         self.vel_world['rz'] = msg.twist.twist.angular.z
@@ -413,7 +447,7 @@ class SimBridgeNode(Node):
         cy, sy = math.cos(yaw), math.sin(yaw)
         self.vel['x'] = vx_w * cy + vy_w * sy
         self.vel['y'] = -vx_w * sy + vy_w * cy
-        self.vel['z'] = msg.twist.twist.linear.z
+        self.vel['z'] = vz_w
         self.vel['rx'] = self.vel_world['rx']
         self.vel['ry'] = self.vel_world['ry']
         self.vel['rz'] = self.vel_world['rz']

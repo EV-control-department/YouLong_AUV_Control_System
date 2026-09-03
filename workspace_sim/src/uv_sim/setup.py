@@ -11,7 +11,9 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('lib/' + package_name, ['libexec/uv_sim/sim_bridge']),
     ],
-    install_requires=['setuptools'],
+    # cv_bridge shipped with ROS 2 Jazzy in this environment uses the NumPy
+    # 1.x C ABI. Keep the simulation runtime on the known-compatible version.
+    install_requires=['setuptools', 'numpy==1.26.4'],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',
