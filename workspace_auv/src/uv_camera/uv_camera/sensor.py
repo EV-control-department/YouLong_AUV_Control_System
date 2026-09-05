@@ -10,6 +10,7 @@ In the SAME process as uv_ai. uv_sensor:
 import threading
 
 import cv2
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from .common import (
     DOWN_CAMERA_DEVICE,
@@ -35,6 +36,11 @@ class Sensor:
         self._capture_threads = []
         self._front_cap = None
         self._down_cap = None
+        self._image_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+        )
 
     # ── setup: pick source ──────────────────────────────────────────────
     def start(self):
@@ -46,10 +52,12 @@ class Sensor:
     def _start_sim(self):
         if self._enable_front:
             self.node.create_subscription(
-                Image, '/auv/front_cam/stitched', self._front_img_cb, 10)
+                Image, '/auv/front_cam/stitched', self._front_img_cb,
+                self._image_qos)
         if self._enable_down:
             self.node.create_subscription(
-                Image, '/auv/down_cam/stitched', self._down_img_cb, 10)
+                Image, '/auv/down_cam/stitched', self._down_img_cb,
+                self._image_qos)
         self.node.get_logger().info(
             'uv_sensor started (sim mode: ROS stitched topics)')
 
@@ -109,8 +117,9 @@ class Sensor:
                 self.node.get_logger().warn(f'Invalid frame from {camera} camera')
                 continue
             # raw preview at capture rate, then hand to ai via gate
-            self.node.update_raw_preview(camera, normalized)
-            self.node.submit_frame(camera, normalized)
+            stamp = self.node.get_clock().now().to_msg()
+            self.node.update_raw_preview(camera, normalized, stamp)
+            self.node.submit_frame(camera, normalized, stamp)
 
     # ── shutdown ────────────────────────────────────────────────────────
     def shutdown(self):

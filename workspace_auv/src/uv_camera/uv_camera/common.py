@@ -119,10 +119,14 @@ class _MjpegHandler(BaseHTTPRequestHandler):
                 result = self.node._wait_for_stream_frame(camera, annotated, last_sequence)
                 if result is None:
                     break
-                payload, last_sequence = result
-                self.wfile.write(
-                    b'--frame\r\nContent-Type: image/jpeg\r\n'
-                    + f'Content-Length: {len(payload)}\r\n\r\n'.encode('ascii'))
+                payload, last_sequence, stamp_ns = result
+                part_header = (
+                    f'--frame\r\nContent-Type: image/jpeg\r\n'
+                    f'X-Frame-Sequence: {last_sequence}\r\n'
+                    f'X-Frame-Stamp-Ns: {stamp_ns}\r\n'
+                    f'Content-Length: {len(payload)}\r\n\r\n'
+                ).encode('ascii')
+                self.wfile.write(part_header)
                 self.wfile.write(payload)
                 self.wfile.write(b'\r\n')
                 self.wfile.flush()

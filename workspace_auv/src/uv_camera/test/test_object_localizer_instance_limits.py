@@ -11,6 +11,7 @@ from uv_camera.object_localizer import (
     FORM_FRONT_MULTI_VIEW,
     FORM_FRONT_STEREO,
     ObjectLocalizer,
+    PoseAt,
     RayObservation,
     StereoCalibration,
 )
@@ -67,6 +68,128 @@ def _localizer_for_association():
     }
     node.max_rays = 20
     return node
+
+
+def _localizer_for_known_height_geometry():
+    """Build the minimum non-ROS state for down ray-plane measurements."""
+    node = ObjectLocalizer.__new__(ObjectLocalizer)
+    node.class_names = ["guide_line", "yellow_golf", "gate_down"]
+    node.down_geometry_mode = "known_height"
+    node.down_target_z_by_class = {
+        "guide_line": 1.294,
+        "yellow_golf": 0.964,
+    }
+    node.down_default_target_z = 1.294
+    node.down_scene_origin_z = 0.0
+    node.down_ignored_classes = {"gate"}
+    node.down_target_z_sigma = 0.01
+    node.down_min_plane_incidence = 0.15
+    node.down_plane_normal = np.array([0.0, 0.0, 1.0])
+    node.down_plane_c = 0.0
+    node.down_plane_sigma = 0.03
+    node.down_direct_scale = 1.0
+    node.down_width = 1280
+    node.down_height = 960
+    node.pixel_sigma_fraction = 0.01
+    node.pixel_sigma_min = 1.0
+    node.pixel_sigma_max = 12.0
+    node.calibration_pixel_sigma = 0.5
+    node.extrinsic_position_covariance = np.eye(3) * 0.005**2
+    node.extrinsic_angle_covariance = np.eye(3) * math.radians(0.5)**2
+    node.body_translation = {"down_left": np.zeros(3)}
+    node.body_rotation = {"down_left": np.eye(3)}
+
+    class MonocularCalibration:
+        @staticmethod
+        def ray_in_left_optical(side, pixel):
+            # Deliberately expose no stereo/triangulation method.  A known-
+            # height observation must be usable without a baseline.
+            return np.array([0.2, -0.1, 1.0], dtype=np.float64) \
+                / math.sqrt(1.05)
+
+    node._down_calibration = MonocularCalibration()
+    return node
+
+
+def _down_detection(confidence=0.9):
+    return SimpleNamespace(
+        class_id=1,
+        confidence=confidence,
+        pixel_x=640.0,
+        pixel_y=480.0,
+        bbox_x1=630.0,
+        bbox_y1=470.0,
+        bbox_x2=650.0,
+        bbox_y2=490.0,
+    )
+
+
+def test_known_height_down_measurement_does_not_need_stereo_depth():
+    node = _localizer_for_known_height_geometry()
+    pose = PoseAt(
+        stamp=1.0,
+        position=np.zeros(3),
+        rotation=np.eye(3),
+        covariance=np.zeros((6, 6)),
+        age_sec=0.0,
+    )
+
+    point, covariance, quality = node._plane_measurement(
+        "left", _down_detection(), pose, class_id=1)
+
+    assert np.isfinite(point).all()
+    assert np.isclose(point[2], 0.964, atol=1e-6)
+    assert np.isclose(quality["target_z_m"], 0.964, atol=1e-6)
+    assert covariance.shape == (3, 3)
+
+
+def test_known_height_uses_a_different_plane_for_guide_lines():
+    node = _localizer_for_known_height_geometry()
+    pose = PoseAt(
+        stamp=1.0,
+        position=np.zeros(3),
+        rotation=np.eye(3),
+        covariance=np.zeros((6, 6)),
+        age_sec=0.0,
+    )
+    detection = _down_detection()
+    detection.class_id = 0
+
+    point, _, quality = node._plane_measurement(
+        "left", detection, pose, class_id=0)
+
+    assert np.isclose(point[2], 1.294, atol=1e-6)
+    assert np.isclose(quality["target_z_m"], 1.294, atol=1e-6)
+
+
+def test_known_height_converts_scene_depth_to_spawn_relative_odom():
+    node = _localizer_for_known_height_geometry()
+    node.down_scene_origin_z = 0.12
+    pose = PoseAt(
+        stamp=1.0,
+        position=np.zeros(3),
+        rotation=np.eye(3),
+        covariance=np.zeros((6, 6)),
+        age_sec=0.0,
+    )
+
+    point, _, quality = node._plane_measurement(
+        "left", _down_detection(), pose, class_id=1)
+
+    # The rack ball is at scene depth 0.964 m, while the local odom origin is
+    # at the 0.12 m spawn depth.  Its local target plane is therefore 0.844 m.
+    assert np.isclose(point[2], 0.844, atol=1e-6)
+    assert np.isclose(quality["target_z_m"], 0.844, atol=1e-6)
+    assert np.isclose(quality["target_scene_z_m"], 0.964, atol=1e-6)
+    assert np.isclose(quality["robot_scene_depth_m"], 0.12, atol=1e-6)
+
+
+def test_known_height_does_not_fallback_to_gate_plane():
+    node = _localizer_for_known_height_geometry()
+
+    assert node._down_class_ignored(2)
+    assert not node._down_height_plane_available(2)
+    assert node._down_plane_parameters(2) is None
 
 
 def test_competition_instance_limits():

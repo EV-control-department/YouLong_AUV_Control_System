@@ -38,10 +38,23 @@ from .common import (
 class Ai:
     """Detection consumer for the A3 frame gate."""
 
-    def __init__(self, node, update_annotated_fn, cameras=('front', 'down')):
+    def __init__(
+        self,
+        node,
+        update_annotated_fn,
+        cameras=('front', 'down'),
+        inference_fps=0.0,
+        inference_threads=2,
+    ):
         self.node = node                     # composed uv_camera rclpy Node
         self._update_annotated = update_annotated_fn  # node.update_annotated_stream
         self._active_cams = list(cameras)
+        self._inference_period_s = (
+            0.0 if float(inference_fps) <= 0.0 else 1.0 / float(inference_fps)
+        )
+        self._inference_timing_lock = threading.Lock()
+        self._last_inference_s = {camera: float('-inf') for camera in cameras}
+        self._inference_threads = max(1, int(inference_threads))
 
         # line-state / dataset / model config (declared as node params)
         self._line_contour_min_area = int(
@@ -114,6 +127,15 @@ class Ai:
 
     def load_model(self, model_path=''):
         try:
+            # Ultralytics delegates CPU inference to PyTorch, whose default
+            # thread count is often the full machine.  Cap it so Stonefish,
+            # ROS and the control path retain CPU time.
+            try:
+                import torch
+                torch.set_num_threads(self._inference_threads)
+                torch.set_num_interop_threads(1)
+            except (ImportError, RuntimeError):
+                pass
             from ultralytics import YOLO
             if model_path:
                 model_path = os.path.expanduser(str(model_path))
@@ -227,12 +249,18 @@ class Ai:
 
         if not self._model_loaded:
             return
+        if not self._allow_inference(camera):
+            return
 
         K = self._front_K if camera == 'front' else self._down_K
         D = self._front_D if camera == 'front' else self._down_D
         h, w = cv_img.shape[:2]
         mid = w // 2
         if ENABLE_UNDISTORT and K is not None and D is not None:
+            distortion_active = bool(np.any(np.abs(D) > 1e-12))
+        else:
+            distortion_active = False
+        if distortion_active:
             left_img = cv2.undistort(cv_img[:, :mid], K, D)
             right_img = cv2.undistort(cv_img[:, mid:], K, D)
         else:
@@ -241,7 +269,9 @@ class Ai:
 
         if camera == 'front' and self._aruco_detector is not None:
             with self._aruco_lock:
-                self._aruco_frames = (left_img.copy(), right_img.copy())
+                # These arrays are read-only in the ArUco worker.  Retaining
+                # the views avoids two full-resolution copies per inference.
+                self._aruco_frames = (left_img, right_img)
 
         left_name = f'{camera}_left'
         right_name = f'{camera}_right'
@@ -252,14 +282,31 @@ class Ai:
         det_l, polys_l, line_l, dbg_l = self._detect(header, left_name, left_img)
         self._pub_det[left_name].publish(det_l)
         self._pub_line[left_name].publish(line_l)
-        ann_l = self._draw_boxes(left_img, det_l, polys_l, line_l, dbg_l)
+        annotate = bool(getattr(self.node, '_stream_annotated', False))
+        if annotate:
+            ann_l = self._draw_boxes(left_img, det_l, polys_l, line_l, dbg_l)
 
         det_r, polys_r, line_r, dbg_r = self._detect(header, right_name, right_img)
         self._pub_det[right_name].publish(det_r)
         self._pub_line[right_name].publish(line_r)
-        ann_r = self._draw_boxes(right_img, det_r, polys_r, line_r, dbg_r)
+        if annotate:
+            ann_r = self._draw_boxes(right_img, det_r, polys_r, line_r, dbg_r)
 
-        self._update_annotated(camera, np.hstack((ann_l, ann_r)))
+        if annotate:
+            self._update_annotated(
+                camera, np.hstack((ann_l, ann_r)), header.stamp)
+
+    def _allow_inference(self, camera):
+        """Rate-limit expensive inference while keeping the newest frame."""
+        if self._inference_period_s <= 0.0:
+            return True
+        now = time.monotonic()
+        with self._inference_timing_lock:
+            last = self._last_inference_s.get(camera, float('-inf'))
+            if now - last < self._inference_period_s:
+                return False
+            self._last_inference_s[camera] = now
+        return True
 
     # ── detection (unchanged logic) ────────────────────────────────────
     def _detect(self, header, camera_name, cv_img):

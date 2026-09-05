@@ -17,10 +17,12 @@ import os
 import subprocess
 import threading
 import math
+import time
 
 import cv2
 import numpy as np
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from std_msgs.msg import Float32MultiArray, Header
@@ -40,6 +42,13 @@ from .common import (
 )
 
 
+def _as_bool(value) -> bool:
+    """Parse launch-provided booleans without treating 'false' as true."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 class CameraAiNode(Node):
     """uv_camera node: composes uv_sensor (source+preview) + uv_ai (detection)."""
 
@@ -49,18 +58,29 @@ class CameraAiNode(Node):
         params = self._read_params()
 
         # stream caches (go2rtc preview: raw + annotated)
-        self._stream_annotated = params['stream_annotated']
+        self._preview_enabled = params['enable_gortc']
+        self._stream_annotated = (
+            params['stream_annotated'] and self._preview_enabled)
         self._mjpeg_port = params['mjpeg_port']
         self._stream_lock = threading.Lock()
         self._stream_jpegs = {'front': None, 'down': None}
         self._stream_annotated_jpegs = {'front': None, 'down': None}
         self._stream_sequence = {'front': 0, 'down': 0}
         self._stream_annotated_sequence = {'front': 0, 'down': 0}
+        self._stream_stamps = {'front': 0, 'down': 0}
+        self._stream_annotated_stamps = {'front': 0, 'down': 0}
         self._stream_condition = threading.Condition(self._stream_lock)
         self._stream_stop = threading.Event()
         self._mjpeg_server = None
         self._gortc_process = None
         self._gortc_config = None
+
+        # JPEG/undistort work is small and frequent; prevent OpenCV from
+        # creating another large worker pool alongside PyTorch and Stonefish.
+        try:
+            cv2.setNumThreads(1)
+        except (AttributeError, cv2.error):
+            pass
 
         # Latest ZIT6 pose used for the small telemetry overlay on all streams.
         # /zit6/state/pos has no header, so the newest received sample is the
@@ -78,7 +98,10 @@ class CameraAiNode(Node):
             active.append('down')
 
         # uv_ai (must be built before gate so gate.consumer is ready)
-        self.ai = ai_mod.Ai(self, self.update_annotated_stream, cameras=active)
+        self.ai = ai_mod.Ai(
+            self, self.update_annotated_stream, cameras=active,
+            inference_fps=params['inference_fps'],
+            inference_threads=params['inference_threads'])
         self._gate = FrameGate(self.ai.process, cameras=active,
                                max_workers=2, log_warn=self._warn)
         self.ai.load_model(params['model_path'])
@@ -100,17 +123,22 @@ class CameraAiNode(Node):
                 self.get_logger().error(f'cv_bridge not available in sim mode: {e}')
 
         # MJPEG server + go2rtc (preview only)
-        if params['enable_gortc']:
+        if self._preview_enabled:
             if self._start_mjpeg_server():
                 self._start_gortc(params['gortc_port'])
 
+        preview_text = (
+            f'preview enabled on {params["gortc_port"]}'
+            if self._preview_enabled else 'preview disabled')
         self.get_logger().info(
             f'uv_camera started: sensor(source={params["sim_mode"] and "sim" or "v4l"})'
-            f' + ai, go2rtc preview on {params["gortc_port"]}')
+            f' + ai, {preview_text}')
 
     # ── params ──────────────────────────────────────────────────────────
     def _declare_params(self):
         self.declare_parameter('sim_mode', False)
+        self.declare_parameter('inference_fps', 5.0)
+        self.declare_parameter('inference_threads', 2)
         self.declare_parameter('enable_gortc', ENABLE_GORTC)
         self.declare_parameter('gortc_executable', GORTC_EXECUTABLE)
         self.declare_parameter('gortc_http_port', GORTC_HTTP_PORT)
@@ -137,9 +165,11 @@ class CameraAiNode(Node):
         g = self.get_parameter
         return {
             'sim_mode': g('sim_mode').value,
-            'enable_gortc': g('enable_gortc').value,
+            'inference_fps': max(0.0, float(g('inference_fps').value)),
+            'inference_threads': max(1, int(g('inference_threads').value)),
+            'enable_gortc': _as_bool(g('enable_gortc').value),
             'gortc_port': g('gortc_http_port').value,
-            'stream_annotated': g('stream_annotated').value,
+            'stream_annotated': _as_bool(g('stream_annotated').value),
             'mjpeg_port': g('mjpeg_port').value,
             'enable_front': g('enable_front_camera').value,
             'enable_down': g('enable_down_camera').value,
@@ -218,15 +248,26 @@ class CameraAiNode(Node):
             self.get_logger().warn(f'Image conversion failed ({camera}): {e}')
             return
         # raw preview updated at arrival (independent of YOLO speed)
-        self.update_raw_preview(camera, cv_img)
+        self.update_raw_preview(camera, cv_img, msg.header.stamp)
         self._gate.submit(camera, ('opencv', cv_img, msg.header.stamp, False))
 
-    def submit_frame(self, camera, frame):
+    def submit_frame(self, camera, frame, stamp=None):
         """Called from uv_sensor when a V4L2 frame arrives (real mode)."""
-        stamp = self.get_clock().now().to_msg()
+        stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
         self._gate.submit(camera, ('opencv', frame, stamp, True))
 
-    def update_raw_preview(self, camera, frame):
+    @staticmethod
+    def _stamp_to_ns(stamp):
+        if stamp is None:
+            return time.time_ns()
+        try:
+            return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+        except (AttributeError, TypeError, ValueError):
+            return time.time_ns()
+
+    def update_raw_preview(self, camera, frame, stamp=None):
+        if not self._preview_enabled:
+            return
         frame = self._draw_pose_overlay(frame)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
@@ -234,9 +275,10 @@ class CameraAiNode(Node):
         with self._stream_condition:
             self._stream_jpegs[camera] = encoded.tobytes()
             self._stream_sequence[camera] += 1
+            self._stream_stamps[camera] = self._stamp_to_ns(stamp)
             self._stream_condition.notify_all()
 
-    def update_annotated_stream(self, camera, frame):
+    def update_annotated_stream(self, camera, frame, stamp=None):
         if not self._stream_annotated:
             return
         frame = self._draw_pose_overlay(frame)
@@ -246,6 +288,7 @@ class CameraAiNode(Node):
         with self._stream_condition:
             self._stream_annotated_jpegs[camera] = encoded.tobytes()
             self._stream_annotated_sequence[camera] += 1
+            self._stream_annotated_stamps[camera] = self._stamp_to_ns(stamp)
             self._stream_condition.notify_all()
 
     def _wait_for_stream_frame(self, camera, annotated, last_sequence):
@@ -253,12 +296,14 @@ class CameraAiNode(Node):
                      else self._stream_sequence)
         jpeg_cache = (self._stream_annotated_jpegs if annotated
                       else self._stream_jpegs)
+        stamp_cache = (self._stream_annotated_stamps if annotated
+                       else self._stream_stamps)
         with self._stream_condition:
             while not self._stream_stop.is_set():
                 seq = seq_cache[camera]
                 payload = jpeg_cache[camera]
                 if payload is not None and seq != last_sequence:
-                    return payload, seq
+                    return payload, seq, stamp_cache[camera]
                 self._stream_condition.wait(timeout=0.5)
         return None
 
@@ -363,11 +408,13 @@ def main(args=None):
     node = CameraAiNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # launch may already have shut down the default context while
+        # delivering SIGINT.
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

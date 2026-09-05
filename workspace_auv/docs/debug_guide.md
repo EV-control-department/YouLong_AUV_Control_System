@@ -380,7 +380,7 @@ ros2 node list | grep basic_motion
 
 Stonefish 在无 GPU 的环境（SSH、WSL）会挂。确保：
 
-1. 使用 NO GPU 模式（`sim_bringup.py` 已设为 `quality: high`，但无 GPU 时需降级）
+1. 使用低负载渲染模式（`sim_bringup.py` 默认 `render_quality:=low`；需要更清晰画面时再显式改为 `medium` 或 `high`）
 2. 或者用 VNC 连接桌面环境
 
 ### 机器人收到定深指令后转圈

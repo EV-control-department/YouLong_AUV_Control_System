@@ -1,21 +1,23 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>uv_bringup</name>
+  <name>uv_log</name>
   <version>0.1.0</version>
-  <description>Launch files for YouLong AUV system bringup</description>
+  <description>Crash-resilient ROS2, video and node-log session recorder</description>
   <maintainer email="origin@example.com">origin</maintainer>
   <license>GPL-3.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
-  <exec_depend>uv_hm</exec_depend>
-  <exec_depend>uv_control</exec_depend>
-  <exec_depend>uv_camera</exec_depend>
-  <exec_depend>uv_nav</exec_depend>
-  <exec_depend>uv_task</exec_depend>
-  <exec_depend>uv_log</exec_depend>
-  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>ros2cli</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rosbag2</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>rosbag2_storage_mcap</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-pyside6</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -9,6 +9,7 @@ uint8 cmd_type
 string axes         # 要动的轴: "x","y","z","rz" 任意组合, 空=全部
 float32[] target    # [x, y, z, yaw]
 float32 timeout     # 秒, ≤0=默认60s
+string task_context # 任务上下文，例如：hit_balls task:5步骤-前往红球前1米
 ---
 # Result
 bool success

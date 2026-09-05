@@ -94,12 +94,12 @@
       "drag": 0.0
     },
     "yaw": {
-      "pos_kp": 0.4,
+      "pos_kp": 0.6,
       "pos_ki": 0.0,
       "pos_kd": 0.001,
       "pos_i_limit": 0.0,
       "pos_output_limit": 1.5,
-      "vel_kp": 0.4,
+      "vel_kp": 0.9,
       "vel_ki": 0.000,
       "vel_kd": 0.05,
       "vel_i_limit": 0.0,

@@ -20,10 +20,17 @@ from rclpy.node import Node
 from std_msgs.msg import Float32, UInt8
 from std_srvs.srv import Trigger
 
-from zit6_interfaces.msg import ZitStatus
+from zit6_interfaces.msg import ZitSetpoint, ZitStatus
 
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import DetectionArray, ObjectPositionArray, PoseInfo, TaskStatus
+from uv_msgs.msg import (
+    DetectionArray,
+    ObjectPositionArray,
+    PoseInfo,
+    TargetPosition,
+    TargetPositionArray,
+    TaskStatus,
+)
 from uv_msgs.srv import ExecTask, RunTask
 
 from uv_task.arrow_surfacer import (
@@ -33,6 +40,22 @@ from uv_task.arrow_surfacer import (
 )
 from uv_task.arrow_surfacer import ArrowSurfacer
 from uv_task.line_follower import LineFollower
+
+
+_IMPACT_BALL_CLASS_IDS = {
+    'impact_ball_blue': 5,
+    'impact_ball_red': 6,
+}
+_IMPACT_BALL_ALIASES = {
+    'blue': 'impact_ball_blue',
+    'blue_ball': 'impact_ball_blue',
+    'impact_blue': 'impact_ball_blue',
+    'impact_ball_blue': 'impact_ball_blue',
+    'red': 'impact_ball_red',
+    'red_ball': 'impact_ball_red',
+    'impact_red': 'impact_ball_red',
+    'impact_ball_red': 'impact_ball_red',
+}
 
 
 class TaskRunnerNode(Node):
@@ -61,6 +84,7 @@ class TaskRunnerNode(Node):
         self._cmd_z = 0.0
         self._cmd_yaw = 0.0
         self.objects = ObjectPositionArray()
+        self.target_positions = TargetPositionArray()
 
         # ── 下视感知（release_sampler 对齐用）──
         self._perception_lock = threading.RLock()
@@ -69,6 +93,8 @@ class TaskRunnerNode(Node):
 
         self.tasks = []
         self.current_index = 0
+        self._current_task_name = ''
+        self._current_task_step = 0
         self.running = False
         self.stopped = False
         self._active_goal_handle = None
@@ -135,9 +161,12 @@ class TaskRunnerNode(Node):
             'wait': self._task_wait,
             'follow_line': self._task_follow_line,
             'arrow_surface': self._task_arrow_surface,
+            'hit_ball': self._task_hit_balls,
+            'hit_balls': self._task_hit_balls,
             'drop_beacon': self._task_drop_beacon,
             'take_water_sample': self._task_take_water_sample,
             'release_sampler': self._task_release_sampler,
+            'return_origin': self._task_return_origin,
         }
 
         # Action client
@@ -148,6 +177,9 @@ class TaskRunnerNode(Node):
         # Subscribers
         self.create_subscription(
             ObjectPositionArray, '/perception/objects', self._objects_cb, 10)
+        self.create_subscription(
+            TargetPositionArray, '/perception/target_positions',
+            self._target_positions_cb, 10)
         for cam in ('down_left', 'down_right'):
             self.create_subscription(
                 DetectionArray, f'/perception/detection/{cam}',
@@ -165,6 +197,10 @@ class TaskRunnerNode(Node):
         self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
         self.pub_light = self.create_publisher(UInt8, '/zit6/cmd/light', 10)
         self.pub_servo = self.create_publisher(Float32, '/zit6/cmd/servo', 10)
+        # The impact charge deliberately uses the existing ZIT6 velocity
+        # setpoint wire format: mode=VEL (0x01) + body frame (0x10).
+        self.pub_setpoint = self.create_publisher(
+            ZitSetpoint, '/zit6/cmd/setpoint', 10)
 
         # Services
         self.create_service(RunTask, '/task/run', self._run_task_cb)
@@ -178,7 +214,12 @@ class TaskRunnerNode(Node):
         self.get_logger().info(f'Debug mode: {self._debug_mode}')
 
     def _objects_cb(self, msg: ObjectPositionArray):
-        self.objects = msg
+        with self._perception_lock:
+            self.objects = msg
+
+    def _target_positions_cb(self, msg: TargetPositionArray):
+        with self._perception_lock:
+            self.target_positions = msg
 
     def _det_cb(self, camera_name: str, msg: DetectionArray):
         with self._perception_lock:
@@ -334,6 +375,8 @@ class TaskRunnerNode(Node):
             task = self.tasks[self.current_index]
             name = task.get('name', 'unknown')
             params = task.get('params', {})
+            self._current_task_name = str(name)
+            self._current_task_step = self.current_index + 1
 
             self.get_logger().info(
                 f'[{self.current_index + 1}/{total}] {name} {params} '
@@ -352,6 +395,8 @@ class TaskRunnerNode(Node):
             self.current_index += 1
 
         self.running = False
+        self._current_task_name = ''
+        self._current_task_step = 0
         if self.stopped:
             self.get_logger().warn(f'=== Task list stopped at {self.current_index}/{total} ===')
         else:
@@ -370,8 +415,30 @@ class TaskRunnerNode(Node):
     # Action helper
     # ========================================================================
 
+    def _format_motion_context(self, purpose: str) -> str:
+        """Create the standard task context attached to BasicMotion goals."""
+        task_name = self._debug_task_name or self._current_task_name or 'unknown'
+        step = self._current_task_step
+        if step <= 0:
+            step = self.current_index + 1 if self.tasks else 1
+        purpose = str(purpose).strip() or '执行运动指令'
+        return f'{task_name} task:{step}步骤-{purpose}'
+
+    @staticmethod
+    def _default_motion_purpose(cmd_type, axes: str) -> str:
+        purposes = {
+            BasicMotion.Goal.START: '初始化里程计原点',
+            BasicMotion.Goal.SET: '执行绝对定位',
+            BasicMotion.Goal.WMOVE: '执行世界坐标步进移动',
+            BasicMotion.Goal.BMOVE: '执行机体坐标步进移动',
+            BasicMotion.Goal.WTRAVEL: '执行世界坐标直线移动',
+            BasicMotion.Goal.BTRAVEL: '执行机体坐标直线移动',
+        }
+        purpose = purposes.get(cmd_type, '执行运动指令')
+        return f'{purpose}({axes or "all"})'
+
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
-                          quiet=False):
+                          quiet=False, task_context=''):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -383,12 +450,16 @@ class TaskRunnerNode(Node):
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
             quiet: if True, suppress per-goal INFO logs (errors still logged)
+            task_context: context shown by basic_motion; empty uses the standard
+                current-task/current-step/action context.
 
         Returns:
             (success: bool, message: str)
         """
         type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL', 6: 'START'}
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
+        task_context = (str(task_context).strip() or self._format_motion_context(
+            self._default_motion_purpose(cmd_type, axes)))
 
         # Debug mode timeout override
         effective_timeout = timeout
@@ -398,7 +469,8 @@ class TaskRunnerNode(Node):
         if not quiet:
             t = [f'{v:.2f}' for v in target]
             self.get_logger().info(
-                f'Send goal: {type_name} target=[{", ".join(t)}] timeout={effective_timeout:.0f}s')
+                f'Send goal: {type_name} target=[{", ".join(t)}] '
+                f'timeout={effective_timeout:.0f}s task_context="{task_context}"')
 
         if not self._action_client.wait_for_server(timeout_sec=2.0):
             self.get_logger().error('Action server not available')
@@ -409,6 +481,7 @@ class TaskRunnerNode(Node):
         goal.axes = axes
         goal.target = target
         goal.timeout = float(effective_timeout)
+        goal.task_context = task_context
 
         send_future = self._action_client.send_goal_async(goal)
         while rclpy.ok() and not self.stopped and not send_future.done():
@@ -529,6 +602,41 @@ class TaskRunnerNode(Node):
             self._cmd_x = self._cmd_y = self._cmd_z = self._cmd_yaw = 0.0
         else:
             self.get_logger().error(f'START failed: {msg}')
+        return success
+
+    def _task_return_origin(self, p: dict) -> bool:
+        """任务开始后回到 odom 原点，只修正水平位置和航向。
+
+        START 会把当前所在位置定义为 odom 原点，因此通常这里无需再移动；
+        保留该步骤是为了让任务时序明确，并处理 START 前仍有残余目标的情况。
+        深度不参与归零，避免把当前深度误当成需要回到 z=0 的目标。
+        """
+        settle_time = max(0.0, float(p.get('state_settle_time', 0.3)))
+        if settle_time > 0.0:
+            time.sleep(settle_time)
+
+        pose = self._latest_robot_pose()
+        horizontal_error = math.hypot(pose[0], pose[1])
+        yaw_error = abs(((pose[5] + 180.0) % 360.0) - 180.0)
+        if horizontal_error <= 0.1 and yaw_error <= 5.0:
+            self._cmd_x = self._cmd_y = self._cmd_yaw = 0.0
+            self.get_logger().info(
+                'return_origin: 已在 odom 原点附近，跳过重复定位 '
+                f'(xy={horizontal_error:.3f}m, yaw={yaw_error:.1f}°)')
+            return True
+
+        timeout = max(1.0, float(p.get('timeout', 30.0)))
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [0.0, 0.0, 0.0, 0.0],
+            'xyrz',
+            timeout=timeout,
+            task_context=self._format_motion_context(
+                '回到里程计原点(保持当前深度)'),
+        )
+        self.get_logger().info(f'return_origin: {msg}')
+        if success:
+            self._cmd_x = self._cmd_y = self._cmd_yaw = 0.0
         return success
 
     # --- SET tasks (absolute positioning) ---
@@ -891,6 +999,567 @@ class TaskRunnerNode(Node):
         finally:
             surfacer.destroy()
 
+    # ── 撞球任务 ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_impact_ball_name(value):
+        """将撞球名称或 class_id 统一成定位器的物理类别名。"""
+        if isinstance(value, (int, np.integer)):
+            class_id = int(value)
+            for name, known_id in _IMPACT_BALL_CLASS_IDS.items():
+                if class_id == known_id:
+                    return name
+            return None
+        text = str(value).strip().lower()
+        if text.isdigit():
+            return TaskRunnerNode._normalize_impact_ball_name(int(text))
+        return _IMPACT_BALL_ALIASES.get(text)
+
+    def _impact_ball_order(self, params: dict) -> list[str]:
+        """Read the requested ball order; default is blue then red."""
+        values = params.get('order')
+        if values is None:
+            values = params.get('ball_classes')
+        if values is None:
+            values = params.get('ball_class_ids')
+        if values is None:
+            values = ['impact_ball_blue', 'impact_ball_red']
+        if isinstance(values, (str, int, np.integer)):
+            values = [values]
+
+        result = []
+        for value in values:
+            name = self._normalize_impact_ball_name(value)
+            if name is not None and name not in result:
+                result.append(name)
+        if not result:
+            self.get_logger().error(
+                'hit_balls: no valid ball in order; use blue/red or class_id 5/6')
+        return result
+
+    def _best_impact_ball_target(self, name: str, params: dict):
+        """Return a usable estimate for one suspended impact ball.
+
+        Impact-ball targets are allowed to remain usable after the localizer
+        marks them stale.  The estimate can still be valuable for the task;
+        freshness is not a task-level validity condition.
+        """
+        class_id = _IMPACT_BALL_CLASS_IDS[name]
+        min_confidence = float(params.get('min_confidence', 0.05))
+        min_observations = int(params.get('min_observations', 1))
+        with self._perception_lock:
+            target_positions = list(self.target_positions.targets)
+            compatibility_objects = list(self.objects.objects)
+
+        candidates = []
+        for target in target_positions:
+            target_name = str(
+                getattr(target, 'physical_class_name', '') or
+                getattr(target, 'class_name', '')).strip().lower()
+            if (int(getattr(target, 'class_id', -1)) != class_id
+                    and target_name != name):
+                continue
+            # A front estimate is the normal source for suspended balls.  The
+            # empty-source case keeps this task compatible with older bags.
+            source = str(getattr(target, 'estimate_source', '')).strip().lower()
+            if source not in ('', 'front'):
+                continue
+            status = int(getattr(target, 'status', TargetPosition.STATUS_STABLE))
+            if status == TargetPosition.STATUS_UNINITIALIZED:
+                continue
+            confidence = float(getattr(target, 'confidence', 0.0))
+            observations = int(getattr(target, 'num_observations', 0))
+            if (not math.isfinite(confidence)
+                    or confidence < min_confidence
+                    or observations < min_observations):
+                continue
+            x = float(target.world_x)
+            y = float(target.world_y)
+            z = float(target.world_z)
+            if not all(math.isfinite(value) for value in (x, y, z)):
+                continue
+            distance = math.hypot(x - self._cmd_x, y - self._cmd_y)
+            # Prefer stable estimates, then the estimate nearest to the
+            # current commanded position when duplicate tracks exist.
+            candidates.append((
+                status != TargetPosition.STATUS_STABLE,
+                distance,
+                -confidence,
+                {'name': name, 'x': x, 'y': y, 'z': z,
+                 'confidence': confidence, 'observations': observations,
+                 'source': source or 'target_positions'},
+            ))
+
+        # Fallback for the legacy ObjectPositionArray producer.  The current
+        # object_localizer publishes front targets on TargetPositionArray, but
+        # this keeps hit_balls usable with old position-node recordings.
+        for obj in compatibility_objects:
+            if int(getattr(obj, 'class_id', -1)) != class_id:
+                continue
+            confidence = float(getattr(obj, 'confidence', 0.0))
+            observations = int(getattr(obj, 'num_observations', 0))
+            x = float(obj.world_x)
+            y = float(obj.world_y)
+            z = float(obj.world_z)
+            if (not all(math.isfinite(value) for value in (x, y, z))
+                    or confidence < min_confidence
+                    or observations < min_observations):
+                continue
+            candidates.append((
+                False,
+                math.hypot(x - self._cmd_x, y - self._cmd_y),
+                -confidence,
+                {'name': name, 'x': x, 'y': y, 'z': z,
+                 'confidence': confidence, 'observations': observations,
+                 'source': 'objects'},
+            ))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[:3])
+        return candidates[0][3]
+
+    def _wait_for_impact_ball(self, name: str, params: dict):
+        """Wait for a usable target estimate while allowing task stop."""
+        timeout = max(0.0, float(params.get('detect_timeout', 30.0)))
+        deadline = time.monotonic() + timeout
+        while rclpy.ok() and not self.stopped:
+            target = self._best_impact_ball_target(name, params)
+            if target is not None:
+                return target
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+        self.get_logger().error(
+            f'hit_balls: timed out waiting for {name} estimate '
+            f'({timeout:.1f}s)')
+        return None
+
+    @staticmethod
+    def _wrap_yaw_degrees(value: float) -> float:
+        """Wrap a yaw command to the controller's conventional range."""
+        return (float(value) + 180.0) % 360.0 - 180.0
+
+    def _rotate_for_impact_scan(self, yaw: float, timeout: float) -> bool:
+        """Rotate in place so the front stereo cameras scan their surroundings."""
+        yaw = self._wrap_yaw_degrees(yaw)
+        success, message = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [self._cmd_x, self._cmd_y, self._cmd_z, yaw],
+            'rz',
+            timeout=timeout,
+            quiet=True,
+            task_context=self._format_motion_context('主动旋转扫描红球'),
+        )
+        if success:
+            self._cmd_yaw = yaw
+        else:
+            self.get_logger().warn(
+                f'hit_balls: scan rotation to {yaw:.1f}° failed: {message}')
+        return success
+
+    def _active_localize_impact_balls(self, order: list[str], params: dict):
+        """Actively scan 360 degrees and collect both ball estimates."""
+        step = float(params.get('search_yaw_step_deg', 30.0))
+        step = min(180.0, max(5.0, abs(step)))
+        settle_time = max(0.0, float(params.get('search_settle_time', 0.4)))
+        rotate_timeout = max(
+            1.0, float(params.get('search_rotate_timeout', 10.0)))
+        search_timeout = max(0.0, float(params.get('search_timeout', 60.0)))
+        headings = max(1, int(math.ceil(360.0 / step)))
+        start_yaw = self._cmd_yaw
+        found = {}
+        deadline = time.monotonic() + search_timeout
+
+        self.get_logger().info(
+            f'hit_balls: active localization scan started, '
+            f'{headings} headings/{step:.1f}°')
+        for index in range(headings):
+            if not rclpy.ok() or self.stopped or time.monotonic() >= deadline:
+                break
+            heading = start_yaw + index * step
+            # The first sample uses the current heading; subsequent samples
+            # rotate in place so the front stereo pair observes all azimuths.
+            if index > 0 and not self._rotate_for_impact_scan(
+                    heading,
+                    min(rotate_timeout,
+                        max(1.0, deadline - time.monotonic()))):
+                continue
+            if settle_time > 0.0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    break
+                time.sleep(min(settle_time, remaining))
+            for name in order:
+                if name not in found:
+                    target = self._best_impact_ball_target(name, params)
+                    if target is not None:
+                        found[name] = target
+                        self.get_logger().info(
+                            f'hit_balls: active scan found {name} '
+                            f'at ({target["x"]:.2f}, {target["y"]:.2f}, '
+                            f'{target["z"]:.2f})')
+            if len(found) == len(order):
+                break
+
+        self.get_logger().info(
+            f'hit_balls: active localization scan finished, '
+            f'found={list(found.keys())}, missing=' +
+            f'{[name for name in order if name not in found]}')
+        return found
+
+    def _travel_to_impact_point(self, x: float, y: float, z: float,
+                                timeout: float, label: str) -> bool:
+        """Travel in a straight world-frame segment and update command pose."""
+        dx = x - self._cmd_x
+        dy = y - self._cmd_y
+        if math.hypot(dx, dy) > 1e-6:
+            yaw = math.degrees(math.atan2(dy, dx))
+        else:
+            yaw = self._cmd_yaw
+        success, message = self._send_action_goal(
+            BasicMotion.Goal.WTRAVEL,
+            [x, y, z, yaw],
+            'xyz',
+            timeout=timeout,
+            task_context=self._format_motion_context(label),
+        )
+        if success:
+            self._cmd_x, self._cmd_y, self._cmd_z = x, y, z
+            if math.hypot(dx, dy) > 1e-6:
+                self._cmd_yaw = yaw
+            self.get_logger().info(
+                f'hit_balls: {label} complete at '
+                f'({x:.2f}, {y:.2f}, {z:.2f})')
+        else:
+            self.get_logger().error(f'hit_balls: {label} failed: {message}')
+        return success
+
+    def _latest_robot_pose(self):
+        """Return the latest measured odom pose, or the command pose fallback."""
+        with self._perception_lock:
+            pose = self._robot_pose
+        if pose is not None and all(math.isfinite(float(value)) for value in pose):
+            return tuple(float(value) for value in pose)
+        return (
+            float(self._cmd_x), float(self._cmd_y), float(self._cmd_z),
+            0.0, 0.0, float(self._cmd_yaw),
+        )
+
+    def _impact_staging_pose(self, target: dict, staging_distance: float,
+                             z_offset: float = 0.0):
+        """Calculate a point before the ball and a yaw pointing at the ball."""
+        pose = self._latest_robot_pose()
+        dx = float(target['x']) - pose[0]
+        dy = float(target['y']) - pose[1]
+        distance = math.hypot(dx, dy)
+        if distance > 1e-6:
+            direction_x = dx / distance
+            direction_y = dy / distance
+            yaw = math.degrees(math.atan2(dy, dx))
+        else:
+            yaw = float(pose[5])
+            yaw_rad = math.radians(yaw)
+            direction_x = math.cos(yaw_rad)
+            direction_y = math.sin(yaw_rad)
+        return (
+            float(target['x']) - direction_x * staging_distance,
+            float(target['y']) - direction_y * staging_distance,
+            float(target['z']) + z_offset,
+            self._wrap_yaw_degrees(yaw),
+        )
+
+    def _hold_impact_alignment(self, name: str, target: dict, params: dict):
+        """Continuously refresh the position/yaw target during the alignment hold."""
+        duration = max(
+            0.0, float(params.get('position_correction_duration', 30.0)))
+        period = max(0.05, float(params.get('position_correction_period', 0.20)))
+        command_timeout = max(
+            0.20, float(params.get('position_correction_command_timeout', 10.0)))
+        min_update_m = max(
+            0.0, float(params.get('position_correction_min_update_m', 0.03)))
+        min_update_yaw_deg = max(
+            0.0, float(params.get('position_correction_min_update_deg', 1.0)))
+        staging_distance = max(
+            0.0, float(params.get('approach_distance', 0.5)))
+        min_clearance = max(0.0, float(params.get('min_clearance', 0.05)))
+        z_offset = float(params.get('z_offset', 0.2))
+
+        deadline = time.monotonic() + duration
+        last_target = target
+        last_sent_staging = None
+        while rclpy.ok() and not self.stopped:
+            latest = self._best_impact_ball_target(name, params)
+            if latest is not None:
+                last_target = latest
+
+            pose = self._latest_robot_pose()
+            distance = math.hypot(
+                float(last_target['x']) - pose[0],
+                float(last_target['y']) - pose[1],
+            )
+            effective_distance = min(
+                staging_distance,
+                max(0.0, distance - min_clearance),
+            )
+            staging = self._impact_staging_pose(
+                last_target, effective_distance, z_offset)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+
+            # BasicMotion keeps the last position target active.  Re-sending
+            # an identical SET goal every 200 ms only creates action-server
+            # work and can starve the simulator/perception executor.  Check
+            # the target at the configured period, but send a new goal only
+            # after a meaningful position or yaw change.
+            if last_sent_staging is not None:
+                position_delta = max(
+                    abs(staging[index] - last_sent_staging[index])
+                    for index in range(3))
+                yaw_delta = abs(self._wrap_yaw_degrees(
+                    staging[3] - last_sent_staging[3]))
+                if (position_delta < min_update_m
+                        and yaw_delta < min_update_yaw_deg):
+                    time.sleep(min(period, remaining))
+                    continue
+
+            success, message = self._send_action_goal(
+                BasicMotion.Goal.SET,
+                list(staging),
+                'xyzrz',
+                timeout=min(command_timeout, max(0.20, remaining)),
+                quiet=True,
+                task_context=self._format_motion_context(
+                    f'{name}持续位置姿态修正'),
+            )
+            if success:
+                self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = staging
+                last_sent_staging = list(staging)
+            elif not rclpy.ok() or self.stopped:
+                return False
+            else:
+                self.get_logger().warning(
+                    f'hit_balls: {name} alignment correction failed: {message}')
+
+            remaining = deadline - time.monotonic()
+            if remaining > 0.0:
+                time.sleep(min(period, remaining))
+
+        return rclpy.ok() and not self.stopped
+
+    def _publish_body_velocity(self, forward_mps: float):
+        """Publish one body-frame velocity-loop setpoint (forward/zero other axes)."""
+        msg = ZitSetpoint()
+        msg.control_key = 0x11  # VEL (0x01) | BODY (0x10)
+        msg.type_mask = 0
+        msg.x = float(forward_mps)
+        msg.y = 0.0
+        msg.z = 0.0
+        msg.roll = 0.0
+        msg.pitch = 0.0
+        msg.yaw = 0.0
+        msg.seq = 0
+        self.pub_setpoint.publish(msg)
+
+    def _charge_forward(self, params: dict) -> bool:
+        """Run the body-X velocity loop for a fixed short impact charge."""
+        duration = max(0.0, float(params.get('charge_duration', 5.0)))
+        speed = max(0.0, float(params.get('charge_speed_mps', 0.15)))
+        period = max(0.02, float(params.get('charge_publish_period', 0.05)))
+        deadline = time.monotonic() + duration
+        while rclpy.ok() and not self.stopped and time.monotonic() < deadline:
+            self._publish_body_velocity(speed)
+            time.sleep(min(period, max(0.0, deadline - time.monotonic())))
+        # Leave velocity mode with a neutral command before switching back to
+        # the position action for the return trip.
+        self._publish_body_velocity(0.0)
+        return rclpy.ok() and not self.stopped
+
+    def _record_current_impact_pose(self):
+        """Snapshot the measured pose after alignment for the return target."""
+        pose = self._latest_robot_pose()
+        return [pose[0], pose[1], pose[2], pose[5]]
+
+    def _task_staged_charge_return(self, name: str, target: dict,
+                                   params: dict) -> bool:
+        """Align at the configured offset before one ball, charge, then return."""
+        approach_distance = max(
+            0.0, float(params.get('approach_distance', 0.5)))
+        min_clearance = max(0.0, float(params.get('min_clearance', 0.05)))
+        z_offset = float(params.get('z_offset', 0.2))
+        approach_timeout = max(
+            1.0, float(params.get('approach_timeout', 90.0)))
+        return_timeout = max(
+            1.0, float(params.get('return_timeout', 60.0)))
+
+        pose = self._latest_robot_pose()
+        distance = math.hypot(float(target['x']) - pose[0],
+                              float(target['y']) - pose[1])
+        effective_distance = min(
+            approach_distance,
+            max(0.0, distance - min_clearance),
+        )
+        staging = self._impact_staging_pose(
+            target, effective_distance, z_offset)
+        self.get_logger().info(
+            f'hit_balls: {name} staging {effective_distance:.2f}m-before target '
+            f'=({staging[0]:.2f}, {staging[1]:.2f}, {staging[2]:.2f}), '
+            f'yaw={staging[3]:.1f}°')
+        if not self._travel_to_impact_point(
+                staging[0], staging[1], staging[2], approach_timeout,
+                f'{name} {effective_distance:.2f}m staging'):
+            return False
+
+        # Refresh the ball estimate once at the staging point, then keep the
+        # full position + yaw controller correcting for the configured hold.
+        refreshed = self._best_impact_ball_target(name, params)
+        if refreshed is not None:
+            target = refreshed
+        if not self._hold_impact_alignment(name, target, params):
+            return False
+
+        recorded_pose = self._record_current_impact_pose()
+        self.get_logger().info(
+            f'hit_balls: alignment complete; recorded pose '
+            f'=({recorded_pose[0]:.2f}, {recorded_pose[1]:.2f}, '
+            f'{recorded_pose[2]:.2f}, {recorded_pose[3]:.1f}°)')
+
+        if not self._charge_forward(params):
+            return False
+        self.get_logger().info(
+            f'hit_balls: forward velocity charge complete '
+            f'({float(params.get("charge_duration", 5.0)):.1f}s)')
+
+        success, message = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            recorded_pose,
+            'xyzrz',
+            timeout=return_timeout,
+            task_context=self._format_motion_context(
+                f'{name}撞球后返回记录位置'),
+        )
+        if not success:
+            self.get_logger().error(
+                f'hit_balls: return to recorded pose failed: {message}')
+            return False
+        self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = recorded_pose
+        self.get_logger().info('hit_balls: red-ball task complete; returned to recorded pose')
+        return True
+
+    def _task_hit_balls(self, p: dict) -> bool:
+        """Approach and pass through each detected suspended impact ball.
+
+        The AUV stops a short distance before the current estimate, then
+        travels through the ball to a point on the far side.  This creates a
+        real collision path instead of merely moving to the ball's centre.
+        The task is deliberately target-driven: it uses the front target
+        localizer and does not depend on hard-coded scene coordinates.
+        """
+        order = self._impact_ball_order(p)
+        if not order:
+            return False
+        approach_distance = max(0.0, float(p.get('approach_distance', 0.5)))
+        pass_distance = max(0.0, float(p.get('pass_distance', 0.35)))
+        min_clearance = max(0.0, float(p.get('min_clearance', 0.05)))
+        z_offset = float(p.get('z_offset', 0.2))
+        approach_timeout = max(1.0, float(p.get('approach_timeout', 90.0)))
+        hit_timeout = max(1.0, float(p.get('hit_timeout', 45.0)))
+        pause = max(0.0, float(p.get('between_balls_pause', 0.5)))
+
+        self.get_logger().info(
+            f'hit_balls: order={order}, approach={approach_distance:.2f}m, '
+            f'pass={pass_distance:.2f}m')
+        found = {}
+        active_localization = bool(p.get('active_localization', True))
+        if active_localization:
+            found = self._active_localize_impact_balls(order, p)
+            # Do not start an impact run with only one ball localized.  The
+            # active scan provides the spatial search; this short completion
+            # wait lets the detector/localizer finish the second estimate.
+            for name in order:
+                if name in found:
+                    continue
+                self.get_logger().info(
+                    f'hit_balls: waiting to complete localization for {name}')
+                target = self._wait_for_impact_ball(name, p)
+                if target is None:
+                    return False
+                found[name] = target
+
+        impact_mode = str(p.get('impact_mode', '')).strip().lower()
+        if impact_mode == 'staged_charge_return':
+            if len(order) != 1:
+                self.get_logger().error(
+                    'hit_balls: staged_charge_return requires exactly one ball')
+                return False
+            name = order[0]
+            target = self._best_impact_ball_target(name, p) or found.get(name)
+            if target is None:
+                target = self._wait_for_impact_ball(name, p)
+            if target is None:
+                return False
+            return self._task_staged_charge_return(name, target, p)
+
+        for index, name in enumerate(order):
+            target = self._best_impact_ball_target(name, p)
+            if target is None:
+                target = found.get(name)
+            if target is None:
+                target = self._wait_for_impact_ball(name, p)
+            if target is None:
+                return False
+
+            dx = target['x'] - self._cmd_x
+            dy = target['y'] - self._cmd_y
+            distance = math.hypot(dx, dy)
+            if distance > 1e-6:
+                direction = np.array([dx / distance, dy / distance])
+            else:
+                yaw_rad = math.radians(self._cmd_yaw)
+                direction = np.array([math.cos(yaw_rad), math.sin(yaw_rad)])
+
+            # If already close, do not back away just to create a staging
+            # point; leave at least min_clearance before the ball instead.
+            staging_distance = min(
+                approach_distance,
+                max(0.0, distance - min_clearance),
+            )
+            staging_x = target['x'] - direction[0] * staging_distance
+            staging_y = target['y'] - direction[1] * staging_distance
+            hit_z = target['z'] + z_offset
+            self.get_logger().info(
+                f'hit_balls: [{index + 1}/{len(order)}] {name} '
+                f'estimate=({target["x"]:.2f}, {target["y"]:.2f}, '
+                f'{target["z"]:.2f}), confidence={target["confidence"]:.2f}')
+
+            if not self._travel_to_impact_point(
+                    staging_x, staging_y, hit_z, approach_timeout,
+                    f'{name} approach'):
+                return False
+
+            # Refresh once after staging.  If the dynamic suspended ball has
+            # moved, use its latest estimate for the pass-through segment.
+            refreshed = self._best_impact_ball_target(name, p)
+            if refreshed is not None:
+                target = refreshed
+            dx = target['x'] - self._cmd_x
+            dy = target['y'] - self._cmd_y
+            distance = math.hypot(dx, dy)
+            if distance > 1e-6:
+                direction = np.array([dx / distance, dy / distance])
+            hit_x = target['x'] + direction[0] * pass_distance
+            hit_y = target['y'] + direction[1] * pass_distance
+            hit_z = target['z'] + z_offset
+            if not self._travel_to_impact_point(
+                    hit_x, hit_y, hit_z, hit_timeout,
+                    f'{name} impact pass'):
+                return False
+            self.get_logger().info(f'hit_balls: {name} collision path finished')
+            if index + 1 < len(order) and pause > 0.0:
+                time.sleep(pause)
+        return True
+
     # ── 投信标 / 采水 / 释放取水器 ─────────────────────────────────
 
     def _task_drop_beacon(self, p: dict) -> bool:
@@ -1044,6 +1713,8 @@ class TaskRunnerNode(Node):
         """Run a single task in debug mode (runs in daemon thread)."""
         self._debug_executing = True
         self._debug_task_name = name
+        self._current_task_name = name
+        self._current_task_step = 1
         self.stopped = False
         self.running = True
 
@@ -1062,6 +1733,8 @@ class TaskRunnerNode(Node):
         finally:
             self._debug_executing = False
             self._debug_task_name = None
+            self._current_task_name = ''
+            self._current_task_step = 0
             self.running = False
             self._debug_timeout = -1.0
 

@@ -46,6 +46,7 @@ SOURCE_COLORS = {"front": "#1565c0", "down": "#2e7d32"}
 ROBOT_FILL = "#b3e5fc"
 ROBOT_OUTLINE = "#0277bd"
 ROBOT_HEADING = "#d32f2f"
+UNASSIGNED_INSTANCE_ID = (1 << 32) - 1
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,12 @@ def _form_name(form: int) -> str:
 def _form_mask_name(mask: int) -> str:
     forms = [name for value, name in FORM_NAMES.items() if int(mask) & value]
     return " + ".join(forms) if forms else "无"
+
+
+def _instance_text(instance_id: int) -> str:
+    """Render a provisional observation identity without a huge uint32."""
+    return "未确认" if int(instance_id) == UNASSIGNED_INSTANCE_ID \
+        else str(int(instance_id))
 
 
 def _stamp_text(stamp) -> str:
@@ -170,7 +177,10 @@ class TargetPositionGui(Node):
         ttk.Checkbutton(toolbar, text="显示前视多视角射线",
                         variable=self.show_rays,
                         command=self._draw_scene).pack(side=tk.LEFT, padx=12)
-        self.show_stale = tk.BooleanVar(value=True)
+        # A stale track is retained by the localizer for diagnostics, but it
+        # must not look like a live target in the default scene view.  The
+        # checkbox still allows deliberate inspection of historical tracks.
+        self.show_stale = tk.BooleanVar(value=False)
         ttk.Checkbutton(toolbar, text="显示过期目标",
                         variable=self.show_stale,
                         command=self._refresh).pack(side=tk.LEFT)
@@ -349,7 +359,7 @@ class TargetPositionGui(Node):
                 str(class_id) for class_id in target.observed_class_ids)
             values = (
                 SOURCE_NAMES.get(key[0], key[0]),
-                f"{key[1]}/{key[2]}",
+                f"{key[1]}/{_instance_text(key[2])}",
                 f"{target.class_name} (ID:{observed_ids})",
                 f"{target.world_x:.3f}", f"{target.world_y:.3f}",
                 f"{target.world_z:.3f}", f"{sigma:.3f}",
@@ -388,7 +398,7 @@ class TargetPositionGui(Node):
                 )
             values = (
                 observation.observation_id,
-                f"{key[1]}/{key[2]}", observation.class_name,
+                f"{key[1]}/{_instance_text(key[2])}", observation.class_name,
                 _form_name(observation.observation_form), kind, location,
                 f"{observation.confidence:.2f}",
                 _stamp_text(observation.observation_stamp),
@@ -619,14 +629,8 @@ class TargetPositionGui(Node):
                                       TARGET_COLORS[(color_seed * 31 + key[2])
                                                      % len(TARGET_COLORS)])
             covariance = target.position_covariance
-            variance_x, variance_y = self._plane_variances(covariance)
-            sigma_x = 2.0 * math.sqrt(max(0.0, variance_x)) * scale
-            sigma_y = 2.0 * math.sqrt(max(0.0, variance_y)) * scale
-            if sigma_x >= 1.0 or sigma_y >= 1.0:
-                self.canvas.create_oval(
-                    x - sigma_x, y - sigma_y, x + sigma_x, y + sigma_y,
-                    outline=color, dash=(3, 2), width=1,
-                )
+            self._draw_covariance_ellipse(
+                point_x, point_y, covariance, scale, color, canvas_point)
             radius = 8 if key == self.selected_key else 6
             if key[0] == "front":
                 self.canvas.create_polygon(
@@ -645,7 +649,9 @@ class TargetPositionGui(Node):
                                     fill=color, width=2)
             self.canvas.create_text(
                 x + 8, y - 9, anchor=tk.SW,
-                text=f"{SOURCE_NAMES.get(key[0], key[0])}:{key[1]} [{key[2]}]",
+                text=(
+                    f"{SOURCE_NAMES.get(key[0], key[0])}:{key[1]} "
+                    f"[{_instance_text(key[2])}]"),
                 fill="#212121", font=("TkDefaultFont", 9, "bold"),
             )
 
@@ -765,13 +771,79 @@ class TargetPositionGui(Node):
         # conventional pool plan: east is right and north is up.
         return float(y), float(x)
 
-    def _plane_variances(self, covariance) -> tuple[float, float]:
+    def _plane_covariance(self, covariance) -> tuple[float, float, float]:
+        """Return the 2-D covariance in the same coordinates as the plot.
+
+        The position covariance is a flattened 3x3 matrix in world NED
+        coordinates (x=North, y=East, z=Down).  The XY plot intentionally
+        displays (East, North), so its covariance must be permuted as well;
+        otherwise the ellipse angle would not correspond to the displayed
+        axes.
+        """
         plane = self.view_plane.get()
         if plane == "xz":
-            return float(covariance[0]), float(covariance[8])
+            # [x, z]
+            return (float(covariance[0]),
+                    0.5 * (float(covariance[2]) + float(covariance[6])),
+                    float(covariance[8]))
         if plane == "yz":
-            return float(covariance[4]), float(covariance[8])
-        return float(covariance[4]), float(covariance[0])
+            # [y, z]
+            return (float(covariance[4]),
+                    0.5 * (float(covariance[5]) + float(covariance[7])),
+                    float(covariance[8]))
+        # [y, x] because the XY canvas uses East as horizontal and North as
+        # vertical.  Covariance is expected to be symmetric, but use the
+        # matching lower-triangle entry for the off-diagonal term as a
+        # fallback when a message is only approximately symmetric.
+        return (float(covariance[4]),
+                0.5 * (float(covariance[1]) + float(covariance[3])),
+                float(covariance[0]))
+
+    def _draw_covariance_ellipse(self, plane_x: float, plane_y: float,
+                                 covariance, scale: float, color: str,
+                                 canvas_point):
+        """Draw a rotated 2-sigma covariance ellipse on the current plane."""
+        try:
+            variance_x, covariance_xy, variance_y = self._plane_covariance(
+                covariance)
+        except (IndexError, TypeError, ValueError):
+            return
+        values = (variance_x, covariance_xy, variance_y)
+        if not all(math.isfinite(value) for value in values):
+            return
+
+        # Eigenvalues/eigenvector angle of [[variance_x, covariance_xy],
+        # [covariance_xy, variance_y]].  This closed form avoids adding a
+        # NumPy dependency to the Tk-only visualizer.
+        half_trace = 0.5 * (variance_x + variance_y)
+        half_difference = 0.5 * (variance_x - variance_y)
+        spread = math.hypot(half_difference, covariance_xy)
+        major_variance = max(0.0, half_trace + spread)
+        minor_variance = max(0.0, half_trace - spread)
+        major_sigma = 2.0 * math.sqrt(major_variance)
+        minor_sigma = 2.0 * math.sqrt(minor_variance)
+        if max(major_sigma, minor_sigma) * scale < 1.0:
+            return
+
+        angle = (0.5 * math.atan2(2.0 * covariance_xy,
+                                  variance_x - variance_y)
+                 if spread > 1e-12 else 0.0)
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        # A polygon gives Tk Canvas an ellipse with an arbitrary rotation;
+        # create_oval itself can only draw axis-aligned bounds.
+        points = []
+        for index in range(48):
+            parameter = 2.0 * math.pi * index / 48.0
+            local_x = major_sigma * math.cos(parameter)
+            local_y = minor_sigma * math.sin(parameter)
+            offset_x = local_x * cos_angle - local_y * sin_angle
+            offset_y = local_x * sin_angle + local_y * cos_angle
+            point = canvas_point(plane_x + offset_x, plane_y + offset_y)
+            points.extend(point)
+        self.canvas.create_polygon(
+            *points, outline=color, fill="", dash=(3, 2), width=1,
+        )
 
     def _draw_estimate_comparisons(self, targets, canvas_point):
         """Connect nearest front/down estimates of the same physical class."""

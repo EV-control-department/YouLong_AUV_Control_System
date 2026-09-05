@@ -16,6 +16,7 @@ from pathlib import Path
 
 import rclpy
 from nav_msgs.msg import Odometry
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import FluidPressure, Image, Imu
 from std_msgs.msg import Float64MultiArray, Float32, UInt8, UInt32, Float32MultiArray
@@ -41,6 +42,13 @@ def _wrap_angle_deg(angle: float) -> float:
     while angle < -180.0:
         angle += 360.0
     return angle
+
+
+def _as_bool(value) -> bool:
+    """Parse ROS launch booleans safely, including string substitutions."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 def _find_firmware_config(overrides=None) -> dict:
@@ -81,8 +89,13 @@ class SimBridgeNode(Node):
 
         self.declare_parameter('hil_mode', False)
         self._hil_mode = self.get_parameter('hil_mode').value
+        self.declare_parameter('camera_stitch_fps', 10.0)
+        self.declare_parameter('publish_raw_camera_topics', False)
 
-        self.cam = CameraPassthrough()
+        self.cam = CameraPassthrough(
+            self.get_parameter('camera_stitch_fps').value,
+            publish_raw_views=_as_bool(
+                self.get_parameter('publish_raw_camera_topics').value))
         self.cam.bind(self)
 
         if self._hil_mode:
@@ -96,6 +109,8 @@ class SimBridgeNode(Node):
 
     def _init_full(self) -> None:
         self._tick = 0
+        self._last_status_publish_s = float('-inf')
+        self._last_telemetry_publish_s = float('-inf')
 
         # Internal state (host policy, mirrors firmware MicroRosPublisher semantics)
         self.pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}      # NED deg (internal convenience)
@@ -379,13 +394,18 @@ class SimBridgeNode(Node):
             self.force_6dof = list(forces)
             self.thrust = self._mixer.mix6(*forces)
 
-        # Rate-gated publishing (status 10Hz, pos 30Hz, vel 60Hz, thr 30Hz)
-        if self._tick % 6 == 0:
+        # Keep control/actuation at 100Hz, but publish telemetry at rates that
+        # are sufficient for navigation and task control.  Time-based gates
+        # avoid the jitter of modulo counters when the control thread slips.
+        publish_now = time.monotonic()
+        if publish_now - self._last_status_publish_s >= 0.1:
             self._publish_state()
-        if self._tick % 2 == 0:
+            self._last_status_publish_s = publish_now
+        if publish_now - self._last_telemetry_publish_s >= (1.0 / 30.0):
             self._publish_pos(pos_world)
+            self._publish_vel(vel_body)
             self._publish_thr()
-        self._publish_vel(vel_body)
+            self._last_telemetry_publish_s = publish_now
 
         # Thrust to Stonefish
         cmd = Float64MultiArray()
@@ -547,9 +567,14 @@ def main(args=None) -> None:
     node = SimBridgeNode()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # launch may already have shut down the default context while
+        # delivering SIGINT.  try_shutdown keeps a normal Ctrl-C from
+        # becoming an exit-code-1 failure.
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

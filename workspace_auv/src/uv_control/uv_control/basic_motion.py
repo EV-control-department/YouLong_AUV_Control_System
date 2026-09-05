@@ -70,7 +70,7 @@ import time
 
 import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 
@@ -269,6 +269,8 @@ class BasicMotionNode(Node):
             self.pose.y = 0.0
             self.pose.z = 0.0
             self.pose.rz = 0.0
+            # START 重新定义坐标系时，旧动作目标也必须一起清零。
+            self._target = Coordinate()
         self.get_logger().info(
             f'odom origin set: map({self._origin.x:.2f}, '
             f'{self._origin.y:.2f}, {self._origin.z:.2f}), '
@@ -565,8 +567,9 @@ class BasicMotionNode(Node):
             # 步进目标 = 当前 target + 步进增量
             self.set_step(dx=vector_body.x, dy=vector_body.y, dz=vector_body.z, dyaw_deg=vector_body.rz)
 
-            # 每一步用剩余时间（至少 1 秒）
-            step_timeout = max(1.0, remaining)
+            # 每一步只能使用当前动作剩余的时间，不能把已经超出的时间再借回来。
+            # 保留一个很小的下限，避免剩余时间过小时进入无意义的等待。
+            step_timeout = max(0.1, remaining)
             if not self._wait_step_convergence(move_angle, timeout=step_timeout):
                 self.get_logger().warning(f'步进第{step_no}步收敛超时')
 
@@ -721,27 +724,38 @@ class BasicMotionNode(Node):
     def _travel_world(self, x_w: float, y_w: float, z: float = 0.0, rz: float = 0.0,
                       timeout: float = 60.0) -> bool:
         """直线移动基础函数：先转向目标方向，再沿 body-X 步进前进。"""
-        _, t, _ = self.get_state()
+        # t 是上一次发布的目标，不能拿它当当前位置。
+        # 任务刚启动时，目标通常仍是 (0, 0, 0, 0)，而实测深度可能已经
+        # 与 0 有偏差；使用 t 会让 BTRAVEL 的“转向阶段”错误地等待深度归零。
+        p, _, _ = self.get_state()
         target_x = x_w
         target_y = y_w
         target_z = z
-        dx_w = target_x - t.x
-        dy_w = target_y - t.y
+        dx_w = target_x - p.x
+        dy_w = target_y - p.y
 
         dist_xy = math.sqrt(dx_w**2 + dy_w**2)
         if dist_xy > 0.01:
             target_yaw = math.degrees(math.atan2(dy_w, dx_w))
+            deadline = time.monotonic() + max(0.0, timeout)
             self.get_logger().info(
                 f'直线移动 第一阶段(转向): 目标朝向{target_yaw:.1f}°, '
-                f'当前朝向{t.rz:.1f}°')
-            self._step_move_world(t.x, t.y, t.z, target_yaw,
-                                  timeout=timeout)
+                f'当前朝向{p.rz:.1f}°')
+            rotate_timeout = deadline - time.monotonic()
+            if rotate_timeout <= 0 or not self._step_move_world(
+                    p.x, p.y, p.z, target_yaw, timeout=rotate_timeout):
+                self.get_logger().warning('直线移动第一阶段失败，不进入前进阶段')
+                return False
             self.get_logger().info(
                 f'直线移动 第二阶段(前进): 目标=({target_x:.2f}, {target_y:.2f}), '
                 f'距离={dist_xy:.2f}m')
+            move_timeout = deadline - time.monotonic()
+            if move_timeout <= 0:
+                self.get_logger().warning('直线移动第二阶段没有剩余超时时间')
+                return False
             return self._step_move_world(
                 target_x, target_y, target_z, target_yaw,
-                timeout=timeout)
+                timeout=move_timeout)
         else:
             self.get_logger().info(
                 f'直线移动: 距离过短({dist_xy:.3f}m), 直发深度/偏航')
@@ -774,6 +788,10 @@ class BasicMotionNode(Node):
         # START: 初始化 odom 原点，不需要任何前置校验
         if req.cmd_type == BasicMotion.Goal.START:
             self.get_logger().info('Action START: initializing odom origin')
+            task_context = str(getattr(req, 'task_context', '')).strip()
+            if task_context:
+                self.get_logger().info(
+                    f'Action START: task_context="{task_context}"')
             self.start()
             result = BasicMotion.Result()
             result.success = True
@@ -807,12 +825,18 @@ class BasicMotionNode(Node):
 
         x, y, z, yaw = req.target
         timeout = req.timeout if req.timeout > 0 else 60.0
+        task_context = str(getattr(req, 'task_context', '')).strip()
         p, t, _ = self.get_state()
 
         # ── 派发运动类型 ──────────────────────────────────────
         type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL'}
         type_name = type_names.get(req.cmd_type, f'UNKNOWN({req.cmd_type})')
-        self.get_logger().info("============================="f'动作 {type_name}: axes="{req.axes}"开始'"=============================")
+        context_text = (
+            f' task_context="{task_context}"' if task_context else '')
+        self.get_logger().info(
+            "============================="
+            f'动作 {type_name}: axes="{req.axes}"{context_text}开始'
+            "=============================")
         self.get_logger().info(
             f'Action {type_name}: axes="{req.axes}", '
             f'target=[{x:.2f}, {y:.2f}, {z:.2f}, {yaw:.1f}], '
@@ -821,7 +845,9 @@ class BasicMotionNode(Node):
 
         if req.cmd_type == BasicMotion.Goal.SET:
             axes = req.axes or 'xyzrz'
-            tx, ty, tz, tyaw = t.x, t.y, t.z, t.rz
+            # 未选中的轴保持“当前实测值”，而不是上一次动作的旧目标。
+            # 例如 xyrz 回原点时必须保持当前深度。
+            tx, ty, tz, tyaw = p.x, p.y, p.z, p.rz
             if 'x' in axes: tx = x
             if 'y' in axes: ty = y
             if 'z' in axes.replace('rz', ''): tz = z
@@ -831,7 +857,7 @@ class BasicMotionNode(Node):
 
         elif req.cmd_type == BasicMotion.Goal.WMOVE:
             axes = req.axes or 'xyzrz'
-            tx, ty, tz, trz = t.x, t.y, t.z, t.rz
+            tx, ty, tz, trz = p.x, p.y, p.z, p.rz
             if 'x' in axes: tx = x
             if 'y' in axes: ty = y
             if 'z' in axes.replace('rz', ''): tz = z
@@ -849,7 +875,7 @@ class BasicMotionNode(Node):
             success = self.bmovexyzrz(x, y, z, yaw, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.WTRAVEL:
             axes = req.axes or 'xyzrz'
-            tx, ty, tz, trz = t.x, t.y, t.z, t.rz
+            tx, ty, tz, trz = p.x, p.y, p.z, p.rz
             if 'x' in axes: tx = x
             if 'y' in axes: ty = y
             if 'z' in axes.replace('rz', ''): tz = z
@@ -946,12 +972,14 @@ def main(args=None):
     executor.add_node(node)
     try:
         executor.spin()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        # launch may already have shut down the default context while
+        # delivering SIGINT.
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':
