@@ -19,6 +19,7 @@ set(CMAKE_CXX_STANDARD 20)
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -86,7 +87,7 @@ ament_export_include_directories(include)
 # define exacutables
 add_executable(stonefish_simulator src/stonefish_simulator.cpp)
 target_link_libraries(stonefish_simulator stonefish_ros2_interface)
-ament_target_dependencies(stonefish_simulator rclcpp)
+ament_target_dependencies(stonefish_simulator rclcpp std_msgs)
 
 add_executable(stonefish_simulator_nogpu src/stonefish_simulator_nogpu.cpp)
 target_link_libraries(stonefish_simulator_nogpu stonefish_ros2_interface)

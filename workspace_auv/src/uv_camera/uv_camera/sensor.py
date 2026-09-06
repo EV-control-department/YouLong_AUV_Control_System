@@ -8,6 +8,7 @@ In the SAME process as uv_ai. uv_sensor:
 """
 
 import threading
+import time
 
 import cv2
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -20,6 +21,11 @@ from .common import (
     normalize_frame,
 )
 from sensor_msgs.msg import Image
+
+try:
+    from uv_msgs.msg import StereoFrameInfo
+except ImportError:  # Older installed interfaces remain usable as a fallback.
+    StereoFrameInfo = None
 
 
 class Sensor:
@@ -41,6 +47,10 @@ class Sensor:
             depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT,
         )
+        self._stereo_info = {camera: {} for camera in ('front', 'down')}
+        self._pending_sim_images = {}
+        self._pending_sim_lock = threading.Lock()
+        self._pending_sim_timer = None
 
     # ── setup: pick source ──────────────────────────────────────────────
     def start(self):
@@ -50,6 +60,15 @@ class Sensor:
             self._start_v4l2()
 
     def _start_sim(self):
+        if StereoFrameInfo is not None:
+            if self._enable_front:
+                self.node.create_subscription(
+                    StereoFrameInfo, '/auv/front_cam/stereo_info',
+                    self._front_stereo_info_cb, self._image_qos)
+            if self._enable_down:
+                self.node.create_subscription(
+                    StereoFrameInfo, '/auv/down_cam/stereo_info',
+                    self._down_stereo_info_cb, self._image_qos)
         if self._enable_front:
             self.node.create_subscription(
                 Image, '/auv/front_cam/stitched', self._front_img_cb,
@@ -58,6 +77,13 @@ class Sensor:
             self.node.create_subscription(
                 Image, '/auv/down_cam/stitched', self._down_img_cb,
                 self._image_qos)
+        # Metadata and image are published back-to-back, but BEST_EFFORT ROS
+        # delivery does not promise callback order.  Hold an image briefly so
+        # the right-eye timestamp can normally arrive first; if metadata is
+        # missing, the image is still processed with the legacy single stamp.
+        if StereoFrameInfo is not None:
+            self._pending_sim_timer = self.node.create_timer(
+                0.03, self._flush_pending_sim_images)
         self.node.get_logger().info(
             'uv_sensor started (sim mode: ROS stitched topics)')
 
@@ -98,8 +124,83 @@ class Sensor:
     def _down_img_cb(self, msg):
         self._submit_image(msg, 'down')
 
+    @staticmethod
+    def _stamp_key(stamp):
+        try:
+            return int(stamp.sec), int(stamp.nanosec)
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _info_stamps(info):
+        try:
+            left_stamp = info.left_stamp
+            right_stamp = info.right_stamp
+            pair_id = int(info.stereo_pair_id)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        left_key = Sensor._stamp_key(left_stamp)
+        if left_key is None:
+            left_key = Sensor._stamp_key(info.header.stamp)
+        if left_key is None:
+            return None
+        return left_key, right_stamp, pair_id
+
+    def _stereo_info_cb(self, message):
+        camera = str(getattr(message, 'camera_name', '')).strip().lower()
+        if camera not in self._stereo_info:
+            return
+        values = self._info_stamps(message)
+        if values is None:
+            return
+        key, right_stamp, pair_id = values
+        with self._pending_sim_lock:
+            cache = self._stereo_info[camera]
+            cache[key] = (right_stamp, pair_id, time.monotonic())
+            while len(cache) > 8:
+                cache.pop(next(iter(cache)))
+            pending = self._pending_sim_images.pop((camera, key), None)
+        if pending is not None:
+            self.node.submit_image(
+                camera, pending, right_stamp=right_stamp,
+                stereo_pair_id=pair_id)
+
+    def _front_stereo_info_cb(self, message):
+        self._stereo_info_cb(message)
+
+    def _down_stereo_info_cb(self, message):
+        self._stereo_info_cb(message)
+
+    def _flush_pending_sim_images(self):
+        now = time.monotonic()
+        expired = []
+        with self._pending_sim_lock:
+            for key, (message, arrival) in self._pending_sim_images.items():
+                if now - arrival >= 0.025:
+                    expired.append((key, message))
+            for key, _ in expired:
+                self._pending_sim_images.pop(key, None)
+        for (camera, _), message in expired:
+            self.node.submit_image(camera, message)
+
     def _submit_image(self, msg, camera):
-        self.node.submit_image(camera, msg)   # composed node decodes ROS->BGR + preview + gate
+        if StereoFrameInfo is None:
+            self.node.submit_image(camera, msg)
+            return
+        key = self._stamp_key(msg.header.stamp)
+        with self._pending_sim_lock:
+            info = self._stereo_info[camera].pop(key, None) if key else None
+            if info is None and key is not None:
+                self._pending_sim_images[(camera, key)] = (
+                    msg, time.monotonic())
+                return
+        if info is None:
+            self.node.submit_image(camera, msg)
+        else:
+            right_stamp, pair_id, _ = info
+            self.node.submit_image(
+                camera, msg, right_stamp=right_stamp,
+                stereo_pair_id=pair_id)
 
     # ── v4l2 capture loop ───────────────────────────────────────────────
     def _capture_loop(self, cap, camera):
@@ -124,6 +225,9 @@ class Sensor:
     # ── shutdown ────────────────────────────────────────────────────────
     def shutdown(self):
         self._capture_stop.set()
+        if self._pending_sim_timer is not None:
+            self._pending_sim_timer.cancel()
+            self._pending_sim_timer = None
         for cap in (self._front_cap, self._down_cap):
             if cap is not None:
                 cap.release()

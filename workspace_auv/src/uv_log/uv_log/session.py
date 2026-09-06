@@ -61,6 +61,7 @@ def _git_commit() -> str | None:
             capture_output=True,
             text=True,
             timeout=2.0,
+            cwd=project_root(),
         )
         commit = result.stdout.strip()
         return commit or None

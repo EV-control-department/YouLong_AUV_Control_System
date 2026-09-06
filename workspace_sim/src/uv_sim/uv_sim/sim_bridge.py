@@ -349,14 +349,15 @@ class SimBridgeNode(Node):
 
     def _control_loop(self) -> None:
         """Drive the native core at 100Hz: update_nav -> step -> mix -> publish states."""
-        last = time.monotonic()
+        deadline = time.monotonic() + 0.01
         while rclpy.ok() and not self._control_stop.is_set():
-            now = time.monotonic()
-            elapsed = now - last
-            if elapsed >= 0.01:  # ≥10ms guard, mirror firmware kDt
-                self._control_tick()
-                last = now
-            time.sleep(0.001)
+            if self._control_stop.wait(max(0.0, deadline - time.monotonic())):
+                break
+            self._control_tick()
+            deadline += 0.01
+            # Do not burst stale control steps after an overloaded interval.
+            if deadline < time.monotonic():
+                deadline = time.monotonic() + 0.01
 
     def _control_tick(self) -> None:
         self._tick = (self._tick + 1) % 60
@@ -401,7 +402,8 @@ class SimBridgeNode(Node):
         if publish_now - self._last_status_publish_s >= 0.1:
             self._publish_state()
             self._last_status_publish_s = publish_now
-        if publish_now - self._last_telemetry_publish_s >= (1.0 / 30.0):
+        if (self.current_pose_ready and
+                publish_now - self._last_telemetry_publish_s >= (1.0 / 30.0)):
             self._publish_pos(pos_world)
             self._publish_vel(vel_body)
             self._publish_thr()

@@ -24,6 +24,9 @@
 //
 
 #include "rclcpp/rclcpp.hpp"
+#include <algorithm>
+#include <cmath>
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include <Stonefish/utils/SystemUtil.hpp>
 #include "stonefish_ros2/ROS2SimulationManager.h"
 #include "stonefish_ros2/ROS2GraphicalSimulationApp.h"
@@ -44,12 +47,38 @@ public:
         app_ = std::shared_ptr<sf::ROS2GraphicalSimulationApp>(new sf::ROS2GraphicalSimulationApp("Stonefish Simulator", 
                                                                                                  dataPath, s, h, manager));
         app_->Startup();
-        tickTimer_ = this->create_wall_timer(16667us, std::bind(&sf::ROS2GraphicalSimulationApp::Tick, app_));
+        const double requestedFps = this->declare_parameter<double>("render_fps", 30.0);
+        const double renderFps = std::isfinite(requestedFps)
+            ? std::clamp(requestedFps, 5.0, 120.0) : 30.0;
+        tickTimer_ = this->create_wall_timer(
+            std::chrono::microseconds(static_cast<int64_t>(1e6 / renderFps)),
+            std::bind(&sf::ROS2GraphicalSimulationApp::Tick, app_));
+        RCLCPP_INFO(get_logger(), "Render limit %.1f FPS; physics %.1f Hz", renderFps, double(rate));
+        performancePub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/sim/performance", 1);
+        performanceLastWall_ = std::chrono::steady_clock::now();
+        performanceTimer_ = create_wall_timer(5s, [this, manager]() {
+            const auto now = std::chrono::steady_clock::now();
+            const double simTime = manager->getSimulationTime();
+            const double wallSeconds = std::chrono::duration<double>(
+                now - performanceLastWall_).count();
+            const double realTimeFactor = (simTime - performanceLastSim_) /
+                std::max(1e-6, wallSeconds);
+            std_msgs::msg::Float64MultiArray msg;
+            msg.data = {simTime, realTimeFactor};
+            performancePub_->publish(msg);
+            RCLCPP_INFO(get_logger(), "Simulation time=%.2fs, real_time_factor=%.3f", simTime, realTimeFactor);
+            performanceLastWall_ = now;
+            performanceLastSim_ = simTime;
+        });
     };
 
 private:
     std::shared_ptr<sf::ROS2GraphicalSimulationApp> app_;
     rclcpp::TimerBase::SharedPtr tickTimer_;
+    rclcpp::TimerBase::SharedPtr performanceTimer_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr performancePub_;
+    std::chrono::steady_clock::time_point performanceLastWall_;
+    double performanceLastSim_ = 0.0;
 };
 
 int main(int argc, char **argv)

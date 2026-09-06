@@ -64,6 +64,9 @@ class _MjpegReader(threading.Thread):
         self.stop_event = threading.Event()
         self.frames = Queue(maxsize=1)
         self.dimensions = None
+        self.last_error = None
+        self.connection_attempts = 0
+        self.decoded_frames = 0
 
     def _put_latest(self, frame):
         try:
@@ -78,14 +81,16 @@ class _MjpegReader(threading.Thread):
     def run(self):
         while not self.stop_event.is_set():
             try:
+                self.connection_attempts += 1
                 request = Request(
                     self.url,
                     headers={'User-Agent': 'uv-annotated-preview'},
                 )
                 with urlopen(request, timeout=3.0) as response:
                     buffer = b''
+                    read_chunk = getattr(response, 'read1', response.read)
                     while not self.stop_event.is_set():
-                        chunk = response.read(65536)
+                        chunk = read_chunk(65536)
                         if not chunk:
                             break
                         buffer += chunk
@@ -107,9 +112,11 @@ class _MjpegReader(threading.Thread):
                             )
                             if frame is not None and frame.size:
                                 self.dimensions = (frame.shape[1], frame.shape[0])
+                                self.decoded_frames += 1
+                                self.last_error = None
                                 self._put_latest(frame)
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError, AttributeError, cv2.error) as error:
+                self.last_error = str(error)
             self.stop_event.wait(0.25)
 
     def latest(self):
@@ -268,6 +275,36 @@ def _window_size(frame_size, args):
     return width, height
 
 
+# The simulator publishes a horizontally stitched stereo image.  This is
+# only a bootstrap ratio; the first decoded frame replaces it with the exact
+# source dimensions.  Keeping a fallback lets both GUI windows exist even
+# when one HTTP stream is a little slower during startup.
+DEFAULT_STITCHED_FRAME_SIZE = (1280, 480)
+
+
+def _initial_window_size(args):
+    """Return a usable size before either MJPEG stream has produced a frame."""
+    right_column_width = max(1, args.monitor_width - args.sim_width)
+    return (
+        max(1, min(args.width, right_column_width, args.monitor_width)),
+        max(1, min(args.height, max(1, args.monitor_height // 2))),
+    )
+
+
+def _waiting_frame(title, size):
+    """Create a visible placeholder so a delayed camera has a window too."""
+    width, height = size
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    cv2.putText(
+        frame, title, (24, max(36, height // 2 - 8)),
+        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (220, 220, 220), 2, cv2.LINE_AA)
+    cv2.putText(
+        frame, 'waiting for annotated stream...',
+        (24, max(70, height // 2 + 32)),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (150, 150, 150), 1, cv2.LINE_AA)
+    return frame
+
+
 def _fit_frame(frame, size):
     """Return a frame rendered at the exact pixel size of its window."""
     target_width, target_height = size
@@ -302,6 +339,8 @@ def main():
         print('annotated_preview: OpenCV is not available', flush=True)
         return 0
 
+    cv2.setNumThreads(1)
+
     front_url = f'http://{args.host}:{args.port}/front_annotated'
     down_url = f'http://{args.host}:{args.port}/down_annotated'
     readers = [_MjpegReader(front_url), _MjpegReader(down_url)]
@@ -318,67 +357,137 @@ def main():
         for reader in readers:
             reader.start()
 
-        deadline = time.monotonic() + max(0.0, args.wait_timeout)
-        while not stop_requested.is_set():
-            # Stonefish may recreate/reconfigure its SDL window while the
-            # scene is loading.  Re-issue the placement request until both
-            # camera streams are ready instead of assuming the first request
-            # was the final one.
-            controller.move(args.sim_title, args.monitor_x, args.monitor_y)
-            if all(reader.dimensions is not None for reader in readers):
-                break
-            if time.monotonic() >= deadline:
-                print(
-                    f'annotated_preview: timed out waiting for {front_url} '
-                    f'and {down_url}',
-                    flush=True,
-                )
-                return 0
-            time.sleep(0.2)
-
-        front_size = _window_size(readers[0].dimensions, args)
-        down_size = _window_size(readers[1].dimensions, args)
-        front_x = args.monitor_x + args.monitor_width - front_size[0]
-        down_x = args.monitor_x + args.monitor_width - down_size[0]
-        front_y = args.monitor_y
-        down_y = front_y + front_size[1]
-
         flags = cv2.WINDOW_NORMAL
         flags |= getattr(cv2, 'WINDOW_FREERATIO', 0)
-        cv2.namedWindow('front_annotated', flags)
-        cv2.namedWindow('down_annotated', flags)
-        cv2.resizeWindow('front_annotated', *front_size)
-        cv2.resizeWindow('down_annotated', *down_size)
-        cv2.moveWindow('front_annotated', front_x, front_y)
-        cv2.moveWindow('down_annotated', down_x, down_y)
-        controller.move_resize(
-            'front_annotated', front_x, front_y, *front_size)
-        controller.move_resize(
-            'down_annotated', down_x, down_y, *down_size)
-        # One final request handles the case where Stonefish applied its SDL
-        # position after the first X11 request during startup.
-        controller.move(args.sim_title, args.monitor_x, args.monitor_y)
-
-        print(
-            f'annotated_preview: monitor=({args.monitor_x},{args.monitor_y}) '
-            f'{args.monitor_width}x{args.monitor_height}; '
-            f'front={front_size[0]}x{front_size[1]} at '
-            f'({front_x},{front_y}); down={down_size[0]}x{down_size[1]} '
-            f'at ({down_x},{down_y})',
-            flush=True,
-        )
-
+        windows = {}
         latest = [None, None]
+        placeholders = [None, None]
+        dirty = [True, True]
+        initial_size = _initial_window_size(args)
+        gui_error_reported = set()
+
+        def update_layout():
+            """Create and position both windows before their first frame."""
+            y = args.monitor_y
+            for index, reader in enumerate(readers):
+                title = ('front_annotated' if index == 0
+                         else 'down_annotated')
+                frame_size = reader.dimensions or DEFAULT_STITCHED_FRAME_SIZE
+                size = (_window_size(frame_size, args)
+                        if reader.dimensions is not None else initial_size)
+                x = args.monitor_x + args.monitor_width - size[0]
+                if title not in windows:
+                    try:
+                        cv2.namedWindow(title, flags)
+                    except cv2.error as error:
+                        # A failure in one HighGUI window must not prevent the
+                        # other camera from being displayed. Retry this one on
+                        # the next layout pass.
+                        if title not in gui_error_reported:
+                            print(
+                                f'annotated_preview: cannot create {title}: '
+                                f'{error}', flush=True)
+                            gui_error_reported.add(title)
+                        continue
+                    windows[title] = (size, x, y)
+                    print(
+                        f'annotated_preview: {title}={size[0]}x{size[1]} '
+                        f'at ({x},{y})', flush=True)
+                else:
+                    windows[title] = (size, x, y)
+                try:
+                    cv2.resizeWindow(title, *size)
+                    cv2.moveWindow(title, x, y)
+                    controller.move_resize(title, x, y, *size)
+                except cv2.error as error:
+                    if title not in gui_error_reported:
+                        print(
+                            f'annotated_preview: cannot position {title}: '
+                            f'{error}', flush=True)
+                        gui_error_reported.add(title)
+                y += size[1]
+            # One final request handles the case where Stonefish applied its
+            # SDL position after the first X11 request during startup.
+            controller.move(args.sim_title, args.monitor_x, args.monitor_y)
+
+        # Do not wait for a camera frame before creating the windows.  The
+        # camera readers reconnect independently while the GUI stays alive.
+        update_layout()
+        deadline = time.monotonic() + max(0.0, args.wait_timeout)
+        timeout_reported = False
+        layout_dimensions = tuple(reader.dimensions for reader in readers)
+        next_sim_move = 0.0
         while not stop_requested.is_set():
+            # Stonefish may recreate/reconfigure its SDL window while the
+            # scene is loading. Re-issue the placement request until the
+            # simulator and both preview windows settle.
+            now = time.monotonic()
+            if now >= next_sim_move:
+                controller.move(args.sim_title, args.monitor_x, args.monitor_y)
+                next_sim_move = now + 0.5
+            # A stream may become available after the other one. Create its
+            # window then and compact the layout so the two remain stacked.
+            current_dimensions = tuple(reader.dimensions for reader in readers)
+            if current_dimensions != layout_dimensions or len(windows) < len(readers):
+                update_layout()
+                layout_dimensions = current_dimensions
+                dirty = [True, True]
             for index, reader in enumerate(readers):
                 frame = reader.latest()
                 if frame is not None:
                     latest[index] = frame
-            if latest[0] is not None:
-                cv2.imshow('front_annotated', _fit_frame(latest[0], front_size))
-            if latest[1] is not None:
-                cv2.imshow('down_annotated', _fit_frame(latest[1], down_size))
-            key = cv2.waitKey(20) & 0xFF
+                    dirty[index] = True
+            if not timeout_reported and time.monotonic() >= deadline:
+                missing = [
+                    ('front_annotated' if index == 0 else 'down_annotated')
+                    for index, reader in enumerate(readers)
+                    if reader.dimensions is None
+                ]
+                if missing:
+                    status = [
+                        {
+                            'attempts': reader.connection_attempts,
+                            'frames': reader.decoded_frames,
+                            'error': reader.last_error,
+                        }
+                        for reader in readers
+                    ]
+                    print(
+                        f'annotated_preview: still waiting for {missing}; '
+                        f'status={status}',
+                        flush=True,
+                    )
+                timeout_reported = True
+            for index, reader in enumerate(readers):
+                title = ('front_annotated' if index == 0
+                         else 'down_annotated')
+                if title not in windows:
+                    continue
+                size = windows[title][0]
+                frame = latest[index]
+                if frame is None:
+                    if placeholders[index] is None or (
+                            placeholders[index].shape[1],
+                            placeholders[index].shape[0]) != size:
+                        placeholders[index] = _waiting_frame(title, size)
+                    frame = placeholders[index]
+                if not dirty[index]:
+                    continue
+                try:
+                    cv2.imshow(title, _fit_frame(frame, size))
+                    dirty[index] = False
+                except cv2.error as error:
+                    if title not in gui_error_reported:
+                        print(
+                            f'annotated_preview: cannot update {title}: '
+                            f'{error}', flush=True)
+                        gui_error_reported.add(title)
+            try:
+                key = cv2.waitKey(50) & 0xFF
+            except cv2.error as error:
+                print(f'annotated_preview: HighGUI event loop failed: {error}',
+                      flush=True)
+                break
             if key in (27, ord('q')):
                 stop_requested.set()
     finally:

@@ -3,7 +3,8 @@
 Runs in the SAME process as uv_sensor. uv_ai is the FrameGate consumer:
 * receives BGR frames handed over in-memory by uv_sensor (A3 — no ROS image,
   no JPEG between the two);
-* runs YOLO segmentation, line-state extraction and ArUco detection;
+* runs YOLO detection (with optional segmentation-mask assistance for line
+  visualization), line-state extraction and ArUco detection;
 * publishes /perception/detection/{cam}, /perception/line/{cam},
   /perception/aruco/ids (unchanged transport contract for position/task/nav);
 * updates the annotated MJPEG cache fed to go2rtc preview.
@@ -17,7 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Header, Int32MultiArray
 
 from uv_msgs.msg import Detection, DetectionArray, LineState
 
@@ -32,7 +33,15 @@ from .common import (
     FRONT_DIST_COEFFS,
     SAVE_DATASET,
     _LineFilterState,
+    image_msg_to_bgr,
 )
+
+
+# Values mirror uv_msgs/msg/Detection.msg.  Keeping the local constants avoids
+# importing generated message constants in the image-processing hot path.
+FEATURE_BBOX_CENTER = 0
+FEATURE_GATE_CENTERLINE = 1
+FEATURE_GATE_SEGMENTATION = 2
 
 
 class Ai:
@@ -45,6 +54,8 @@ class Ai:
         cameras=('front', 'down'),
         inference_fps=0.0,
         inference_threads=2,
+        gate_feature_mode='auto',
+        confidence=CONFIDENCE,
     ):
         self.node = node                     # composed uv_camera rclpy Node
         self._update_annotated = update_annotated_fn  # node.update_annotated_stream
@@ -55,6 +66,10 @@ class Ai:
         self._inference_timing_lock = threading.Lock()
         self._last_inference_s = {camera: float('-inf') for camera in cameras}
         self._inference_threads = max(1, int(inference_threads))
+        self._gate_feature_mode = str(gate_feature_mode).strip().lower()
+        if self._gate_feature_mode not in {
+                'auto', 'bbox', 'centerline', 'segmentation'}:
+            self._gate_feature_mode = 'auto'
 
         # line-state / dataset / model config (declared as node params)
         self._line_contour_min_area = int(
@@ -79,7 +94,7 @@ class Ai:
             node.get_logger().info(f'Dataset saving enabled: {self._dataset_dir}')
 
         self._model = None
-        self._confidence = CONFIDENCE
+        self._confidence = min(1.0, max(0.05, float(confidence)))
         self._model_loaded = False
         self._inference_lock = threading.Lock()
 
@@ -214,14 +229,11 @@ class Ai:
 
     # ── FrameGate consumer (was _process_work + _process_frame) ─────────
     def process(self, camera, work):
-        from std_msgs.msg import Header
-        from .common import import_cv_bridge
         source = work[0]
         if source == 'ros_image':
             msg = work[1]
             try:
-                cb = import_cv_bridge()
-                cv_img = cb().imgmsg_to_cv2(msg, 'bgr8')
+                cv_img = image_msg_to_bgr(msg)
             except Exception as e:
                 self.node.get_logger().warn(
                     f'Image conversion failed ({camera}): {e}')
@@ -230,14 +242,18 @@ class Ai:
             return
         if source == 'opencv':
             frame, stamp, _ = work[1], work[2], work[3]
+            right_stamp = work[4] if len(work) > 4 else None
+            stereo_pair_id = int(work[5]) if len(work) > 5 else 0
             header = Header()
             header.stamp = (stamp if stamp is not None
                             else self.node.get_clock().now().to_msg())
-            self._process_frame(header, frame, camera)
+            self._process_frame(
+                header, frame, camera, right_stamp, stereo_pair_id)
             return
         raise ValueError(f'unknown frame source {source!r}')
 
-    def _process_frame(self, header, frame, camera):
+    def _process_frame(self, header, frame, camera, right_stamp=None,
+                       stereo_pair_id=0):
         if f'{camera}_left' not in self._active_channels:
             return
         from .common import normalize_frame
@@ -279,14 +295,20 @@ class Ai:
             self._save_frame(left_img, left_name)
             self._save_frame(right_img, right_name)
 
-        det_l, polys_l, line_l, dbg_l = self._detect(header, left_name, left_img)
+        det_l, polys_l, line_l, dbg_l = self._detect(
+            header, left_name, left_img, stereo_pair_id)
         self._pub_det[left_name].publish(det_l)
         self._pub_line[left_name].publish(line_l)
-        annotate = bool(getattr(self.node, '_stream_annotated', False))
+        annotate = self.node.stream_requested(camera, True)
         if annotate:
             ann_l = self._draw_boxes(left_img, det_l, polys_l, line_l, dbg_l)
 
-        det_r, polys_r, line_r, dbg_r = self._detect(header, right_name, right_img)
+        right_header = Header()
+        right_header.frame_id = header.frame_id
+        right_header.stamp = (
+            right_stamp if right_stamp is not None else header.stamp)
+        det_r, polys_r, line_r, dbg_r = self._detect(
+            right_header, right_name, right_img, stereo_pair_id)
         self._pub_det[right_name].publish(det_r)
         self._pub_line[right_name].publish(line_r)
         if annotate:
@@ -309,10 +331,12 @@ class Ai:
         return True
 
     # ── detection (unchanged logic) ────────────────────────────────────
-    def _detect(self, header, camera_name, cv_img):
+    def _detect(self, header, camera_name, cv_img, stereo_pair_id=0):
         det_array = DetectionArray()
         det_array.header = header
         det_array.camera_name = camera_name
+        if hasattr(det_array, 'stereo_pair_id'):
+            det_array.stereo_pair_id = int(stereo_pair_id or 0)
 
         line_state = LineState()
         line_state.stamp = header.stamp
@@ -346,7 +370,7 @@ class Ai:
                 det.bbox_x2, det.bbox_y2 = x2, y2
                 det.pixel_x = (x1 + x2) / 2.0
                 det.pixel_y = (y1 + y2) / 2.0
-                det_array.detections.append(det)
+                poly = None
                 if det.class_id == 3 and masks is not None and len(masks.xy) > i:
                     poly = masks.xy[i].astype(np.float32)
                     polygons.append(poly)
@@ -356,6 +380,8 @@ class Ai:
                         best_pipe_poly = poly
                 else:
                     polygons.append(None)
+                self._set_gate_feature(det, poly, cv_img)
+                det_array.detections.append(det)
 
         height, width = cv_img.shape[:2]
         if best_pipe_poly is not None:
@@ -391,6 +417,96 @@ class Ai:
 
         return det_array, polygons, line_state, debug_info
 
+    @staticmethod
+    def _segmentation_center(poly):
+        """Return the center of an oriented segmentation envelope.
+
+        A gate mask is usually a hollow frame rather than a solid object.  Its
+        centroid can move when one pipe is occluded, while the center of the
+        oriented envelope is a better approximation of the opening center.
+        """
+        if poly is None:
+            return None
+        points = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
+        if len(points) < 4 or not np.all(np.isfinite(points)):
+            return None
+        center, size, _ = cv2.minAreaRect(points)
+        if (not np.all(np.isfinite(center))
+                or min(float(size[0]), float(size[1])) < 2.0):
+            return None
+        return float(center[0]), float(center[1])
+
+    @staticmethod
+    def _centerline_from_red_pipes(cv_img, bbox):
+        """Estimate the gate opening center from visible red frame pipes.
+
+        The current checkpoint is a detection model, not a segmentation model,
+        so this lightweight image cue is the useful fallback in ``auto`` mode.
+        It is deliberately restricted to the predicted gate bbox and requires
+        red pixels spanning both axes; a single red bar is not promoted to a
+        geometric anchor and falls back to the bbox center.
+        """
+        x1, y1, x2, y2 = (float(value) for value in bbox)
+        height, width = cv_img.shape[:2]
+        ix1 = max(0, min(width - 1, int(np.floor(x1))))
+        iy1 = max(0, min(height - 1, int(np.floor(y1))))
+        ix2 = max(ix1 + 1, min(width, int(np.ceil(x2))))
+        iy2 = max(iy1 + 1, min(height, int(np.ceil(y2))))
+        roi = cv_img[iy1:iy2, ix1:ix2]
+        if roi.size == 0:
+            return None
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        lower_red = cv2.inRange(
+            hsv, np.array([0, 45, 30], dtype=np.uint8),
+            np.array([18, 255, 255], dtype=np.uint8))
+        upper_red = cv2.inRange(
+            hsv, np.array([165, 45, 30], dtype=np.uint8),
+            np.array([180, 255, 255], dtype=np.uint8))
+        mask = cv2.bitwise_or(lower_red, upper_red)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        ys, xs = np.where(mask > 0)
+        if len(xs) < 24:
+            return None
+        x_span = float(np.percentile(xs, 95) - np.percentile(xs, 5))
+        y_span = float(np.percentile(ys, 95) - np.percentile(ys, 5))
+        roi_width = max(float(ix2 - ix1), 1.0)
+        roi_height = max(float(iy2 - iy1), 1.0)
+        if (x_span < max(8.0, 0.25 * roi_width)
+                or y_span < max(8.0, 0.25 * roi_height)):
+            return None
+        points = np.column_stack((xs + ix1, ys + iy1)).astype(np.float32)
+        center, size, _ = cv2.minAreaRect(points)
+        if (not np.all(np.isfinite(center))
+                or min(float(size[0]), float(size[1])) < 2.0):
+            return None
+        return float(center[0]), float(center[1])
+
+    def _set_gate_feature(self, detection, polygon, cv_img):
+        """Attach one repeatable gate anchor without changing bbox fields."""
+        if int(detection.class_id) != 3 or self._gate_feature_mode == 'bbox':
+            return
+        feature = None
+        feature_type = FEATURE_BBOX_CENTER
+        if self._gate_feature_mode in {'auto', 'segmentation'}:
+            feature = self._segmentation_center(polygon)
+            if feature is not None:
+                feature_type = FEATURE_GATE_SEGMENTATION
+        if feature is None and self._gate_feature_mode in {
+                'auto', 'centerline'}:
+            feature = self._centerline_from_red_pipes(
+                cv_img,
+                (detection.bbox_x1, detection.bbox_y1,
+                 detection.bbox_x2, detection.bbox_y2))
+            if feature is not None:
+                feature_type = FEATURE_GATE_CENTERLINE
+        if feature is None or not np.all(np.isfinite(feature)):
+            return
+        if hasattr(detection, 'feature_type'):
+            detection.feature_type = int(feature_type)
+            detection.feature_pixel_x = float(feature[0])
+            detection.feature_pixel_y = float(feature[1])
+
     def _draw_boxes(self, cv_img, det_array, polygons, line_state, debug_info):
         import math
         annotated = cv_img.copy()
@@ -406,6 +522,18 @@ class Ai:
                 cv2.polylines(annotated, [poly], True, color, 2)
             else:
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            feature_type = int(getattr(det, 'feature_type', 0))
+            feature_x = float(getattr(det, 'feature_pixel_x', 0.0))
+            feature_y = float(getattr(det, 'feature_pixel_y', 0.0))
+            if (feature_type > FEATURE_BBOX_CENTER
+                    and np.isfinite(feature_x) and np.isfinite(feature_y)):
+                cv2.circle(annotated, (int(round(feature_x)), int(round(feature_y))),
+                           6, (255, 0, 255), -1)
+                cv2.putText(annotated, 'anchor',
+                            (int(round(feature_x)) + 8,
+                             int(round(feature_y)) - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                            (255, 0, 255), 1, cv2.LINE_AA)
             label = f'{det.class_id}:{det.confidence:.2f}'
             cv2.putText(annotated, label, (x1, max(y1 - 5, 10)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)

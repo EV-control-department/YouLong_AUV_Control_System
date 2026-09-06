@@ -1,4 +1,4 @@
-"""Common helpers for uv_camera: constants, Kalman/line filters, MJPEG server, cv_bridge.
+"""Common helpers for uv_camera: constants, filters, MJPEG and image codecs.
 
 This module is process-internal; it does not depend on the ROS node itself
 (only on ``rclpy.ok`` for the MJPEG serve loop, matching upstream vision.py).
@@ -108,15 +108,27 @@ class _MjpegHandler(BaseHTTPRequestHandler):
             self.send_error(404, 'annotated streams are disabled')
             return
 
-        self.send_response(200)
-        self.send_header('Cache-Control', 'no-cache, private')
-        self.send_header('Connection', 'close')
-        self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
-        self.end_headers()
+        node = self.node
+        if node is None:
+            self.send_error(503, 'MJPEG source is stopping')
+            return
+        key = (camera, annotated)
+        # Register before sending the response headers.  A camera callback
+        # can arrive during header transmission; registering afterwards lets
+        # that first frame be skipped, which is especially visible when the
+        # front and down streams do not start at exactly the same time.
+        with node._stream_lock:
+            node._stream_clients[key] = node._stream_clients.get(key, 0) + 1
         try:
+            self.send_response(200)
+            self.send_header('Cache-Control', 'no-cache, private')
+            self.send_header('Connection', 'close')
+            self.send_header(
+                'Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+            self.end_headers()
             last_sequence = 0
-            while self.node is not None and self.node._rclpy_ok():
-                result = self.node._wait_for_stream_frame(camera, annotated, last_sequence)
+            while node._rclpy_ok():
+                result = node._wait_for_stream_frame(camera, annotated, last_sequence)
                 if result is None:
                     break
                 payload, last_sequence, stamp_ns = result
@@ -132,6 +144,9 @@ class _MjpegHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
+        finally:
+            with node._stream_lock:
+                node._stream_clients[key] -= 1
 
     def log_message(self, *_args):
         pass
@@ -167,6 +182,73 @@ def normalize_frame(frame):
     if frame.shape[2] == 4:
         return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
     return frame
+
+
+def image_msg_to_bgr(message):
+    """Decode common ROS Image encodings without importing cv_bridge.
+
+    The ROS cv_bridge binary in some deployments is compiled against NumPy
+    1.x while the active Python environment has NumPy 2.x.  The camera path
+    only needs a few 8-bit encodings, so keeping this conversion local avoids
+    an ABI-sensitive dependency in the hot simulation/logging path.
+    """
+    try:
+        height = int(message.height)
+        width = int(message.width)
+        encoding = str(message.encoding).strip().lower()
+        step = int(message.step)
+        raw = np.frombuffer(message.data, dtype=np.uint8)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError(f"invalid ROS Image metadata: {error}") from error
+    if height <= 0 or width <= 0:
+        raise ValueError("ROS Image has non-positive dimensions")
+
+    channels = {
+        "bgr8": 3, "rgb8": 3, "8uc3": 3,
+        "bgra8": 4, "rgba8": 4, "8uc4": 4,
+        "mono8": 1, "8uc1": 1,
+    }.get(encoding)
+    if channels is None:
+        raise ValueError(f"unsupported ROS Image encoding: {encoding!r}")
+    minimum_step = width * channels
+    step = max(step, minimum_step)
+    required = height * step
+    if raw.size < required:
+        raise ValueError(
+            f"ROS Image data is short: {raw.size} < {required} bytes")
+    rows = raw[:required].reshape(height, step)
+    values = rows[:, :minimum_step].reshape(height, width, channels)
+    # Copy before returning: FrameGate processing must not retain a view into
+    # a ROS message buffer that may be recycled by the middleware.
+    image = values.copy()
+    if encoding in {"rgb8", "rgba8"}:
+        image = cv2.cvtColor(
+            image, cv2.COLOR_RGB2BGR if channels == 3 else cv2.COLOR_RGBA2BGR)
+    elif channels == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    elif channels == 1:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    return image
+
+
+def bgr_to_image_msg(frame, header=None):
+    """Encode a BGR NumPy frame into ``sensor_msgs/Image`` without cv_bridge."""
+    from sensor_msgs.msg import Image
+
+    image = normalize_frame(np.asarray(frame))
+    if image is None:
+        raise ValueError("cannot encode an empty/non-image BGR frame")
+    image = np.ascontiguousarray(image)
+    message = Image()
+    if header is not None:
+        message.header = header
+    message.height = int(image.shape[0])
+    message.width = int(image.shape[1])
+    message.encoding = "bgr8"
+    message.is_bigendian = 0
+    message.step = int(image.shape[1] * 3)
+    message.data = image.tobytes()
+    return message
 
 
 class FrameGate:

@@ -8,6 +8,11 @@ uint8 FORM_DOWN_DIRECT=4
 uint64 observation_id
 builtin_interfaces/Time observation_stamp
 
+# IDs of the raw bbox-center detections that produced this derived record.
+# A stereo record normally has two IDs; a multi-view record may have several.
+uint64[] source_raw_observation_ids
+string feature_id  # bbox-only frontend currently uses "bbox_center"
+
 uint16 class_id
 uint32 instance_id
 string class_name

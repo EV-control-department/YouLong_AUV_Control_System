@@ -45,9 +45,25 @@ ros2 run uv_log player sessions/YYYYMMDD_HHMMSS
 `record_video_format:=ts`，此时恢复 H.264 转码路径，但 CPU 和编码延迟会更高。
 
 仿真启动默认使用 `record_use_sim_time:=false`，录制时间戳采用稳定的墙上时钟，
-不依赖 `/clock`。录制默认会自动打开 MJPEG 端点；不录制时预览默认关闭以节省
-CPU。需要预览时显式设置 `enable_preview:=true`，如手动执行 `record`，也应加上
-`--use-sim-time false`。
+不依赖 `/clock`。为了保留交互仿真的两个标注窗口，`enable_preview` 默认开启；
+无显示或只跑控制/任务时可显式设置 `enable_preview:=false` 节省 CPU。手动执行
+`record` 时，也应加上 `--use-sim-time false`。
+
+每个 session 还会保存启动和运行诊断信息：
+
+- `logs/ros/`：每个 ROS 进程的 ROS 日志；
+- `logs/nodes/`：launch 捕获的进程标准输出/错误输出，以及 bag/视频子进程日志；
+- `events.jsonl`：进程启动、退出、重启和录制器状态变化；
+- `metadata/launch_arguments.json`：本次启动实际使用的 launch 参数；
+- `metadata/performance.jsonl`：约每 5 秒记录一次 CPU、内存、线程数、系统负载、
+  磁盘剩余空间、视频帧龄和子进程状态；
+- `heartbeat.json`：约每秒更新，用于判断录制器是否还在工作。
+
+仿真默认将 Stonefish 的显示刷新限制为 30 FPS，物理步进仍为 100 Hz。可用
+`render_fps:=60` 临时提高显示刷新，或用 `enable_preview:=false` 关闭 MJPEG、
+go2rtc 和两个标注窗口，进一步降低负载。启动时任务不会立即释放：会先等待仿真
+位姿/里程计和四路相机标定连续到达，再等待四路检测消息连续到达，最后才启动导航
+和任务节点；等待过程和超时原因记录在 `logs/nodes/` 中。
 
 rosbag 只保存状态、控制、检测和其他元数据等小消息。录制器会无条件排除
 `sensor_msgs/msg/Image`、`sensor_msgs/msg/CompressedImage` 和

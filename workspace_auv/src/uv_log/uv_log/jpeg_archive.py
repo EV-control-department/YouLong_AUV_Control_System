@@ -99,6 +99,7 @@ class JpegArchiveWriter:
         self.data_path: Path | None = None
         self.index_path: Path | None = None
         self.frames_in_chunk = 0
+        self._last_sync = time.monotonic()
         self._open_chunk()
 
     def _open_chunk(self) -> None:
@@ -113,10 +114,7 @@ class JpegArchiveWriter:
     @staticmethod
     def _sync_handle(handle) -> None:
         handle.flush()
-        try:
-            os.fsync(handle.fileno())
-        except OSError:
-            pass
+        os.fsync(handle.fileno())
 
     def _close_chunk(self) -> None:
         if self.data is None or self.index is None:
@@ -174,6 +172,13 @@ class JpegArchiveWriter:
         self.index.write(_entry_json(ref))
         self.index.flush()
         self.frames_in_chunk += 1
+        # The writer owns these files, so it can sync the active tail without
+        # a recorder thread walking every historical video chunk each second.
+        now = time.monotonic()
+        if now - self._last_sync >= 1.0:
+            self._sync_handle(self.data)
+            self._sync_handle(self.index)
+            self._last_sync = now
         return True
 
     def close(self) -> None:
@@ -277,11 +282,13 @@ def load_chunk_entries(path: str | Path) -> list[JpegFrameRef]:
             indexed_end = 0
         else:
             indexed_end = entries[-1].offset + entries[-1].size
-            indexed_end += FRAME_HEADER.size
+            # offset already points to the JPEG payload. Its end is exactly
+            # the next record's header, not one header beyond it.
         # An index pointing into an invalid or overlapping file is not usable.
         if any(
             current.offset < FRAME_HEADER.size
-            or (previous is not None and current.offset < previous.offset + previous.size)
+            or (previous is not None and current.offset !=
+                previous.offset + previous.size + FRAME_HEADER.size)
             for previous, current in zip([None] + entries[:-1], entries)
         ):
             entries = []

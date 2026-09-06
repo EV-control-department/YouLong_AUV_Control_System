@@ -14,10 +14,11 @@ from launch.actions import (
     DeclareLaunchArgument,
     LogInfo,
     OpaqueFunction,
+    RegisterEventHandler,
     SetEnvironmentVariable,
-    TimerAction,
 )
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
 from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
@@ -176,6 +177,16 @@ def generate_launch_description():
             'simulator responsive'
         )
     )
+    declare_ai_confidence = DeclareLaunchArgument(
+        'ai_confidence', default_value='0.8',
+        description='YOLO confidence threshold; lower values retain partial gates'
+    )
+    declare_gate_feature_mode = DeclareLaunchArgument(
+        'gate_feature_mode', default_value='auto',
+        description=(
+            'Front gate anchor: auto, centerline, segmentation, or bbox'
+        )
+    )
     declare_camera_stitch_fps = DeclareLaunchArgument(
         'camera_stitch_fps', default_value='5.0',
         description=(
@@ -233,6 +244,15 @@ def generate_launch_description():
         'render_quality', default_value=default_render_quality,
         description='Stonefish rendering quality: low, medium, or high'
     )
+    declare_render_fps = DeclareLaunchArgument(
+        'render_fps', default_value='30.0',
+        description='Stonefish display refresh limit; physics remains at 100 Hz')
+    declare_startup_timeout = DeclareLaunchArgument(
+        'startup_timeout', default_value='120.0',
+        description='Maximum seconds per measured startup readiness stage')
+    declare_annotated_max_width = DeclareLaunchArgument(
+        'annotated_max_width', default_value='1280',
+        description='Annotated MJPEG width limit (0=full); raw recordings retain original size')
     declare_preview_width = DeclareLaunchArgument(
         'preview_width', default_value=str(default_preview_width),
         description='Width of each annotated preview window in pixels'
@@ -247,7 +267,10 @@ def generate_launch_description():
     )
     declare_preview_wait_timeout = DeclareLaunchArgument(
         'preview_wait_timeout', default_value='60.0',
-        description='Seconds to wait for the annotated MJPEG service'
+        description=(
+            'Seconds before logging a missing annotated stream; windows stay '
+            'open and readers continue retrying'
+        )
     )
     declare_record_session = DeclareLaunchArgument(
         'record_session', default_value='false',
@@ -325,6 +348,8 @@ def generate_launch_description():
     enable_ai = LaunchConfiguration('enable_ai')
     ai_inference_fps = LaunchConfiguration('ai_inference_fps')
     inference_threads = LaunchConfiguration('inference_threads')
+    ai_confidence = LaunchConfiguration('ai_confidence')
+    gate_feature_mode = LaunchConfiguration('gate_feature_mode')
     camera_stitch_fps = LaunchConfiguration('camera_stitch_fps')
     publish_raw_camera_topics = LaunchConfiguration('publish_raw_camera_topics')
     enable_nav = LaunchConfiguration('enable_nav')
@@ -386,10 +411,16 @@ def generate_launch_description():
                 '--video-codec', record_video_codec.perform(context),
                 '--record-image-topics', record_image_topics.perform(context),
                 '--use-sim-time', record_use_sim_time.perform(context),
+                '--port', preview_port.perform(context),
+                '--enable-video', enable_preview.perform(context),
             ],
+            sigterm_timeout='20',
+            sigkill_timeout='5',
         )
+        from uv_bringup.session_logging import session_log_handlers
         return [
             SetEnvironmentVariable('ROS_LOG_DIR', str(paths.logs / 'ros')),
+            *session_log_handlers(paths, dict(context.launch_configurations)),
             LogInfo(msg=['uv_log session: ', str(paths.root)]),
             recorder,
         ]
@@ -461,6 +492,7 @@ def generate_launch_description():
             render_quality,
         ],
         output='both',
+        parameters=[{'render_fps': LaunchConfiguration('render_fps')}],
     )
 
     # Core nodes
@@ -495,8 +527,14 @@ def generate_launch_description():
             'sim_mode': True,
             'inference_fps': ai_inference_fps,
             'inference_threads': inference_threads,
+            'confidence': ai_confidence,
+            # Gate localization uses a repeatable opening anchor when the
+            # detector/image supports it, with bbox center as a safe fallback.
+            'gate_feature_mode': gate_feature_mode,
             'enable_gortc': enable_preview,
             'stream_annotated': stream_annotated,
+            'mjpeg_port': preview_port,
+            'annotated_max_width': LaunchConfiguration('annotated_max_width'),
         }],
         condition=IfCondition(enable_ai),
     )
@@ -600,9 +638,9 @@ def generate_launch_description():
         condition=IfCondition(enable_task),
     )
 
-    # The helper waits for uv_camera's MJPEG endpoint, then opens two native
-    # OpenCV windows.  Start it slightly after the perception node so the
-    # camera server has time to bind its port.
+    # The helper opens both native OpenCV windows immediately. Each reader
+    # reconnects independently while the MJPEG endpoint and camera streams
+    # finish starting, so one delayed camera cannot hide the other window.
     annotated_preview = Node(
         package='uv_bringup',
         executable='annotated_preview',
@@ -636,10 +674,39 @@ def generate_launch_description():
             SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
         ]
 
+    # Processes existing is not sufficient: the simulator first loads the
+    # scene, then begins publishing navigation/calibration. Load AI after that,
+    # and release the task only once both cameras actually publish inference.
+    def readiness_gate(phase):
+        return Node(
+            package='uv_bringup', executable='wait_for_sim',
+            name='wait_for_sim_' + phase, output='both', **python_node_kwargs,
+            arguments=['--phase', phase, '--require-ai', enable_ai,
+                       '--timeout', LaunchConfiguration('startup_timeout')])
+
+    sensors_ready = readiness_gate('sensors')
+    perception_ready = readiness_gate('perception')
+
+    def after_sensors(event, context):
+        if context.is_shutdown:
+            return []
+        if event.returncode != 0:
+            return [LogInfo(msg='Sensor readiness failed; perception/task startup withheld. See wait_for_sim log.')]
+        return [vision, object_localizer, annotated_preview, perception_ready]
+
+    def after_perception(event, context):
+        if context.is_shutdown:
+            return []
+        if event.returncode != 0:
+            return [LogInfo(msg='Perception readiness failed; task startup withheld. See wait_for_sim log.')]
+        return [navigator, task_runner]
+
     return LaunchDescription([
         declare_enable_ai,
         declare_ai_inference_fps,
         declare_inference_threads,
+        declare_ai_confidence,
+        declare_gate_feature_mode,
         declare_camera_stitch_fps,
         declare_publish_raw_camera_topics,
         declare_enable_nav,
@@ -652,6 +719,9 @@ def generate_launch_description():
         declare_sim_window_width,
         declare_sim_window_height,
         declare_render_quality,
+        declare_render_fps,
+        declare_startup_timeout,
+        declare_annotated_max_width,
         declare_preview_width,
         declare_preview_height,
         declare_preview_port,
@@ -685,9 +755,7 @@ def generate_launch_description():
         stonefish_sim,
         sim_bridge,
         basic_motion,
-        vision,
-        object_localizer,
-        navigator,
-        task_runner,
-        TimerAction(period=2.0, actions=[annotated_preview]),
+        RegisterEventHandler(OnProcessExit(target_action=sensors_ready, on_exit=after_sensors)),
+        RegisterEventHandler(OnProcessExit(target_action=perception_ready, on_exit=after_perception)),
+        sensors_ready,
     ])

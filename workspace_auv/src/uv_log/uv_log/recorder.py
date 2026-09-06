@@ -27,6 +27,7 @@ from .session import (
     update_manifest,
 )
 from .jpeg_archive import next_chunk_number
+from .performance import ProcessSampler
 
 
 DEFAULT_TOPIC_REGEX = (
@@ -39,7 +40,7 @@ DEFAULT_TOPIC_REGEX = (
 # default narrow; image message types are excluded independently below even
 # when a caller supplies a broader custom topic regex.
 METADATA_TOPIC_REGEX = (
-    r'^/(clock|tf|tf_static|rosout|parameter_events|diagnostics|'
+    r'^/(clock|tf|tf_static|rosout|parameter_events|diagnostics|sim/performance|'
     r'auv/thrusters_cmd|zit6/.*|perception/.*|basic_motion/.*|task/.*|'
     r'nav/.*|cmd_vel.*)$'
 )
@@ -73,15 +74,16 @@ def _next_segment_number(directory: Path) -> int:
     return max(numbers, default=-1) + 1
 
 
-def _sync_file(path: Path) -> None:
+def _sync_file(path: Path) -> bool:
     try:
         fd = os.open(path, os.O_RDONLY)
         try:
             os.fsync(fd)
         finally:
             os.close(fd)
+        return True
     except OSError:
-        pass
+        return False
 
 
 class SegmentSyncer(threading.Thread):
@@ -100,6 +102,12 @@ class SegmentSyncer(threading.Thread):
         self.stop_event = threading.Event()
         self._observed: dict[Path, tuple[int, int]] = {}
         self._synced: set[Path] = set()
+        # Files are discovered recursively only every few seconds. Known
+        # files are stat'ed between discoveries so a growing MCAP tail is
+        # still synced without walking thousands of historical chunks.
+        self._known: set[Path] = set()
+        self._next_discovery = 0.0
+        self.errors = 0
 
     def run(self):
         while not self.stop_event.is_set():
@@ -108,14 +116,20 @@ class SegmentSyncer(threading.Thread):
         self.sync_once()
 
     def sync_once(self):
+        now = time.monotonic()
+        discover = now >= self._next_discovery
+        if discover:
+            self._next_discovery = now + 5.0
         for directory in self.directories:
             if not directory.is_dir():
                 continue
             changed_directories: set[Path] = set()
-            files = {
-                path for pattern in self.patterns
-                for path in directory.rglob(pattern)
-            }
+            files = {p for p in self._known if p.is_relative_to(directory)}
+            if discover:
+                files.update(
+                    p for p in directory.rglob('*')
+                    if any(p.match(pattern) for pattern in self.patterns))
+            self._known.update(files)
             for path in files:
                 try:
                     stat = path.stat()
@@ -125,11 +139,12 @@ class SegmentSyncer(threading.Thread):
                 if self._observed.get(path) != signature:
                     self._observed[path] = signature
                     self._synced.discard(path)
-                    continue
                 if path not in self._synced and stat.st_size > 0:
-                    _sync_file(path)
-                    self._synced.add(path)
-                    changed_directories.add(path.parent)
+                    if _sync_file(path):
+                        self._synced.add(path)
+                        changed_directories.add(path.parent)
+                    else:
+                        self.errors += 1
             for changed_directory in changed_directories:
                 try:
                     fd = os.open(
@@ -157,7 +172,15 @@ class SegmentSyncer(threading.Thread):
                 for path in directory.rglob(pattern)
             }
             for path in files:
-                _sync_file(path)
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if (path in self._synced and self._observed.get(path) ==
+                        (stat.st_size, stat.st_mtime_ns)):
+                    continue
+                if not _sync_file(path):
+                    self.errors += 1
                 directories.add(path.parent)
         for directory in directories:
             try:
@@ -232,9 +255,10 @@ class ChildSupervisor(threading.Thread):
                     self._terminate(process, self.stop_signal)
                 if process.poll() is None:
                     try:
-                        process.wait(timeout=2.0)
+                        process.wait(timeout=6.0)
                     except subprocess.TimeoutExpired:
                         self._kill(process)
+                        process.wait(timeout=2.0)
                 with self.process_lock:
                     self.process = None
 
@@ -294,6 +318,9 @@ class Recorder:
         self.syncer = SegmentSyncer([])
         self.children: list[ChildSupervisor] = []
         self.video_directories: list[Path] = []
+        self.performance = ProcessSampler(os.getppid())
+        self.health_errors = 0
+        self._stopped = False
         self._prepare_video_streams()
 
     def _recorded_streams(self):
@@ -306,6 +333,8 @@ class Recorder:
         available for sessions that explicitly request them.
         """
         mode = str(getattr(self.args, 'video_mode', 'raw')).strip().lower()
+        if not _bool_value(getattr(self.args, 'enable_video', True)):
+            return {}
         if mode == 'raw':
             return dict(RAW_STREAMS)
         if mode == 'annotated':
@@ -424,29 +453,63 @@ class Recorder:
             stop_signal=signal.SIGINT))
 
     def _heartbeat_loop(self):
+        next_sample = 0.0
+        previous_children = {}
         while not self.stop_event.wait(1.0):
-            snapshots = {
-                child.name_label: child.snapshot() for child in self.children}
-            update_heartbeat(
-                self.paths.root,
-                children=snapshots,
-                video_directories=[str(path) for path in self.video_directories],
-            )
+            try:
+                snapshots = {
+                    child.name_label: child.snapshot() for child in self.children}
+                for name, state in snapshots.items():
+                    if state != previous_children.get(name):
+                        append_event(self.paths.root, {
+                            'event': 'recorder_child_state', 'name': name, **state})
+                previous_children = snapshots
+                update_heartbeat(self.paths.root, children=snapshots,
+                                 sync_errors=self.syncer.errors,
+                                 health_errors=self.health_errors)
+                if time.monotonic() < next_sample:
+                    continue
+                next_sample = time.monotonic() + 5.0
+                sample = self.performance.sample()
+                sample['disk_free_bytes'] = shutil.disk_usage(self.paths.root).free
+                sample['children'] = snapshots
+                sample['video'] = {}
+                for directory in self.video_directories:
+                    try:
+                        status = json.loads((directory / 'status.json').read_text())
+                        received = status.get('last_frame_received_unix_ns', 0)
+                        status['frame_age_seconds'] = (
+                            (time.time_ns() - received) / 1e9 if received else None)
+                        sample['video'][directory.name] = status
+                    except (OSError, ValueError):
+                        sample['video'][directory.name] = {'status': 'waiting_for_video'}
+                with (self.paths.metadata / 'performance.jsonl').open('a') as handle:
+                    handle.write(json.dumps(sample, ensure_ascii=False) + '\n')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except (OSError, ValueError) as error:
+                self.health_errors += 1
+                print(f'uv_log: health logging failed: {error}', flush=True)
 
     def start(self):
-        if self.args.video_format == 'ts' and shutil.which(self.args.ffmpeg) is None:
+        if self._recorded_streams() and self.args.video_format == 'ts' and shutil.which(self.args.ffmpeg) is None:
             raise RuntimeError(f'ffmpeg executable not found: {self.args.ffmpeg}')
         self._start_bag_child()
         self._start_video_children()
         self.syncer = SegmentSyncer(
-            self.video_directories + [self.paths.bag],
-            patterns=('*.ts', '*.mjpg', '*.jsonl', '*.mcap', 'metadata.yaml'),
+            # JPEG writers sync their own active/closed chunks. Only legacy
+            # TS and rosbag need an external syncer.
+            ([*self.video_directories] if self.args.video_format == 'ts' else [])
+            + [self.paths.bag],
+            patterns=('*.ts', '*.mcap', 'metadata.yaml'),
         )
         self.syncer.start()
         for child in self.children:
             child.start()
         update_manifest(
             self.paths.root,
+            bag={'directory': 'bag', 'storage': 'mcap',
+                 'segment_seconds': float(self.args.bag_duration)},
             recorder={
                 'pid': os.getpid(),
                 'topic_regex': self._bag_topic_regex(),
@@ -462,6 +525,7 @@ class Recorder:
                 'video_fps': float(self.args.video_fps),
                 'use_sim_time': _bool_value(self.args.use_sim_time),
                 'image_topics_excluded': True,
+                'enable_video': bool(self._recorded_streams()),
             },
         )
         if _bool_value(getattr(self.args, 'record_image_topics', False)):
@@ -473,6 +537,9 @@ class Recorder:
         self.heartbeat_thread.start()
 
     def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
         self.stop_event.set()
         for child in self.children:
             child.stop()
@@ -485,6 +552,10 @@ class Recorder:
         self.syncer.sync_all()
         if self.heartbeat_thread.is_alive():
             self.heartbeat_thread.join(timeout=2.0)
+        update_manifest(self.paths.root, recording_health={
+            'sync_errors': self.syncer.errors, 'health_errors': self.health_errors,
+            'children': {child.name_label: child.snapshot() for child in self.children},
+        })
         append_event(self.paths.root, {'event': 'recorder_stopped'})
 
 
@@ -494,6 +565,8 @@ def _parse_args():
     parser.add_argument('--output-root', default=str(default_output_root()))
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8090)
+    parser.add_argument('--enable-video', default='true',
+                        help='false records ROS/logs only, without reconnecting video workers')
     parser.add_argument('--segment-duration', type=float, default=2.0)
     parser.add_argument('--bag-duration', type=float, default=10.0)
     parser.add_argument(

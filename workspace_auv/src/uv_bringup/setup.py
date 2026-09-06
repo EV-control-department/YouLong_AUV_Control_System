@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'annotated_preview = uv_bringup.annotated_preview:main',
+            'wait_for_sim = uv_bringup.wait_for_sim:main',
         ],
     },
 )

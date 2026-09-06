@@ -1,0 +1,5 @@
+std_msgs/Header header
+string camera_name
+builtin_interfaces/Time left_stamp
+builtin_interfaces/Time right_stamp
+uint64 stereo_pair_id

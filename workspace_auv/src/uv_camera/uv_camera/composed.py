@@ -38,7 +38,7 @@ from .common import (
     _MjpegHandler,
     _MjpegServer,
     FrameGate,
-    import_cv_bridge,
+    image_msg_to_bgr,
 )
 
 
@@ -63,6 +63,8 @@ class CameraAiNode(Node):
             params['stream_annotated'] and self._preview_enabled)
         self._mjpeg_port = params['mjpeg_port']
         self._stream_lock = threading.Lock()
+        self._stream_clients = {}
+        self._annotated_max_width = params['annotated_max_width']
         self._stream_jpegs = {'front': None, 'down': None}
         self._stream_annotated_jpegs = {'front': None, 'down': None}
         self._stream_sequence = {'front': 0, 'down': 0}
@@ -101,7 +103,9 @@ class CameraAiNode(Node):
         self.ai = ai_mod.Ai(
             self, self.update_annotated_stream, cameras=active,
             inference_fps=params['inference_fps'],
-            inference_threads=params['inference_threads'])
+            inference_threads=params['inference_threads'],
+            gate_feature_mode=params['gate_feature_mode'],
+            confidence=params['confidence'])
         self._gate = FrameGate(self.ai.process, cameras=active,
                                max_workers=2, log_warn=self._warn)
         self.ai.load_model(params['model_path'])
@@ -111,16 +115,6 @@ class CameraAiNode(Node):
             self, self._gate, params['sim_mode'],
             params['enable_front'], params['enable_down'])
         self.sensor.start()
-
-        # cv_bridge only for sim mode (decode ROS Image -> BGR)
-        self._cv_bridge_ok = False
-        self.bridge = None
-        if params['sim_mode']:
-            try:
-                self.bridge = import_cv_bridge()()
-                self._cv_bridge_ok = True
-            except Exception as e:
-                self.get_logger().error(f'cv_bridge not available in sim mode: {e}')
 
         # MJPEG server + go2rtc (preview only)
         if self._preview_enabled:
@@ -139,11 +133,14 @@ class CameraAiNode(Node):
         self.declare_parameter('sim_mode', False)
         self.declare_parameter('inference_fps', 5.0)
         self.declare_parameter('inference_threads', 2)
+        self.declare_parameter('confidence', 0.8)
+        self.declare_parameter('gate_feature_mode', 'auto')
         self.declare_parameter('enable_gortc', ENABLE_GORTC)
         self.declare_parameter('gortc_executable', GORTC_EXECUTABLE)
         self.declare_parameter('gortc_http_port', GORTC_HTTP_PORT)
         self.declare_parameter('mjpeg_port', VISION_MJPEG_PORT)
         self.declare_parameter('stream_annotated', STREAM_ANNOTATED)
+        self.declare_parameter('annotated_max_width', 0)
         self.declare_parameter('enable_front_camera', True)
         self.declare_parameter('enable_down_camera', True)
         self.declare_parameter('front_cam_path', '/dev/video2')
@@ -167,9 +164,12 @@ class CameraAiNode(Node):
             'sim_mode': g('sim_mode').value,
             'inference_fps': max(0.0, float(g('inference_fps').value)),
             'inference_threads': max(1, int(g('inference_threads').value)),
+            'confidence': min(1.0, max(0.05, float(g('confidence').value))),
+            'gate_feature_mode': str(g('gate_feature_mode').value).strip().lower(),
             'enable_gortc': _as_bool(g('enable_gortc').value),
             'gortc_port': g('gortc_http_port').value,
             'stream_annotated': _as_bool(g('stream_annotated').value),
+            'annotated_max_width': max(0, int(g('annotated_max_width').value)),
             'mjpeg_port': g('mjpeg_port').value,
             'enable_front': g('enable_front_camera').value,
             'enable_down': g('enable_down_camera').value,
@@ -234,27 +234,48 @@ class CameraAiNode(Node):
         return overlay
 
     # ── sensor connector: ROS->BGR gate submission + raw preview ────────
-    def submit_image(self, camera, msg):
+    def submit_image(self, camera, msg, right_stamp=None, stereo_pair_id=0):
         """Called from uv_sensor when a ROS Image arrives (sim mode).
 
         Decode to BGR, update the raw preview cache (same as the V4L2 path),
-        then hand the frame to uv_ai through the in-memory gate.
+        then hand the frame to uv_ai through the in-memory gate.  Simulator
+        stereo metadata keeps the two eye detections tied to their original
+        capture stamps without changing the stitched image transport.
         """
-        if not self._cv_bridge_ok:
-            return
         try:
-            cv_img = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+            cv_img = image_msg_to_bgr(msg)
         except Exception as e:
             self.get_logger().warn(f'Image conversion failed ({camera}): {e}')
             return
         # raw preview updated at arrival (independent of YOLO speed)
         self.update_raw_preview(camera, cv_img, msg.header.stamp)
-        self._gate.submit(camera, ('opencv', cv_img, msg.header.stamp, False))
+        # Keep the annotated endpoint usable while the first YOLO inference is
+        # still warming up. It starts as a pose-overlay-only frame and is
+        # replaced by the real annotated frame as soon as AI finishes. This
+        # prevents the preview window from waiting on model startup forever.
+        if self.stream_requested(camera, True):
+            with self._stream_lock:
+                annotated_ready = (
+                    self._stream_annotated_jpegs[camera] is not None)
+            if not annotated_ready:
+                self.update_annotated_stream(
+                    camera, cv_img, msg.header.stamp)
+        self._gate.submit(
+            camera,
+            ('opencv', cv_img, msg.header.stamp, False,
+             right_stamp, int(stereo_pair_id or 0)),
+        )
 
     def submit_frame(self, camera, frame, stamp=None):
         """Called from uv_sensor when a V4L2 frame arrives (real mode)."""
         stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
-        self._gate.submit(camera, ('opencv', frame, stamp, True))
+        if self.stream_requested(camera, True):
+            with self._stream_lock:
+                annotated_ready = (
+                    self._stream_annotated_jpegs[camera] is not None)
+            if not annotated_ready:
+                self.update_annotated_stream(camera, frame, stamp)
+        self._gate.submit(camera, ('opencv', frame, stamp, True, None, 0))
 
     @staticmethod
     def _stamp_to_ns(stamp):
@@ -265,8 +286,15 @@ class CameraAiNode(Node):
         except (AttributeError, TypeError, ValueError):
             return time.time_ns()
 
+    def stream_requested(self, camera, annotated=False):
+        """Only encode streams consumed by a preview or recorder connection."""
+        if not self._preview_enabled or (annotated and not self._stream_annotated):
+            return False
+        with self._stream_lock:
+            return self._stream_clients.get((camera, annotated), 0) > 0
+
     def update_raw_preview(self, camera, frame, stamp=None):
-        if not self._preview_enabled:
+        if not self.stream_requested(camera):
             return
         frame = self._draw_pose_overlay(frame)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -279,8 +307,12 @@ class CameraAiNode(Node):
             self._stream_condition.notify_all()
 
     def update_annotated_stream(self, camera, frame, stamp=None):
-        if not self._stream_annotated:
+        if not self.stream_requested(camera, True):
             return
+        width = self._annotated_max_width
+        if width and frame.shape[1] > width:
+            height = max(1, round(frame.shape[0] * width / frame.shape[1]))
+            frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
         frame = self._draw_pose_overlay(frame)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:

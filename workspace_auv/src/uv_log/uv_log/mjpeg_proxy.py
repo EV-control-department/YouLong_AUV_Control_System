@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from .jpeg_archive import JpegArchiveWriter
+from .session import write_json_atomic
 
 
 class LatestJpeg:
@@ -51,7 +52,9 @@ def _mjpeg_reader(
             with urlopen(request, timeout=3.0) as response:
                 buffer = b''
                 while not stop_event.is_set():
-                    chunk = response.read(65536)
+                    # Return available bytes immediately; read(n) can wait for
+                    # the next low-rate frame just to fill its 64 KiB buffer.
+                    chunk = response.read1(65536)
                     if not chunk:
                         break
                     buffer += chunk
@@ -231,6 +234,8 @@ def _run_jpeg_archive(args) -> int:
     """Store source JPEGs directly; no decoder or video encoder is started."""
     stop_event = threading.Event()
     write_error = []
+    progress = {'status': 'waiting_for_video', 'frames': 0, 'bytes': 0,
+                'last_frame_received_unix_ns': 0}
     writer = JpegArchiveWriter(
         args.output_dir,
         start_number=args.start_number,
@@ -246,8 +251,10 @@ def _run_jpeg_archive(args) -> int:
 
     def save_frame(payload, sequence, timestamp_ns):
         try:
-            writer.write(
-                payload, timestamp_ns=timestamp_ns, sequence=sequence)
+            if writer.write(payload, timestamp_ns=timestamp_ns, sequence=sequence):
+                progress.update(status='recording', frames=progress['frames'] + 1,
+                                bytes=progress['bytes'] + len(payload),
+                                last_frame_received_unix_ns=time.time_ns())
         except (OSError, ValueError) as error:
             write_error.append(error)
             print(f'uv_log mjpeg archive failed: {error}', file=sys.stderr)
@@ -262,12 +269,15 @@ def _run_jpeg_archive(args) -> int:
     )
     reader.start()
     try:
-        while not stop_event.wait(0.25):
-            pass
+        while not stop_event.is_set():
+            write_json_atomic(Path(args.output_dir) / 'status.json', dict(progress))
+            stop_event.wait(5.0)
     finally:
         stop_event.set()
         reader.join(timeout=4.0)
         writer.close()
+        progress['status'] = 'failed' if write_error else 'stopped'
+        write_json_atomic(Path(args.output_dir) / 'status.json', dict(progress))
     return 1 if write_error else 0
 
 
