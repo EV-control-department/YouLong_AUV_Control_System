@@ -118,6 +118,27 @@ def test_batch_pool_creates_track_only_after_geometry_is_available():
     assert track.front_effective_observations >= 2.0
 
 
+def test_bearing_batch_reanchors_unique_track_without_distance_gate():
+    node = _estimator_node()
+    node.max_instances_default = 1
+    old_track = node._new_front_track(0)
+    old_track.position = np.array([30.0, -20.0, 10.0])
+    old_track.covariance = np.eye(3)
+
+    target = np.array([5.0, 2.0, 3.0])
+    node._front_bearing_pool["target"] = [
+        _ray([0.0, 0.0, 0.0], target, 1),
+        _ray([0.0, 1.0, 0.0], target, 2),
+        _ray([0.0, 0.0, 1.0], target, 3),
+    ]
+
+    node._rebuild_front_bearing_clusters("target")
+
+    assert len(node._front_tracks) == 1
+    assert np.linalg.norm(old_track.position - target) < 1e-3
+    assert node._counters.get("instance_limit_rejected", 0) == 0
+
+
 def test_raw_bearing_is_pooled_without_ray_to_track_association():
     node = _estimator_node()
     node._rebuild_front_bearing_clusters = lambda semantic_class: None

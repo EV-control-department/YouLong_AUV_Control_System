@@ -3712,6 +3712,22 @@ class ObjectLocalizer(Node):
         # Cluster-to-track matching happens only after the batch geometry is
         # solved.  It keeps instance IDs stable without using a ray-to-track
         # angle gate to decide whether a new observation may enter the pool.
+        class_id = int(rays[0].class_id) if rays else -1
+        instance_limit = self._instance_limit(class_id)
+        # For a semantic class configured as one physical instance, the
+        # current pool solve is authoritative.  Do not retain an older false
+        # hypothesis merely because the new batch estimate is far away.
+        if instance_limit == 1 and len(accepted) > 1:
+            accepted = [max(
+                accepted,
+                key=lambda item: (
+                    float(item.get("effective_count", 0.0)),
+                    int(item.get("inlier_count", 0)),
+                    -float(item.get("mean_whitened_residual", float("inf"))),
+                    -float(item.get("cost", float("inf"))),
+                ),
+            )]
+
         old_tracks = [track for track in self._front_tracks.values()
                       if track.physical_class_name == semantic_class
                       and track.position is not None]
@@ -3723,16 +3739,19 @@ class ObjectLocalizer(Node):
                 for index, track in enumerate(old_tracks)
                 if index not in used_tracks)
             track = None
-            if distances and distances[0][0] <= float(getattr(
-                    self, "front_bearing_track_match_distance", 2.0)):
+            if distances:
+                # Distance is only used to keep an existing instance ID
+                # stable when several clusters are present.  It is not an
+                # acceptance gate: a far but valid batch solution must update
+                # the existing track instead of consuming an instance slot.
                 _, index, track = distances[0]
                 used_tracks.add(index)
             if track is None:
                 track = self._new_front_track(
-                    int(rays[0].class_id) if rays else -1)
+                    class_id)
                 if track is None:
                     self._reject_instance_limit(
-                        int(rays[0].class_id) if rays else -1)
+                        class_id)
                     continue
             member_weights = estimate["memberships"]
             member_rays = [ray for ray, weight in zip(rays, member_weights)
@@ -3741,7 +3760,7 @@ class ObjectLocalizer(Node):
                 member_rays = [rays[index] for index in np.argsort(
                     member_weights)[-2:]]
             self._update_front_track_from_bearing_cluster(
-                track, int(rays[0].class_id), member_rays, estimate)
+                track, class_id, member_rays, estimate)
             estimate["track"] = track
             self._counters["front_multi_view_points"] = (
                 self._counters.get("front_multi_view_points", 0) + 1)

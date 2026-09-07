@@ -615,8 +615,9 @@ _down_observation_pool:  semantic_class -> deque[DownDirectObservation]
 observation_i → {cluster_0: 0.72, cluster_1: 0.19, clutter: 0.09}
 ```
 
-`25°/32°` 不再参与前视 raw bearing 入池。`front_bearing_track_match_distance_m` 只用于
-聚类完成后把新的后验簇映射到旧的 instance ID，避免 ID 跳变，不会阻止观测参与其他簇。
+`25°/32°` 不再参与前视 raw bearing 入池。后验簇不会再因为与旧 track 的距离过大而被拒绝；
+对已有实例，距离只用于多个簇同时存在时保持 instance ID 的稳定，不是观测接受门槛。单实例
+类别直接用当前支持度最强的后验簇更新唯一 track。
 
 ### 9.3 近距离簇合并
 
@@ -849,7 +850,7 @@ Stonefish 左右相机的真实渲染时间，同时避免相邻帧串配。旧�
 | `front_bearing_clutter_likelihood` | 0.08 | soft membership 中的杂波/错误检测分量 |
 | `front_bearing_lm_iterations` | 10 | 每个 bearing 簇的 LM 最大迭代次数 |
 | `front_bearing_lm_initial_damping` | 1e-3 | LM 初始阻尼 |
-| `front_bearing_track_match_distance_m` | 2.0 m | 后验簇映射旧 instance ID 的位置距离 |
+| `front_bearing_track_match_distance_m` | 2.0 m | 已废弃兼容参数；当前不参与前视簇接受或 track 更新 |
 | `front_bearing_rebuild_period_sec` | 0.50 s | 合并 raw 到达后执行 batch 重建的周期 |
 | `front_bearing_include_geometry_uncertainty` | false | V1 是否加入位姿/外参共同 bearing 误差 |
 | `ray_association_angle_deg` | 25° | 旧无 raw 像素兼容函数的参数；不参与实时 bearing 入池 |
