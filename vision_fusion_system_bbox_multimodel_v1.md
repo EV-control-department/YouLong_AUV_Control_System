@@ -1,15 +1,14 @@
-# 当前视觉融合系统工作原理
+# 视觉融合系统改造方案：BBox-only 多实例几何融合 V1
 
-> 本文描述当前仓库中的实际实现，主要依据
-> [`object_localizer.py`](../workspace_auv/src/uv_camera/uv_camera/object_localizer.py)。
-> 文中的“当前”指现行 `uv_camera` 组合节点、`object_localizer` 和
-> `sim_bringup.py` 的行为，不以旧版 `position.py` 或历史设计文档为准。
+> 本文以当前 `uv_camera/object_localizer` 架构为基础，给出下一版 **BBox-only 多实例几何融合** 的目标方案。
+> 本版明确不依赖 segmentation、关键点或 bbox 内传统 CV；前视已知尺寸目标只使用 YOLO bbox、类别、置信度、相机标定和采集时位姿。
+> 文中涉及的新增参数、状态机和多模型拟合流程属于目标改造设计，需与源码实现逐项同步后再称为“当前行为”。
 
 ## 1. 系统定位
 
 当前视觉系统的目标是：
 
-1. 从前视、下视相机图像中得到目标检测框；前视门框优先提取稳定图像特征点；
+1. 从前视、下视相机图像中得到目标检测框；前视已知尺寸目标直接保留 bbox 中心、宽高和置信度；
 2. 结合左右目相机标定和机器人位姿，把检测转换为 `odom/NED` 坐标系中的三维观测；
 3. 用多帧、多视角、协方差和空间聚类抑制偶发误差；
 4. 为 GUI、任务和导航分别提供兼容输出、丰富目标状态和原始观测历史。
@@ -85,9 +84,7 @@ Stonefish 左/右目图像
 
 - 左右图像分别发布 `DetectionArray`；
 - 每个 `Detection` 包含 `class_id`、置信度、bbox 中心和边界框；
-- 前视 `gate_front` 还可通过 `feature_type`、`feature_pixel_x/y` 携带门框开口锚点：
-  当前 `auto` 模式优先使用分割轮廓的有向包络中心，其次尝试红色门框管线的中心线范围；
-  提取失败时回退到 bbox 中心；
+- 本版前视 `gate_front` 不依赖 segmentation、关键点或 bbox 内传统 CV；定位统一使用 detector 原始 bbox 的中心、宽、高和置信度；
 - 前视和下视使用独立的 detector label；
 - `xxx_front` 只能进入前视处理，`xxx_down` 只能进入下视处理；
 - 没有 `_front` 或 `_down` 后缀的标签不受该相机方向过滤；
@@ -301,60 +298,166 @@ max(left_aspect / right_aspect,
 
 因此，远距离或小视差观测仍可以帮助观测池和多帧估计，但对最终位置的影响会明显小于高质量观测。
 
-### 5.4 已知形状的 bbox 多视角模型
+### 5.4 已知尺寸目标的 BBox-only 多视角模型
 
-当前前视主路径已经开始按“原始 bbox 观测”组织数据。每个原始观测保存：
-
-```text
-observation_id, class_id, bbox, feature_id/feature_pixel,
-camera_id, capture_timestamp, capture_pose, calibration, confidence
-```
-
-同一检测产生的双目 XYZ 只作为初始状态 `X0`，不会再和生成它的两个像素一起作为第三个独立测量。
-原始观测进入 `_front_bbox_observation_pool[physical_class]`，在 batch 阶段才做实例关联。
-
-检测框先转换为四维测量：
+本版前视已知尺寸类别不再把 bbox 只降维成一条射线，也暂时不使用 segmentation、关键点、门框中心线或 bbox 内传统 CV。每个原始观测只保存 detector 和几何求解真正需要的信息：
 
 ```text
-z = [u_center, v_center, log(width), log(height)]
+observation_id, class_id,
+bbox = [left, top, right, bottom],
+camera_id, capture_timestamp,
+capture_pose, calibration, confidence
 ```
 
-其中门框如果携带 `gate_centerline` 或 `gate_segmentation` 特征，会用该稳定锚点替换
-`u_center/v_center`；宽高仍来自 bbox。这样既利用门框稳定中心线，又不会把“门框 bbox 的
-外接矩形”误认为目标一定是长方体。
+同一检测产生的双目 XYZ 或两射线交会点只允许作为候选状态 `X0`；最终优化不能同时把派生 XYZ 和产生它的原始 bbox 当作独立测量，避免重复计算同一份像素信息。
 
-当前已配置的模型来自
-[`bbox_geometry.py`](../workspace_auv/src/uv_camera/uv_camera/bbox_geometry.py)：
+#### 5.4.1 BBox 测量参数化
 
-| 语义类别 | 模型状态 | 投影方式 |
-|---|---|---|
-| `gate` | `[N,E,D,yaw]` | 已知宽高的四角平面框；yaw 按 π 归一化 |
-| `impact_ball_red/blue` | `[N,E,D]` | 已知半径球的透视 bbox |
-| `pink_golf/yellow_golf` | `[N,E,D]` | 已知半径球的透视 bbox |
-| `red_ring` | `[N,E,D,yaw]` | 已知尺寸长方体包络的 8 点投影 |
-| `collection_frame/target_rack` | `[N,E,D,yaw]` | 已知外轮廓尺寸的 `FrameModel`（长方体包络），使用更大的 bbox 噪声 |
-| 其他类别 | `[N,E,D]` | 暂时使用 bearing fallback，避免错误假设形状 |
-
-对每一个候选模型，节点把它的几何边界投影回每个采集时刻的相机，形成预测 bbox，
-再计算：
+对完整 bbox：
 
 ```text
-r_i = z_i - project_bbox(X, yaw, camera_i, pose_i)
+u = (left + right) / 2
+v = (top  + bottom) / 2
+w = right - left
+h = bottom - top
+a = w / h
 ```
 
-残差协方差由 bbox 像素误差传播到中心和 `log(width)/log(height)`。Huber LM 优化
-模型状态，三维位置协方差取鲁棒 Hessian 的位置子块。检测框接触图像边界时，受截断影响
-的中心/宽度或中心/高度维度会被 mask，不强迫模型解释不可见部分。
+对于门、置物台、收集框等近似正视且尺寸已知的目标，推荐把观测拆成：
 
-模型关联不是“当前射线和旧目标夹角小于 25°”。节点会让每个原始 bbox 对所有候选模型
-计算 Mahalanobis 代价，并加入明确的 clutter 选项；每个原始观测最多归属一个模型。
-同一相机、同一帧内同一个模型也最多使用一次；左目和右目属于不同相机组，仍可共同支持
-同一个模型。这样一帧里多个门/球不会因贪心关联而把同一个检测重复计入多个目标。
+```text
+z_geo   = [u, v, log(h)]
+z_shape = log(a)
+```
 
-候选模型的初值仍来自当前 bearing 交会、同帧双目三角化或球的单帧尺寸深度提议，但最终
-输出由 bbox 重投影残差决定。已知形状模型建立实例前，至少需要 `3` 个不同的原始观测、
-并且这些观测来自至少 `2` 个有实际平移/转动差异的相机位姿；球的单帧深度只作为候选初值，
-不能单独发布成目标。未知形状才回退到下面的 bearing 求解器。
+其中：
+
+- `[u,v]` 主要约束观察方向；
+- `log(h)` 利用已知真实高度提供距离尺度约束；
+- `log(a)` 主要作为形状一致性、遮挡/误检和数据关联证据，不直接驱动三维位置；
+- 对球体，尺度使用 `log(s)`，`s=sqrt(w*h)`，`log(w/h)` 主要作为“是否像球”的质量项。
+
+这种分解比直接把 `[u,v,w,h]` 当四个同等物理量更清楚：位置优化只使用真正随位置变化、且模型可解释的几何量，宽高比则用于拒绝不符合该类别形状的 bbox。
+
+#### 5.4.2 门框 V1：固定尺寸、竖直、近似正视，不估 yaw
+
+本版 gate 状态暂时只估：
+
+```text
+x_gate = [N, E, D]
+```
+
+门的物理宽高 `W_gate/H_gate` 已知，门竖直；考虑到任务中通常近似正视，本版不把 `yaw` 作为自由变量，避免弱可观测 yaw 与位置互相补偿。
+
+NED 中令：
+
+```text
+e_D = [0, 0, 1]^T
+P_top    = X - 0.5 * H_gate * e_D
+P_bottom = X + 0.5 * H_gate * e_D
+```
+
+将顶点和底点按当前相机位姿投影到图像：
+
+```text
+(u_top, v_top)       = project(P_top)
+(u_bottom, v_bottom) = project(P_bottom)
+```
+
+预测中心与高度：
+
+```text
+u_hat = 0.5 * (u_top + u_bottom)
+v_hat = 0.5 * (v_top + v_bottom)
+h_hat = abs(v_bottom - v_top)
+```
+
+正视近似下，预测宽高比先采用类别先验：
+
+```text
+a_hat ≈ (fx / fy) * (W_gate / H_gate)
+```
+
+实际 detector bbox 往往包含固定 padding，因此工程上更推荐在正确检测样本上标定：
+
+```text
+mu_log_aspect_gate = median(log(w/h))
+sigma_log_aspect_gate = 1.4826 * MAD(log(w/h))
+```
+
+并把 `mu_log_aspect_gate` 作为 `log(a_hat)`。这样宽高比反映“这个框像不像门”，而不是强迫 YOLO bbox 严格等于理想物理矩形。
+
+门的几何残差：
+
+```text
+r_geo = [
+    (u - u_hat) / sigma_u,
+    (v - v_hat) / sigma_v,
+    log(h / h_hat) / sigma_log_h
+]
+```
+
+形状残差：
+
+```text
+r_shape = log(a / a_hat) / sigma_log_aspect
+```
+
+关联总代价：
+
+```text
+D^2 = ||r_geo||^2 + r_shape^2
+```
+
+最终位置 LM 只最小化 `r_geo`；`r_shape` 用于 association、clutter 和新模型出生评分。斜视时 `r_shape` 会自然变大，因此 `sigma_log_aspect_gate` 应保守设置，不能把轻微斜视误判为绝对错误。
+
+#### 5.4.3 球体和其他已知尺寸类别
+
+| 语义类别 | V1 状态 | 几何尺度项 | 形状项 |
+|---|---|---|---|
+| `impact_ball_red/blue` | `[N,E,D]` | 已知半径预测 `log(sqrt(w*h))` | `log(w/h)`，期望接近球的经验分布 |
+| `pink_golf/yellow_golf` | `[N,E,D]` | 已知半径预测 `log(sqrt(w*h))` | 同上 |
+| `gate` | `[N,E,D]` | 已知高度预测 `log(h)` | 已标定的 `log(w/h)` |
+| `red_ring` | `[N,E,D]` V1 | 已知外包尺寸的高度/尺度 | 宽高比，使用较大噪声 |
+| `collection_frame/target_rack` | `[N,E,D]` V1 | 已知外轮廓高度/尺度 | 宽高比，使用更大的模型噪声 |
+| 其他类别 | `[N,E,D]` | 不可靠时只使用 bearing fallback | 不强加形状假设 |
+
+如果后续发现某类长方体姿态变化明显，再单独升级为 `[N,E,D,yaw]`；V1 不为了理论完整性增加当前数据无法稳定约束的自由度。
+
+#### 5.4.4 BBox 协方差和截断处理
+
+对完整观测，类别级基础噪声可写为：
+
+```text
+R_geo = diag(sigma_u^2, sigma_v^2, sigma_log_scale^2)
+sigma_log_aspect
+```
+
+检测置信度只用于放大/缩小噪声，不直接乘位置：
+
+```text
+sigma_i = sigma_class / sqrt(max(confidence, confidence_floor))
+```
+
+当 bbox 接触图像边界时，对应尺度不再代表完整物体：
+
+- 上/下边界截断：`log(h)` 和受偏置的 `v` 不参与强尺度约束；
+- 左/右边界截断：shape 宽高比降低权重或关闭；
+- 严重截断观测仍可作为弱 bearing 证据，但不能独立产生可靠的尺度深度种子。
+
+#### 5.4.5 已知尺寸观测的单帧 3D proposal
+
+已知真实高度后，一个完整 gate bbox 本身就能产生粗深度 proposal。不要简单固定使用 `Z=fH/h`，而是在当前相机模型下沿中心 bearing 做一维求解：
+
+```text
+X(lambda) = o_camera + lambda * d_center
+lambda* = argmin_lambda [ log(h_obs / h_pred(X(lambda))) ]^2
+X0 = X(lambda*)
+```
+
+可用 Brent / bounded 1D minimization 实现。球体同理使用已知直径和预测图像尺度。
+
+这个单帧 `X0` 只是模型假设，不是正式目标；它必须被其他独立 raw bbox 共同支持后才能出生。其优势是已知尺寸类别无需再把所有历史射线两两组合成大量 XYZ 候选，从根源上避免“一条错误射线与很多历史射线组合后伪造高密度簇”。
 
 ### 5.5 未知形状的统一 bearing 求解
 
@@ -381,13 +484,6 @@ e_i(X) = B_iᵀ · (X - o_i) / ||X - o_i||
 
 双目 `XYZ`、两射线最近点只用于提供初值。原始像素只贡献一次，避免“像素约束 + 由这些
 像素得到的 XYZ”重复计算同一份信息。
-
-对于门框，当前实现不假设目标是长方体，也不把 bbox 形状当作目标形状。检测模型仍
-提供 bbox 作为可见范围/边缘保护依据；前视几何优先使用稳定开口锚点：若有分割轮廓，
-取其有向包络中心；当前检测模型没有 mask 时，在 bbox 内提取红色管线且要求红色像素
-同时覆盖水平、垂直方向，再取管线范围的中心；条件不足时才回退到 bbox 中心。该锚点
-会同时用于左右目匹配极线误差、双目三角化、单目射线和统一重投影。检测结果中可通过
-`feature_id` 区分来源；它是稳定的几何代表点，不等同于“已经恢复了某个不可见角点”。
 
 ### 5.6 双目失败后的单目回退
 
@@ -649,8 +745,7 @@ _front_observation_pool: semantic_class -> deque[FrontPositionObservation]
 _down_observation_pool:  semantic_class -> deque[DownDirectObservation]
 ```
 
-前视两个原始池默认每个语义类别保存 `300` 条观测。bbox 池保存完整检测框、稳定特征、
-相机和采集时位姿；bearing 池保存射线原点、方向、像素和协方差，而不是先验分配后的三维点：
+前视两个原始池默认每个语义类别保存 `300` 条观测。bbox 池保存完整检测框、相机和采集时位姿；bearing 池保存射线原点、方向、像素和协方差，而不是先验分配后的三维点：
 
 - 前视双目的左、右像素分别进入同一个 bearing 池；
 - 前视单目像素直接进入 bearing 池；
@@ -658,73 +753,337 @@ _down_observation_pool:  semantic_class -> deque[DownDirectObservation]
 - bearing 只有在批量聚类和 LM 求解后才形成前视实例位置；
 - 下视有效平面交点或下视双目点可以进下视池。
 
-### 9.2 前视模型关联与 bearing fallback
+### 9.2 前视已知尺寸目标：从“空间聚类”改为“多模型拟合”
 
-已知形状类别不再在观测到达时按射线方向关联已有 track。每次类别池更新后，节点执行：
-
-1. 使用有足够视差的射线对或同帧双目 XYZ 生成候选初值；
-2. 用球/门框/长方体模型把候选状态投影为预测 bbox；
-3. 对所有池内 bbox 计算 `[u,v,log(w),log(h)]` 残差和 Mahalanobis 代价；
-4. 加入 clutter 选项，执行“每个观测最多一个模型、同相机同帧每模型最多一次”的独占关联；
-5. 对每个模型执行 Huber/LM bbox 重投影优化；
-6. 仅把通过至少 3 个唯一 raw observation、至少 2 个独立 capture-camera pose、支持数、
-   满秩和有限深度检查的后验提升为前视实例。
-
-未知形状类别才执行原有的 bearing 候选交会、soft membership 和 bearing LM。两种路径
-都保留 raw observation ID，因此不会同时把同一像素的 bbox 约束和派生 XYZ 作为独立信息。
-
-bearing fallback 中一条观测可以暂时属于多个候选簇：
+对于 gate、球体、置物台/收集框等已知尺寸类别，本版不再把两两射线交会产生的 XYZ 送入 K-means/HDBSCAN 作为主聚类。更科学的表述是：
 
 ```text
-observation_i → {cluster_0: 0.72, cluster_1: 0.19, clutter: 0.09}
+multiple geometric model fitting / hypothesis-and-consensus segmentation
 ```
 
-`25°/32°` 不再参与前视 raw bearing 入池。后验簇不会再因为与旧 track 的距离过大而被拒绝；
-对已有实例，距离只用于多个簇同时存在时保持 instance ID 的稳定，不是观测接受门槛。单实例
-类别直接用当前支持度最强的后验簇更新唯一 track。
+即同时估计：
 
-### 9.3 近距离簇合并
+```text
+1. 场景中有几个同类别物体模型；
+2. 每个模型的三维状态 X_k；
+3. 每个 raw bbox 属于哪个模型，或属于 clutter。
+```
 
-几何候选中心如果在 bearing 误差尺度内接近，会被初始聚类合并：
+其思想参考 T-Linkage 的连续模型偏好和 Progressive-X 的“逐步提出新模型 → 全局整合 → 继续寻找未解释结构”。这里不要求逐行复刻论文算法，而采用适合当前节点的轻量实现。
 
-- 普通类别默认使用 `front_bearing_cluster_radius_m=0.35 m`；
-- `gate` 至少使用 `front_gate_duplicate_merge_distance_m=0.50 m`；
-- 这个半径只用于生成初始候选簇，不会删除 raw bearing。
+#### 9.2.1 第一步：已有实例先作为固定候选模型参与解释
 
-这一步用于防止检测抖动被误分成多个物理目标。
+对某一语义类别，先把所有未过期 confirmed instances 加入候选集：
 
-### 9.4 K-means 在当前系统中的位置
+```text
+Theta = {X_1, X_2, ..., X_K}
+```
 
-下视的三维观测池仍使用协方差加权的 N/E 平面 K-means：普通类别最多 1 个簇，
-`guide_line` 最多 6 个簇，`gate` 最多 4 个簇；近距离簇再按类别合并半径合并，最后用
-每个实例最近 50 个观测做 Kalman 窗口更新。K-means 不使用 D 轴来分簇，避免深度噪声把同一
-平面目标拆开。前视旧的直接 XYZ 兼容入口也保留同一套 K-means，但当前 raw bbox 已知形状
-主路径使用模型评分和独占关联，不再把同一 bbox 先变成多个 K-means 点。
+每个 raw bbox `z_i` 对每个模型计算完整 bbox 兼容度：
+
+```text
+D_ik^2 = D_center^2 + D_scale^2 + D_shape^2
+```
+
+其中对 gate：
+
+```text
+D_center : 预测 bbox 中心 vs 实测中心
+D_scale  : 预测高度 vs 实测高度
+D_shape  : 实测 w/h vs gate 类别宽高比先验
+```
+
+对 confirmed model，预测协方差可以加入模型状态自身的不确定度：
+
+```text
+S_ik = J_ik P_k J_ik^T + R_i
+D_ik^2 = r_ik^T S_ik^-1 r_ik
+```
+
+本版仍暂时不加入机器人位姿/外参误差，但目标状态自己的 `P_k` 可以参与预测门控。
+
+#### 9.2.2 第二步：全局独占 assignment + clutter
+
+按同一 `(camera_id, frame/capture_group)` 建立 detection × model 代价矩阵，并加入 clutter dummy：
+
+```text
+C_ik      = D_ik^2
+C_i,clutter = tau_clutter(m)
+```
+
+其中 `m` 是当前有效残差维数，`tau_clutter` 推荐由卡方分布分位数给出，而不是拍脑袋的固定米/角度阈值，例如：
+
+```text
+m=4, 99%: chi2 ≈ 13.28
+m=3, 99%: chi2 ≈ 11.34
+m=2, 99%: chi2 ≈ 9.21
+```
+
+使用 Hungarian / min-cost assignment 保证：
+
+```text
+一个 raw detection 在同一全局解释中最多属于一个物体；
+同一相机同一帧，一个物体最多吃一个 detection；
+左右相机是两个不同 measurement group，可共同支持同一物体。
+```
+
+这一步解决 measurement reuse；它不是旧式“匹配窗口”，因为谁和谁匹配由完整的三维 bbox likelihood 决定。
+
+#### 9.2.3 第三步：只在未解释观测中寻找新模型
+
+已有实例完成 assignment 后，定义：
+
+```text
+U = { assigned_to_clutter 或对所有已有模型 likelihood 都很低的 raw bbox }
+```
+
+新物体 discovery 只在 `U` 上运行，避免一个已经被稳定门解释的历史观测又被拿去给另一个新门制造支持。
+
+已知尺寸 gate/球体优先使用单 bbox 尺度生成 3D proposal；也允许同帧双目或已有 bearing 求解器提供更好的 `X0`。每个 proposal 都必须回到 **所有原始 bbox** 上评分，不能按“它产生了多少 pairwise XYZ”计票。
+
+#### 9.2.4 第四步：连续模型偏好，而不是 XYZ 距离聚类
+
+对未解释 observation `i` 与候选模型 hypothesis `j`：
+
+```text
+p_ij = exp(-0.5 * min(D_ij^2, tau_pref))
+```
+
+`p_ij` 是“这个 raw bbox 支持该三维物体模型的程度”。一条 observation 无论参与生成多少 proposal，都只有一个 `observation_id`，因此对任一模型最多贡献一次独立证据。
+
+如果需要显式聚类 observation，可采用 T-Linkage 风格的 soft Tanimoto 相似度：
+
+```text
+sim(i,j) = (p_i · p_j) /
+           (||p_i||^2 + ||p_j||^2 - p_i · p_j)
+```
+
+同一真实物体的观测会偏好相似的一组 3D hypotheses；clutter 通常没有稳定共同偏好。工程 V1 可以不完整实现层次 T-Linkage，而采用下面的 Progressive-X 风格迭代发现流程。
+
+#### 9.2.5 第五步：Progressive-X 风格的新模型发现
+
+重复：
+
+```text
+1. 从当前 U 中选高置信、未截断 observation 生成 X0；
+2. 计算 X0 对全部 U 的 bbox likelihood；
+3. 取高 preference observations 做 Huber LM 局部优化；
+4. 得到候选模型 theta_new 和唯一 raw support set；
+5. 把 theta_new 临时加入现有模型集，重新做独占 assignment；
+6. 只有全局模型选择能量明显下降时才接受；
+7. 被新模型解释的 observation 从 U 中移出；
+8. 继续寻找下一模型，直到没有候选能显著改善全局解释。
+```
+
+这样物体数量 `K` 由数据决定，不需要提前告诉 K-means “有几个门”。
+
+#### 9.2.6 全局模型选择能量
+
+推荐使用带 clutter 和模型复杂度惩罚的能量：
+
+```text
+E(Y, Theta) =
+    sum_i min( rho(D_i,y_i^2), tau_clutter )
+    + lambda_model * K
+```
+
+其中：
+
+- `Y` 是每个 raw bbox 的独占 label；
+- `y_i=0` 表示 clutter；
+- `K` 是当前同类目标模型数；
+- `rho` 使用 Huber/Cauchy；
+- `lambda_model` 防止“每个假框都单独建一个目标”。
+
+若希望减少经验参数，可令模型惩罚以 BIC/MDL 为初始值：
+
+```text
+lambda_model ≈ p * log(N_eff)
+```
+
+`p` 是单个模型状态维数；V1 gate/ball 为 `p=3`。在实际 residual/clutter 不是理想高斯时，它应视为有统计依据的初始化，而不是绝对理论常数。
+
+#### 9.2.7 模型合并不再使用固定距离
+
+两个门 `A/B` 是否重复，不再因为 `||X_A-X_B|| < 0.5 m` 就直接合并。比较：
+
+```text
+E_sep   = E(A) + E(B) + 2 * lambda_model
+E_merge = E(refit(A ∪ B)) + 1 * lambda_model
+```
+
+只有：
+
+```text
+E_merge + margin < E_sep
+```
+
+才接受合并。这样两个距离较近但 bbox 尺度/多视角中心无法由同一个门解释的真实门不会被误合并。
+
+### 9.3 未知形状类别的 bearing fallback 聚类
+
+只有没有可靠物理尺寸模型的类别继续走 bearing hypothesis：
+
+```text
+raw bearing
+  -> pairwise seed（仅初始化）
+  -> bearing 模型偏好/软 membership
+  -> Huber bearing LM
+```
+
+`front_bearing_cluster_radius_m` 可以保留为未知形状 seed 的计算加速或初始去重参数，但不再作用于 gate/ball 等已知尺寸主路径，也不作为最终模型合并标准。
+
+### 9.4 K-means 在系统中的位置
+
+K-means 仅保留给现有下视三维点兼容路径或历史直接 XYZ 接口；前视已知尺寸类别不再使用 K-means/HDBSCAN 对 candidate XYZ 决定实例。前视已知尺寸实例由“原始 bbox → 模型 hypothesis → 全局独占 assignment → robust refit → 模型选择”产生。
 
 ## 10. 实例状态和滑动窗口滤波
 
-### 10.1 前视实例
+### 10.1 前视实例：何时更新位置、何时确认新目标
 
-前视 track 不参与原始 bbox/bearing 的入池关联。已知形状类别每次批量重建模型假设，
-执行全池评分、clutter 和独占分配，再用鲁棒 bbox LM 求状态；未知形状类别走候选簇和
-bearing LM。已知形状模型只有在至少 `3` 个唯一 raw observation、至少 `2` 个独立
-capture-camera pose、满秩法方程和有限前向几何同时满足时才生成三维位置；观测不足时仍
-留在原始池中，不创建虚假深度。未知形状 bearing fallback 仍至少需要两条有效且有几何
-基线的射线。
-
-前视最终状态不是“多个 XYZ 点的 Kalman 平均”，而是：
+前视已知尺寸目标分成两个彼此独立的状态量：
 
 ```text
-X ~ N(position, covariance)
+存在/可见性状态：每次兼容 detection 都可更新 last_seen / support；
+几何状态：只有观测带来足够新信息时才重新 LM 更新 position/covariance。
 ```
 
-其中 `covariance` 来自对应 bbox/bearing Hessian 的逆，并叠加类别模型误差下限。独立观测会增加
-信息、降低随机误差；共同的标定/位姿误差不会因为观测数量变多而消失。Huber 权重使
-视角变化造成的异常 bbox 中心成为低权重参考，而不是直接把整个目标状态推走。
+这样不会因为同一视角连续抖动的 bbox 每帧都把静态目标位置来回推。
 
-聚类完成后才执行 cluster-to-track 的位置匹配，以保持 instance ID 连续。这个匹配只
-作用于已经形成的后验簇，不会用 `25°/32°` 阻止任何 raw bearing 参与其他簇。一次聚类
-未命中旧 track 时，旧 track 不立即删除；长时间无新观测后才通过年龄变为 `STALE`。
+#### 10.1.1 已确认目标的 observation 接受
+
+新 bbox 到达后先完成上一节的全局独占 assignment。若 observation 被分给 instance `k`：
+
+1. 立即更新 `last_seen`、最近 detector confidence 和存在性统计；
+2. observation 写入该实例的 raw support/history；
+3. 计算它对当前状态的几何 Jacobian `J_i` 和测量协方差 `R_i`；
+4. 判断它是否值得触发一次新的几何求解。
+
+#### 10.1.2 用 Fisher 信息增益决定是否重算位置
+
+当前目标信息矩阵：
+
+```text
+Lambda_old = P_old^-1
+```
+
+新 observation 的近似新增信息：
+
+```text
+Delta_Lambda = J_i^T R_i^-1 J_i
+```
+
+定义信息增益：
+
+```text
+Delta_I = logdet(Lambda_old + Delta_Lambda)
+          - logdet(Lambda_old)
+```
+
+触发 LM 的推荐条件：
+
+```text
+track 尚未 STABLE
+或 Delta_I >= front_bbox_min_information_gain
+或 accumulated_pending_informative_obs >= N_force_refit
+```
+
+如果一个新框和已有历史来自几乎相同 camera pose、带来的 `Delta_I` 很小，它仍可更新“看见了这个目标”，但不必立即重新算位置。可在同一几何 view cell 中保留 confidence 更高/残差更小的代表 observation，避免几百个近重复 frame 让协方差虚假收缩。
+
+这不是时间匹配窗口：是否有价值由几何信息决定，而不是“最近几秒”。
+
+#### 10.1.3 几何 view 独立性
+
+为了 birth 和 covariance 不被高帧率重复观测夸大，可把 observation 按相机几何分组。两条观测至少满足下列之一才视为新的 independent view：
+
+```text
+camera_id 不同；
+相机中心平移超过 baseline_min；
+目标视线方向变化超过 view_angle_min；
+或计算出的 Fisher 信息方向明显不同。
+```
+
+推荐实现时优先直接使用 `Delta_I`；`baseline_min/view_angle_min` 只作为便宜的预筛选。
+
+#### 10.1.4 LM 重算和状态接受
+
+对当前实例的代表性 raw observations 做：
+
+```text
+X_new = argmin_X sum_i Huber( r_geo_i(X)^T R_i^-1 r_geo_i(X) )
+P_new ≈ H_robust^-1
+```
+
+只有同时满足以下条件才提交新的三维位置：
+
+```text
+优化收敛且 X_new 有限；
+Hessian 对位置满秩；
+robust cost / dof 没有异常上升；
+有效 support 没有被 Huber 大量压成近零权重；
+P_new 有限且不存在明显退化的最小特征值。
+```
+
+已确认目标不再用“新 XYZ + Kalman”逐点推动；它的前视位置就是当前支持集合的 batch/局部 batch 最大似然后验近似。
+
+#### 10.1.5 新 gate 的出生流程
+
+“检测到一个新门”不等于“出现了一个未匹配 bbox”。出生分四层：
+
+```text
+UNEXPLAINED OBS
+    -> PROPOSAL
+    -> TENTATIVE MODEL
+    -> CONFIRMED INSTANCE
+```
+
+**A. UNEXPLAINED OBS**
+
+无法被任何已有 gate 以合理 joint bbox likelihood 解释的 detection 进入 `U_gate`。它首先仍被视为 clutter 候选。
+
+**B. PROPOSAL**
+
+完整、非严重截断的 gate bbox 可以利用已知 `H_gate` 沿中心 bearing 解出粗 `X0`；双目/多 bearing 也可以给出 `X0`。一个 observation 可以生成 proposal，但不能因此建立实例。
+
+**C. TENTATIVE MODEL**
+
+proposal 在全部 `U_gate` 原始 bbox 上评分并局部 LM 后，至少需要：
+
+```text
+unique raw observations >= 3；
+independent views >= 2；
+effective_support = sum_i exp(-0.5 D_i^2) 达到阈值；
+至少若干完整 bbox 的 height/shape residual 合理；
+位置 Hessian 满秩、深度为正、协方差有限；
+每个 raw observation 只计一次支持。
+```
+
+**D. CONFIRMED INSTANCE**
+
+把 tentative gate 临时加入全局模型集，重新做 exclusive assignment。如果：
+
+```text
+E_before - E_after > birth_margin
+```
+
+并且它没有通过 merge-energy test 被某个已有 gate 更好解释，则认为“场景中确实需要额外增加一个 gate 模型”，这时才分配新的 `instance_id` 并发布。
+
+因此没有固定“等 5 帧/等 1 秒”的确认窗口：如果双目 + 新视角在很短时间内已经提供足够独立证据，可以立即确认；如果机器人一直没产生独立几何，即使过了很久也只保留 proposal/tentative，不应该凭时间自动出生。
+
+#### 10.1.6 已有 gate 不因一次未命中而移动或删除
+
+一次 detection 没有分给旧 gate，只表示本帧没有观测支持。静态 gate 的 `X/P` 保持不变，`last_seen` 继续老化；超过 `track_timeout_sec` 后状态变为 `STALE`，但模型本身可以继续作为地图级候选保留。重新出现的 bbox 如果 joint likelihood 再次支持该模型，可以直接恢复，而不需要重新创建另一个 instance ID。
+
+#### 10.1.7 ID 连续性
+
+当前批次最终得到的 confirmed models 再和持久实例做状态级匹配，只用于保持 ID 连续：
+
+```text
+cost_track_model =
+    (X_t - X_m)^T (P_t + P_m)^-1 (X_t - X_m)
+```
+
+这个匹配不决定 raw bbox 属于谁；raw bbox 的归属已经由模型 likelihood 和独占 assignment 决定。这样“保持 ID”与“解释 measurement”两个问题彻底分开。
 
 ### 10.2 下视实例
 
@@ -881,9 +1240,7 @@ confidence = clip(
 - `observation_form_mask` 和最近一次 `last_observation_form`；
 - 最近观测时间和年龄。
 
-`TargetObservation` 还会发布 `source_raw_observation_ids` 和 `feature_id`，用于判断一个
-派生三维点依赖哪些原始图像特征；同一批射线重算时，派生记录可以更新，但不会伪造
-新的原始证据。
+`TargetObservation` 继续发布 `source_raw_observation_ids` 追踪派生结果依赖的原始检测；`feature_id` 字段可为旧接口兼容保留，但 BBox-only V1 不依赖它完成 gate 定位或实例关联。
 
 ### 12.5 观测历史中的“未分配实例”
 
@@ -914,51 +1271,54 @@ confidence = clip(
 Stonefish 左右相机的真实渲染时间，同时避免相邻帧串配。旧消息或实机未填写该字段
 时仍使用 `stereo_sync_slop_sec` 的时间配对。
 
-### 13.2 前视多视角参数
+### 13.2 前视多视角与 BBox 多模型拟合参数
 
-| 参数 | 默认值 | 作用 |
+下面给出建议 V1 参数，不要求一次性全部做成 ROS 参数；优先把统计含义保留下来，再根据实测 residual 标定数值。
+
+| 参数 | 建议初值 | 作用 |
 |---|---:|---|
-| `use_rejected_front_pairs_for_multiview` | true | 被拒绝前视双目对是否回退为单目射线 |
-| `front_multi_view_max_rays` | 20 | 每个已发布实例缓存的射线数；不限制原始类别池 |
-| `front_multi_view_min_angle_deg` | 5° | 仅用于候选初始化时排除近似平行射线 |
-| `front_multi_view_max_line_error_m` | 1.0 m | 候选射线对的最近点最大间隙；不删除原始 bearing |
-| `front_bearing_seed_max_rays` | 80 | 生成候选种子时使用的最近射线数 |
-| `front_bearing_seed_max_pairs` | 2400 | 候选射线对数量上限 |
-| `front_bearing_cluster_radius_m` | 0.35 m | 候选交点几何初始聚类半径 |
-| `front_bearing_min_cluster_rays` | 2 | 后验簇的最小有效观测支持数 |
-| `front_bearing_clutter_likelihood` | 0.08 | soft membership 中的杂波/错误检测分量 |
-| `front_bearing_lm_iterations` | 10 | 每个 bearing 簇的 LM 最大迭代次数 |
-| `front_bearing_lm_initial_damping` | 1e-3 | LM 初始阻尼 |
-| `front_bearing_track_match_distance_m` | 2.0 m | 已废弃兼容参数；当前不参与前视簇接受或 track 更新 |
-| `front_bearing_rebuild_period_sec` | 0.50 s | 合并 raw 到达后执行 batch 重建的周期 |
-| `front_bearing_include_geometry_uncertainty` | false | V1 是否加入位姿/外参共同 bearing 误差 |
-| `front_bbox_models_enabled` | true | 是否启用已知形状 bbox 重投影模型 |
-| `front_bbox_assoc_chi2` | 25.0 | bbox 模型关联的 Mahalanobis 上限 |
-| `front_bbox_clutter_cost` | 25.0 | 每条观测选择 clutter 的代价；超过它不强行归属模型 |
-| `front_bbox_model_birth_cost` | 0.75 | 建立一个新 bbox 模型的固定代价 |
-| `front_bbox_model_merge_search_distance_m` | 2.0 m | 仅用于限制 merge 候选搜索，不是合并判据 |
-| `front_bbox_lm_iterations` | 8 | 每个已知形状模型的 bbox LM 最大迭代次数 |
-| `front_bbox_model_pixel_sigma_px` | 0（关闭公共覆盖） | 大于 0 时覆盖类别 bbox 误差底座 |
-| `front_bbox_sphere_pixel_sigma_px` | 3.0 px | 球模型 bbox 误差底座 |
-| `front_bbox_gate_pixel_sigma_px` | 6.0 px | 门框模型 bbox 误差底座 |
-| `front_bbox_cuboid_pixel_sigma_px` | 8.0 px | 长方体/红环模型 bbox 误差底座 |
-| `front_bbox_frame_pixel_sigma_px` | 10.0 px | 置物架/收集框 `FrameModel` 的较大 bbox 误差底座 |
-| `front_gate_model_width_m` / `front_gate_model_height_m` | 0.70 / 0.50 m | 门框四角模型尺寸 |
-| `front_impact_ball_radius_m` | 0.10 m | 撞球球模型半径 |
-| `front_golf_ball_radius_m` | 0.02135 m | 高尔夫球模型半径 |
-| `front_ring_model_width_m` / `front_ring_model_depth_m` / `front_ring_model_height_m` | 0.12 / 0.12 / 0.03 m | 红环的保守长方体包络尺寸 |
-| `front_collection_frame_model_width_m` / `front_collection_frame_model_depth_m` / `front_collection_frame_model_height_m` | 0.40 / 0.30 / 0.30 m | 收集框外轮廓 `FrameModel` 尺寸 |
-| `front_target_rack_model_width_m` / `front_target_rack_model_depth_m` / `front_target_rack_model_height_m` | 0.50 / 0.50 / 0.30 m | 置物架外轮廓 `FrameModel` 尺寸 |
-| `ray_association_angle_deg` | 25° | 旧无 raw 像素兼容函数的参数；不参与实时 bearing 入池 |
-| `gate_ray_association_angle_deg` | 32° | 旧无 raw 像素兼容函数的参数；不参与实时 bearing 入池 |
-| `ray_gate_chi2` | 16.0 | 旧三维兼容更新的 Mahalanobis 门限 |
+| `use_rejected_front_pairs_for_multiview` | true | 双目失败后仍保留有效单目证据 |
+| `front_multi_view_min_angle_deg` | 5° | 仅未知形状 bearing seed 排除近平行初始化，不是入池门槛 |
+| `front_bearing_seed_max_rays` | 80 | bearing fallback 候选生成上限 |
+| `front_bearing_seed_max_pairs` | 2400 | bearing fallback pair 上限；已知尺寸 bbox 主路径不依赖两两组合 |
+| `front_bearing_cluster_radius_m` | 0.35 m | 仅未知形状 seed 加速/去重，不用于 gate/ball 最终实例 |
+| `front_bearing_clutter_likelihood` | 0.08 | 未知形状 fallback 的 clutter 分量 |
+| `front_bbox_models_enabled` | true | 启用已知尺寸 bbox 模型 |
+| `front_bbox_assoc_probability` | 0.99 | 按有效维数转换为 chi-square association gate |
+| `front_bbox_preference_tau_probability` | 0.995 | soft preference 截断分位数 |
+| `front_bbox_model_penalty_mode` | `bic` | 模型数量惩罚优先用 `p*log(N_eff)` 初始化 |
+| `front_bbox_model_penalty` | auto | 手工模式下的 model label cost |
+| `front_bbox_birth_margin` | 3.0 | 新模型加入后全局能量至少改善的安全余量 |
+| `front_bbox_birth_min_unique_obs` | 3 | 新实例至少需要的唯一 raw bbox 数 |
+| `front_bbox_birth_min_independent_views` | 2 | 至少两个独立 camera geometry |
+| `front_bbox_min_effective_support` | 2.3 | `sum exp(-0.5 D²)` 的初始最低有效支持 |
+| `front_bbox_min_information_gain` | 0.05 | confirmed target 是否立即重算位置的 `Delta_I` 初值 |
+| `front_bbox_force_refit_pending_obs` | 3 | 即使单条信息小，积累若干有效观测后强制复算 |
+| `front_bbox_support_overlap_merge` | 0.80 | preference/support 高度重叠时才进入 merge energy test |
+| `front_bbox_max_hypotheses` | 128 | 每个类别每轮 proposal 上限 |
+| `front_bbox_lm_iterations` | 8~15 | 单模型 Huber LM 最大迭代 |
+| `front_bbox_max_geometry_observations` | 60 | 每实例保留的几何代表观测上限；优先保留信息互补视角 |
+| `front_bbox_confidence_floor` | 0.20 | 置信度映射 covariance 的下限 |
+| `front_bbox_gate_center_sigma_px` | 4~6 px | gate bbox 中心基础噪声，需实测标定 |
+| `front_bbox_gate_log_height_sigma` | 0.10~0.15 | gate 尺度比例噪声 |
+| `front_bbox_gate_log_aspect_sigma` | 0.12~0.20 | gate 宽高比先验噪声，允许轻微斜视/检测 padding |
+| `front_bbox_sphere_center_sigma_px` | 3 px | 球中心基础噪声 |
+| `front_bbox_sphere_log_scale_sigma` | 0.08~0.12 | 球尺度噪声 |
+| `front_bbox_frame_center_sigma_px` | 8~10 px | 收集框/置物架中心噪声 |
+| `front_bbox_frame_log_scale_sigma` | 0.20~0.30 | 空心/遮挡结构更保守的尺度噪声 |
+| `front_gate_model_width_m` / `front_gate_model_height_m` | 0.70 / 0.50 m | gate 已知物理尺寸 |
+| `front_impact_ball_radius_m` | 0.10 m | 撞击球半径 |
+| `front_golf_ball_radius_m` | 0.02135 m | 小球半径 |
+| `ray_association_angle_deg` / `gate_ray_association_angle_deg` | deprecated | 不参与实时 bbox/bearing 主路径关联 |
+
+association 的 `chi-square` 数值不要写死为一个维数无关的 `25.0`；应根据当前有效 residual 维数和 `front_bbox_assoc_probability` 动态查表/计算。
 
 ### 13.3 观测池、实例和状态参数
 
 | 参数 | 默认值 | 作用 |
 |---|---:|---|
 | `front_observation_pool_size` | 300 | 前视每个语义类别的滚动池容量 |
-| `_front_bbox_observation_pool` | 300/类别 | 原始 bbox、稳定特征和采集时相机/位姿 |
+| `_front_bbox_observation_pool` | 300/类别 | 原始 bbox 和采集时相机/位姿 |
 | `_front_bearing_pool` | 300/类别 | 原始 bearing 射线；不在入池时绑定实例 |
 | `down_observation_pool_size` | 300 | 下视每个语义类别的滚动池容量 |
 | `front_direct_queue_size` | 50 | 前视派生三维点的初始化/稳健窗口长度 |
@@ -967,7 +1327,7 @@ Stonefish 左右相机的真实渲染时间，同时避免相邻帧串配。旧�
 | `front_duplicate_merge_distance_m` | 0.25 m | 前视普通簇/目标合并半径 |
 | `down_duplicate_merge_distance_m` | 0.25 m | 下视普通目标合并半径 |
 | `guide_line_min_spacing_m` | 0.5 m | 管线最小间距和合并半径 |
-| `front_gate_min_cluster_observations` | 3 | 前视 gate 新簇最小支持数 |
+| `front_bbox_birth_min_unique_obs` | 3 | gate 等已知尺寸目标新模型出生的最小唯一 raw bbox 数 |
 | `front_min_publish_confidence` | 0.15 | 前视 gate 最低发布置信度 |
 | `track_timeout_sec` | 2.0 s | track 变为 STALE 的年龄阈值 |
 | `minimum_stable_observations` | 2 | 稳定状态最小观测数 |
@@ -999,11 +1359,10 @@ Stonefish 左右相机的真实渲染时间，同时避免相邻帧串配。旧�
 | `down_direct_queue_size` | 50 |
 | `publish_period_sec` | 0.2 s |
 | `observation_history_size` | 100 |
-| `front_gate_min_cluster_observations` | 3 |
+| `front_bbox_birth_min_unique_obs` | 3 |
 | `front_min_publish_confidence` | 0.15 |
 | `front_bbox_models_enabled` | true（节点默认值，sim 未覆盖） |
 | `front_bbox_model_pixel_sigma_px` | 0（按类别误差底座，sim 未覆盖） |
-| `gate_feature_mode` | `auto` |
 
 这些是“仿真 launch 的实际值”，不是 `object_localizer` 在脱离 launch 单独启动时的所有默认值。
 
@@ -1165,10 +1524,12 @@ down_direct_accepted=... down_direct_rejected=...
 
 检查：
 
-- 类别是否为 gate，且前视簇是否少于 3 条；
-- 是否已经达到实例上限；
-- 几何初始簇是否被 `front_bearing_cluster_radius_m` 合并；
-- bearing Hessian 是否不满秩，或软关联是否主要落在 clutter；
+- gate 等已知尺寸类别是否有至少 `front_bbox_birth_min_unique_obs` 个唯一 raw bbox；
+- 是否至少存在 `front_bbox_birth_min_independent_views` 个独立 camera geometry；
+- 候选模型是否能同时解释 bbox center、height/scale 和 aspect，还是大部分 preference 落在 clutter；
+- tentative model 加入后是否真正降低全局模型选择能量；
+- 位置 Hessian / Fisher 信息是否满秩；
+- 是否已经达到最终实例上限；
 - 目标是否被前视发布置信度条件过滤；
 - 消费者是否订阅了正确的话题：前视应看 `target_positions`，不能只看兼容的 `objects`。
 
@@ -1205,40 +1566,51 @@ ros2 topic hz /auv/down_cam/stitched
 ros2 topic echo /sim/front_cam/left/camera_info --once
 ```
 
-## 16. 当前实现的边界和注意事项
+## 16. 当前 V1 设计边界和注意事项
 
-1. 当前系统是静态目标定位器，假设场景目标在世界坐标中基本静止；
-2. 前视内部的左右目/跨位姿观测已经统一到同一个目标求解器，但前视和下视仍是独立 track 空间，不是跨相机的统一三维滤波器；
-3. 同一物理目标可能同时发布两个 `TargetPosition`，分别标记 `estimate_source=front` 和 `estimate_source=down`；
-4. 前视左右框的 1.6 判断是检测框形状一致性，不是目标长方体约束；
-5. 前视 0.5～2.5 m 是高可信度区间，不是当前的绝对可见范围；
-6. 前视双目没有 2 m 的硬上限，只有非正深度和最小机器人距离等硬条件；
-7. 多视角交点没有机器人距离上限，但必须有有效视角基线和前向交点；
-8. 已知形状类别的原始 bbox 可以在模型尺度约束下直接参与三维重投影求解；未知形状类别的
-   原始射线仍不是三维观测，必须先获得有效交会初始化或已有模型状态；
-9. 下视 known-height 依赖类别目标高度配置，未知类别不会自动假设与默认平面相同；
-10. 下视左右平面结果当前是“左目代表 + 右目一致性检查”，不是两点平均；
-11. `/perception/objects` 是兼容接口，当前只提供未过期下视结果；
-12. 预览视频存在并不代表检测或定位观测已经进入池，图像链路和几何链路需要分别检查。
-13. 当前 `Detection` 只携带一个可选稳定锚点，因此门框优先使用中心线/分割包络中心，
-    尚未传输一组带编号的四角关键点；需要遮挡条件下更稳定的角点几何时，必须扩展消息
-    契约和标注，而不能靠假设所有目标都是长方体解决。
-14. 当前 gate 使用四角平面包络、sphere 使用已知半径透视近似，尚未实现圆球精确 conic
-    外接投影和门框管径/遮挡的完整可见性模型；这部分误差通过 `front_bbox_model_pixel_sigma_px`
-    进入协方差。
+1. 本版首先解决静态目标、多实例和误检关联问题，采集时机器人位姿与相机外参暂时视为准确值；
+2. 前视已知尺寸类别的核心测量是 detector 原始 bbox，不依赖 segmentation、角点、门框中心线或 bbox 内传统 CV；
+3. 已知尺寸目标不再以“两两射线 XYZ 密度”决定实例，而采用 raw bbox 对三维物体模型的 likelihood、多模型选择和 clutter；
+4. gate V1 状态为 `[N,E,D]`，使用已知高度提供尺度深度、已知/标定宽高比提供 shape compatibility，暂时不估 yaw；
+5. 球体 V1 状态为 `[N,E,D]`，已知半径使单 bbox 尺度可以提供粗深度 proposal，但单 observation 仍不能直接成为 confirmed instance；
+6. 置物台、收集框等 V1 若任务中姿态基本固定，可先使用 `[N,E,D] + 已知外轮廓尺度/宽高比`；若真实姿态变化明显，再升级 yaw 或回退 bearing，不要让弱姿态变量污染位置；
+7. bbox 接触图像边界时，受截断影响的 scale/shape 维度必须 mask/降权；截断框可作为弱方向证据，但不能独立产生可靠的新目标尺度 seed；
+8. 一个 raw observation 在同一全局解释中只能属于一个物体或 clutter；同一 observation 无论参与多少 hypothesis proposal，都只能贡献一次独立支持；
+9. 新目标数量由模型证据决定，不由 K-means 的预设 K、固定空间半径或经过了多少秒决定；
+10. confirmed 静态目标的位置只在新的几何信息足够时重算；普通重复帧可以更新 last_seen，但不应无限压低 covariance；
+11. 下视 known-height 和现有下视聚类可以暂时保持原路径，前视 bbox 多模型拟合先独立验证；
+12. `/perception/objects` 仍是兼容接口，rich 前视目标应以 `/perception/target_positions` 和 raw observation 调试信息为准。
 
-## 17. 实战数据集：只需要大框标注
+## 17. 实战数据集与第一版标注要求
 
-目标定位链路至少读取 YOLO 的 `result.boxes`，定位器使用类别、置信度、框中心和
-框尺寸；门框如果有 mask，会额外提取稳定分割包络中心，否则尝试在 bbox 内提取红色
-管线中心线，再回退到 bbox 中心。因此实战第一版仍可只标 bbox，但要得到遮挡下稳定的
-门框角点，需要进一步提供分割或带编号关键点。
-大框的含义是覆盖目标主体，而不是只框一个角或一小块
-可见区域。目标被图像边缘截断时仍可用于单目方向搜索，但前视双目会拒绝该框，单目
-射线会自动增大角度噪声。
+第一版只需要现有 YOLO **bbox detection 标签**：
 
-LabelMe 矩形转 YOLO detection 的工具是
-[`scripts/labelme2yolo_bbox.py`](../scripts/labelme2yolo_bbox.py)：
+```text
+class_id + [left, top, right, bottom] + confidence
+```
+
+不要求 segmentation、OBB、角点或关键点重标。
+
+训练/标注时最重要的是让 bbox 定义稳定：
+
+- 尽量覆盖完整物体外轮廓；
+- 同一类别保持一致的 padding 习惯；
+- 不要有时框外缘、有时只框内部小块；
+- 图像边缘截断可以正常标，但定位器必须识别为 truncated observation；
+- gate/球/框架的 bbox 宽高比和尺度噪声应从验证集正确检测上做统计，而不是仅凭物理尺寸手工设置。
+
+建议离线标定每个类别的 measurement model：
+
+```text
+mu_log_aspect = median(log(w/h))
+sigma_log_aspect = 1.4826 * MAD(log(w/h))
+sigma_center_px   = robust std of bbox center residual
+sigma_log_scale   = robust std of log(scale_obs / scale_pred)
+```
+
+对于 gate，物理 `W/H` 用来提供理论先验；实际 `mu_log_aspect` 更适合吸收 detector 固定 padding、矩形标注习惯和轻微正视偏差。
+
+LabelMe 矩形转 YOLO detection 的工具仍可继续使用：
 
 ```bash
 cd /home/doc049/dev/UUV/YouLong_AUV_Control_System
@@ -1246,36 +1618,14 @@ python scripts/labelme2yolo_bbox.py \
   --labelme datas/down_dataset/labelme \
   --image-root datas/down_dataset/images \
   --classes datas/down_dataset/classes.txt \
-  --output-root datas/down_bbox_dataset \
-  --val-ratio 0.2
+  --output-root datas/down_bbox_dataset
 ```
 
-转换器会保留无目标负样本，支持矩形，并兼容把已有 polygon/circle 转成外接框；默认
-用软链接避免重复占用录制图片空间，需要独立拷贝时加 `--copy-images`。如果原始
-LabelMe 图像是左右拼接的一张整图，直接增加 `--split-side-by-side`，脚本会生成
-`_left`/`_right` 半幅图并自动裁剪、平移大框坐标；运行时 `uv_ai` 始终对左右半幅分别
-推理，不能把整幅拼接图中的整图坐标直接当作单目训练坐标。
+后续如果实测证明 bbox-only 在强遮挡、极端斜视或高度对称目标上信息不足，再把关键点/分割作为 V2 measurement factor；V1 不预留一套尚未使用的 CV 角点管线来增加系统复杂度。
 
-训练 detection 模型使用
-[`scripts/train_bbox.py`](../scripts/train_bbox.py)：
+## 18. 与旧版实现及当前源码的过渡关系
 
-```bash
-python scripts/train_bbox.py \
-  --weights yolov8n.pt \
-  --data datas/down_bbox_dataset/data.yaml \
-  --imgsz 640 --epochs 100 --batch 8
-```
-
-必须提供 detection checkpoint；训练出的 `best.pt` 可直接作为 `uv_camera` 的
-`model_path`。目标检测和三维定位链路没有强制访问 `result.masks`，因此 bbox-only 模型
-可以覆盖仿真和实机，只要类别顺序与 `classes.txt`/启动参数保持一致；有 mask 时则
-会增强 gate 稳定锚点。若任务还要求
-`follow_line` 的精确管线方向/中心线，当前 `LineState` 的高精度辅助仍来自可选 mask；
-这不影响门、球、框等目标的 bbox-only 定位。
-
-## 18. 与旧版实现的区别
-
-旧版 [`position.py`](../workspace_auv/src/uv_camera/uv_camera/position.py) 是历史定位实现，不能用来推断当前 `object_localizer` 的全部行为。当前节点的主要变化包括：
+旧版 [`position.py`](../workspace_auv/src/uv_camera/uv_camera/position.py) 是历史定位实现；本设计又在现有 `object_localizer` 的 raw bbox/bearing 池基础上继续推进。下面这些条目既包含已经存在的架构基础，也包含本 V1 需要落实到源码的目标改造：
 
 - 前视和下视分开维护独立实例空间；
 - 增加前视双目三角化和多视角射线交会；
@@ -1283,6 +1633,9 @@ python scripts/train_bbox.py \
 - 增加下视 known-height 平面交点；
 - 增加按语义类别的 raw bearing 滚动观测池、几何候选聚类和软关联；
 - 增加 bearing LM/Huber 后验、Hessian 协方差、实例后验匹配和历史观测消息；
+- 已知尺寸前视目标改为 bbox center + scale + shape likelihood，不再依赖 gate 分割/角点/CV 锚点；
+- 已知尺寸多实例采用 Progressive-X/T-Linkage 风格 hypothesis-and-consensus、clutter、模型复杂度惩罚和独占 assignment；
+- confirmed 静态目标按 Fisher 信息增益触发位置重算，新实例按独立支持 + 全局能量改善出生；
 - 增加 `TargetPosition`/`TargetObservation` 丰富接口；
 - 保留 `/perception/objects` 作为任务和旧消费者的兼容输出。
 

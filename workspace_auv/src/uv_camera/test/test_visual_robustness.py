@@ -138,6 +138,22 @@ def test_front_match_uses_gate_feature_pixels_for_epipolar_check():
     assert unmatched_right == [0]
 
 
+def test_front_gate_match_also_compares_left_right_bbox_shapes():
+    node = _node()
+    left_detection = _detection(400.0, 400.0, width=80.0, height=20.0)
+    right_detection = _detection(400.0, 400.0, width=20.0, height=80.0)
+    left_detection.class_id = 3
+    right_detection.class_id = 3
+
+    pairs, unmatched_left, unmatched_right = node._match_detections(
+        [left_detection], [right_detection], _IdentityCalibration(),
+        hard_front_geometry=True)
+
+    assert pairs == []
+    assert unmatched_left == [0]
+    assert unmatched_right == [0]
+
+
 def test_front_raw_observation_uses_stable_gate_feature():
     node = _node()
     node.pixel_sigma_fraction = 0.08

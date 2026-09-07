@@ -4,18 +4,19 @@ This node deliberately replaces the legacy monocular position implementation.
 It consumes timestamped detection metadata, loads the stereo calibration profiles,
 and fuses valid observations into independent front/down static 3-D estimates:
 
-* FRONT_STEREO/FRONT_MULTI_VIEW: raw front-camera bearing factors.  Stereo is
-  simply two bearings captured at the same time; it is not a second XYZ
-  measurement in the fusion backend.
+* FRONT_STEREO/FRONT_MULTI_VIEW: raw front-camera bbox and bearing factors.
+  Known-shape targets use bbox reprojection models; stereo is simply two
+  observations captured at the same time, not a second XYZ measurement.
 * DOWN_DIRECT: a down-camera known-height plane intersection (or optional
   stereo measurement for scenes without a target-height constraint).
 
-The two camera pairs have separate observation pools.  Front bearings are
-associated in a batch from pairwise geometric hypotheses and then fused by a
-robust tangent-plane bearing estimator; the raw bearing is never assigned to
-an existing front track on arrival.  Down estimates retain their known-height
-pool and filter.  A front estimate never gates, reanchors, or updates a down
-estimate, and vice versa.
+The two camera pairs have separate observation pools.  Front raw observations
+are associated in a batch from geometric hypotheses and fitted either by a
+known-shape bbox model or, for unsupported classes, a robust tangent-plane
+bearing estimator; no raw observation is assigned to an existing front track
+on arrival.  Down estimates retain their known-height pool and filter.  A
+front estimate never gates, reanchors, or updates a down estimate, and vice
+versa.
 
 The public compatibility output is ObjectPositionArray on /perception/objects.
 TargetPositionArray additionally exposes covariance and observation provenance.
@@ -54,10 +55,28 @@ from uv_msgs.msg import (
     TargetObservationArray,
 )
 
+from .bbox_geometry import (
+    CameraContext,
+    CuboidModel,
+    FrameModel,
+    GateModel,
+    GatePositionModel,
+    GeometryModel,
+    SphereModel,
+    bbox_measurement,
+    bbox_measurement_covariance,
+    bbox_residual,
+    bbox_truncation_mask,
+    exclusive_assignments,
+    huber_weight,
+)
+
 
 FORM_FRONT_STEREO = 1
 FORM_FRONT_MULTI_VIEW = 2
 FORM_DOWN_DIRECT = 4
+# V2 final front state produced by raw bbox-model fitting.
+FORM_FRONT_BBOX_MODEL = 8
 UNASSIGNED_INSTANCE_ID = (1 << 32) - 1
 
 DEFAULT_CLASS_NAMES = [
@@ -293,8 +312,12 @@ class PoseAt:
 
 
 @dataclass
-class FrontPixelObservation:
-    """One raw front image-feature bearing used by the unified solver."""
+class ObjectObservation:
+    """One raw front detection with capture-time camera geometry.
+
+    This is the V2 unit of evidence.  Bearing rays, proposals and fitted
+    models only refer back to this object; they never create extra votes.
+    """
 
     stamp: float
     camera: str
@@ -314,6 +337,22 @@ class FrontPixelObservation:
     # newer calibration profile.
     calibration: StereoCalibration | None = None
     target_instance_id: int = UNASSIGNED_INSTANCE_ID
+    # Original detector rectangle.  ``pixel`` remains the selected stable
+    # anchor (bbox centre, gate centreline or segmentation anchor) for the
+    # bearing fallback, while the bbox model consumes all four edges.
+    bbox: np.ndarray | None = None
+    image_size: tuple[int, int] = (0, 0)
+    truncation_mask: np.ndarray | None = None
+    class_id: int = -1
+    observation_form: int = FORM_FRONT_MULTI_VIEW
+    # A same-frame stereo XYZ is an initializer only.  It is never added as a
+    # second independent measurement after the two source pixels enter the
+    # reprojection window.
+    initialization_position: np.ndarray | None = None
+
+
+# Backward-compatible name used by existing tests and offline tools.
+FrontPixelObservation = ObjectObservation
 
 
 @dataclass
@@ -697,6 +736,8 @@ class ObjectLocalizer(Node):
         self._front_observation_pool: dict[
             str, deque[FrontPositionObservation]] = {}
         self._front_bearing_pool: dict[str, deque[RayObservation]] = {}
+        self._front_bbox_observation_pool: dict[
+            str, deque[FrontPixelObservation]] = {}
         self._front_bearing_dirty_classes: set[str] = set()
         self._next_ray_id = 1
         self._next_raw_observation_id = 1
@@ -721,6 +762,15 @@ class ObjectLocalizer(Node):
             "front_duplicate_merged": 0,
             "front_multi_view_angle_rejected": 0,
             "front_bearing_pool_added": 0,
+            "front_bbox_pool_added": 0,
+            "front_bbox_observation_rejected": 0,
+            "front_bbox_assignments": 0,
+            "front_bbox_clutter": 0,
+            "front_bbox_optimizations": 0,
+            "front_bbox_support_rejected": 0,
+            "front_bbox_birth_rejected": 0,
+            "front_bbox_merge_attempts": 0,
+            "front_bbox_merge_accepted": 0,
             "front_bearing_seed_candidates": 0,
             "front_bearing_clusters": 0,
             "front_bearing_optimizations": 0,
@@ -899,6 +949,40 @@ class ObjectLocalizer(Node):
         self.declare_parameter("front_observation_pool_size", 300)
         self.declare_parameter("front_direct_queue_size", 50)
         self.declare_parameter("front_raw_observation_window_size", 100)
+        # Front bbox models.  The bearing estimator remains the initializer
+        # and fallback for classes without a known silhouette, while these
+        # models are the authoritative association/fusion path for gates and
+        # spherical targets.
+        self.declare_parameter("front_bbox_models_enabled", True)
+        self.declare_parameter("front_bbox_assoc_chi2", 25.0)
+        self.declare_parameter("front_bbox_clutter_cost", 25.0)
+        self.declare_parameter("front_bbox_model_birth_cost", 0.75)
+        self.declare_parameter("front_bbox_model_merge_search_distance_m", 2.0)
+        self.declare_parameter("front_bbox_lm_iterations", 8)
+        self.declare_parameter("front_bbox_lm_initial_damping", 1e-3)
+        # A non-positive common value selects the category-specific floors
+        # below.  It is retained as a convenient global override for replay
+        # and tuning.
+        self.declare_parameter("front_bbox_model_pixel_sigma_px", 0.0)
+        self.declare_parameter("front_bbox_sphere_pixel_sigma_px", 3.0)
+        self.declare_parameter("front_bbox_gate_pixel_sigma_px", 6.0)
+        self.declare_parameter("front_gate_sigma_log_aspect", 0.16)
+        self.declare_parameter("front_bbox_cuboid_pixel_sigma_px", 8.0)
+        self.declare_parameter("front_bbox_frame_pixel_sigma_px", 10.0)
+        self.declare_parameter("front_gate_model_width_m", 0.70)
+        self.declare_parameter("front_gate_model_height_m", 0.50)
+        self.declare_parameter("front_impact_ball_radius_m", 0.10)
+        self.declare_parameter("front_golf_ball_radius_m", 0.02135)
+        self.declare_parameter("front_ring_model_width_m", 0.12)
+        self.declare_parameter("front_ring_model_depth_m", 0.12)
+        # Rules: ring diameter about 120 mm, made from about 10 mm tube.
+        self.declare_parameter("front_ring_model_height_m", 0.01)
+        self.declare_parameter("front_collection_frame_model_width_m", 0.40)
+        self.declare_parameter("front_collection_frame_model_depth_m", 0.30)
+        self.declare_parameter("front_collection_frame_model_height_m", 0.30)
+        self.declare_parameter("front_target_rack_model_width_m", 0.50)
+        self.declare_parameter("front_target_rack_model_depth_m", 0.50)
+        self.declare_parameter("front_target_rack_model_height_m", 0.30)
         self.declare_parameter("front_duplicate_merge_distance_m", 0.25)
         self.declare_parameter("front_gate_duplicate_merge_distance_m", 0.50)
         self.declare_parameter("front_gate_min_cluster_observations", 3)
@@ -1136,6 +1220,61 @@ class ObjectLocalizer(Node):
             1, int(get("front_direct_queue_size").value))
         self.front_raw_observation_window_size = max(
             2, int(get("front_raw_observation_window_size").value))
+        self.front_bbox_models_enabled = bool(
+            get("front_bbox_models_enabled").value)
+        self.front_bbox_assoc_chi2 = max(
+            1.0, float(get("front_bbox_assoc_chi2").value))
+        self.front_bbox_clutter_cost = max(
+            0.0, float(get("front_bbox_clutter_cost").value))
+        self.front_bbox_model_birth_cost = max(
+            0.0, float(get("front_bbox_model_birth_cost").value))
+        self.front_bbox_model_merge_search_distance = max(
+            0.0, float(get("front_bbox_model_merge_search_distance_m").value))
+        self.front_bbox_lm_iterations = max(
+            1, int(get("front_bbox_lm_iterations").value))
+        self.front_bbox_lm_initial_damping = max(
+            1e-9, float(get("front_bbox_lm_initial_damping").value))
+        self.front_bbox_model_pixel_sigma = max(
+            0.0, float(get("front_bbox_model_pixel_sigma_px").value))
+        self.front_bbox_sphere_pixel_sigma = max(
+            0.1, float(get("front_bbox_sphere_pixel_sigma_px").value))
+        self.front_bbox_gate_pixel_sigma = max(
+            0.1, float(get("front_bbox_gate_pixel_sigma_px").value))
+        self.front_gate_sigma_log_aspect = max(
+            0.01, float(get("front_gate_sigma_log_aspect").value))
+        self.front_bbox_cuboid_pixel_sigma = max(
+            0.1, float(get("front_bbox_cuboid_pixel_sigma_px").value))
+        self.front_bbox_frame_pixel_sigma = max(
+            0.1, float(get("front_bbox_frame_pixel_sigma_px").value))
+        self.front_gate_model_width = max(
+            0.01, float(get("front_gate_model_width_m").value))
+        self.front_gate_model_height = max(
+            0.01, float(get("front_gate_model_height_m").value))
+        self.front_impact_ball_radius = max(
+            0.001, float(get("front_impact_ball_radius_m").value))
+        self.front_golf_ball_radius = max(
+            0.001, float(get("front_golf_ball_radius_m").value))
+        self.front_ring_model_dimensions = (
+            max(0.001, float(get("front_ring_model_width_m").value)),
+            max(0.001, float(get("front_ring_model_depth_m").value)),
+            max(0.001, float(get("front_ring_model_height_m").value)),
+        )
+        self.front_collection_frame_model_dimensions = (
+            max(0.001, float(get(
+                "front_collection_frame_model_width_m").value)),
+            max(0.001, float(get(
+                "front_collection_frame_model_depth_m").value)),
+            max(0.001, float(get(
+                "front_collection_frame_model_height_m").value)),
+        )
+        self.front_target_rack_model_dimensions = (
+            max(0.001, float(get(
+                "front_target_rack_model_width_m").value)),
+            max(0.001, float(get(
+                "front_target_rack_model_depth_m").value)),
+            max(0.001, float(get(
+                "front_target_rack_model_height_m").value)),
+        )
         self.front_duplicate_merge_distance = max(
             0.01, float(get("front_duplicate_merge_distance_m").value))
         self.front_gate_duplicate_merge_distance = max(
@@ -1409,6 +1548,12 @@ class ObjectLocalizer(Node):
         self._queue_detection("down_right", message)
 
     def _queue_detection(self, camera: str, message: DetectionArray):
+        # V2 front path: every camera/timestamp creates independent raw
+        # observations.  It must not wait for, or be paired with, the other
+        # eye.  Down-camera processing keeps the legacy synchronized path.
+        if camera.startswith("front"):
+            self._process_front_single(message, camera.rsplit("_", 1)[-1])
+            return
         arrival = time.monotonic()
         self._pending[camera].append((arrival, message))
         self._try_pair("front" if camera.startswith("front") else "down")
@@ -1464,15 +1609,13 @@ class ObjectLocalizer(Node):
 
     def _flush_stale_pending(self):
         now = time.monotonic()
-        for camera_pair in ("front", "down"):
+        for camera_pair in ("down",):
             for side in ("left", "right"):
                 key = f"{camera_pair}_{side}"
                 queue = self._pending[key]
                 while queue and now - queue[0][0] > self.pending_timeout:
                     _, message = queue.popleft()
-                    if camera_pair == "front":
-                        self._process_front_single(message, side)
-                    elif self.down_plane_enabled:
+                    if self.down_plane_enabled:
                         self._process_down_single(message, side)
 
     def _lookup_pose(self, stamp: float) -> PoseAt | None:
@@ -1554,6 +1697,13 @@ class ObjectLocalizer(Node):
 
     def _process_front_pair(self, left_message: DetectionArray,
                             right_message: DetectionArray):
+        """Compatibility shim: process both eyes as independent V2 inputs."""
+        self._process_front_single(left_message, "left")
+        self._process_front_single(right_message, "right")
+        return
+
+        # Retained below only as historical reference for old offline callers;
+        # the live V2 path can never reach it.
         left_pose = self._lookup_pose(self._message_stamp(left_message))
         right_pose = self._lookup_pose(self._message_stamp(right_message))
         if (left_pose is None or right_pose is None
@@ -1598,6 +1748,16 @@ class ObjectLocalizer(Node):
                         self._make_front_pixel_observation(
                             right, "right", right_pose),
                     )
+                    for raw_observation in raw_observations:
+                        # Triangulation supplies an initial hypothesis for
+                        # the bbox solver.  The two source pixels remain the
+                        # only information used by the final optimization.
+                        raw_observation.initialization_position = (
+                            np.asarray(point, dtype=np.float64).copy())
+                        raw_observation.class_id = int(left.class_id)
+                        raw_observation.observation_form = FORM_FRONT_STEREO
+                        self._add_front_bbox_observation(
+                            int(left.class_id), raw_observation)
                     # Every front object is represented by a bearing bundle,
                     # not by a stream of independently triangulated XYZ
                     # samples.  A gate simply receives a larger model-error
@@ -1635,10 +1795,13 @@ class ObjectLocalizer(Node):
                     # factors.  Do not create another XYZ pool sample from
                     # the same pixels; that used to make K-means split one
                     # physical gate/ball when a later triangulation drifted.
-                    if self._update_front_from_raw_observations(
-                            int(left.class_id), raw_observations,
-                            min(float(left.confidence),
-                                float(right.confidence)), FORM_FRONT_STEREO):
+                    semantic_class = self._semantic_class(int(left.class_id))
+                    if (self._front_geometry_model(semantic_class) is None
+                            and self._update_front_from_raw_observations(
+                                int(left.class_id), raw_observations,
+                                min(float(left.confidence),
+                                    float(right.confidence)),
+                                FORM_FRONT_STEREO)):
                         used_left.add(left_index)
                         used_right.add(right_index)
                         self._counters["front_stereo_accepted"] += 1
@@ -1705,6 +1868,8 @@ class ObjectLocalizer(Node):
             return
         raw_observation = self._make_front_pixel_observation(
             detection, side, pose)
+        raw_observation.class_id = int(detection.class_id)
+        raw_observation.observation_form = FORM_FRONT_BBOX_MODEL
         self._add_front_ray(
             int(detection.class_id), ray, float(detection.confidence),
             pose.stamp, raw_observation=raw_observation,
@@ -2023,7 +2188,6 @@ class ObjectLocalizer(Node):
                 else:
                     left_aspect = lw / lh
                     right_aspect = rw / rh
-                    semantic_class = self._semantic_class(int(left.class_id))
                     aspect_ratio = max(
                         left_aspect / max(right_aspect, 1e-6),
                         right_aspect / max(left_aspect, 1e-6),
@@ -2032,7 +2196,6 @@ class ObjectLocalizer(Node):
                         max(left_aspect, 1e-6) /
                         max(right_aspect, 1e-6)))
                     if (hard_front_geometry
-                            and semantic_class != "gate"
                             and aspect_ratio > self.bbox_aspect_ratio_max):
                         self._counters["front_aspect_match_rejected"] = (
                             self._counters.get(
@@ -2048,12 +2211,11 @@ class ObjectLocalizer(Node):
                         self._counters.get(
                             "front_epipolar_match_rejected", 0) + 1)
                     continue
-                # A gate is an open frame, not a cuboid.  Its visible bbox
-                # changes substantially when one post is occluded, so shape
-                # is only a weak tie-breaker for gates; epipolar agreement
-                # remains the primary stereo correspondence cue.
-                aspect_weight = 1.0 if self._semantic_class(
-                    int(left.class_id)) == "gate" else 5.0
+                # Compare the two detector rectangles, not the physical
+                # target shape.  This remains valid for an open gate or an
+                # irregular object because it only tests whether the left
+                # and right observations have compatible visible extents.
+                aspect_weight = 5.0
                 cost = epipolar + aspect_weight * aspect_cost
                 candidates.append((cost, left_index, right_index))
 
@@ -2166,15 +2328,22 @@ class ObjectLocalizer(Node):
             return True
         width = self.front_width
         height = self.front_height
-        margin = max(
-            self.edge_margin_px,
-            self.edge_margin_ratio * min(width, height),
-        )
+        margin = self._front_bbox_edge_margin()
         return (
             float(detection.bbox_x1) <= margin
             or float(detection.bbox_y1) <= margin
             or float(detection.bbox_x2) >= width - margin
             or float(detection.bbox_y2) >= height - margin
+        )
+
+    def _front_bbox_edge_margin(self) -> float:
+        """Return the same pixel margin used by hard checks and masking."""
+        width = float(getattr(self, "front_width", 0.0))
+        height = float(getattr(self, "front_height", 0.0))
+        return max(
+            float(getattr(self, "edge_margin_px", 0.0)),
+            float(getattr(self, "edge_margin_ratio", 0.0))
+            * min(max(width, 0.0), max(height, 0.0)),
         )
 
     def _front_stereo_valid(self, left: Detection, right: Detection):
@@ -2198,8 +2367,7 @@ class ObjectLocalizer(Node):
             left_aspect / right_aspect,
             right_aspect / left_aspect,
         )
-        if (self._semantic_class(int(left.class_id)) != "gate"
-                and aspect_ratio > self.bbox_aspect_ratio_max):
+        if aspect_ratio > self.bbox_aspect_ratio_max:
             return False, "front pair rejected: bbox aspect ratio mismatch", {}
 
         try:
@@ -2985,6 +3153,16 @@ class ObjectLocalizer(Node):
             raw_observation_id=raw_observation_id,
             feature_id=self._detection_feature_id(detection),
             calibration=getattr(self, "_front_calibration", None),
+            bbox=np.array([
+                float(detection.bbox_x1), float(detection.bbox_y1),
+                float(detection.bbox_x2), float(detection.bbox_y2),
+            ], dtype=np.float64),
+            image_size=(int(self.front_width), int(self.front_height)),
+            truncation_mask=bbox_truncation_mask(
+                [detection.bbox_x1, detection.bbox_y1,
+                 detection.bbox_x2, detection.bbox_y2],
+                float(self.front_width), float(self.front_height),
+                self._front_bbox_edge_margin()),
         )
 
     @staticmethod
@@ -3055,6 +3233,495 @@ class ObjectLocalizer(Node):
                 np.linalg.LinAlgError):
             return fallback
 
+    def _add_front_bbox_observation(
+            self, class_id: int, observation: FrontPixelObservation):
+        """Retain one raw front bbox before any model association.
+
+        This pool is class separated but deliberately track free.  In
+        particular, an observation is not dropped because an earlier track
+        has a different bearing; the next batch pass may explain it with a
+        new viewpoint or a different instance.  Raw IDs make callback
+        retries idempotent.
+        """
+        bbox = getattr(observation, "bbox", None)
+        if bbox is None or bbox_measurement(bbox) is None:
+            counters = getattr(self, "_counters", None)
+            if counters is not None:
+                counters["front_bbox_observation_rejected"] = (
+                    counters.get("front_bbox_observation_rejected", 0) + 1)
+            return
+        semantic_class = self._semantic_class(class_id)
+        pools = getattr(self, "_front_bbox_observation_pool", None)
+        if pools is None:
+            self._front_bbox_observation_pool = {}
+            pools = self._front_bbox_observation_pool
+        values = pools.setdefault(
+            semantic_class,
+            deque(maxlen=max(50, int(getattr(
+                self, "front_observation_pool_size", 300)))),
+        )
+        raw_id = int(getattr(observation, "raw_observation_id", 0))
+        for index, previous in enumerate(values):
+            if raw_id > 0 and int(getattr(
+                    previous, "raw_observation_id", 0)) == raw_id:
+                values[index] = observation
+                return
+        values.append(observation)
+        counters = getattr(self, "_counters", None)
+        if counters is not None:
+            counters["front_bbox_pool_added"] = (
+                counters.get("front_bbox_pool_added", 0) + 1)
+        dirty_classes = getattr(self, "_front_bearing_dirty_classes", None)
+        if dirty_classes is not None:
+            dirty_classes.add(semantic_class)
+
+    def _front_geometry_model(self, semantic_class: str) -> GeometryModel | None:
+        """Return the known silhouette model for one front class.
+
+        A bbox alone cannot identify an arbitrary object shape.  Only classes
+        with a scene-supported shape use this backend; guide lines, racks and
+        frames continue through the bearing fallback until their stable
+        corner/segment representation is available.
+        """
+        if not bool(getattr(self, "front_bbox_models_enabled", True)):
+            return None
+        if semantic_class == "gate":
+            return GatePositionModel(
+                float(getattr(self, "front_gate_model_width", 0.70)),
+                float(getattr(self, "front_gate_model_height", 0.50)),
+            )
+        if semantic_class in {"impact_ball_red", "impact_ball_blue"}:
+            return SphereModel(
+                float(getattr(self, "front_impact_ball_radius", 0.10)),
+                name="impact_ball",
+            )
+        if semantic_class in {"pink_golf", "yellow_golf"}:
+            return SphereModel(
+                float(getattr(self, "front_golf_ball_radius", 0.02135)),
+                name="golf_ball",
+            )
+        if semantic_class == "red_ring":
+            dimensions = getattr(
+                self, "front_ring_model_dimensions", (0.12, 0.12, 0.01))
+            return CuboidModel(*map(float, dimensions), name="ring_envelope")
+        if semantic_class == "collection_frame":
+            dimensions = getattr(
+                self, "front_collection_frame_model_dimensions",
+                (0.40, 0.30, 0.30))
+            return FrameModel(*map(float, dimensions))
+        if semantic_class == "target_rack":
+            dimensions = getattr(
+                self, "front_target_rack_model_dimensions",
+                (0.50, 0.50, 0.30))
+            return FrameModel(*map(float, dimensions))
+        return None
+
+    def _front_bbox_camera_context(
+            self, observation: FrontPixelObservation) -> CameraContext | None:
+        """Build a projection context from the observation's capture state."""
+        calibration = (getattr(observation, "calibration", None)
+                       or getattr(self, "_front_calibration", None))
+        camera = str(getattr(observation, "camera", ""))
+        if calibration is None or camera not in getattr(
+                self, "body_translation", {}) or camera not in getattr(
+                    self, "body_rotation", {}):
+            return None
+        side = "left" if camera.endswith("_left") else "right"
+        projection = (calibration.projection_left if side == "left"
+                      else calibration.projection_right)
+        try:
+            fx = float(projection[0, 0])
+            fy = float(projection[1, 1])
+        except (IndexError, TypeError, ValueError):
+            return None
+        if min(fx, fy) <= 1e-6 or not np.isfinite(fx + fy):
+            return None
+
+        def project(point):
+            return self._front_project_pixel(
+                observation, point, self.body_translation,
+                self.body_rotation, calibration)
+
+        def depth(point):
+            value = np.asarray(point, dtype=np.float64).reshape(3)
+            pose = observation.pose
+            point_body = pose.rotation.T @ (value - pose.position)
+            point_optical = self.body_rotation[camera].T @ (
+                point_body - self.body_translation[camera])
+            return float(point_optical[2])
+
+        return CameraContext(project=project, depth=depth, fx=fx, fy=fy)
+
+    def _front_bbox_valid_mask(self, observation: FrontPixelObservation):
+        mask = getattr(observation, "truncation_mask", None)
+        if mask is not None:
+            value = np.asarray(mask, dtype=bool).reshape(-1)
+            if value.size == 4:
+                return value
+        width, height = getattr(observation, "image_size", (0, 0))
+        if width > 0 and height > 0 and getattr(observation, "bbox", None) is not None:
+            return bbox_truncation_mask(
+                observation.bbox, width, height,
+                self._front_bbox_edge_margin())
+        return np.ones(4, dtype=bool)
+
+    def _front_bbox_covariance(self, observation: FrontPixelObservation,
+                               model: GeometryModel) -> np.ndarray:
+        bbox = getattr(observation, "bbox", None)
+        if bbox is None:
+            return np.eye(4, dtype=np.float64) * 1e6
+        covariance = np.asarray(getattr(
+            observation, "covariance", np.eye(2)), dtype=np.float64)
+        sigma = np.sqrt(np.maximum(np.diag(covariance)[:2], 1e-6))
+        model_name = str(getattr(model, "name", ""))
+        if model_name in {"sphere", "impact_ball", "golf_ball"}:
+            default_sigma = getattr(
+                self, "front_bbox_sphere_pixel_sigma", 3.0)
+        elif model_name == "gate":
+            default_sigma = getattr(
+                self, "front_bbox_gate_pixel_sigma", 6.0)
+        elif model_name == "frame":
+            default_sigma = getattr(
+                self, "front_bbox_frame_pixel_sigma", 10.0)
+        else:
+            default_sigma = getattr(
+                self, "front_bbox_cuboid_pixel_sigma", 8.0)
+        common_sigma = float(getattr(
+            self, "front_bbox_model_pixel_sigma", 0.0))
+        model_sigma = common_sigma if common_sigma > 0.0 else default_sigma
+        sigma = np.sqrt(sigma * sigma + model_sigma * model_sigma)
+        return bbox_measurement_covariance(bbox, sigma)
+
+    def _front_bbox_terms(self, observation: FrontPixelObservation,
+                          model: GeometryModel, state: np.ndarray):
+        context = self._front_bbox_camera_context(observation)
+        bbox = getattr(observation, "bbox", None)
+        if context is None or bbox is None:
+            return None
+        predicted = model.project_bbox(state, context)
+        if predicted is None:
+            return None
+        feature_center = None
+        if str(getattr(observation, "feature_id", "bbox_center")) != "bbox_center":
+            feature_center = observation.pixel
+        valid_mask = self._front_bbox_valid_mask(observation)
+        # Gate V2 uses height as the geometric scale measurement.  Width is
+        # retained only as a soft aspect/shape cue in association.
+        if str(getattr(model, "name", "")) == "gate":
+            valid_mask = np.asarray(valid_mask, dtype=bool).copy()
+            valid_mask[2] = False
+        return bbox_residual(
+            bbox, predicted, self._front_bbox_covariance(observation, model),
+            feature_center=feature_center,
+            valid_mask=valid_mask,
+        )
+
+    def _front_bbox_seed_states(self, semantic_class: str,
+                                model: GeometryModel, observations):
+        """Generate initial model states without turning them into evidence."""
+        positions = []
+        for observation in reversed(observations):
+            value = getattr(observation, "initialization_position", None)
+            if value is not None:
+                value = _finite_vector(value, 3)
+                if value is not None and value[2] > -1e-6:
+                    positions.append(value)
+        if isinstance(model, SphereModel):
+            # A known-radius sphere has a useful single-frame depth proposal:
+            # sqrt(w*h) ~= 2*f_eff*R/Z.  This is only a seed; the final state
+            # is still fitted against the original bbox residual.
+            for observation in reversed(observations):
+                bbox = getattr(observation, "bbox", None)
+                context = self._front_bbox_camera_context(observation)
+                measurement = (bbox_measurement(
+                    bbox, observation.pixel
+                    if str(getattr(observation, "feature_id", "bbox_center"))
+                    != "bbox_center" else None) if bbox is not None else None)
+                if context is None or measurement is None:
+                    continue
+                pixel_width = math.exp(float(measurement[2]))
+                pixel_height = math.exp(float(measurement[3]))
+                pixel_scale = math.sqrt(max(pixel_width * pixel_height, 1e-9))
+                desired_depth = (2.0 * math.sqrt(
+                    abs(float(context.fx) * float(context.fy)))
+                    * float(model.radius) / pixel_scale)
+                ray = self._raw_front_ray(observation)
+                if ray is None:
+                    continue
+                origin, direction = ray
+                origin_depth = float(context.depth(origin))
+                depth_per_metre = float(context.depth(
+                    origin + direction) - origin_depth)
+                if (not np.isfinite(desired_depth)
+                        or not np.isfinite(depth_per_metre)
+                        or desired_depth <= origin_depth
+                        or abs(depth_per_metre) < 1e-6):
+                    continue
+                distance = (desired_depth - origin_depth) / depth_per_metre
+                value = origin + distance * direction
+                if np.all(np.isfinite(value)) and distance > 1e-6:
+                    positions.append(value)
+        rays = list(getattr(self, "_front_bearing_pool", {}).get(
+            semantic_class, ()))
+        if len(rays) >= 2:
+            try:
+                for center, _ in self._front_bearing_seed_clusters(
+                        rays, semantic_class):
+                    value = _finite_vector(center, 3)
+                    if value is not None:
+                        positions.append(value)
+            except (ValueError, np.linalg.LinAlgError):
+                pass
+        for track in getattr(self, "_front_tracks", {}).values():
+            if (track.physical_class_name == semantic_class
+                    and track.position is not None):
+                positions.insert(0, np.asarray(track.position, dtype=np.float64))
+
+        unique = []
+        for position in positions:
+            if not np.all(np.isfinite(position)):
+                continue
+            if any(np.linalg.norm(position - previous) < 0.20
+                   for previous in unique):
+                continue
+            unique.append(position.copy())
+            if len(unique) >= max(4, self._instance_limit(
+                    observations[0].class_id if observations else -1) * 2):
+                break
+        if not unique:
+            return []
+
+        if model.state_size == 3:
+            return list(unique)
+
+        # A gate is pi-periodic.  Fifteen-degree seeds keep initialization
+        # close enough for the bbox LM even when the first stereo estimate is
+        # noisy; later batches refine yaw continuously.
+        yaw_values = [math.radians(15.0 * index) for index in range(12)]
+        states = []
+        for position in unique:
+            track_yaw = []
+            for track in getattr(self, "_front_tracks", {}).values():
+                if (track.physical_class_name == semantic_class
+                        and track.position is not None
+                        and np.linalg.norm(track.position - position) < 0.4):
+                    state = getattr(track, "front_model_state", None)
+                    if state is not None and len(state) >= 4:
+                        track_yaw.append(float(state[3]))
+            candidates = track_yaw + yaw_values
+            for yaw in candidates:
+                states.append(np.r_[position, yaw])
+                if len(states) >= max(12, self._instance_limit(
+                        observations[0].class_id if observations else -1) * 12):
+                    return states
+        return states
+
+    def _front_bbox_cost_matrix(self, observations, model, states):
+        costs = np.full((len(observations), len(states)), np.inf,
+                        dtype=np.float64)
+        for observation_index, observation in enumerate(observations):
+            for state_index, state in enumerate(states):
+                terms = self._front_bbox_terms(observation, model, state)
+                if terms is None or terms[1].size == 0:
+                    continue
+                squared = float(terms[1] @ terms[1])
+                if str(getattr(model, "name", "")) == "gate":
+                    observed = bbox_measurement(observation.bbox)
+                    predicted = model.project_bbox(
+                        state, self._front_bbox_camera_context(observation))
+                    predicted = (None if predicted is None
+                                 else bbox_measurement(predicted))
+                    if observed is not None and predicted is not None:
+                        sigma = float(getattr(
+                            self, "front_gate_sigma_log_aspect", 0.16))
+                        aspect_residual = ((observed[2] - observed[3])
+                                           - (predicted[2] - predicted[3]))
+                        squared += (aspect_residual / sigma) ** 2
+                if np.isfinite(squared):
+                    costs[observation_index, state_index] = squared
+        return costs
+
+    @staticmethod
+    def _front_bbox_min_support(model: GeometryModel) -> int:
+        # A sphere can generate a metrically useful single-frame depth seed,
+        # but model birth still requires independent evidence.  Three raw
+        # detections and two camera poses are checked by
+        # _front_bbox_has_birth_support(); this count also keeps a planar/box
+        # model from becoming a target after one stereo frame.
+        return 3
+
+    def _front_bbox_pose_count(self, observations) -> int:
+        """Count materially different capture-camera poses in observations."""
+        poses = []
+        translations = getattr(self, "body_translation", {})
+        rotations = getattr(self, "body_rotation", {})
+        for observation in observations:
+            pose = getattr(observation, "pose", None)
+            camera = str(getattr(observation, "camera", ""))
+            if (pose is None or camera not in translations
+                    or camera not in rotations):
+                continue
+            try:
+                camera_origin = (
+                    np.asarray(pose.position, dtype=np.float64)
+                    + np.asarray(pose.rotation, dtype=np.float64)
+                    @ np.asarray(translations[camera], dtype=np.float64))
+                camera_forward = (
+                    np.asarray(pose.rotation, dtype=np.float64)
+                    @ np.asarray(rotations[camera], dtype=np.float64)
+                    @ np.array([0.0, 0.0, 1.0], dtype=np.float64))
+                camera_forward /= max(float(np.linalg.norm(camera_forward)), 1e-12)
+            except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+                continue
+            if not np.all(np.isfinite(camera_origin)) \
+                    or not np.all(np.isfinite(camera_forward)):
+                continue
+            same_pose = False
+            for previous_origin, previous_forward in poses:
+                angle = math.acos(float(np.clip(
+                    previous_forward @ camera_forward, -1.0, 1.0)))
+                if (np.linalg.norm(camera_origin - previous_origin) >= 0.02
+                        or angle >= math.radians(1.0)):
+                    continue
+                same_pose = True
+                break
+            if not same_pose:
+                poses.append((camera_origin, camera_forward))
+        return len(poses)
+
+    def _front_bbox_has_birth_support(self, observations) -> bool:
+        """Require unique raw evidence and at least two capture poses."""
+        raw_ids = {
+            int(getattr(observation, "raw_observation_id", 0))
+            for observation in observations
+            if int(getattr(observation, "raw_observation_id", 0)) > 0
+        }
+        unique_count = len(raw_ids) if raw_ids else len(observations)
+        return (unique_count >= 3
+                and self._front_bbox_pose_count(observations) >= 2)
+
+    def _front_bbox_optimize(self, observations, model, initial):
+        """Huber LM fit of one known-shape model to assigned raw bboxes."""
+        state = model.normalize_state(initial)
+        damping = float(getattr(
+            self, "front_bbox_lm_initial_damping", 1e-3))
+
+        def cost(value):
+            total = 0.0
+            valid = 0
+            for observation in observations:
+                terms = self._front_bbox_terms(observation, model, value)
+                if terms is None or terms[1].size == 0:
+                    continue
+                norm = float(np.linalg.norm(terms[1]))
+                # Huber objective, not just a Huber-weighted normal matrix.
+                delta = float(getattr(self, "huber_delta", 2.5))
+                total += (0.5 * norm * norm if norm <= delta else
+                          delta * (norm - 0.5 * delta))
+                valid += 1
+            return total, valid
+
+        steps = np.r_[np.full(3, 1e-3),
+                      np.full(model.state_size - 3, 1e-4)]
+
+        def residual_at(observation, value, size):
+            terms = self._front_bbox_terms(observation, model, value)
+            if terms is None or terms[1].size != size:
+                return np.full(size, 1e6, dtype=np.float64)
+            return terms[1]
+
+        def jacobian_at(observation, value, size):
+            # Forward differences are intentional here.  A projected bbox is
+            # an envelope (min/max) and is non-differentiable when an edge is
+            # exactly symmetric; a central difference would then incorrectly
+            # report zero yaw information for a front-facing gate.
+            base = residual_at(observation, value, size)
+            jacobian = np.zeros((size, model.state_size), dtype=np.float64)
+            for state_index, step in enumerate(steps):
+                plus = value.copy()
+                plus[state_index] += step
+                plus = model.normalize_state(plus)
+                jacobian[:, state_index] = (
+                    residual_at(observation, plus, size) - base) / step
+            return jacobian
+
+        for _ in range(max(1, int(getattr(
+                self, "front_bbox_lm_iterations", 8)))):
+            normal = np.zeros((model.state_size, model.state_size))
+            rhs = np.zeros(model.state_size)
+            current_cost, valid_count = cost(state)
+            if valid_count < self._front_bbox_min_support(model):
+                return None
+            for observation in observations:
+                terms = self._front_bbox_terms(observation, model, state)
+                if terms is None or terms[1].size == 0:
+                    continue
+                residual = terms[1]
+                jacobian = jacobian_at(observation, state, residual.size)
+                if not np.all(np.isfinite(jacobian)):
+                    continue
+                weight = huber_weight(
+                    np.linalg.norm(residual),
+                    float(getattr(self, "huber_delta", 2.5)))
+                normal += weight * jacobian.T @ jacobian
+                rhs += weight * jacobian.T @ residual
+            if np.linalg.matrix_rank(normal, tol=1e-9) < model.state_size:
+                return None
+            diagonal = np.maximum(np.diag(normal), 1e-9)
+            delta = _safe_inverse(normal + damping * np.diag(diagonal)) @ rhs
+            # residual = observed - prediction, so move against its Jacobian.
+            delta *= -1.0
+            if not np.all(np.isfinite(delta)):
+                return None
+            if np.linalg.norm(delta[:3]) > 1.0:
+                delta[:3] *= 1.0 / np.linalg.norm(delta[:3])
+            candidate = model.normalize_state(state + delta)
+            candidate_cost, candidate_valid = cost(candidate)
+            if candidate_valid >= valid_count and candidate_cost < current_cost:
+                state = candidate
+                damping = max(damping * 0.5, 1e-9)
+                if np.linalg.norm(delta) < 1e-5:
+                    break
+            else:
+                damping = min(damping * 10.0, 1e9)
+
+        normal = np.zeros((model.state_size, model.state_size))
+        residual_norms = []
+        valid_count = 0
+        for observation in observations:
+            terms = self._front_bbox_terms(observation, model, state)
+            if terms is None or terms[1].size == 0:
+                continue
+            residual = terms[1]
+            jacobian = jacobian_at(observation, state, residual.size)
+            if not np.all(np.isfinite(jacobian)):
+                continue
+            weight = huber_weight(
+                np.linalg.norm(residual),
+                float(getattr(self, "huber_delta", 2.5)))
+            normal += weight * jacobian.T @ jacobian
+            residual_norms.append(float(np.linalg.norm(residual)))
+            valid_count += 1
+        if (valid_count < self._front_bbox_min_support(model)
+                or np.linalg.matrix_rank(
+                normal, tol=1e-9) < model.state_size):
+            return None
+        robust_cost, _ = cost(state)
+        covariance = _regularize_covariance(_safe_inverse(normal))
+        return {
+            "state": state,
+            "position": state[:3].copy(),
+            "covariance": _regularize_covariance(covariance[:3, :3]),
+            "state_covariance": covariance,
+            "valid_count": valid_count,
+            "mean_whitened_residual": float(np.mean(residual_norms)),
+            "cost": float(np.sum(np.square(residual_norms))),
+            "robust_cost": float(robust_cost),
+            "model_cost": float(robust_cost + getattr(
+                self, "front_bbox_model_birth_cost", 0.75)),
+            "condition_number": float(np.linalg.cond(normal)),
+        }
+
     def _add_front_bearing_pool_ray(
             self, class_id: int, ray, confidence: float, stamp: float,
             raw_observation: FrontPixelObservation,
@@ -3103,7 +3770,10 @@ class ObjectLocalizer(Node):
             bearing_covariance=covariance,
             observation_form=int(observation_form),
         )
+        raw_observation.class_id = int(class_id)
+        raw_observation.observation_form = int(observation_form)
         semantic_class = self._semantic_class(class_id)
+        self._add_front_bbox_observation(class_id, raw_observation)
         pool = getattr(self, "_front_bearing_pool", None)
         if pool is None:
             self._front_bearing_pool = {}
@@ -3138,7 +3808,10 @@ class ObjectLocalizer(Node):
         if dirty_classes is None:
             # Unit/offline callers that construct the node without __init__
             # retain the old synchronous helper behaviour.
-            self._rebuild_front_bearing_clusters(semantic_class)
+            if self._front_geometry_model(semantic_class) is None:
+                self._rebuild_front_bearing_clusters(semantic_class)
+            else:
+                self._rebuild_front_bbox_models(semantic_class)
         else:
             dirty_classes.add(semantic_class)
         return observation
@@ -3653,6 +4326,325 @@ class ObjectLocalizer(Node):
             track.covariance, FORM_FRONT_MULTI_VIEW,
             track.last_confidence, source="front")
 
+    def _update_front_track_from_bbox_model(
+            self, track: TargetTrack, class_id: int,
+            observations: list[FrontPixelObservation], estimate: dict,
+            rays_by_raw_id: dict[int, RayObservation]):
+        """Publish one bbox-model hypothesis as a front target track."""
+        track.class_id = int(class_id)
+        track.physical_class_name = self._semantic_class(class_id)
+        track.observed_class_ids = {int(class_id)}
+        track.position = np.asarray(estimate["position"], dtype=np.float64).copy()
+        track.covariance = _regularize_covariance(
+            np.asarray(estimate["covariance"], dtype=np.float64))
+        track.front_filter_position = track.position.copy()
+        track.front_filter_covariance = track.covariance.copy()
+        assigned = list(observations)
+        limit = max(2, int(getattr(
+            self, "front_raw_observation_window_size", 100)))
+        track.front_pixel_observations = deque(
+            assigned[-limit:], maxlen=limit)
+        for observation in track.front_pixel_observations:
+            observation.target_instance_id = int(track.instance_id)
+        track.rays = deque(
+            [rays_by_raw_id[observation.raw_observation_id]
+             for observation in assigned
+             if int(getattr(observation, "raw_observation_id", 0))
+             in rays_by_raw_id][-max(2, int(getattr(
+                 self, "front_multi_view_max_rays", 20))):])
+        forms = [int(getattr(
+            observation, "observation_form", FORM_FRONT_MULTI_VIEW))
+                 for observation in assigned]
+        track.front_stereo_count = sum(
+            form == FORM_FRONT_STEREO for form in forms)
+        track.front_multi_view_count = sum(
+            form == FORM_FRONT_MULTI_VIEW for form in forms)
+        track.down_direct_count = 0
+        track.observation_count = len(assigned)
+        track.observation_form_mask = 0
+        for form in forms:
+            track.observation_form_mask |= form
+        track.last_observation_form = FORM_FRONT_BBOX_MODEL
+        track.last_confidence = max(
+            [float(observation.confidence) for observation in assigned] or [0.0])
+        track.last_stamp = max(
+            [float(observation.stamp) for observation in assigned] or [0.0])
+        track.last_update_monotonic = time.monotonic()
+        track.systematic_covariance = None
+        track.front_effective_observations = float(len(assigned))
+        track.front_inlier_observations = int(estimate["valid_count"])
+        track.front_mean_residual = float(estimate["mean_whitened_residual"])
+        track.front_condition_number = float(estimate["condition_number"])
+        track.front_model_state = np.asarray(
+            estimate["state"], dtype=np.float64).copy()
+        track.front_model_name = str(getattr(estimate["model"], "name", ""))
+        self._record_position_observation(
+            track, class_id, track.last_stamp, track.position,
+            track.covariance, FORM_FRONT_BBOX_MODEL,
+            track.last_confidence, source="front",
+            source_raw_observation_ids=tuple(
+                int(getattr(observation, "raw_observation_id", 0))
+                for observation in assigned),
+            feature_id=("gate_centerline" if track.physical_class_name == "gate"
+                        else "bbox"),
+        )
+
+    def _remap_front_bbox_history(self, semantic_class: str,
+                                  observations, assignments, tracks):
+        raw_to_instance = {}
+        for index, assignment in enumerate(assignments):
+            if int(assignment) < 0 or int(assignment) >= len(tracks):
+                continue
+            track = tracks[int(assignment)]
+            raw_id = int(getattr(observations[index], "raw_observation_id", 0))
+            if raw_id > 0 and track is not None:
+                raw_to_instance[raw_id] = int(track.instance_id)
+                observations[index].target_instance_id = int(track.instance_id)
+        for record in getattr(self, "_observation_history", ()):
+            if (record.source != "front"
+                    or record.physical_class_name != semantic_class):
+                continue
+            values = [raw_to_instance.get(int(raw_id)) for raw_id in getattr(
+                record, "source_raw_observation_ids", ())]
+            values = [value for value in values if value is not None]
+            if values:
+                record.instance_id = int(values[0])
+
+    def _rebuild_front_bbox_models(self, semantic_class: str) -> bool:
+        """Associate and optimize all raw bboxes for one known-shape class."""
+        model = self._front_geometry_model(semantic_class)
+        observations = list(getattr(self, "_front_bbox_observation_pool", {})
+                            .get(semantic_class, ()))
+        if model is None or len(observations) < (
+                self._front_bbox_min_support(model) if model is not None else 2):
+            return False
+        # Do not let a malformed/old bag observation poison the model pass.
+        observations = [observation for observation in observations
+                        if getattr(observation, "bbox", None) is not None]
+        if not self._front_bbox_has_birth_support(observations):
+            self._counters["front_bbox_support_rejected"] = (
+                self._counters.get("front_bbox_support_rejected", 0) + 1)
+            return False
+        states = self._front_bbox_seed_states(
+            semantic_class, model, observations)
+        if not states:
+            return False
+
+        assignments = np.full(len(observations), -1, dtype=np.int64)
+        estimates = []
+        for _ in range(2):
+            costs = self._front_bbox_cost_matrix(
+                observations, model, states)
+            groups = [
+                (str(observation.camera), self._observation_stamp_key(
+                    observation.stamp)) for observation in observations]
+            assignments, _ = exclusive_assignments(
+                costs,
+                float(getattr(self, "front_bbox_clutter_cost", 25.0)),
+                groups=groups,
+                max_cost=float(getattr(self, "front_bbox_assoc_chi2", 25.0)),
+            )
+            estimates = []
+            for state_index, state in enumerate(states):
+                member_indices = [
+                    index for index, assignment in enumerate(assignments)
+                    if int(assignment) == state_index]
+                if len(member_indices) < self._front_bbox_min_support(model):
+                    continue
+                member_observations = [observations[index]
+                                       for index in member_indices]
+                estimate = self._front_bbox_optimize(
+                    member_observations, model, state)
+                if estimate is None:
+                    continue
+                estimate["state_index"] = state_index
+                estimate["member_indices"] = member_indices
+                estimate["model"] = model
+                estimates.append(estimate)
+            if estimates:
+                states = [estimate["state"] for estimate in estimates]
+
+        if not estimates:
+            self._counters["front_bbox_support_rejected"] = (
+                self._counters.get("front_bbox_support_rejected", 0) + 1)
+            return False
+
+        # Rebuild the cost/assignment one final time with optimized states.
+        costs = self._front_bbox_cost_matrix(
+            observations, model, [estimate["state"] for estimate in estimates])
+        groups = [
+            (str(observation.camera), self._observation_stamp_key(
+                observation.stamp)) for observation in observations]
+        assignments, _ = exclusive_assignments(
+            costs,
+            float(getattr(self, "front_bbox_clutter_cost", 25.0)),
+            groups=groups,
+            max_cost=float(getattr(self, "front_bbox_assoc_chi2", 25.0)),
+        )
+        final_estimates = []
+        for state_index, estimate in enumerate(estimates):
+            member_indices = [
+                index for index, assignment in enumerate(assignments)
+                if int(assignment) == state_index]
+            if len(member_indices) < self._front_bbox_min_support(model):
+                continue
+            refined = self._front_bbox_optimize(
+                [observations[index] for index in member_indices],
+                model, estimate["state"])
+            if refined is None:
+                continue
+            refined["member_indices"] = member_indices
+            refined["model"] = model
+            final_estimates.append(refined)
+        if not final_estimates:
+            return False
+
+        clutter_cost = float(getattr(
+            self, "front_bbox_clutter_cost", 25.0))
+        minimum_support = self._front_bbox_min_support(model)
+        unpruned_estimates = final_estimates
+        final_estimates = [
+            estimate for estimate in final_estimates
+            if float(estimate.get("model_cost", float("inf")))
+            < clutter_cost * max(1, len(estimate["member_indices"]))
+        ]
+        self._counters["front_bbox_birth_rejected"] = (
+            self._counters.get("front_bbox_birth_rejected", 0)
+            + len(unpruned_estimates) - len(final_estimates))
+        if not final_estimates:
+            self._counters["front_bbox_support_rejected"] = (
+                self._counters.get("front_bbox_support_rejected", 0) + 1)
+            return False
+
+        # Merge is decided by model energy, not by a position threshold.  A
+        # proximity search only bounds the expensive pair tests; the merged
+        # and separated bbox residuals decide the result.
+        candidates = list(final_estimates)
+        search_distance = float(getattr(
+            self, "front_bbox_model_merge_search_distance", 2.0))
+        changed = True
+        while changed and len(candidates) > 1:
+            changed = False
+            for first_index in range(len(candidates)):
+                merged_here = False
+                for second_index in range(first_index + 1, len(candidates)):
+                    first = candidates[first_index]
+                    second = candidates[second_index]
+                    if (search_distance > 0.0 and float(np.linalg.norm(
+                            first["position"] - second["position"]))
+                            > search_distance):
+                        continue
+                    self._counters["front_bbox_merge_attempts"] = (
+                        self._counters.get("front_bbox_merge_attempts", 0) + 1)
+                    member_indices = sorted(set(first["member_indices"])
+                                             | set(second["member_indices"]))
+                    merged = self._front_bbox_optimize(
+                        [observations[index] for index in member_indices],
+                        model, first["state"])
+                    if (merged is None
+                            or float(merged.get("model_cost", float("inf")))
+                            >= float(first.get("model_cost", float("inf")))
+                            + float(second.get("model_cost", float("inf")))):
+                        continue
+                    merged["member_indices"] = member_indices
+                    merged["model"] = model
+                    candidates[first_index] = merged
+                    candidates.pop(second_index)
+                    self._counters["front_bbox_merge_accepted"] = (
+                        self._counters.get("front_bbox_merge_accepted", 0) + 1)
+                    changed = True
+                    merged_here = True
+                    break
+                if merged_here:
+                    break
+
+        # Re-score after merge decisions.  This restores the same-camera /
+        # same-frame one-to-one invariant even when two hypotheses were
+        # combined into one model.
+        costs = self._front_bbox_cost_matrix(
+            observations, model, [candidate["state"] for candidate in candidates])
+        groups = [
+            (str(observation.camera), self._observation_stamp_key(
+                observation.stamp)) for observation in observations]
+        assignments, _ = exclusive_assignments(
+            costs, clutter_cost, groups=groups,
+            max_cost=float(getattr(self, "front_bbox_assoc_chi2", 25.0)))
+        accepted = []
+        candidate_to_accepted = {}
+        for candidate_index, candidate in enumerate(candidates):
+            member_indices = [
+                index for index, assignment in enumerate(assignments)
+                if int(assignment) == candidate_index]
+            if len(member_indices) < minimum_support:
+                continue
+            refined = self._front_bbox_optimize(
+                [observations[index] for index in member_indices],
+                model, candidate["state"])
+            if refined is None:
+                continue
+            refined["member_indices"] = member_indices
+            refined["model"] = model
+            if float(refined.get("model_cost", float("inf"))) >= (
+                    clutter_cost * max(1, len(member_indices))):
+                continue
+            candidate_to_accepted[candidate_index] = len(accepted)
+            accepted.append(refined)
+            if len(accepted) >= self._instance_limit(
+                    observations[0].class_id):
+                break
+        if not accepted:
+            self._counters["front_bbox_support_rejected"] = (
+                self._counters.get("front_bbox_support_rejected", 0) + 1)
+            return False
+        effective_assignments = np.array([
+            candidate_to_accepted.get(int(assignment), -1)
+            for assignment in assignments
+        ], dtype=np.int64)
+
+        old_tracks = [track for track in getattr(
+            self, "_front_tracks", {}).values()
+                      if track.physical_class_name == semantic_class
+                      and track.position is not None]
+        used_tracks = set()
+        output_tracks = []
+        raw_to_ray = {
+            int(getattr(ray.raw_observation, "raw_observation_id", 0)): ray
+            for ray in getattr(self, "_front_bearing_pool", {}).get(
+                semantic_class, ()) if ray.raw_observation is not None}
+        for estimate in accepted:
+            distances = sorted(
+                (float(np.linalg.norm(estimate["position"] - track.position)),
+                 index, track)
+                for index, track in enumerate(old_tracks)
+                if index not in used_tracks)
+            track = None
+            if distances:
+                _, index, track = distances[0]
+                used_tracks.add(index)
+            if track is None:
+                track = self._new_front_track(observations[0].class_id)
+                if track is None:
+                    self._reject_instance_limit(observations[0].class_id)
+                    continue
+            members = [observations[index]
+                       for index in estimate["member_indices"]]
+            self._update_front_track_from_bbox_model(
+                track, observations[0].class_id, members, estimate, raw_to_ray)
+            output_tracks.append(track)
+            self._counters["front_bbox_optimizations"] = (
+                self._counters.get("front_bbox_optimizations", 0) + 1)
+
+        for index, assignment in enumerate(effective_assignments):
+            if int(assignment) < 0 or int(assignment) >= len(accepted):
+                self._counters["front_bbox_clutter"] = (
+                    self._counters.get("front_bbox_clutter", 0) + 1)
+        self._counters["front_bbox_assignments"] = (
+            self._counters.get("front_bbox_assignments", 0)
+            + sum(int(assignment) >= 0 for assignment in effective_assignments))
+        self._remap_front_bbox_history(
+            semantic_class, observations, effective_assignments, output_tracks)
+        return bool(output_tracks)
+
     def _rebuild_front_bearing_clusters(self, semantic_class: str):
         """Reassociate a complete front class pool and update output tracks."""
         pool = getattr(self, "_front_bearing_pool", {}).get(
@@ -3790,7 +4782,15 @@ class ObjectLocalizer(Node):
         classes = sorted(dirty_classes)
         dirty_classes.clear()
         for semantic_class in classes:
-            self._rebuild_front_bearing_clusters(semantic_class)
+            # Known-shape classes use the bbox likelihood and exclusive
+            # association.  Until the raw window has enough support they stay
+            # in the pool; the bearing estimator supplies seeds, but is not a
+            # competing final association for a known-shape class.  Unknown
+            # shapes continue through the established bearing fallback.
+            if self._front_geometry_model(semantic_class) is None:
+                self._rebuild_front_bearing_clusters(semantic_class)
+            else:
+                self._rebuild_front_bbox_models(semantic_class)
 
     def _remap_front_bearing_history(self, semantic_class: str, rays, estimates):
         raw_to_instance = {}
@@ -4232,7 +5232,7 @@ class ObjectLocalizer(Node):
                 if (track.physical_class_name == semantic_class
                         and track.position is not None):
                     distance = float(np.linalg.norm(
-                        measurement[:2] - track.position[:2]))
+                        position[:2] - track.position[:2]))
                     if distance <= self.front_gate_reassociation_distance:
                         nearby.append((distance, track))
             if nearby:
@@ -5935,13 +6935,16 @@ class ObjectLocalizer(Node):
                 f"s={self._track_status(track, self._track_age(track))}")
         self.get_logger().info(
             "localizer: down_tracks=%d front_tracks=%d down_pool=%s "
-            "front_pool=%s front_bearing_pool=%s gate_tracks=[%s] %s" % (
+            "front_pool=%s front_bbox_pool=%s front_bearing_pool=%s "
+            "gate_tracks=[%s] %s" % (
                 len(self._tracks),
                 len(self._front_tracks),
                 {key: len(value) for key, value in
                  self._down_observation_pool.items()},
                 {key: len(value) for key, value in
                  self._front_observation_pool.items()},
+                {key: len(value) for key, value in
+                 getattr(self, "_front_bbox_observation_pool", {}).items()},
                 {key: len(value) for key, value in
                  getattr(self, "_front_bearing_pool", {}).items()},
                 ";".join(gate_tracks),
