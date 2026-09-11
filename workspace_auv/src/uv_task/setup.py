@@ -1,3 +1,5 @@
+from glob import glob
+
 from setuptools import setup
 
 package_name = 'uv_task'
@@ -10,9 +12,10 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/task_launch.py']),
-        ('share/' + package_name + '/config', [
-            'config/tasks.json',
-        ]),
+        ('share/' + package_name + '/config/missions',
+         glob('config/missions/*.yaml')),
+        ('share/' + package_name + '/config/tasks',
+         glob('config/tasks/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

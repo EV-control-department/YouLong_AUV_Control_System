@@ -1,19 +1,16 @@
+"""Legacy wrapper for :mod:`hardware_launch`."""
+
 from launch import LaunchDescription
-from launch_ros.actions import Node
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import PathJoinSubstitution
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     return LaunchDescription([
-        Node(
-            package='uv_hm',
-            executable='sim_bridge',
-            name='sim_bridge',
-            output='screen',
-        ),
-        Node(
-            package='uv_hm',
-            executable='hw_manager',
-            name='hw_manager',
-            output='screen',
-        ),
+        IncludeLaunchDescription(PythonLaunchDescriptionSource(
+            PathJoinSubstitution([
+                FindPackageShare("uv_hm"), "launch", "hardware_launch.py"
+            ]))),
     ])

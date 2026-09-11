@@ -18,7 +18,7 @@ GUI 是诊断工具，不参与定位或控制；不要在无桌面显示的机�
 ~~~bash
 source /opt/ros/jazzy/setup.bash
 source /home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/install/setup.bash
-ros2 launch uv_bringup sim_bringup.py
+ros2 launch uv_bringup sim.launch.py
 ~~~
 
 在有桌面环境的另一个终端启动 GUI：

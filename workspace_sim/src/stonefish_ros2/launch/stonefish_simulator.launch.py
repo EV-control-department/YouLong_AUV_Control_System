@@ -10,6 +10,7 @@ def generate_launch_description():
     window_res_x = LaunchConfiguration('window_res_x')
     window_res_y = LaunchConfiguration('window_res_y')
     rendering_quality = LaunchConfiguration('rendering_quality')
+    render_fps = LaunchConfiguration('render_fps')
        
     simulation_data_arg = DeclareLaunchArgument(
         'simulation_data',
@@ -40,15 +41,19 @@ def generate_launch_description():
         'rendering_quality',
         default_value = 'high'
     )
-
+    render_fps_arg = DeclareLaunchArgument(
+        'render_fps',
+        default_value = '30.0'
+    )
     stonefish_simulator_node = Node(
             package='stonefish_ros2',
             executable='stonefish_simulator',
             namespace='stonefish_ros2',
             name='stonefish_simulator',
+            exec_name='stonefish_simulator',
             arguments=[simulation_data, scenario_desc, simulation_rate, window_res_x, window_res_y, rendering_quality],
             output='screen',
-            #prefix=['xterm -e gdb -ex run --args']
+            parameters=[{'render_fps': render_fps}],
     )
 
     return LaunchDescription([
@@ -58,5 +63,6 @@ def generate_launch_description():
         window_res_x_arg,
         window_res_y_arg,
         rendering_quality_arg,
+        render_fps_arg,
         stonefish_simulator_node
     ])

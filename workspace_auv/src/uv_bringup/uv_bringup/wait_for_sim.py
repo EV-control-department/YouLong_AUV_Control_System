@@ -38,12 +38,12 @@ class SimReadyNode(Node):
     def __init__(self, phase, require_ai):
         super().__init__('wait_for_sim_' + phase)
         required = {'odometry', 'control_pose'}
-        if require_ai:
-            if phase == 'sensors':
-                required.update('calibration/' + c for c in self.cameras())
-            else:
-                required.update('detections/' + c for c in self.cameras())
-                required.add('target_positions')
+        self.require_control = phase in ('control', 'sensors', 'perception')
+        if require_ai and phase == 'sensors':
+            required.update('calibration/' + c for c in self.cameras())
+        elif require_ai and phase == 'perception':
+            required.update('detections/' + c for c in self.cameras())
+            required.add('target_positions')
         self.readiness = Readiness(required)
         self.action = ActionClient(self, BasicMotion, 'basic_motion')
         self.create_subscription(Odometry, '/auv/odometry', self._odom,
@@ -90,14 +90,17 @@ class SimReadyNode(Node):
 
     def missing(self):
         missing = self.readiness.missing(time.monotonic())
-        if not self.action.server_is_ready():
+        if self.require_control and not self.action.server_is_ready():
             missing.append('basic_motion action server')
         return missing
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--phase', choices=('sensors', 'perception'), required=True)
+    parser.add_argument(
+        '--phase', choices=('backend', 'control', 'sensors', 'perception'),
+        required=True,
+    )
     parser.add_argument('--require-ai', default='true')
     parser.add_argument('--timeout', type=float, default=120.0)
     args, ros_args = parser.parse_known_args()

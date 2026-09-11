@@ -8,8 +8,14 @@ setup(
     packages=[package_name],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
-        ('lib/' + package_name, ['libexec/uv_sim/sim_bridge']),
+    ('share/' + package_name, ['package.xml']),
+    ('share/' + package_name + '/launch', ['launch/bridge.launch.py']),
+    ('share/' + package_name + '/config/profiles', [
+        'config/profiles/sim_dev.yaml',
+        'config/profiles/sim_ci.yaml',
+        'config/profiles/hil_lab.yaml',
+    ]),
+    ('lib/' + package_name, ['libexec/uv_sim/sim_bridge']),
     ],
     # cv_bridge shipped with ROS 2 Jazzy in this environment uses the NumPy
     # 1.x C ABI. Keep the simulation runtime on the known-compatible version.

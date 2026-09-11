@@ -11,9 +11,9 @@
 | 仿真 | `stonefish_ros2` (C++) | Stonefish 1.6 水下物理仿真，无 GPU 模式 |
 | 硬件管理 | `uv_hm` | SIM：级联 PID + 推力分配 → 6 推进器；实机：hw_manager 占位 |
 | 运动控制 | `uv_control` | 运动 API：SET / WMOVE / BMOVE / TRAVEL |
-| 感知 | `uv_perception` | YOLO 目标检测 + 单目射线求交 3D 定位 |
+| 感知 | `uv_camera` | YOLO 目标检测 + 单目射线求交 3D 定位 |
 | 导航 | `uv_nav` | A* 路径规划 + 避障路径跟踪 |
-| 任务 | `uv_task` | JSON 竞赛任务顺序执行 |
+| 任务 | `uv_task` | YAML mission 竞赛任务顺序执行 |
 
 ### 工作区结构
 
@@ -25,7 +25,7 @@ YouLong_AUV_Control_System/
 │   └── src/
 │       ├── uv_control/     # 运动控制
 │       ├── uv_hm/          # 硬件管理
-│       ├── uv_perception/  # 感知
+│       ├── uv_camera/       # 感知
 │       ├── uv_nav/         # 导航
 │       ├── uv_task/        # 任务执行
 │       ├── uv_bringup/     # 启动文件
@@ -47,16 +47,61 @@ bash scripts/setup_workspace_python.sh
 # AUV 控制栈
 cd workspace_auv
 colcon build --symlink-install && source install/setup.bash
-ros2 launch uv_bringup real_bringup.py
+ros2 launch uv_bringup real.launch.py
 
 # 仿真栈（需要先 source workspace_auv）
 cd workspace_sim
 colcon build && source install/setup.bash
-ros2 launch uv_bringup sim_bringup.py
+ros2 launch uv_bringup sim.launch.py
 ```
 
 仿真 Python 节点会自动使用 `workspace_auv/.venv`，其中固定了
 `numpy==1.26.4`，以匹配 ROS 2 Jazzy 的 `cv_bridge`。
+
+任务配置已经按 mission 拓扑和 task 参数拆分：
+
+```text
+workspace_auv/src/uv_task/config/
+├── missions/robocup_26.yaml
+└── tasks/*.yaml
+```
+
+默认任务链会自动加载 `robocup_26.yaml`。切换自定义任务链时，直接传入
+YAML 文件：
+
+```bash
+ros2 launch uv_bringup sim.launch.py enable_task:=true \
+  mission_file:=/path/to/custom_mission.yaml
+```
+
+正式运行入口按模式划分，`profile` 是标准 ROS 2 参数文件预设：
+
+```bash
+# SIL 仿真：默认 sim_dev；CI/headless 显式关闭桌面观测
+ros2 launch uv_bringup sim.launch.py profile:=sim_dev
+ros2 launch uv_bringup sim.launch.py profile:=sim_ci enable_preview:=false
+
+# 混合显卡机器：auto 会在检测到 NVIDIA 设备时自动启用 PRIME offload
+ros2 launch uv_bringup sim.launch.py gpu_backend:=auto
+
+# HIL：串口参数直接传给 micro-ROS agent
+ros2 launch uv_bringup hil.launch.py profile:=hil_lab \
+  serial_dev:=/dev/ttyUSB0 serial_baud:=921600
+
+# 真机：real_safe 使用更保守的功能参数
+ros2 launch uv_bringup real.launch.py profile:=real_safe
+```
+
+场景 seed 会生成到独立的临时 Data 目录，不会改写源码场景；请使用
+`sim.launch.py`、`hil.launch.py`、`real.launch.py` 和 `core_sim.launch.py`
+这四个正式入口。
+
+需要并行运行多个 seed 时，为每个 launch 使用不同的 DDS domain：
+
+```bash
+ROS_DOMAIN_ID=41 ros2 launch uv_bringup sim.launch.py scene_seed:=1
+ROS_DOMAIN_ID=42 ros2 launch uv_bringup sim.launch.py scene_seed:=2
+```
 
 ## 一键部署到 AUV 电脑
 
@@ -85,17 +130,17 @@ ssh nvidia@192.168.16.10
 
 ```bash
 ./scripts/deploy.sh --checksum --dry-run \
-  workspace_auv/src/uv_perception/uv_perception/vision.py
+  workspace_auv/src/uv_camera/uv_camera/composed.py
 ./scripts/deploy.sh --checksum \
-  workspace_auv/src/uv_perception/uv_perception/vision.py
+  workspace_auv/src/uv_camera/uv_camera/composed.py
 ```
 
 也可以同时指定多个文件或目录：
 
 ```bash
 ./scripts/deploy.sh --checksum \
-  workspace_auv/src/uv_perception/uv_perception/vision.py \
-  workspace_auv/src/uv_perception/config
+  workspace_auv/src/uv_camera/uv_camera/composed.py \
+  workspace_auv/src/uv_camera/config
 ```
 
 `--checksum` 会让 rsync 读取本地和远端文件内容进行比较，只传输内容不同的文件。
@@ -145,8 +190,7 @@ SSH_KEY=~/.ssh/auv \
 - **hw_manager (uv_hm)** — STM32 MCU 通信仅占位
 - **PID 控制参数** — 参数未调优
 - **thrust_mixer** — 推力分配矩阵未验证
-- **vision (uv_perception)** — YOLO 检测流程，4 通道双目 YOLO + sim/real 模式切换，已仿真验证
-- **position (uv_perception)** — 多帧单目射线交会 3D 定位，已仿真验证
+- **uv_camera** — YOLO 检测与多帧单目射线交会 3D 定位，支持 sim/real 模式
 - **astar / navigator (uv_nav)** — 路径规划与避障未审查
 - **task_runner (uv_task)** — 竞赛任务执行器未审查
 - **stonefish 场景和物理参数** — 仿真场景（`underwater_xunyun.scn` 等）未验证

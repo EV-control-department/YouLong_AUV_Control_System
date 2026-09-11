@@ -1,0 +1,5 @@
+/sim_bridge:
+  ros__parameters:
+    hil_mode: true
+    camera_stitch_fps: 10.0
+    publish_raw_camera_topics: false

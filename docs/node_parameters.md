@@ -9,14 +9,14 @@
 | `sim_bridge` | `uv_sim` | workspace_sim | 仿真硬件桥接 |
 | `hw_manager` | `uv_hm` | workspace_auv | 实车硬件管理 |
 | `basic_motion` | `uv_control` | workspace_auv | 运动控制 |
-| `vision` | `uv_perception` | workspace_auv | YOLO 目标检测 |
-| `position` | `uv_perception` | workspace_auv | 3D 目标定位 |
+| `uv_camera` | `uv_camera` | workspace_auv | YOLO 目标检测 |
+| `object_localizer` | `uv_camera` | workspace_auv | 3D 目标定位 |
 | `navigator` | `uv_nav` | workspace_auv | A* 路径规划 + 避障 |
-| `task_runner` | `uv_task` | workspace_auv | JSON 任务执行器 |
+| `task_runner` | `uv_task` | workspace_auv | YAML mission 任务执行器 |
 
 ---
 
-## vision 节点参数
+## uv_camera 节点参数
 
 ### 运行模式
 
@@ -31,7 +31,7 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `enable_gortc` | bool | `true` | 启用本地 MJPEG 源和 go2rtc 子进程 |
-| `mjpeg_port` | int | `8090` | vision 本地 MJPEG 服务端口 |
+| `mjpeg_port` | int | `8090` | uv_camera 本地 MJPEG 服务端口 |
 | `gortc_http_port` | int | `1984` | go2rtc HTTP/WebRTC 服务端口 |
 | `stream_annotated` | bool | `true` | 通过 go2rtc 提供带检测框的视频流 `front_annotated/down_annotated` |
 
@@ -51,11 +51,11 @@
 | `down_camera_matrix` | float[9] | 单位矩阵 | 下视相机内参 3x3 |
 | `down_dist_coeffs` | float[5] | 全零 | 下视相机畸变系数 (k1,k2,p1,p2,k3) |
 
-## position 节点参数
+## object_localizer 节点参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `max_history` | int | `30` | 每条射线历史最大保留数量 |
+| `observation_history_size` | int | `500` | 定位观测历史最大保留数量 |
 
 ---
 
@@ -69,65 +69,80 @@
 
 ## 无参数节点
 
-`basic_motion`、`navigator`、`task_runner`、`hw_manager` 不接受 ROS2 参数。
+`basic_motion`、`navigator`、`hw_manager` 不接受 ROS2 参数。
+
+## task_runner 节点参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `mission_file` | string | `config/missions/robocup_26.yaml` | 启动时加载的 YAML mission |
+| `target_id` | string | `yellow_golf` | 比赛目标元数据 |
+| `debug_mode` | bool | `false` | 开启后跳过 mission 自动执行，仅允许 `/task/exec` |
 
 ---
 
 ## 启动文件 Launch Arguments
 
-### sim_bringup.py
+### sim.launch.py
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enable_ai` | `true` | 启用 vision + position |
+| `enable_ai` | `true` | 启用 uv_camera + object_localizer |
+| `enable_motion` | `true` | 启用 basic_motion |
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
-| `scenario_desc` | `wuurc_murc_2026_auv.scn` | Stonefish 场景文件 |
+| `mission_file` | `config/missions/robocup_26.yaml` | YAML mission 文件路径 |
+| `scenario_desc` | `guoshui_2026_cruise_seeded.scn` | Stonefish 场景文件 |
+| `scene_seed` | `0` | 生成场景使用的整数 seed，运行目录隔离 |
 **用法：**
 ```bash
-ros2 launch uv_bringup sim_bringup.py enable_ai:=true
+ros2 launch uv_bringup sim.launch.py profile:=sim_dev enable_ai:=true
 ```
 
-### real_bringup.py
+任务配置由 `mission_file` 指定。mission 只描述任务顺序，具体参数位于
+`config/tasks/*.yaml`，mission 条目的 `params` 可以覆盖任务默认值。
+
+### real.launch.py
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enable_ai` | `true` | 启用 vision + position |
+| `enable_ai` | `true` | 启用 uv_camera + object_localizer |
+| `enable_motion` | `true` | 启用 basic_motion |
 | `enable_nav` | `true` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
 **用法：**
 ```bash
-ros2 launch uv_bringup real_bringup.py
+ros2 launch uv_bringup real.launch.py profile:=real_default
 ```
 
-### hil_bringup.py
+### hil.launch.py
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enable_ai` | `false` | 启用 vision + position |
+| `enable_ai` | `false` | 启用 uv_camera + object_localizer |
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
 | `enable_motion` | `false` | 启用 basic_motion |
-| `scenario` | `underwater_xunyun.scn` | Stonefish 场景文件 |
+| `scenario_desc` | `underwater_xunyun.scn` | Stonefish 场景文件 |
 | `serial_dev` | `/dev/ttyUSB0` | MCU 串口设备 |
 | `serial_baud` | `921600` | 串口波特率 |
 **用法：**
 ```bash
-ros2 launch uv_bringup hil_bringup.py enable_ai:=true
+ros2 launch uv_bringup hil.launch.py enable_ai:=true
 ```
 
-### perception_launch.py
+### uv_camera/launch/perception_launch.py
 
 该启动文件不再提供图像发布参数；视频通过 go2rtc 查看。
 
 **用法：**
 ```bash
-ros2 launch uv_perception perception_launch.py
+ros2 launch uv_camera perception_launch.py
 ```
 
 ## 话题参考
 
-### vision 发布话题
+### uv_camera 发布话题
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
@@ -135,7 +150,7 @@ ros2 launch uv_perception perception_launch.py
 | `/perception/detection/front_right` | `DetectionArray` | 前视右检测结果 |
 | `/perception/detection/down_left` | `DetectionArray` | 下视左检测结果 |
 | `/perception/detection/down_right` | `DetectionArray` | 下视右检测结果 |
-vision 不发布图像 DDS 话题；请通过 go2rtc 的 `front`、`down`、
+uv_camera 不发布图像 DDS 话题；请通过 go2rtc 的 `front`、`down`、
 `front_annotated`、`down_annotated` 流查看视频。
 
 go2rtc 视频流：
@@ -145,7 +160,7 @@ go2rtc 视频流：
 | `front` / `down` | 前视/下视原始拼接视频 |
 | `front_annotated` / `down_annotated` | 前视/下视 YOLO 识别后带框拼接视频 |
 
-### position 发布话题
+### object_localizer 发布话题
 
 | 话题 | 类型 | 说明 |
 |---|---|---|

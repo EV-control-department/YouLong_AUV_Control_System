@@ -1,0 +1,105 @@
+task: 26rb_gate_task
+
+params:
+  # 任务级参数。
+  gate_count: 4 # 需要通过的门数量。
+  timeout: 720.0 # 整个过门任务最长时间，单位：秒。
+
+  # 前视视觉输入与检测。
+  image_input: stitched # stitched 表示拼接图，left 表示左目。
+  detection_timeout: 1.5 # 检测结果最大允许年龄，单位：秒。
+  min_gate_detection_confidence: 0.02 # 门框检测最低置信度。
+  image_timeout: 8.0 # 图像输入或视觉观测超时，单位：秒。
+  min_gate_extent_fraction: 0.25 # 门框最小视场占比。
+  target_gate_extent_fraction: 0.75 # 期望门框视场占比。
+  target_gate_height_fraction: 0.5 # 距离控制目标高度占比。
+  extent_tolerance: 0.15 # 门框尺寸目标允许误差。
+  bbox_filter_alpha: 0.25 # 边界框低通滤波系数。
+  bbox_log_period: 0.5 # bbox/J 日志周期，单位：秒。
+  image_center_tolerance_fraction: 0.04 # 门框中心允许误差比例。
+  stereo_vertical_tolerance_fraction: 0.04 # 双目垂直中心允许不一致比例。
+
+  # 搜索阶段。
+  search:
+    # 相对当前参考航向的搜索起点和扫描范围，单位：度。
+    start_offset_deg: -30.0
+    sweep_deg: 60.0
+    right_yaw_sign: 1.0 # 坐标约定的航向正方向符号。
+    yaw_rate_deg_s: 36.0 # 恒速搜索航向速度，单位：度/秒。
+    yaw_publish_period: 0.05 # 搜索航向速度指令周期，单位：秒。
+    settle_time: 0.4 # 扫描旋转或选门后的稳定时间，单位：秒。
+    timeout: 60.0 # 单个门搜索最长时间，单位：秒。
+    rotate_timeout: 12.0 # 搜索旋转位置环超时，单位：秒。
+    stop_height_fraction: 0.4 # 门框高度占图像高度超过该值时立即停止扫描并锁定目标。
+
+  # 对准阶段。
+  alignment:
+    heading_check_seconds: 1.0 # 停止速度后观察门框的时间，单位：秒。
+    post_turn_settle_seconds: 1.0 # 最终转向后的稳定时间，单位：秒。
+    post_turn_observation_timeout: 3.0 # 最终转向后重新获得观测的最长时间。
+    bbox_ratio_target: 1.2 # 横向弧线搜索目标 J=宽度/高度。
+    bbox_ratio_hold_seconds: 1.0 # J 达标后连续保持时间，单位：秒。
+    minimum_attitude_correction_seconds: 10.0 # 姿态修正最短时间。
+    timeout: 150.0 # 单个门对准最长时间，单位：秒。
+    control_period: 0.1 # 视觉控制循环周期，单位：秒。
+    command_timeout: 8.0 # 持续位置修正命令超时，单位：秒。
+    max_forward_step: 0.2 # 单次前向修正最大步长，单位：米。
+    max_back_step: 0.15 # 单次后退修正最大步长，单位：米。
+    max_lateral_step: 0.15 # 单次横向修正最大步长，单位：米。
+    max_vertical_step: 0.12 # 单次垂向修正最大步长，单位：米。
+    lost_observation_timeout: 10.0 # 丢失门框后的失败判定时间，单位：秒。
+
+    # 双目中心/极线对齐的偏航 PID。误差是左右目 bbox 中心的归一化
+    # 水平中点换算得到的视线角，输出为机体偏航角速度，单位为 °/秒。
+    yaw_pid:
+      kp: 1.2 # 偏航角误差比例增益，单位：°/秒/°。
+      ki: 0.0 # 偏航角误差积分增益。
+      kd: 0.0 # 偏航角误差微分增益。
+      integral_limit_deg: 10.0 # 偏航积分状态限幅，单位：°·秒。
+
+  # 距离和双目几何。
+  distance:
+    control_min_m: 0.5 # 距离控制最小参考距离，单位：米。
+    control_max_m: 5.0 # 距离控制最大参考距离，单位：米。
+    monocular_reference_distance_m: 1.5 # 单目 bbox 距离参考值，单位：米。
+    max_yaw_step_deg: 4.0 # 单次航向位置修正最大步长，单位：度。
+
+  # 速度控制。
+  velocity:
+    period: 0.05 # 速度指令发布周期，单位：秒。
+    max_forward_speed_mps: 0.18 # 最大前向速度，单位：米/秒。
+    max_reverse_speed_mps: 0.12 # 最大后退速度，单位：米/秒。
+    max_lateral_speed_mps: 0.5 # 最大横向速度，单位：米/秒。
+    max_vertical_speed_mps: 0.12 # 最大垂向速度，单位：米/秒。
+    max_yaw_rate_deg_s: 36.0 # 最大偏航速度，单位：度/秒。
+    distance_gain: 0.45 # 距离误差到前后速度的增益。
+    vertical_gain: 0.55 # 垂直中心误差到垂向速度的增益。
+    yaw_gain_deg_s: 0.8 # 中心误差到偏航速度的增益。
+
+  # 高度 PID。
+  height_pid:
+    kp: 0.8 # 比例增益。
+    ki: 0.02 # 积分增益。
+    kd: 0.05 # 微分增益。
+    integral_limit: 0.5 # 积分项限幅。
+    stable_error_m: 0.03 # 高度稳定误差，单位：米。
+    stable_derivative_mps: 0.02 # 高度误差变化率阈值，单位：米/秒。
+    stable_seconds: 0.5 # 连续稳定时间，单位：秒。
+
+  # 横向弧线搜索。
+  arc:
+    lateral_speed_mps: 0.3 # 弧线搜索横向速度，单位：米/秒。
+    yaw_center_kp: 1.2 # 保持门框中心的偏航比例增益。
+    probe_seconds: 2.0 # 首段弧线探测窗口长度，单位：秒。
+    probe_speed_mps: 0.1 # 首个弧线窗口探测速度，单位：米/秒。
+    gradient_window_seconds: 5.0 # 固定分段窗口长度，单位：秒。
+    objective_deadband: 0.001 # J 变化死区。
+    reverse_cooldown_seconds: 0.5 # 方向反转冷却时间，单位：秒。
+    near_extremum_speed_scale: 0.5 # 接近极值时速度缩放比例。
+    lost_command_hold_seconds: 1.0 # 短暂丢失时保持速度时间，单位：秒。
+
+  # 穿门阶段。
+  pass:
+    distance_m: 1.6 # 穿过门框距离，单位：米。
+    timeout: 20.0 # 单个门穿越最长时间，单位：秒。
+    pause: 0.5 # 通过后停顿时间，单位：秒。

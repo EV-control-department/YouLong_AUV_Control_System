@@ -1,0 +1,5 @@
+/uv_camera:
+  ros__parameters:
+    sim_mode: false
+    enable_gortc: true
+    stream_annotated: true

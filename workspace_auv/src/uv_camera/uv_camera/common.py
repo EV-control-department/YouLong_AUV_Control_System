@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 
-# ── Runtime switches / constants (moved verbatim from uv_perception.vision) ──
+# ── Runtime switches / constants shared by the uv_camera nodes ──────────────
 FRONT_CAMERA_DEVICE = '/dev/video2'
 DOWN_CAMERA_DEVICE = '/dev/video0'
 ENABLE_FRONT_CAMERA = True

@@ -4,7 +4,7 @@
 
 硬件在环仿真 (HIL, Hardware-in-the-Loop) 是在算法在环仿真 (SIL) 的基础上，将 PID 控制、推力混合、ZIT6 状态机等逻辑从 Host PC 上的 `sim_bridge` 节点迁移至真实的 STM32 MCU 执行。MCU 通过 **micro-ROS** 串行链路与 ROS 2 系统通信，运行与实机完全相同的固件。
 
-SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_perception` → `uv_nav` → `uv_task`），两者的区别仅在硬件抽象层。
+SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_camera` → `uv_nav` → `uv_task`），两者的区别仅在硬件抽象层。
 
 ---
 
@@ -15,7 +15,7 @@ SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_perception` �
 │                     HOST PC (Ubuntu + ROS 2 Jazzy)               │
 │                                                                   │
 │  ┌────────────┐  ┌────────────┐  ┌──────────┐  ┌──────────┐     │
-│  │ uv_control │  │uv_perception│  │ uv_nav   │  │ uv_task  │     │
+│  │ uv_control │  │ uv_camera  │  │ uv_nav   │  │ uv_task  │     │
 │  │ basic_mtn  │  │ vision/pos │  │ navigator│  │ runner   │     │
 │  └─────┬──────┘  └─────┬──────┘  └────┬─────┘  └────┬─────┘     │
 │        │               │              │              │            │
@@ -261,18 +261,18 @@ MCU 固件应通过编译宏区分数据源，使 HIL 与实机共用同一份�
 
 ## 六、启动方式
 
-### SIL 模式 (不变)
+### SIL 模式
 
 ```bash
-cd sim_ws && source install/setup.bash
-ros2 launch uv_bringup sim_bringup.py
+cd workspace_sim && source install/setup.bash
+ros2 launch uv_bringup sim.launch.py
 ```
 
 ### HIL 模式
 
 ```bash
-cd sim_ws && source install/setup.bash
-ros2 launch uv_bringup hil_bringup.py serial_dev:=/dev/ttyUSB0
+cd workspace_sim && source install/setup.bash
+ros2 launch uv_bringup hil.launch.py serial_dev:=/dev/ttyUSB0
 ```
 
 Launch 参数:
@@ -284,7 +284,7 @@ Launch 参数:
 | `enable_ai`   | `true`                  | 启用感知节点       |
 | `enable_nav`  | `true`                  | 启用导航节点       |
 | `enable_task` | `false`                 | 启用任务执行器     |
-| `scenario`    | `underwater_xunyun.scn` | Stonefish 场景文件 |
+| `scenario_desc` | `underwater_xunyun.scn` | Stonefish 场景文件 |
 
 ---
 

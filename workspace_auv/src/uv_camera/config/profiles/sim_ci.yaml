@@ -1,0 +1,10 @@
+/uv_camera:
+  ros__parameters:
+    sim_mode: true
+    inference_fps: 3.0
+    inference_threads: 2
+    confidence: 0.8
+    gate_feature_mode: auto
+    enable_gortc: false
+    stream_annotated: false
+    annotated_max_width: 1280

@@ -1,0 +1,44 @@
+/object_localizer:
+  ros__parameters:
+    calibration_source: sim_camera_info
+    front_left_camera_info_topic: /sim/front_cam/left/camera_info
+    front_right_camera_info_topic: /sim/front_cam/right/camera_info
+    down_left_camera_info_topic: /sim/down_cam/left/camera_info
+    down_right_camera_info_topic: /sim/down_cam/right/camera_info
+    front_left_translation: [0.23, -0.05, 0.276]
+    front_right_translation: [0.23, 0.05, 0.276]
+    front_left_rotation: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+    front_right_rotation: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+    down_left_translation: [-0.13, -0.05, 0.2645]
+    down_right_translation: [-0.13, 0.05, 0.2645]
+    down_geometry_mode: known_height
+    down_scene_origin_z_m: 0.12
+    down_default_target_z_m: 1.294
+    down_target_z_sigma_m: 0.01
+    down_target_z_json: '{"guide_line": 1.294, "target_rack": 1.00, "collection_frame": 0.94, "yellow_golf": 0.964, "pink_golf": 0.964, "red_ring": 0.925}'
+    down_ignored_classes: [gate]
+    down_min_plane_incidence: 0.15
+    use_rejected_front_pairs_for_multiview: true
+    front_stereo_noise_scale: 1.8
+    front_stereo_trusted_min_range_m: 0.5
+    front_stereo_trusted_max_range_m: 2.5
+    front_stereo_out_of_range_noise_scale: 6.0
+    front_stereo_trusted_range_only: false
+    front_stereo_out_of_range_as_ray: false
+    front_observation_pool_size: 300
+    front_direct_queue_size: 50
+    publish_period_sec: 0.2
+    observation_history_size: 100
+    front_duplicate_merge_distance_m: 0.25
+    front_gate_min_cluster_observations: 3
+    front_min_publish_confidence: 0.15
+    front_bbox_height_enabled: true
+    front_bbox_height_by_class_json: '{"gate": 0.60}'
+    front_bbox_height_sigma_fraction: 0.12
+    front_bbox_height_sigma_min_px: 1.0
+    front_bbox_height_sigma_max_px: 12.0
+    front_bbox_height_model_sigma_m: 0.06
+    down_observation_pool_size: 300
+    down_direct_queue_size: 50
+    guide_line_min_spacing_m: 0.5
+    down_duplicate_merge_distance_m: 0.25

@@ -1,0 +1,33 @@
+task: light_target_rack_return_origin
+
+params:
+  # target_rack 正上方对准、亮灯并返回任务链原点。
+  target:
+    frame_name: target_rack
+    min_confidence: 0.02             # 目标最低置信度。
+    min_observations: 1              # 至少需要的观测次数。
+    allow_stale_targets: true        # 是否允许使用过期位置。
+    timeout: 120.0                   # 等待初始位置最长时间，单位：秒。
+    above_z_m: 0.2                   # 正上方绝对深度，单位：米。
+
+  move_timeout: 120.0                # 移动到目标上方超时，单位：秒。
+
+  # 下视双目视觉伺服。世界坐标只用于上面的粗定位；这里直接用
+  # target_rack_down 在左右下视图中的像素误差修正水平位置。
+  visual_servo:
+    timeout: 30.0                    # 视觉伺服最长时间，单位：秒。
+    stable_seconds: 1.0              # 像素误差连续满足容差的时间，单位：秒。
+    detection_timeout: 0.8           # 下视检测消息最大允许年龄，单位：秒。
+    pixel_tolerance_fraction: 0.035  # 图像中心归一化误差容差。
+    epipolar_vertical_tolerance_fraction: 0.04  # 左右目垂直极线误差容差。
+    projection_depth_m: 0.8           # 下视投影深度，单位：米。
+    gain: 0.8                         # 视觉伺服比例增益。
+    max_step_m: 0.08                  # 单次水平修正最大步长，单位：米。
+    period: 0.2                       # 视觉伺服周期，单位：秒。
+    command_timeout: 10.0             # 单次水平修正超时，单位：秒。
+
+  # 灯光与返回。
+  light:
+    color: yellow                    # yellow、green、red 或数值 1、2、3。
+    hold_seconds: 1.0                # 开灯保持时间，单位：秒。
+  return_timeout: 120.0              # 返回任务链原点最长时间，单位：秒。

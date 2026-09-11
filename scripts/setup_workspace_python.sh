@@ -22,5 +22,6 @@ cat <<EOF
 Workspace Python runtime is ready:
   ${venv_dir}/bin/python
 
-sim_bringup.py will use it automatically when the venv exists.
+sim.launch.py and the other formal bringup presets will use it automatically
+when the venv exists.
 EOF

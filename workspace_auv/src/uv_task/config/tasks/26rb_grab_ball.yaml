@@ -1,0 +1,38 @@
+task: 26rb_grab_ball
+
+params:
+  # 要抓取的球颜色。
+  ball_color: red
+
+  # 下视视觉伺服。
+  vision:
+    detection_timeout: 0.8 # 检测结果最大允许年龄，单位：秒。
+    pixel_tolerance_fraction: 0.035 # 球心归一化误差容差。
+  servo:
+    timeout: 90.0 # 水平视觉伺服最长时间，单位：秒。
+    period: 0.15 # 水平伺服周期，单位：秒。
+    log_period: 0.5 # 水平伺服日志周期，单位：秒。
+    hold_seconds: 0.5 # 球心进入容差后的保持时间，单位：秒。
+    projection_depth_m: 0.8 # 像素误差投影参考深度，单位：米。
+    gain: 0.8 # 像素误差到水平位移的增益。
+    max_step_m: 0.08 # 单次水平修正最大步长，单位：米。
+    position_command_timeout: 10.0 # 单次 SET/BMOVE 超时，单位：秒。
+
+  # 从相机对准点到爪子位置的机体系偏置。
+  gripper:
+    offset_x_m: 0.1 # X 偏置，单位：米。
+    offset_y_m: 0.2 # Y 偏置，单位：米。
+    settle_seconds: 1.5 # 偏置移动完成后等待爪子和艇体稳定，单位：秒。
+
+  # 下沉与回位。
+  descent:
+    speed_mps: 0.4 # 下沉速度，NED 正值向下，单位：米/秒。
+    duration_seconds: 10.0 # 下沉持续时间，单位：秒。
+    publish_period: 0.05 # 速度指令周期，单位：秒。
+  return_timeout: 60.0 # 回到水平伺服位置的最长时间，单位：秒。
+
+  # 返回水平位置后检查球是否仍然存在；存在则重新执行完整抓取流程。
+  verification:
+    timeout: 5.0 # 抓取结果检查最长时间，单位：秒。
+    absence_hold_seconds: 0.8 # 连续看不到目标多久才确认已抓走，单位：秒。
+    max_retries: 2 # 初次失败后的最大重新抓取次数。

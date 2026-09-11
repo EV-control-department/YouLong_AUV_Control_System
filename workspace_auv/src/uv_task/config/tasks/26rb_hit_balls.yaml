@@ -1,0 +1,40 @@
+task: 26rb_hit_balls
+
+params:
+  # 球颜色处理顺序；例如 [red, blue]。
+  order: [blue]
+  # 是否主动旋转搜索并更新目标球定位。
+  active_localization: true
+
+  # 主动搜索参数。
+  search:
+    yaw_step_deg: 30.0             # 每次旋转角度，单位：度。
+    settle_time: 0.4               # 旋转后等待视觉稳定，单位：秒。
+    timeout: 60.0                  # 单个目标搜索最长时间，单位：秒。
+    rotate_timeout: 10.0           # 单次搜索旋转位置环超时，单位：秒。
+    min_confidence: 0.02           # 目标结果最低置信度。
+
+  # 撞击模式与预接近。
+  impact:
+    mode: staged_charge_return      # 先接近、冲刺、再返回。
+  approach:
+    distance: 1                     # 撞击前预接近距离，单位：米。
+    min_clearance: 0.05             # 预接近点保留的最小间隙，单位：米。
+    z_offset: -0.2                  # 相对目标球的垂向偏移，单位：米。
+    detect_timeout: 30.0            # 目标定位结果最大等待时间，单位：秒。
+
+  # 接近阶段的位置修正。
+  position_correction:
+    duration: 5.0
+    period: 0.2
+    command_timeout: 10.0
+    min_update_m: 0.03
+    min_update_deg: 1.0
+
+  # 撞击阶段速度指令。
+  charge:
+    duration: 5.0                  # 持续前冲时间，单位：秒。
+    speed_mps: 5                   # 机体系前向速度，单位：米/秒。
+    publish_period: 0.05           # 速度指令周期，单位：秒。
+  return:
+    timeout: 20.0                  # 撞击后返回记录位置的最长时间，单位：秒。

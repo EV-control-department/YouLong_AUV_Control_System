@@ -1,0 +1,5 @@
+task: btravelx
+
+params:
+  # 机体系 X 方向移动距离；正值向前，单位：米。
+  dx: 2.0

@@ -1,0 +1,21 @@
+mission:
+  name: robocup_26
+  tasks:
+    - name: start
+      config: ../tasks/start.yaml
+    - name: return_origin
+      config: ../tasks/return_origin.yaml
+    - name: btravelx
+      config: ../tasks/btravelx.yaml
+    - name: setz
+      config: ../tasks/setz.yaml
+    - name: 26rb_hit_balls
+      config: ../tasks/26rb_hit_balls.yaml
+    - name: 26rb_gate_task
+      config: ../tasks/26rb_gate_task.yaml
+    - name: 26rb_find_collection_frame
+      config: ../tasks/26rb_find_collection_frame.yaml
+    - name: 26rb_grab_ball
+      config: ../tasks/26rb_grab_ball.yaml
+    - name: light_target_rack_return_origin
+      config: ../tasks/26rb_light_target_rack_return_origin.yaml

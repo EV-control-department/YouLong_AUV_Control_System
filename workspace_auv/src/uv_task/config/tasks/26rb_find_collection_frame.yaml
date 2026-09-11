@@ -1,0 +1,30 @@
+task: 26rb_find_collection_frame
+
+params:
+  # 置物台与目标架的 canonical localizer 名称。
+  platform_name: collection_frame
+  rack_name: target_rack
+  # 发现目标后依次观察/确认的目标顺序。
+  look_order: [collection_frame, target_rack]
+  min_confidence: 0.02              # localizer 结果最低置信度。
+  min_observations: 1               # 至少需要的观测次数。
+  allow_stale_targets: true         # 是否允许使用过期位置。
+  max_target_age_seconds: 0.0       # 0 表示不额外限制年龄。
+
+  # 等待、确认与转向。
+  timeout: 120.0                    # 总超时时间，单位：秒。
+  rotate_timeout: 15.0              # 观察目标的位置环超时，单位：秒。
+  look_settle_seconds: 0.5          # 转向后等待感知稳定，单位：秒。
+  confirm_seconds: 0.5              # 目标连续存在确认时间，单位：秒。
+  confirm_timeout: 5.0              # 单个目标确认最长时间，单位：秒。
+
+  # 无目标时的扫描。
+  scan:
+    start_yaw_deg: 90.0             # 扫描起始绝对航向，单位：度。
+    end_yaw_deg: 180.0              # 扫描终止绝对航向，单位：度。
+    yaw_step_deg: 15.0              # 扫描航向步长，单位：度。
+    settle_seconds: 0.4             # 每个航向等待感知更新，单位：秒。
+
+  # 最终移动。
+  collection_depth_m: 0.2           # 置物台上方绝对深度，单位：米。
+  move_timeout: 120.0               # 移动超时时间，单位：秒。

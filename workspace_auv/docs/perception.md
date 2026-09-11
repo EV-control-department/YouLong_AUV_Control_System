@@ -2,7 +2,7 @@
 
 ## 概述
 
-感知系统位于 `uv_perception` 包，由两个节点组成两级流水线：
+感知系统位于 `uv_camera` 包，由两个节点组成两级流水线：
 
 - **vision** — YOLO 目标检测，将双目拼接图拆分为左右独立通道分别推理
 - **position** — 单目多帧射线交会，从 2D 检测结果反算 3D 世界坐标
@@ -44,7 +44,7 @@ basic_motion ── /basic_motion/pose_info (30Hz) ─────────�
 ## VisionNode (`vision`)
 
 **节点名**: `vision`
-**源文件**: `uv_perception/vision.py`
+**源文件**: `uv_camera/composed.py`
 
 ### 功能
 
@@ -116,7 +116,7 @@ right_img = cv_img[:, mid:]   # 1280×960
 ## PositionNode (`position`)
 
 **节点名**: `position`
-**源文件**: `uv_perception/position.py`
+**源文件**: `uv_camera/object_localizer.py`
 
 ### 功能
 
@@ -252,20 +252,20 @@ PositionNode 使用 `robot_x/y/z` 和 `robot_yaw`（度）作为射线原点。
 ### 独立启动
 
 ```bash
-ros2 launch uv_perception perception_launch.py
+ros2 launch uv_camera perception_launch.py
 ```
 
 ### 作为仿真/实车的一部分
 
 ```bash
 # 仿真 (默认 enable_ai:=true)
-ros2 launch uv_bringup sim_bringup.py
+ros2 launch uv_bringup sim.launch.py
 
 # 关闭感知
-ros2 launch uv_bringup sim_bringup.py enable_ai:=false
+ros2 launch uv_bringup sim.launch.py enable_ai:=false
 
 # 开启图像转发 (调试用)
-ros2 run uv_perception vision --ros-args -p stream_annotated:=false
+ros2 run uv_camera uv_camera --ros-args -p stream_annotated:=false
 ```
 
 ---
@@ -281,7 +281,7 @@ ros2 run uv_perception vision --ros-args -p stream_annotated:=false
 
 ## 已知局限
 
-1. 仅使用 yaw 旋转，忽略 pitch/roll — AUV 大姿态倾斜时定位精度下降
-2. 相机内参硬编码在 `position.py` 中，`config/*.npz` 立体校准文件未被使用
+1. 大姿态倾斜或 CameraInfo 延迟时定位精度会下降
+2. 仿真定位参数集中在 `config/object_localizer_sim.yaml`；实机使用节点默认的 NPZ 搜索规则
 3. 需要 AUV 运动产生视差才能定位（静态悬停时无法更新位置）
 4. 最大感知距离 50m，超过此范围的目标被丢弃

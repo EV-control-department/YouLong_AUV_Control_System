@@ -10,12 +10,17 @@
   <buildtool_depend>ament_python</buildtool_depend>
 
   <exec_depend>uv_hm</exec_depend>
+  <exec_depend>uv_sim</exec_depend>
+  <exec_depend>stonefish_ros2</exec_depend>
   <exec_depend>uv_control</exec_depend>
   <exec_depend>uv_camera</exec_depend>
   <exec_depend>uv_nav</exec_depend>
   <exec_depend>uv_task</exec_depend>
   <exec_depend>uv_log</exec_depend>
   <exec_depend>ros2launch</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
@@ -26,6 +31,7 @@
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
+  <test_depend>launch_testing</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

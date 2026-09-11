@@ -1,20 +1,20 @@
-"""Task runner node: loads task list from JSON, executes tasks sequentially.
+"""Task runner node: loads a YAML mission and executes tasks sequentially.
 
 Each task calls basic_motion via the BasicMotion action server.
 The task runner is the single source of truth for commanded position,
 tracked locally (not from external topics).
 """
 
-import glob
+from importlib import import_module
 import json
 import math
 import os
+from pathlib import Path
 import threading
 import time
 
 import numpy as np
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_msgs.msg import Float32, UInt8
@@ -32,6 +32,11 @@ from uv_msgs.msg import (
     TaskStatus,
 )
 from uv_msgs.srv import ExecTask, RunTask
+from uv_task.config_loader import (
+    ConfigError,
+    default_mission_path,
+    load_mission,
+)
 
 from uv_task.arrow_surfacer import (
     _DOWN_CX, _DOWN_CY, _DOWN_FX, _DOWN_FY,
@@ -39,12 +44,23 @@ from uv_task.arrow_surfacer import (
     _euler_to_rotation_matrix, _ray_intersection_midpoint,
 )
 from uv_task.arrow_surfacer import ArrowSurfacer
+# The competition task module names intentionally start with ``26rb_``.
+# Such names cannot be used in a normal ``from package import module``
+# statement, so load them through importlib.
+RB26GrabBallTask = import_module('uv_task.26rb_grab_ball').RB26GrabBallTask
+RB26GateTask = import_module('uv_task.26rb_gate_task').RB26GateTask
+RB26HitBallsTask = import_module('uv_task.26rb_hit_balls').RB26HitBallsTask
+RB26FindCollectionFrameTask = import_module(
+    'uv_task.26rb_find_collection_frame').RB26FindCollectionFrameTask
+RB26DropBeaconTask = import_module(
+    'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
+from uv_camera.model_classes import model_class_id
 
 
 _IMPACT_BALL_CLASS_IDS = {
-    'impact_ball_blue': 5,
-    'impact_ball_red': 6,
+    'impact_ball_blue': model_class_id('impact_ball_blue'),
+    'impact_ball_red': model_class_id('impact_ball_red'),
 }
 _IMPACT_BALL_ALIASES = {
     'blue': 'impact_ball_blue',
@@ -57,9 +73,39 @@ _IMPACT_BALL_ALIASES = {
     'impact_ball_red': 'impact_ball_red',
 }
 
+# object_localizer.py publishes these as canonical physical classes on
+# /perception/target_positions, while class_name can still contain the
+# detector suffix (for example ``collection_frame_front``).  Keep the task
+# tolerant of both forms because the localizer deliberately publishes front
+# and down estimates separately.
+_LOCALIZER_TARGET_CLASS_IDS = {
+    model_class_id('collection_frame_down'): 'collection_frame',
+    model_class_id('collection_frame_front'): 'collection_frame',
+    model_class_id('target_rack_down'): 'target_rack',
+    model_class_id('target_rack_front'): 'target_rack',
+}
+_TARGET_RACK_DOWN_CLASS_ID = model_class_id('target_rack_down')
+_LOCALIZER_TARGET_ALIASES = {
+    'collection_frame': 'collection_frame',
+    'collection': 'collection_frame',
+    'collection_platform': 'collection_frame',
+    'platform': 'collection_frame',
+    'placement_platform': 'collection_frame',
+    '置物台': 'collection_frame',
+    '置舞台': 'collection_frame',
+    'target_rack': 'target_rack',
+    'targetrack': 'target_rack',
+    'rack': 'target_rack',
+    'target': 'target_rack',
+    'target_rack_platform': 'target_rack',
+    'target-rack': 'target_rack',
+    '货架': 'target_rack',
+    '目标架': 'target_rack',
+}
+
 
 class TaskRunnerNode(Node):
-    """Task runner: JSON task loader and sequential executor."""
+    """Task runner: YAML mission loader and sequential executor."""
 
     # ── 灯光常量 (/zit6/cmd/light) ─────────────────────────────────
     LIGHT_OFF = 0
@@ -102,6 +148,9 @@ class TaskRunnerNode(Node):
         # Debug mode
         self.declare_parameter('debug_mode', False)
         self._debug_mode = self.get_parameter('debug_mode').get_parameter_value().bool_value
+        self.declare_parameter('mission_file', '')
+        self.mission_file = self.get_parameter(
+            'mission_file').get_parameter_value().string_value
         self._debug_task_name = None
         self._debug_executing = False
         self._debug_timeout = -1.0
@@ -111,14 +160,17 @@ class TaskRunnerNode(Node):
         # intentionally does not create scoring or grasping behaviour.
         self.declare_parameter('target_id', 'yellow_golf')
         self.target_id = self.get_parameter('target_id').get_parameter_value().string_value
-        valid_target_ids = {'yellow_golf', 'pink_golf', 'red_ring'}
+        valid_target_ids = {
+            name for name in ('yellow_golf', 'pink_golf', 'red_ring')
+            if model_class_id(name, required=False) is not None
+        }
         if self.target_id not in valid_target_ids:
             self.get_logger().warning(
-                f"Unknown target_id {self.target_id!r}; using 'yellow_golf'. "
-                f"Valid values: {', '.join(sorted(valid_target_ids))}"
+                f"未知的 target_id {self.target_id!r}；将使用 'yellow_golf'。"
+                f"有效值：{', '.join(sorted(valid_target_ids))}"
             )
             self.target_id = 'yellow_golf'
-        self.get_logger().info(f'Competition target metadata: {self.target_id}')
+        self.get_logger().info(f'比赛目标元数据：{self.target_id}')
 
         # Camera parameters (used by LineFollower sub-task via get_parameter)
         self.declare_parameter('down_image_width', 1280.0)
@@ -163,7 +215,25 @@ class TaskRunnerNode(Node):
             'arrow_surface': self._task_arrow_surface,
             'hit_ball': self._task_hit_balls,
             'hit_balls': self._task_hit_balls,
+            '26rb_hit_balls': self._task_hit_balls,
+            'pass_gate': self._task_pass_gates,
+            'pass_gates': self._task_pass_gates,
+            'go_through_gates': self._task_pass_gates,
+            '26rb_gate_task': self._task_pass_gates,
+            '26rb_pass_gates': self._task_pass_gates,
+            'find_collection_frame': self._task_find_collection_frame,
+            'find_platform_and_rack': self._task_find_collection_frame,
+            'find_rack_and_platform': self._task_find_collection_frame,
+            '26rb_find_collection_frame': self._task_find_collection_frame,
+            'light_target_rack_return_origin':
+                self._task_light_target_rack_return_origin,
+            'light_frame_return': self._task_light_target_rack_return_origin,
+            'visit_frame_light': self._task_light_target_rack_return_origin,
+            'grab_ball': self._task_grab_ball,
+            'grab_balls': self._task_grab_ball,
+            '26rb_grab_ball': self._task_grab_ball,
             'drop_beacon': self._task_drop_beacon,
+            '26rb_drop_beacon': self._task_drop_beacon,
             'take_water_sample': self._task_take_water_sample,
             'release_sampler': self._task_release_sampler,
             'return_origin': self._task_return_origin,
@@ -172,7 +242,7 @@ class TaskRunnerNode(Node):
         # Action client
         self._action_client = ActionClient(self, BasicMotion, 'basic_motion')
         if not self._action_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('BasicMotion action server not available!')
+            self.get_logger().error('BasicMotion 动作服务器不可用！')
 
         # Subscribers
         self.create_subscription(
@@ -210,8 +280,8 @@ class TaskRunnerNode(Node):
         # Status timer
         self.create_timer(0.5, self._publish_status)
 
-        self.get_logger().info('TaskRunner node started')
-        self.get_logger().info(f'Debug mode: {self._debug_mode}')
+        self.get_logger().info('TaskRunner 节点已启动')
+        self.get_logger().info(f'调试模式：{self._debug_mode}')
 
     def _objects_cb(self, msg: ObjectPositionArray):
         with self._perception_lock:
@@ -239,18 +309,18 @@ class TaskRunnerNode(Node):
     def set_light(self, color: int, label: str):
         msg = UInt8(data=color)
         self.pub_light.publish(msg)
-        self.get_logger().info(f'💡 LIGHT ON: {label} (value={color})')
+        self.get_logger().info(f'💡 灯光已打开：{label}（数值={color}）')
 
     def light_off(self):
         msg = UInt8(data=0)
         self.pub_light.publish(msg)
-        self.get_logger().info('💡 LIGHT OFF')
+        self.get_logger().info('💡 灯光已关闭')
 
     def set_servo(self, angle_rad: float, label: str):
         msg = Float32(data=float(angle_rad))
         self.pub_servo.publish(msg)
         self.get_logger().info(
-            f'⚙️  SERVO: {label} (angle={angle_rad:.2f} rad)')
+            f'⚙️  舵机：{label}（角度={angle_rad:.2f} rad）')
 
     # ── 下视对齐工具 ───────────────────────────────────────────────
 
@@ -283,6 +353,218 @@ class TaskRunnerNode(Node):
                  key=lambda d: d.confidence, default=None)
         return (bl, br) if bl and br else None
 
+    def _down_visual_pair(self, class_id: int, max_age: float,
+                          epipolar_tolerance: float):
+        """Return a fresh, epipolar-consistent down-camera detection pair.
+
+        The localizer's world position is intentionally not used here.  The
+        light task closes its final horizontal loop on the two image centres.
+        A pair ID is preferred when the detector provides one; otherwise the
+        pair with the smallest normalized vertical mismatch is selected.
+        """
+        now = time.monotonic()
+        with self._perception_lock:
+            left_entry = self._down_detections.get('down_left')
+            right_entry = self._down_detections.get('down_right')
+        if left_entry is None or right_entry is None:
+            return None
+
+        left_time, left_msg = left_entry
+        right_time, right_msg = right_entry
+        if now - left_time > max_age or now - right_time > max_age:
+            return None
+
+        left_pair_id = int(getattr(left_msg, 'stereo_pair_id', 0) or 0)
+        right_pair_id = int(getattr(right_msg, 'stereo_pair_id', 0) or 0)
+        if (left_pair_id and right_pair_id
+                and left_pair_id != right_pair_id):
+            return None
+
+        def candidates(message):
+            result = []
+            for detection in getattr(message, 'detections', []):
+                if int(getattr(detection, 'class_id', -1)) != class_id:
+                    continue
+                try:
+                    px = float(detection.pixel_x)
+                    py = float(detection.pixel_y)
+                    confidence = float(detection.confidence)
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if all(math.isfinite(value)
+                       for value in (px, py, confidence)):
+                    result.append(detection)
+            return result
+
+        left_candidates = candidates(left_msg)
+        right_candidates = candidates(right_msg)
+        if not left_candidates or not right_candidates:
+            return None
+
+        pairs = []
+        for left in left_candidates:
+            left_v = (float(left.pixel_y) - _DOWN_CY) / _DOWN_FY
+            for right in right_candidates:
+                right_v = (float(right.pixel_y) - _DOWN_CY) / _DOWN_FY
+                vertical_error = abs(left_v - right_v)
+                if vertical_error <= epipolar_tolerance:
+                    pairs.append((
+                        vertical_error,
+                        -(float(left.confidence) +
+                          float(right.confidence)),
+                        left, right,
+                    ))
+        if not pairs:
+            return None
+        _vertical_error, _confidence, left, right = min(
+            pairs, key=lambda item: (item[0], item[1]))
+        return left, right
+
+    @staticmethod
+    def _down_visual_error(left, right):
+        """Return normalized image-centre and epipolar errors for a pair."""
+        left_u = (float(left.pixel_x) - _DOWN_CX) / _DOWN_FX
+        right_u = (float(right.pixel_x) - _DOWN_CX) / _DOWN_FX
+        left_v = (float(left.pixel_y) - _DOWN_CY) / _DOWN_FY
+        right_v = (float(right.pixel_y) - _DOWN_CY) / _DOWN_FY
+        return (
+            (left_u + right_u) * 0.5,
+            (left_v + right_v) * 0.5,
+            abs(left_v - right_v),
+        )
+
+    @staticmethod
+    def _down_visual_body_step(du: float, dv: float, projection_depth: float,
+                               gain: float, max_step: float):
+        """Map down-view normalized image error to a bounded body XY step."""
+        # The calibrated down optical frame maps to body (-y, +x, +z).
+        body_dx = -float(dv) * float(projection_depth) * float(gain)
+        body_dy = float(du) * float(projection_depth) * float(gain)
+        norm = math.hypot(body_dx, body_dy)
+        if norm > max_step:
+            scale = float(max_step) / norm
+            body_dx *= scale
+            body_dy *= scale
+        return body_dx, body_dy
+
+    def _down_visual_servo_target_rack(self, p: dict, target_z: float) -> bool:
+        """Center target_rack_down in the down stereo image before lighting."""
+        servo_timeout = max(
+            1.0, float(p.get('down_visual_servo_timeout',
+                             p.get('horizontal_servo_timeout', 30.0))))
+        stable_seconds = max(
+            0.1, float(p.get('down_visual_servo_stable_seconds',
+                             p.get('horizontal_servo_stable_seconds', 1.0))))
+        detection_timeout = max(
+            0.1, float(p.get('down_detection_timeout', 0.8)))
+        pixel_tolerance = max(
+            0.001, float(p.get('down_pixel_tolerance_fraction', 0.035)))
+        epipolar_tolerance = max(
+            0.001, float(p.get(
+                'down_epipolar_vertical_tolerance_fraction', 0.04)))
+        projection_depth = max(
+            0.1, float(p.get('down_projection_depth_m', 0.8)))
+        gain = max(0.05, float(p.get('down_visual_servo_gain', 0.8)))
+        max_step = max(
+            0.005, float(p.get('down_visual_servo_max_step_m', 0.08)))
+        period = max(
+            0.05, float(p.get('down_visual_servo_period',
+                              p.get('horizontal_servo_period', 0.2))))
+        command_timeout = max(
+            0.2, float(p.get('down_visual_command_timeout',
+                             p.get('horizontal_command_timeout', 10.0))))
+
+        deadline = time.monotonic() + servo_timeout
+        stable_since = None
+        last_log = float('-inf')
+        self.get_logger().info(
+            'light_target_rack_return_origin：开始下视双目视觉伺服；'
+            f'class_id={_TARGET_RACK_DOWN_CLASS_ID}，'
+            f'像素容差={pixel_tolerance:.3f}，'
+            f'极线容差={epipolar_tolerance:.3f}，'
+            f'稳定时间={stable_seconds:.1f}s')
+
+        while not self.stopped and time.monotonic() < deadline:
+            now = time.monotonic()
+            pair = self._down_visual_pair(
+                _TARGET_RACK_DOWN_CLASS_ID,
+                detection_timeout,
+                epipolar_tolerance,
+            )
+            if pair is None:
+                stable_since = None
+                if now - last_log >= 1.0:
+                    self.get_logger().warning(
+                        'light_target_rack_return_origin：等待下视双目目标；'
+                        '必须同时看到 target_rack_down 且左右目满足极线一致性')
+                    last_log = now
+                time.sleep(min(period, max(0.0, deadline - now)))
+                continue
+
+            left, right = pair
+            du, dv, epipolar_error = self._down_visual_error(left, right)
+            centered = (
+                abs(du) <= pixel_tolerance
+                and abs(dv) <= pixel_tolerance
+                and epipolar_error <= epipolar_tolerance
+            )
+            if now - last_log >= 1.0:
+                state = '已居中，等待稳定' if centered else '修正中'
+                self.get_logger().info(
+                    f'light_target_rack_return_origin：下视视觉伺服{state}；'
+                    f'归一化误差=(du={du:+.4f},dv={dv:+.4f})，'
+                    f'极线误差={epipolar_error:.4f}')
+                last_log = now
+
+            if centered:
+                if stable_since is None:
+                    stable_since = now
+                elif now - stable_since >= stable_seconds:
+                    self.get_logger().info(
+                        'light_target_rack_return_origin：下视视觉伺服已连续稳定，'
+                        '允许打开指示灯')
+                    return True
+            else:
+                stable_since = None
+                body_dx, body_dy = self._down_visual_body_step(
+                    du, dv, projection_depth, gain, max_step)
+                pose = self._latest_robot_pose()
+                yaw = math.radians(float(pose[5]))
+                cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+                world_dx = cos_yaw * body_dx - sin_yaw * body_dy
+                world_dy = sin_yaw * body_dx + cos_yaw * body_dy
+                target = [
+                    pose[0] + world_dx,
+                    pose[1] + world_dy,
+                    float(target_z),
+                    float(pose[5]),
+                ]
+                success, message = self._send_action_goal(
+                    BasicMotion.Goal.SET,
+                    target,
+                    'xy',
+                    timeout=command_timeout,
+                    quiet=True,
+                    task_context=self._format_motion_context(
+                        'target_rack下视视觉伺服'))
+                if not success:
+                    self.get_logger().error(
+                        'light_target_rack_return_origin：下视视觉伺服移动失败：'
+                        f'{message}')
+                    return False
+                self._cmd_x = target[0]
+                self._cmd_y = target[1]
+                self._cmd_z = target[2]
+                self._cmd_yaw = target[3]
+
+            time.sleep(min(period, max(0.0, deadline - time.monotonic())))
+
+        if self.stopped:
+            return False
+        self.get_logger().error(
+            'light_target_rack_return_origin：下视视觉伺服超时，未打开指示灯')
+        return False
+
     def _triangulate(self, class_id: int):
         pair = self._stereo_pair(class_id)
         with self._perception_lock: pose = self._robot_pose
@@ -307,7 +589,7 @@ class TaskRunnerNode(Node):
         while ss <= sm:
             if self.stopped: return False
             if self._best_down_detection(class_id):
-                self.get_logger().info(f'Search [{label}]: found'); return True
+                self.get_logger().info(f'搜索 [{label}]：已找到目标'); return True
             dx, dy = self._SEARCH_DIRS[sd]
             td, tu = ss * dx, ss * dy
             dist = math.sqrt(td**2 + tu**2); n = max(1, int(dist / mi))
@@ -320,14 +602,14 @@ class TaskRunnerNode(Node):
                     'xy', timeout=0.01, quiet=True)
                 self._cmd_x = tx; self._cmd_y = ty
                 if self._best_down_detection(class_id):
-                    self.get_logger().info(f'Search [{label}]: found!'); return True
+                    self.get_logger().info(f'搜索 [{label}]：已找到目标！'); return True
             sd = (sd + 1) % 8
             if sd == 0: ss += sp
         return False
 
     def _align_to_class(self, class_id: int, label: str) -> bool:
         if self._best_down_detection(class_id) is None:
-            self.get_logger().info(f'Align [{label}]: searching...')
+            self.get_logger().info(f'对准 [{label}]：正在搜索……')
             if not self._search_for_class(class_id, label):
                 return False
         for i in range(200):
@@ -338,8 +620,8 @@ class TaskRunnerNode(Node):
                 [tgt[0], tgt[1], self._cmd_z, self._cmd_yaw],
                 'xy', timeout=0.1, quiet=True)
             self._cmd_x = tgt[0]; self._cmd_y = tgt[1]
-            self.get_logger().info(f'Align [{label}]: #{i}靠近，x:{tgt[0]},y:{tgt[1]}')
-        self.get_logger().info(f'Align [{label}]: complete')
+            self.get_logger().info(f'对准 [{label}]：第 {i} 次接近，x={tgt[0]}，y={tgt[1]}')
+        self.get_logger().info(f'对准 [{label}]：已完成')
         return True
 
     # ========================================================================
@@ -347,17 +629,29 @@ class TaskRunnerNode(Node):
     # ========================================================================
 
     def load_tasks(self, path: str) -> list:
-        """Load task list from JSON file."""
-        if not os.path.exists(path):
-            self.get_logger().error(f'Task file not found: {path}')
-            return []
-
-        with open(path, 'r') as f:
-            data = json.load(f)
-
-        tasks = data.get('tasks', [])
-        self.get_logger().info(f'Loaded {len(tasks)} tasks from {path}')
+        """Load a validated YAML mission as runner-compatible task dicts."""
+        tasks = load_mission(path)
+        self.get_logger().info(f'已从 {path} 加载 {len(tasks)} 个任务')
         return tasks
+
+    @staticmethod
+    def _resolve_mission_path(value: str) -> str:
+        """Resolve a service mission path or installed mission filename."""
+        text = str(value or '').strip()
+        if not text:
+            return str(default_mission_path())
+        candidate = Path(os.path.expanduser(text))
+        if candidate.is_absolute():
+            return str(candidate)
+        if candidate.exists():
+            return str(candidate.resolve())
+        missions_dir = default_mission_path().parent
+        package_candidate = missions_dir / candidate
+        if package_candidate.exists():
+            return str(package_candidate)
+        if candidate.suffix == '':
+            package_candidate = missions_dir / f'{candidate.name}.yaml'
+        return str(package_candidate)
 
     # ========================================================================
     # Task execution
@@ -369,7 +663,7 @@ class TaskRunnerNode(Node):
         self.stopped = False
         self.current_index = 0
         total = len(self.tasks)
-        self.get_logger().info(f'=== Task list started ({total} tasks) ===')
+        self.get_logger().info(f'=== 任务列表开始执行（共 {total} 个任务）===')
 
         while self.current_index < total and not self.stopped:
             task = self.tasks[self.current_index]
@@ -379,18 +673,18 @@ class TaskRunnerNode(Node):
             self._current_task_step = self.current_index + 1
 
             self.get_logger().info(
-                f'[{self.current_index + 1}/{total}] {name} {params} '
-                f'| cmd_pose=({self._cmd_x:.2f}, {self._cmd_y:.2f}, '
+                f'[{self.current_index + 1}/{total}] {name} 参数={params} '
+                f'| 指令位姿=({self._cmd_x:.2f}, {self._cmd_y:.2f}, '
                 f'{self._cmd_z:.2f}, {self._cmd_yaw:.1f}°)')
 
             try:
                 success = self._execute_task(name, params)
                 if not success:
                     self.get_logger().warn(
-                        f'[{self.current_index + 1}/{total}] {name} FAILED')
+                        f'[{self.current_index + 1}/{total}] {name} 执行失败')
             except Exception as e:
                 self.get_logger().error(
-                    f'[{self.current_index + 1}/{total}] {name} exception: {e}')
+                    f'[{self.current_index + 1}/{total}] {name} 发生异常：{e}')
 
             self.current_index += 1
 
@@ -398,15 +692,15 @@ class TaskRunnerNode(Node):
         self._current_task_name = ''
         self._current_task_step = 0
         if self.stopped:
-            self.get_logger().warn(f'=== Task list stopped at {self.current_index}/{total} ===')
+            self.get_logger().warn(f'=== 任务列表已停止，位置 {self.current_index}/{total} ===')
         else:
-            self.get_logger().info(f'=== Task list completed ({total}/{total}) ===')
+            self.get_logger().info(f'=== 任务列表执行完成（{total}/{total}）===')
 
     def _execute_task(self, name: str, params: dict) -> bool:
         """Execute a single task by name."""
         handler = self.task_map.get(name)
         if handler is None:
-            self.get_logger().warn(f'Unknown task: {name}')
+            self.get_logger().warn(f'未知任务：{name}')
             return False
 
         return handler(params)
@@ -469,12 +763,12 @@ class TaskRunnerNode(Node):
         if not quiet:
             t = [f'{v:.2f}' for v in target]
             self.get_logger().info(
-                f'Send goal: {type_name} target=[{", ".join(t)}] '
-                f'timeout={effective_timeout:.0f}s task_context="{task_context}"')
+                f'发送动作目标：{type_name}，目标=[{", ".join(t)}]，'
+                f'超时={effective_timeout:.0f}s，任务上下文="{task_context}"')
 
         if not self._action_client.wait_for_server(timeout_sec=2.0):
-            self.get_logger().error('Action server not available')
-            return False, 'Action server not available'
+            self.get_logger().error('动作服务器不可用')
+            return False, '动作服务器不可用'
 
         goal = BasicMotion.Goal()
         goal.cmd_type = cmd_type
@@ -488,21 +782,21 @@ class TaskRunnerNode(Node):
             time.sleep(0.01)
         if not rclpy.ok() or self.stopped:
             if not quiet:
-                self.get_logger().warn(f'Goal interrupted (stopped={self.stopped})')
-            return False, 'Stopped'
+                self.get_logger().warn(f'动作目标被中断（stopped={self.stopped}）')
+            return False, '已停止'
         if not send_future.done():
-            self.get_logger().error('Goal send timeout')
-            return False, 'Goal send timeout'
+            self.get_logger().error('发送动作目标超时')
+            return False, '发送动作目标超时'
 
         goal_handle = send_future.result()
         self._active_goal_handle = goal_handle
         if not goal_handle.accepted:
             self._active_goal_handle = None
-            self.get_logger().error(f'Goal rejected by server')
-            return False, 'Goal rejected by server'
+            self.get_logger().error('动作目标被服务器拒绝')
+            return False, '动作目标被服务器拒绝'
 
         if not quiet:
-            self.get_logger().info(f'Goal accepted, waiting for result...')
+            self.get_logger().info('动作目标已接受，等待执行结果……')
 
         result_future = goal_handle.get_result_async()
         while rclpy.ok() and not self.stopped and not result_future.done():
@@ -510,20 +804,20 @@ class TaskRunnerNode(Node):
         self._active_goal_handle = None
         if not rclpy.ok() or self.stopped:
             if not quiet:
-                self.get_logger().warn(f'Goal result interrupted (stopped={self.stopped})')
-            return False, 'Stopped'
+                self.get_logger().warn(f'动作结果等待被中断（stopped={self.stopped}）')
+            return False, '已停止'
         if not result_future.done():
-            self.get_logger().error('Result timeout')
-            return False, 'Result timeout'
+            self.get_logger().error('等待动作结果超时')
+            return False, '等待动作结果超时'
 
         result = result_future.result().result
         if not result.success:
             t_str = ', '.join(f'{v:.2f}' for v in target)
             self.get_logger().error(
-                f'{type_name} FAILED: {result.message} '
-                f'target=[{t_str}]')
+                f'{type_name} 执行失败：{result.message}，'
+                f'目标=[{t_str}]')
         elif not quiet:
-            self.get_logger().info(f'Goal result: SUCCESS')
+            self.get_logger().info('动作执行结果：成功')
         return result.success, result.message
 
     # ========================================================================
@@ -550,43 +844,43 @@ class TaskRunnerNode(Node):
                 self.get_logger().info('按 回车 跳过检查和准备，直接发车')
                 input()
                 skip.set()
-                self.get_logger().warn('⚠ 跳过准备，直接发车!')
+                self.get_logger().warn('⚠ 跳过准备，直接发车！')
             except EOFError:
                 pass
 
         listener = threading.Thread(target=_listen_skip, daemon=True)
         listener.start()
 
-        self.get_logger().info(f'YouLong_AUV_Control_System 准备启动，请做好拔缆准备')
-        self.set_light(3, 'LED')
+        self.get_logger().info('YouLong_AUV_Control_System 准备启动，请做好拔缆准备')
+        self.set_light(3, '启动指示灯')
         if self._sleep_or_skip(1, skip):
             return self._do_start()
         self.light_off()
-        self.get_logger().info(f'AUV 即将发动，请把缆或发布把缆命令')
+        self.get_logger().info('AUV 即将发动，请拔缆或发布拔缆命令')
 
         for i in range(1):
             if self._sleep_or_skip(0.5, skip):
                 return self._do_start()
-            self.set_light(1, 'LED')
+            self.set_light(1, '启动指示灯')
             if self._sleep_or_skip(0.5, skip):
                 return self._do_start()
             self.light_off()
 
-        self.get_logger().info(f'AUV 将在6秒后启动，已经可以拔缆了')
+        self.get_logger().info('AUV 将在 6 秒后启动，现在可以拔缆了')
 
         for i in range(7):
             if self._sleep_or_skip(0.25, skip):
                 return self._do_start()
-            self.set_light(2, 'LED')
+            self.set_light(2, '启动指示灯')
             if self._sleep_or_skip(0.25, skip):
                 return self._do_start()
             self.light_off()
 
-        self.get_logger().info(f'AUV 将在两秒后启动，如果你能看到这一条信息，说明已经有点晚了')
+        self.get_logger().info('AUV 将在 2 秒后启动，如果看到这条信息，说明已经有点晚了')
 
         if self._sleep_or_skip(1, skip):
             return self._do_start()
-        self.set_light(2, 'LED')
+        self.set_light(2, '启动指示灯')
         if self._sleep_or_skip(1, skip):
             return self._do_start()
         self.light_off()
@@ -601,7 +895,7 @@ class TaskRunnerNode(Node):
         if success:
             self._cmd_x = self._cmd_y = self._cmd_z = self._cmd_yaw = 0.0
         else:
-            self.get_logger().error(f'START failed: {msg}')
+            self.get_logger().error(f'START 执行失败：{msg}')
         return success
 
     def _task_return_origin(self, p: dict) -> bool:
@@ -634,7 +928,7 @@ class TaskRunnerNode(Node):
             task_context=self._format_motion_context(
                 '回到里程计原点(保持当前深度)'),
         )
-        self.get_logger().info(f'return_origin: {msg}')
+        self.get_logger().info(f'return_origin 执行结果：{msg}')
         if success:
             self._cmd_x = self._cmd_y = self._cmd_yaw = 0.0
         return success
@@ -646,7 +940,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.SET,
             [p['x'], self._cmd_y, self._cmd_z, self._cmd_yaw],
             "x")
-        self.get_logger().info(f'setx: {msg}')
+        self.get_logger().info(f'setx 执行结果：{msg}')
         if success:
             self._cmd_x = p['x']
         return success
@@ -656,7 +950,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.SET,
             [self._cmd_x, p['y'], self._cmd_z, self._cmd_yaw],
             "y")
-        self.get_logger().info(f'sety: {msg}')
+        self.get_logger().info(f'sety 执行结果：{msg}')
         if success:
             self._cmd_y = p['y']
         return success
@@ -666,7 +960,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.SET,
             [self._cmd_x, self._cmd_y, p['z'], self._cmd_yaw],
             "z")
-        self.get_logger().info(f'setz: {msg}')
+        self.get_logger().info(f'setz 执行结果：{msg}')
         if success:
             self._cmd_z = p['z']
         return success
@@ -676,7 +970,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.SET,
             [self._cmd_x, self._cmd_y, self._cmd_z, p['rz']],
             "rz")
-        self.get_logger().info(f'setrz: {msg}')
+        self.get_logger().info(f'setrz 执行结果：{msg}')
         if success:
             self._cmd_yaw = p['rz']
         return success
@@ -686,7 +980,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.SET,
             [p['x'], p['y'], self._cmd_z, self._cmd_yaw],
             "xy")
-        self.get_logger().info(f'setxy: {msg}')
+        self.get_logger().info(f'setxy 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
         return success
@@ -696,7 +990,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.SET,
             [p['x'], p['y'], p['z'], self._cmd_yaw],
             "xyz")
-        self.get_logger().info(f'setxyz: {msg}')
+        self.get_logger().info(f'setxyz 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
         return success
@@ -705,7 +999,7 @@ class TaskRunnerNode(Node):
         x, y, z, yaw = p['x'], p['y'], p['z'], p.get('rz', self._cmd_yaw)
         success, msg = self._send_action_goal(
             BasicMotion.Goal.SET, [x, y, z, yaw], "xyzrz")
-        self.get_logger().info(f'setxyzrz: {msg}')
+        self.get_logger().info(f'setxyzrz 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = x, y, z
             self._cmd_yaw = yaw
@@ -717,7 +1011,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.SET,
             [p['x'], p['y'], self._cmd_z, yaw],
             "xyrz")
-        self.get_logger().info(f'setxyrz: {msg}')
+        self.get_logger().info(f'setxyrz 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
             self._cmd_yaw = yaw
@@ -728,7 +1022,7 @@ class TaskRunnerNode(Node):
     def _task_bmovex(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BMOVE, [p['dx'], 0.0, 0.0, 0.0], "x")
-        self.get_logger().info(f'bmovex: {msg}')
+        self.get_logger().info(f'bmovex 执行结果：{msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx']
@@ -738,7 +1032,7 @@ class TaskRunnerNode(Node):
     def _task_bmovey(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BMOVE, [0.0, p['dy'], 0.0, 0.0], "y")
-        self.get_logger().info(f'bmovey: {msg}')
+        self.get_logger().info(f'bmovey 执行结果：{msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += -sy * p['dy']
@@ -748,7 +1042,7 @@ class TaskRunnerNode(Node):
     def _task_bmovez(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BMOVE, [0.0, 0.0, p['dz'], 0.0], "z")
-        self.get_logger().info(f'bmovez: {msg}')
+        self.get_logger().info(f'bmovez 执行结果：{msg}')
         if success:
             self._cmd_z += p['dz']
         return success
@@ -756,7 +1050,7 @@ class TaskRunnerNode(Node):
     def _task_bmoverz(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BMOVE, [0.0, 0.0, 0.0, p['drz']], "rz")
-        self.get_logger().info(f'bmoverz: {msg}')
+        self.get_logger().info(f'bmoverz 执行结果：{msg}')
         if success:
             self._cmd_yaw += p['drz']
         return success
@@ -764,7 +1058,7 @@ class TaskRunnerNode(Node):
     def _task_bmovexy(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BMOVE, [p['dx'], p['dy'], 0.0, 0.0], "xy")
-        self.get_logger().info(f'bmovexy: {msg}')
+        self.get_logger().info(f'bmovexy 执行结果：{msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx'] - sy * p['dy']
@@ -774,7 +1068,7 @@ class TaskRunnerNode(Node):
     def _task_bmovexyz(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BMOVE, [p['dx'], p['dy'], p['dz'], 0.0], "xyz")
-        self.get_logger().info(f'bmovexyz: {msg}')
+        self.get_logger().info(f'bmovexyz 执行结果：{msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx'] - sy * p['dy']
@@ -787,7 +1081,7 @@ class TaskRunnerNode(Node):
     def _task_wmovex(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WMOVE, [p['x'], 0.0, 0.0, 0.0], "x")
-        self.get_logger().info(f'wmovex: {msg}')
+        self.get_logger().info(f'wmovex 执行结果：{msg}')
         if success:
             self._cmd_x = p['x']
         return success
@@ -795,7 +1089,7 @@ class TaskRunnerNode(Node):
     def _task_wmovey(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WMOVE, [0.0, p['y'], 0.0, 0.0], "y")
-        self.get_logger().info(f'wmovey: {msg}')
+        self.get_logger().info(f'wmovey 执行结果：{msg}')
         if success:
             self._cmd_y = p['y']
         return success
@@ -803,7 +1097,7 @@ class TaskRunnerNode(Node):
     def _task_wmovez(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WMOVE, [0.0, 0.0, p['z'], 0.0], "z")
-        self.get_logger().info(f'wmovez: {msg}')
+        self.get_logger().info(f'wmovez 执行结果：{msg}')
         if success:
             self._cmd_z = p['z']
         return success
@@ -811,7 +1105,7 @@ class TaskRunnerNode(Node):
     def _task_wmoverz(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WMOVE, [0.0, 0.0, 0.0, p['rz']], "rz")
-        self.get_logger().info(f'wmoverz: {msg}')
+        self.get_logger().info(f'wmoverz 执行结果：{msg}')
         if success:
             self._cmd_yaw = p['rz']
         return success
@@ -819,7 +1113,7 @@ class TaskRunnerNode(Node):
     def _task_wmovexy(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WMOVE, [p['x'], p['y'], 0.0, 0.0], "xy")
-        self.get_logger().info(f'wmovexy: {msg}')
+        self.get_logger().info(f'wmovexy 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
         return success
@@ -827,7 +1121,7 @@ class TaskRunnerNode(Node):
     def _task_wmovexyz(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WMOVE, [p['x'], p['y'], p['z'], 0.0], "xyz")
-        self.get_logger().info(f'wmovexyz: {msg}')
+        self.get_logger().info(f'wmovexyz 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
         return success
@@ -837,7 +1131,7 @@ class TaskRunnerNode(Node):
     def _task_wtravelx(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WTRAVEL, [p['x'], 0.0, 0.0, 0.0], "x")
-        self.get_logger().info(f'wtravelx: {msg}')
+        self.get_logger().info(f'wtravelx 执行结果：{msg}')
         if success:
             self._cmd_x = p['x']
         return success
@@ -845,7 +1139,7 @@ class TaskRunnerNode(Node):
     def _task_wtravely(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WTRAVEL, [0.0, p['y'], 0.0, 0.0], "y")
-        self.get_logger().info(f'wtravely: {msg}')
+        self.get_logger().info(f'wtravely 执行结果：{msg}')
         if success:
             self._cmd_y = p['y']
         return success
@@ -853,7 +1147,7 @@ class TaskRunnerNode(Node):
     def _task_wtravelz(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WTRAVEL, [0.0, 0.0, p['z'], 0.0], "z")
-        self.get_logger().info(f'wtravelz: {msg}')
+        self.get_logger().info(f'wtravelz 执行结果：{msg}')
         if success:
             self._cmd_z = p['z']
         return success
@@ -861,7 +1155,7 @@ class TaskRunnerNode(Node):
     def _task_wtravelxy(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], 0.0, 0.0], "xy")
-        self.get_logger().info(f'wtravelxy: {msg}')
+        self.get_logger().info(f'wtravelxy 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y = p['x'], p['y']
         return success
@@ -869,7 +1163,7 @@ class TaskRunnerNode(Node):
     def _task_wtravelxyz(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.WTRAVEL, [p['x'], p['y'], p['z'], 0.0], "xyz")
-        self.get_logger().info(f'wtravelxyz: {msg}')
+        self.get_logger().info(f'wtravelxyz 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z = p['x'], p['y'], p['z']
         return success
@@ -879,7 +1173,7 @@ class TaskRunnerNode(Node):
     def _task_btravelx(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BTRAVEL, [p['dx'], 0.0, 0.0, 0.0], "x")
-        self.get_logger().info(f'btravelx: {msg}')
+        self.get_logger().info(f'btravelx 执行结果：{msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx']
@@ -889,7 +1183,7 @@ class TaskRunnerNode(Node):
     def _task_btravely(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BTRAVEL, [0.0, p['dy'], 0.0, 0.0], "y")
-        self.get_logger().info(f'btravely: {msg}')
+        self.get_logger().info(f'btravely 执行结果：{msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += -sy * p['dy']
@@ -899,7 +1193,7 @@ class TaskRunnerNode(Node):
     def _task_btravelz(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BTRAVEL, [0.0, 0.0, p['dz'], 0.0], "z")
-        self.get_logger().info(f'btravelz: {msg}')
+        self.get_logger().info(f'btravelz 执行结果：{msg}')
         if success:
             self._cmd_z += p['dz']
         return success
@@ -907,7 +1201,7 @@ class TaskRunnerNode(Node):
     def _task_btravelxy(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BTRAVEL, [p['dx'], p['dy'], 0.0, 0.0], "xy")
-        self.get_logger().info(f'btravelxy: {msg}')
+        self.get_logger().info(f'btravelxy 执行结果：{msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx'] - sy * p['dy']
@@ -917,7 +1211,7 @@ class TaskRunnerNode(Node):
     def _task_btravelxyz(self, p: dict) -> bool:
         success, msg = self._send_action_goal(
             BasicMotion.Goal.BTRAVEL, [p['dx'], p['dy'], p['dz'], 0.0], "xyz")
-        self.get_logger().info(f'btravelxyz: {msg}')
+        self.get_logger().info(f'btravelxyz 执行结果：{msg}')
         if success:
             cy, sy = math.cos(math.radians(self._cmd_yaw)), math.sin(math.radians(self._cmd_yaw))
             self._cmd_x += cy * p['dx'] - sy * p['dy']
@@ -946,13 +1240,13 @@ class TaskRunnerNode(Node):
 
         if nearest is None:
             self.get_logger().warn(
-                f'_move_to_nearest_object_xy: no object class_id={class_id}')
+                f'_move_to_nearest_object_xy：未找到 class_id={class_id} 的物体')
             return False
 
         self.get_logger().info(
-            f'_move_to_nearest_object_xy: class_id={class_id} '
-            f'at ({nearest.world_x:.2f}, {nearest.world_y:.2f}) '
-            f'dist={min_dist:.2f}m')
+            f'_move_to_nearest_object_xy：class_id={class_id}，'
+            f'位置=({nearest.world_x:.2f}, {nearest.world_y:.2f})，'
+            f'距离={min_dist:.2f}m')
 
         success, msg = self._send_action_goal(
             BasicMotion.Goal.SET,
@@ -963,7 +1257,7 @@ class TaskRunnerNode(Node):
             self._cmd_y = nearest.world_y
         else:
             self.get_logger().warn(
-                f'_move_to_nearest_object_xy failed: {msg}')
+                f'_move_to_nearest_object_xy 执行失败：{msg}')
         return success
 
     def _task_navigate(self, p: dict) -> bool:
@@ -973,7 +1267,7 @@ class TaskRunnerNode(Node):
         yaw = p.get('rz', self._cmd_yaw)
         success, msg = self._send_action_goal(
             BasicMotion.Goal.SET, [x, y, z, yaw], "xyzrz", timeout=120.0)
-        self.get_logger().info(f'navigate: {msg}')
+        self.get_logger().info(f'navigate 执行结果：{msg}')
         if success:
             self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = x, y, z, yaw
         return success
@@ -1034,7 +1328,8 @@ class TaskRunnerNode(Node):
                 result.append(name)
         if not result:
             self.get_logger().error(
-                'hit_balls: no valid ball in order; use blue/red or class_id 5/6')
+                'hit_balls：撞球顺序中没有有效目标；请使用 blue/red，'
+                '或使用 robotcup20260901.json 中的有效 class_id')
         return result
 
     def _best_impact_ball_target(self, name: str, params: dict):
@@ -1131,8 +1426,7 @@ class TaskRunnerNode(Node):
                 break
             time.sleep(0.1)
         self.get_logger().error(
-            f'hit_balls: timed out waiting for {name} estimate '
-            f'({timeout:.1f}s)')
+            f'hit_balls：等待 {name} 目标估计超时（{timeout:.1f}s）')
         return None
 
     @staticmethod
@@ -1155,7 +1449,7 @@ class TaskRunnerNode(Node):
             self._cmd_yaw = yaw
         else:
             self.get_logger().warn(
-                f'hit_balls: scan rotation to {yaw:.1f}° failed: {message}')
+                f'hit_balls：旋转到 {yaw:.1f}° 进行扫描失败：{message}')
         return success
 
     def _active_localize_impact_balls(self, order: list[str], params: dict):
@@ -1172,8 +1466,8 @@ class TaskRunnerNode(Node):
         deadline = time.monotonic() + search_timeout
 
         self.get_logger().info(
-            f'hit_balls: active localization scan started, '
-            f'{headings} headings/{step:.1f}°')
+            f'hit_balls：主动定位扫描开始，共 {headings} 个方向，'
+            f'步进 {step:.1f}°')
         for index in range(headings):
             if not rclpy.ok() or self.stopped or time.monotonic() >= deadline:
                 break
@@ -1196,16 +1490,15 @@ class TaskRunnerNode(Node):
                     if target is not None:
                         found[name] = target
                         self.get_logger().info(
-                            f'hit_balls: active scan found {name} '
-                            f'at ({target["x"]:.2f}, {target["y"]:.2f}, '
+                            f'hit_balls：主动扫描找到 {name}，'
+                            f'位置=({target["x"]:.2f}, {target["y"]:.2f}, '
                             f'{target["z"]:.2f})')
             if len(found) == len(order):
                 break
 
         self.get_logger().info(
-            f'hit_balls: active localization scan finished, '
-            f'found={list(found.keys())}, missing=' +
-            f'{[name for name in order if name not in found]}')
+            f'hit_balls：主动定位扫描完成，已找到={list(found.keys())}，'
+            f'缺少={[name for name in order if name not in found]}')
         return found
 
     def _travel_to_impact_point(self, x: float, y: float, z: float,
@@ -1229,10 +1522,10 @@ class TaskRunnerNode(Node):
             if math.hypot(dx, dy) > 1e-6:
                 self._cmd_yaw = yaw
             self.get_logger().info(
-                f'hit_balls: {label} complete at '
+                f'hit_balls：{label} 已完成，当前位置='
                 f'({x:.2f}, {y:.2f}, {z:.2f})')
         else:
-            self.get_logger().error(f'hit_balls: {label} failed: {message}')
+            self.get_logger().error(f'hit_balls：{label} 执行失败：{message}')
         return success
 
     def _latest_robot_pose(self):
@@ -1340,7 +1633,7 @@ class TaskRunnerNode(Node):
                 return False
             else:
                 self.get_logger().warning(
-                    f'hit_balls: {name} alignment correction failed: {message}')
+                    f'hit_balls：{name} 对准修正失败：{message}')
 
             remaining = deadline - time.monotonic()
             if remaining > 0.0:
@@ -1348,17 +1641,26 @@ class TaskRunnerNode(Node):
 
         return rclpy.ok() and not self.stopped
 
-    def _publish_body_velocity(self, forward_mps: float):
-        """Publish one body-frame velocity-loop setpoint (forward/zero other axes)."""
+    def _publish_body_velocity(self, forward_mps: float = 0.0,
+                               lateral_mps: float = 0.0,
+                               vertical_mps: float = 0.0,
+                               yaw_rate_deg_s: float = 0.0):
+        """Publish one body-frame velocity-loop setpoint.
+
+        The wire protocol uses metres/second for the three linear axes and
+        radians/second for yaw.  Keeping this helper on TaskRunner lets
+        camera tasks use the same velocity path as the existing impact
+        charge, without opening a second motion controller.
+        """
         msg = ZitSetpoint()
         msg.control_key = 0x11  # VEL (0x01) | BODY (0x10)
         msg.type_mask = 0
         msg.x = float(forward_mps)
-        msg.y = 0.0
-        msg.z = 0.0
+        msg.y = float(lateral_mps)
+        msg.z = float(vertical_mps)
         msg.roll = 0.0
         msg.pitch = 0.0
-        msg.yaw = 0.0
+        msg.yaw = math.radians(float(yaw_rate_deg_s))
         msg.seq = 0
         self.pub_setpoint.publish(msg)
 
@@ -1381,203 +1683,376 @@ class TaskRunnerNode(Node):
         pose = self._latest_robot_pose()
         return [pose[0], pose[1], pose[2], pose[5]]
 
-    def _task_staged_charge_return(self, name: str, target: dict,
-                                   params: dict) -> bool:
-        """Align at the configured offset before one ball, charge, then return."""
-        approach_distance = max(
-            0.0, float(params.get('approach_distance', 0.5)))
-        min_clearance = max(0.0, float(params.get('min_clearance', 0.05)))
-        z_offset = float(params.get('z_offset', 0.2))
-        approach_timeout = max(
-            1.0, float(params.get('approach_timeout', 90.0)))
-        return_timeout = max(
-            1.0, float(params.get('return_timeout', 60.0)))
-
-        pose = self._latest_robot_pose()
-        distance = math.hypot(float(target['x']) - pose[0],
-                              float(target['y']) - pose[1])
-        effective_distance = min(
-            approach_distance,
-            max(0.0, distance - min_clearance),
-        )
-        staging = self._impact_staging_pose(
-            target, effective_distance, z_offset)
-        self.get_logger().info(
-            f'hit_balls: {name} staging {effective_distance:.2f}m-before target '
-            f'=({staging[0]:.2f}, {staging[1]:.2f}, {staging[2]:.2f}), '
-            f'yaw={staging[3]:.1f}°')
-        if not self._travel_to_impact_point(
-                staging[0], staging[1], staging[2], approach_timeout,
-                f'{name} {effective_distance:.2f}m staging'):
-            return False
-
-        # Refresh the ball estimate once at the staging point, then keep the
-        # full position + yaw controller correcting for the configured hold.
-        refreshed = self._best_impact_ball_target(name, params)
-        if refreshed is not None:
-            target = refreshed
-        if not self._hold_impact_alignment(name, target, params):
-            return False
-
-        recorded_pose = self._record_current_impact_pose()
-        self.get_logger().info(
-            f'hit_balls: alignment complete; recorded pose '
-            f'=({recorded_pose[0]:.2f}, {recorded_pose[1]:.2f}, '
-            f'{recorded_pose[2]:.2f}, {recorded_pose[3]:.1f}°)')
-
-        if not self._charge_forward(params):
-            return False
-        self.get_logger().info(
-            f'hit_balls: forward velocity charge complete '
-            f'({float(params.get("charge_duration", 5.0)):.1f}s)')
-
-        success, message = self._send_action_goal(
-            BasicMotion.Goal.SET,
-            recorded_pose,
-            'xyzrz',
-            timeout=return_timeout,
-            task_context=self._format_motion_context(
-                f'{name}撞球后返回记录位置'),
-        )
-        if not success:
-            self.get_logger().error(
-                f'hit_balls: return to recorded pose failed: {message}')
-            return False
-        self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = recorded_pose
-        self.get_logger().info('hit_balls: red-ball task complete; returned to recorded pose')
-        return True
+    def _task_pass_gates(self, p: dict) -> bool:
+        """仅用前视相机图像搜索、对准并连续通过多个门。"""
+        gate_task = RB26GateTask(self, p)
+        try:
+            return gate_task.execute()
+        finally:
+            gate_task.destroy()
 
     def _task_hit_balls(self, p: dict) -> bool:
-        """Approach and pass through each detected suspended impact ball.
+        """执行 26rb 撞球任务模块。"""
+        task = RB26HitBallsTask(self, p)
+        return task.execute()
 
-        The AUV stops a short distance before the current estimate, then
-        travels through the ball to a point on the far side.  This creates a
-        real collision path instead of merely moving to the ball's centre.
-        The task is deliberately target-driven: it uses the front target
-        localizer and does not depend on hard-coded scene coordinates.
+    # ── 置物台 / target-rack 搜索任务 ─────────────────────────────
+
+    @staticmethod
+    def _normalize_localizer_target_name(value):
+        """Normalize object_localizer labels to the two task target names."""
+        if isinstance(value, (int, np.integer)):
+            return _LOCALIZER_TARGET_CLASS_IDS.get(int(value))
+
+        text = str(value or '').strip().lower()
+        if not text:
+            return None
+        text = text.replace('-', '_').replace(' ', '_')
+        # Detector labels are intentionally kept in class_name, whereas
+        # physical_class_name is already canonical.
+        for suffix in ('_front', '_down'):
+            if text.endswith(suffix):
+                text = text[:-len(suffix)]
+                break
+        return _LOCALIZER_TARGET_ALIASES.get(text)
+
+    @classmethod
+    def _localizer_target_name(cls, target):
+        """Return a canonical name for one TargetPosition message."""
+        physical_name = cls._normalize_localizer_target_name(
+            getattr(target, 'physical_class_name', ''))
+        if physical_name is not None:
+            return physical_name
+        class_name = cls._normalize_localizer_target_name(
+            getattr(target, 'class_name', ''))
+        if class_name is not None:
+            return class_name
+        return cls._normalize_localizer_target_name(
+            getattr(target, 'class_id', -1))
+
+    def _best_localizer_target(self, target_name: str, p: dict):
+        """Get the best current world estimate from object_localizer.
+
+        The localizer publishes independent ``front`` and ``down`` estimates
+        for one physical target.  This task needs one usable world position,
+        so it selects the freshest/highest-quality estimate rather than
+        treating those two records as two different targets.
         """
-        order = self._impact_ball_order(p)
-        if not order:
-            return False
-        approach_distance = max(0.0, float(p.get('approach_distance', 0.5)))
-        pass_distance = max(0.0, float(p.get('pass_distance', 0.35)))
-        min_clearance = max(0.0, float(p.get('min_clearance', 0.05)))
-        z_offset = float(p.get('z_offset', 0.2))
-        approach_timeout = max(1.0, float(p.get('approach_timeout', 90.0)))
-        hit_timeout = max(1.0, float(p.get('hit_timeout', 45.0)))
-        pause = max(0.0, float(p.get('between_balls_pause', 0.5)))
+        wanted = self._normalize_localizer_target_name(target_name)
+        if wanted is None:
+            return None
+
+        min_confidence = float(p.get('min_confidence', 0.02))
+        min_observations = max(1, int(p.get('min_observations', 1)))
+        stale_status = int(getattr(TargetPosition, 'STATUS_STALE', 3))
+        uninitialized_status = int(
+            getattr(TargetPosition, 'STATUS_UNINITIALIZED', 0))
+        stable_status = int(getattr(TargetPosition, 'STATUS_STABLE', 2))
+        allow_stale = bool(p.get('allow_stale_targets', True))
+
+        with self._perception_lock:
+            candidates = list(self.target_positions.targets)
+
+        valid = []
+        for target in candidates:
+            if self._localizer_target_name(target) != wanted:
+                continue
+            status = int(getattr(target, 'status', uninitialized_status))
+            if status == uninitialized_status:
+                continue
+            if status == stale_status and not allow_stale:
+                continue
+            confidence = float(getattr(target, 'confidence', 0.0))
+            observations = int(getattr(target, 'num_observations', 0))
+            x = float(getattr(target, 'world_x', float('nan')))
+            y = float(getattr(target, 'world_y', float('nan')))
+            z = float(getattr(target, 'world_z', float('nan')))
+            age = float(getattr(target, 'age_sec', 0.0))
+            if (confidence < min_confidence or observations < min_observations
+                    or not all(math.isfinite(value) for value in (x, y, z))):
+                continue
+            max_age = float(p.get('max_target_age_seconds', 0.0))
+            if max_age > 0.0 and math.isfinite(age) and age > max_age:
+                continue
+            valid.append((
+                1 if status == stable_status else 0,
+                confidence,
+                observations,
+                -age if math.isfinite(age) else float('-inf'),
+                1 if str(getattr(target, 'estimate_source', '')) == 'down' else 0,
+                target,
+            ))
+
+        if not valid:
+            return None
+
+        target = max(valid, key=lambda item: item[:-1])[-1]
+        return {
+            'name': wanted,
+            'x': float(target.world_x),
+            'y': float(target.world_y),
+            'z': float(target.world_z),
+            'confidence': float(target.confidence),
+            'observations': int(target.num_observations),
+            'status': int(target.status),
+            'age': float(getattr(target, 'age_sec', 0.0)),
+            'source': str(getattr(target, 'estimate_source', 'unknown')),
+            'instance_id': int(getattr(target, 'instance_id', 0)),
+        }
+
+    def _current_localizer_targets(self, p: dict):
+        """Return at most one current estimate for each required target."""
+        result = {}
+        for name in ('collection_frame', 'target_rack'):
+            target = self._best_localizer_target(name, p)
+            if target is not None:
+                result[name] = target
+        return result
+
+    def _look_at_localizer_target(self, target: dict, p: dict,
+                                  label: str) -> bool:
+        """Point the AUV at a world target using an absolute yaw SET goal."""
+        pose = self._latest_robot_pose()
+        dx = float(target['x']) - pose[0]
+        dy = float(target['y']) - pose[1]
+        if math.hypot(dx, dy) <= 1e-6:
+            yaw = float(self._cmd_yaw)
+        else:
+            yaw = self._wrap_yaw_degrees(math.degrees(math.atan2(dy, dx)))
 
         self.get_logger().info(
-            f'hit_balls: order={order}, approach={approach_distance:.2f}m, '
-            f'pass={pass_distance:.2f}m')
-        found = {}
-        active_localization = bool(p.get('active_localization', True))
-        if active_localization:
-            found = self._active_localize_impact_balls(order, p)
-            # Do not start an impact run with only one ball localized.  The
-            # active scan provides the spatial search; this short completion
-            # wait lets the detector/localizer finish the second estimate.
-            for name in order:
-                if name in found:
-                    continue
-                self.get_logger().info(
-                    f'hit_balls: waiting to complete localization for {name}')
-                target = self._wait_for_impact_ball(name, p)
-                if target is None:
-                    return False
-                found[name] = target
-
-        impact_mode = str(p.get('impact_mode', '')).strip().lower()
-        if impact_mode == 'staged_charge_return':
-            if len(order) != 1:
-                self.get_logger().error(
-                    'hit_balls: staged_charge_return requires exactly one ball')
-                return False
-            name = order[0]
-            target = self._best_impact_ball_target(name, p) or found.get(name)
-            if target is None:
-                target = self._wait_for_impact_ball(name, p)
-            if target is None:
-                return False
-            return self._task_staged_charge_return(name, target, p)
-
-        for index, name in enumerate(order):
-            target = self._best_impact_ball_target(name, p)
-            if target is None:
-                target = found.get(name)
-            if target is None:
-                target = self._wait_for_impact_ball(name, p)
-            if target is None:
-                return False
-
-            dx = target['x'] - self._cmd_x
-            dy = target['y'] - self._cmd_y
-            distance = math.hypot(dx, dy)
-            if distance > 1e-6:
-                direction = np.array([dx / distance, dy / distance])
-            else:
-                yaw_rad = math.radians(self._cmd_yaw)
-                direction = np.array([math.cos(yaw_rad), math.sin(yaw_rad)])
-
-            # If already close, do not back away just to create a staging
-            # point; leave at least min_clearance before the ball instead.
-            staging_distance = min(
-                approach_distance,
-                max(0.0, distance - min_clearance),
-            )
-            staging_x = target['x'] - direction[0] * staging_distance
-            staging_y = target['y'] - direction[1] * staging_distance
-            hit_z = target['z'] + z_offset
-            self.get_logger().info(
-                f'hit_balls: [{index + 1}/{len(order)}] {name} '
-                f'estimate=({target["x"]:.2f}, {target["y"]:.2f}, '
-                f'{target["z"]:.2f}), confidence={target["confidence"]:.2f}')
-
-            if not self._travel_to_impact_point(
-                    staging_x, staging_y, hit_z, approach_timeout,
-                    f'{name} approach'):
-                return False
-
-            # Refresh once after staging.  If the dynamic suspended ball has
-            # moved, use its latest estimate for the pass-through segment.
-            refreshed = self._best_impact_ball_target(name, p)
-            if refreshed is not None:
-                target = refreshed
-            dx = target['x'] - self._cmd_x
-            dy = target['y'] - self._cmd_y
-            distance = math.hypot(dx, dy)
-            if distance > 1e-6:
-                direction = np.array([dx / distance, dy / distance])
-            hit_x = target['x'] + direction[0] * pass_distance
-            hit_y = target['y'] + direction[1] * pass_distance
-            hit_z = target['z'] + z_offset
-            if not self._travel_to_impact_point(
-                    hit_x, hit_y, hit_z, hit_timeout,
-                    f'{name} impact pass'):
-                return False
-            self.get_logger().info(f'hit_balls: {name} collision path finished')
-            if index + 1 < len(order) and pause > 0.0:
-                time.sleep(pause)
+            f'find_collection_frame：观察 {label} '
+            f'({target["x"]:.2f}, {target["y"]:.2f}, {target["z"]:.2f})，'
+            f'偏航角={yaw:.1f}°，来源={target["source"]}')
+        success, message = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [self._cmd_x, self._cmd_y, self._cmd_z, yaw],
+            'rz',
+            timeout=max(1.0, float(p.get('rotate_timeout', 15.0))),
+            task_context=self._format_motion_context(f'观察{label}'))
+        if not success:
+            self.get_logger().error(
+                f'find_collection_frame：旋转观察 {label} 失败：{message}')
+            return False
+        self._cmd_yaw = yaw
+        settle = max(0.0, float(p.get('look_settle_seconds', 0.5)))
+        if settle > 0.0:
+            time.sleep(settle)
         return True
+
+    def _confirm_localizer_target(self, target_name: str, p: dict,
+                                  deadline: float) -> bool:
+        """Require one target estimate to remain available briefly."""
+        hold_seconds = max(0.0, float(p.get('confirm_seconds', 0.5)))
+        hold_start = None
+        while not self.stopped and time.monotonic() < deadline:
+            if self._best_localizer_target(target_name, p) is not None:
+                if hold_start is None:
+                    hold_start = time.monotonic()
+                if time.monotonic() - hold_start >= hold_seconds:
+                    return True
+            else:
+                hold_start = None
+            time.sleep(0.05)
+        return False
+
+    def _scan_localizer_east_to_south(self, p: dict, deadline: float) -> bool:
+        """Scan absolute yaw 90° (east) through 180° (south)."""
+        start = float(p.get('scan_start_yaw_deg', 90.0))
+        end = float(p.get('scan_end_yaw_deg', 180.0))
+        step = abs(float(p.get('scan_yaw_step_deg', 15.0)))
+        if step < 1e-3:
+            step = 15.0
+        if end < start:
+            start, end = end, start
+
+        headings = list(np.arange(start, end, step, dtype=float)) + [end]
+        self.get_logger().info(
+            f'find_collection_frame：初始未发现目标，'
+            f'从东向 {start:.1f}° 至南向 {end:.1f}° 扫描')
+        any_found = False
+        for heading in headings:
+            if self.stopped or time.monotonic() >= deadline:
+                return False
+            heading = self._wrap_yaw_degrees(float(heading))
+            success, message = self._send_action_goal(
+                BasicMotion.Goal.SET,
+                [self._cmd_x, self._cmd_y, self._cmd_z, heading],
+                'rz',
+                timeout=min(
+                    max(1.0, float(p.get('rotate_timeout', 15.0))),
+                    max(1.0, deadline - time.monotonic())),
+                quiet=True,
+                task_context=self._format_motion_context(
+                    f'东向至南向扫描{heading:.1f}°'))
+            if not success:
+                self.get_logger().warn(
+                    f'find_collection_frame：扫描旋转至 {heading:.1f}° 失败：'
+                    f'{message}')
+                return False
+            self._cmd_yaw = heading
+            settle = max(0.0, float(p.get('scan_settle_seconds', 0.4)))
+            if settle > 0.0:
+                time.sleep(min(settle, max(0.0, deadline - time.monotonic())))
+            found = self._current_localizer_targets(p)
+            if found:
+                any_found = True
+                self.get_logger().info(
+                    f'find_collection_frame：扫描在偏航角={heading:.1f}° '
+                    f'发现 {", ".join(sorted(found))}')
+                if len(found) >= 2:
+                    return True
+        return any_found
+
+    def _task_find_collection_frame(self, p: dict) -> bool:
+        """执行 26rb 置物台/台框定位任务模块。"""
+        task = RB26FindCollectionFrameTask(self, p)
+        return task.execute()
+
+    def _task_light_target_rack_return_origin(self, p: dict) -> bool:
+        """粗定位到目标架上方，下视视觉伺服对正后闪灯并返回。
+
+        ``find_collection_frame`` has already confirmed the localizer targets
+        before this task is normally called.  Its world position is used only
+        for the initial coarse move.  The final alignment is closed on the
+        ``target_rack_down`` detections from both down cameras, so the light
+        command is issued only after the rack is visually centred and stable.
+        The final return is the actual task chain origin, not the pose at task
+        entry.
+        """
+        target_name = self._normalize_localizer_target_name(
+            p.get('frame_name', p.get('target_name', 'target_rack')))
+        if target_name is None:
+            self.get_logger().error(
+                'light_target_rack_return_origin：目标名称无效')
+            return False
+
+        target_timeout = max(1.0, float(p.get('target_timeout',
+                                              p.get('timeout', 120.0))))
+        deadline = time.monotonic() + target_timeout
+        target = None
+        last_wait_log = float('-inf')
+        while not self.stopped and time.monotonic() < deadline:
+            target = self._best_localizer_target(target_name, p)
+            if target is not None:
+                break
+            now = time.monotonic()
+            if now - last_wait_log >= 1.0:
+                self.get_logger().info(
+                    f'light_target_rack_return_origin：等待定位器提供 '
+                    f'{target_name} 的位置')
+                last_wait_log = now
+            time.sleep(0.05)
+
+        if self.stopped or target is None:
+            self.get_logger().error(
+                f'light_target_rack_return_origin：等待 {target_name} 超时')
+            return False
+
+        target_z = max(0.0, float(p.get('above_z_m', 0.20)))
+        pose = self._latest_robot_pose()
+        dx = float(target['x']) - pose[0]
+        dy = float(target['y']) - pose[1]
+        target_yaw = float(pose[5])
+        if math.hypot(dx, dy) > 1e-6:
+            target_yaw = self._wrap_yaw_degrees(math.degrees(math.atan2(dy, dx)))
+
+        self.get_logger().info(
+            f'light_target_rack_return_origin：移动到 {target_name} 中心上方 '
+            f'({target["x"]:.2f}, {target["y"]:.2f}, {target_z:.2f})，'
+            f'偏航角={target_yaw:.1f}°')
+        success, message = self._send_action_goal(
+            BasicMotion.Goal.SET,
+            [float(target['x']), float(target['y']), target_z, target_yaw],
+            'xyzrz',
+            timeout=max(1.0, float(p.get('move_timeout', 120.0))),
+            task_context=self._format_motion_context(
+                f'移动到{target_name}正上方'))
+        if not success:
+            self.get_logger().error(
+                f'light_target_rack_return_origin：移动失败：{message}')
+            return False
+        self._cmd_x = float(target['x'])
+        self._cmd_y = float(target['y'])
+        self._cmd_z = target_z
+        self._cmd_yaw = target_yaw
+
+        # 世界坐标只负责把目标送入下视相机视场，最终位置不再由
+        # target_positions 的世界坐标闭环决定。
+        if not self._down_visual_servo_target_rack(p, target_z):
+            return False
+
+        light_value = p.get('light_color', p.get('light', 'yellow'))
+        if isinstance(light_value, str):
+            light_value = {
+                'off': self.LIGHT_OFF,
+                'yellow': self.LIGHT_YELLOW,
+                'green': self.LIGHT_GREEN,
+                'red': self.LIGHT_RED,
+            }.get(light_value.strip().lower(), self.LIGHT_YELLOW)
+        try:
+            light_value = int(light_value)
+        except (TypeError, ValueError):
+            light_value = self.LIGHT_YELLOW
+        if light_value not in (self.LIGHT_OFF, self.LIGHT_YELLOW,
+                               self.LIGHT_GREEN, self.LIGHT_RED):
+            light_value = self.LIGHT_YELLOW
+
+        self.set_light(light_value, f'{target_name} 中心')
+        hold_seconds = max(0.0, float(p.get('light_hold_seconds', 1.0)))
+        try:
+            if hold_seconds > 0.0:
+                end = time.monotonic() + hold_seconds
+                while not self.stopped and time.monotonic() < end:
+                    time.sleep(min(0.05, end - time.monotonic()))
+            if self.stopped:
+                return False
+
+            self.get_logger().info(
+                'light_target_rack_return_origin：返回任务链原点 '
+                '（0.00, 0.00, 0.00, 0.0°）')
+            success, message = self._send_action_goal(
+                BasicMotion.Goal.SET,
+                [0.0, 0.0, 0.0, 0.0],
+                'xyzrz',
+                timeout=max(1.0, float(p.get('return_timeout', 120.0))),
+                task_context=self._format_motion_context(
+                    f'从{target_name}返回任务链原点'))
+            if not success:
+                self.get_logger().error(
+                    f'light_target_rack_return_origin：返回失败：{message}')
+                return False
+            self._cmd_x = self._cmd_y = self._cmd_z = self._cmd_yaw = 0.0
+            self.get_logger().info(
+                'light_target_rack_return_origin：已返回任务链原点')
+            return True
+        finally:
+            self.light_off()
+
+    def _task_grab_ball(self, p: dict) -> bool:
+        """使用左下视相机完成单个指定颜色球的抓取动作。"""
+        grab_task = RB26GrabBallTask(self, p)
+        return grab_task.execute()
 
     # ── 投信标 / 采水 / 释放取水器 ─────────────────────────────────
 
     def _task_drop_beacon(self, p: dict) -> bool:
-        angle = float(p.get('angle_rad', self.ANGLE_DROP_BEACON))
-        self.set_servo(angle, 'drop beacon')
-        self.get_logger().info('🔫 BEACON DROPPED!')
-        return True
+        """执行 26rb 丢球/投放任务模块。"""
+        task = RB26DropBeaconTask(self, p)
+        return task.execute()
 
     def _task_take_water_sample(self, p: dict) -> bool:
         angle = float(p.get('angle_rad', self.ANGLE_SAMPLE_WATER))
-        self.set_servo(angle, 'take water sample')
-        self.get_logger().info('💧 WATER SAMPLE TAKEN!')
+        self.set_servo(angle, '采集水样')
+        self.get_logger().info('💧 水样已采集！')
         return True
 
     def _task_release_sampler(self, p: dict) -> bool:
         """转向 → 对齐 START 标记 → 上浮靠岸 → 释放取水器。"""
         align_yaw = float(p.get('align_yaw', 180.0))
-        start_cid = int(p.get('start_class_id', 4))
+        start_cid = model_class_id('guide_line')
+        if 'start_class_id' in p:
+            start_cid = int(p['start_class_id'])
         approach_z = float(p.get('approach_z', -0.3))
         approach_x = float(p.get('approach_x', -0.3))
         approach_timeout = float(p.get('approach_timeout', 15.0))
@@ -1585,7 +2060,7 @@ class TaskRunnerNode(Node):
                                     self.ANGLE_RELEASE_SAMPLER))
 
         self.get_logger().info(
-            f'🧭 release_sampler: turning to rz={align_yaw:.1f}°')
+            f'🧭 release_sampler：转向 rz={align_yaw:.1f}°')
         self._send_action_goal(
             BasicMotion.Goal.WMOVE,
             [self._cmd_x, self._cmd_y, self._cmd_z, align_yaw],
@@ -1593,11 +2068,11 @@ class TaskRunnerNode(Node):
         self._cmd_yaw = align_yaw
 
         self.get_logger().info(
-            f'🎯 release_sampler: aligning to START marker (class={start_cid})')
-        self._align_to_class(start_cid, 'START marker')
+            f'🎯 release_sampler：对准 START 标记（class={start_cid}）')
+        self._align_to_class(start_cid, 'START 标记')
 
         self.get_logger().info(
-            f'🌊🏖️  release_sampler: wmove z={approach_z} x={approach_x}')
+            f'🌊🏖️  release_sampler：执行 wmove，z={approach_z}，x={approach_x}')
         self._send_action_goal(
             BasicMotion.Goal.WMOVE,
             [approach_x, self._cmd_y, approach_z, self._cmd_yaw],
@@ -1608,8 +2083,8 @@ class TaskRunnerNode(Node):
             'xz', timeout=approach_timeout)
         self._cmd_x = approach_x; self._cmd_z = approach_z
 
-        self.set_servo(release_angle, 'release water sampler')
-        self.get_logger().info('🗑️  WATER SAMPLER RELEASED!')
+        self.set_servo(release_angle, '释放取水器')
+        self.get_logger().info('🗑️  取水器已释放！')
         return True
 
     # ========================================================================
@@ -1618,58 +2093,57 @@ class TaskRunnerNode(Node):
 
     def _run_task_cb(self, request, response):
         if request.start:
-            path = request.task_name
-            if not os.path.isabs(path):
-                default = os.path.join(
-                    get_package_share_directory('uv_task'), 'config', 'tasks.json'
-                )
-                if os.path.exists(default):
-                    path = default
+            path = self._resolve_mission_path(request.task_name)
 
-            self.get_logger().info(f'Service /task/run: start tasks from {path}')
-            self.tasks = self.load_tasks(path)
+            self.get_logger().info(f'服务 /task/run：从 {path} 开始执行任务')
+            try:
+                self.tasks = self.load_tasks(path)
+            except ConfigError as exc:
+                response.success = False
+                response.message = f'任务配置无效：{exc}'
+                self.get_logger().error(response.message)
+                return response
             if self.tasks:
                 thread = threading.Thread(target=self.run_task_list, daemon=True)
                 thread.start()
                 response.success = True
-                response.message = f'Started {len(self.tasks)} tasks'
+                response.message = f'已启动 {len(self.tasks)} 个任务'
             else:
                 response.success = False
-                response.message = 'No tasks loaded'
+                response.message = '未加载任何任务'
         else:
-            self.get_logger().info('Service /task/run: stop requested')
+            self.get_logger().info('服务 /task/run：收到停止请求')
             self.stopped = True
             response.success = True
-            response.message = 'Stopped'
+            response.message = '已停止'
         return response
 
     def _stop_task_cb(self, request, response):
-        self.get_logger().warn('Service /task/stop: emergency stop')
+        self.get_logger().warn('服务 /task/stop：紧急停止')
         self.stopped = True
         if self._active_goal_handle is not None:
-            self.get_logger().info('Cancelling active action goal')
-            cancel_future = self._action_client.async_cancel_goal(
-                self._active_goal_handle)
+            self.get_logger().info('正在取消当前动作目标')
+            self._action_client.async_cancel_goal(self._active_goal_handle)
             self._active_goal_handle = None
         response.success = True
-        response.message = 'Tasks stopped'
+        response.message = '任务已停止'
         return response
 
     def _exec_task_cb(self, request, response):
         """Handle /task/exec: execute a single task (debug mode only)."""
         if not self._debug_mode:
             response.success = False
-            response.message = 'ExecTask service only available in debug mode'
-            self.get_logger().warn('/task/exec called but debug_mode is off')
+            response.message = 'ExecTask 服务仅在调试模式下可用'
+            self.get_logger().warn('/task/exec 被调用，但调试模式未开启')
             return response
 
         if self._debug_executing:
             response.success = False
             response.message = (
-                f'Task "{self._debug_task_name}" is already running. '
-                'Wait for it or call /task/stop.'
+                f'任务“{self._debug_task_name}”已在运行。'
+                '请等待任务结束，或调用 /task/stop。'
             )
-            self.get_logger().warn(f'Rejected concurrent /task/exec: {self._debug_task_name}')
+            self.get_logger().warn(f'拒绝并发 /task/exec：{self._debug_task_name}')
             return response
 
         task_name = request.task_name
@@ -1680,7 +2154,7 @@ class TaskRunnerNode(Node):
         if task_name not in self.task_map:
             response.success = False
             valid = ', '.join(sorted(self.task_map.keys()))
-            response.message = f'Unknown task: {task_name}. Valid: {valid}'
+            response.message = f'未知任务：{task_name}。有效任务：{valid}'
             return response
 
         # Parse params JSON
@@ -1688,14 +2162,14 @@ class TaskRunnerNode(Node):
             params = json.loads(params_json) if params_json.strip() else {}
         except json.JSONDecodeError as e:
             response.success = False
-            response.message = f'Invalid params JSON: {e}'
+            response.message = f'params_json 无效：{e}'
             return response
 
         # Store timeout for _send_action_goal override
         params['_timeout'] = timeout
 
         self.get_logger().info(
-            f'DEBUG EXEC: {task_name} params={params} timeout={timeout:.0f}s'
+            f'调试执行：{task_name}，参数={params}，超时={timeout:.0f}s'
         )
 
         # Execute in daemon thread (same pattern as run_task_list)
@@ -1706,7 +2180,7 @@ class TaskRunnerNode(Node):
         thread.start()
 
         response.success = True
-        response.message = f'Executing task: {task_name}'
+        response.message = f'正在执行任务：{task_name}'
         return response
 
     def _debug_exec_single(self, name: str, params: dict):
@@ -1725,11 +2199,11 @@ class TaskRunnerNode(Node):
         try:
             success = self._execute_task(name, params)
             if success:
-                self.get_logger().info(f'DEBUG EXEC {name}: SUCCESS')
+                self.get_logger().info(f'调试执行 {name}：成功')
             else:
-                self.get_logger().warn(f'DEBUG EXEC {name}: FAILED')
+                self.get_logger().warn(f'调试执行 {name}：失败')
         except Exception as e:
-            self.get_logger().error(f'DEBUG EXEC {name}: exception: {e}')
+            self.get_logger().error(f'调试执行 {name}：发生异常：{e}')
         finally:
             self._debug_executing = False
             self._debug_task_name = None
@@ -1751,7 +2225,7 @@ class TaskRunnerNode(Node):
             msg.current_task_name = self._debug_task_name or 'unknown'
             msg.total_tasks = 1
             msg.current_task_index = 0
-            msg.error_message = '[DEBUG MODE]'
+            msg.error_message = '[调试模式]'
         elif self.running:
             # Normal mode: task list executing
             msg.status = TaskStatus.STATUS_RUNNING
@@ -1765,7 +2239,7 @@ class TaskRunnerNode(Node):
         else:
             msg.status = TaskStatus.STATUS_IDLE
             if self._debug_mode:
-                msg.error_message = '[DEBUG MODE: idle, waiting for /task/exec]'
+                msg.error_message = '[调试模式：空闲，等待 /task/exec]'
 
         self.pub_status.publish(msg)
 
@@ -1775,20 +2249,23 @@ def main(args=None):
     node = TaskRunnerNode()
 
     if not node._debug_mode:
-        # Normal mode: load default tasks and start immediately
-        default_path = os.path.join(
-            get_package_share_directory('uv_task'), 'config', 'tasks.json'
-        )
-        if os.path.exists(default_path):
+        # Normal mode: load the selected YAML mission and start immediately.
+        default_path = node.mission_file or str(default_mission_path())
+        try:
             node.tasks = node.load_tasks(default_path)
-            if node.tasks:
-                thread = threading.Thread(target=node.run_task_list, daemon=True)
-                thread.start()
-                node.get_logger().info(f'Auto-started task list ({len(node.tasks)} tasks)')
+        except ConfigError as exc:
+            node.get_logger().fatal(f'无法启动任务执行器：{exc}')
+            node.destroy_node()
+            rclpy.try_shutdown()
+            raise SystemExit(2) from exc
+        if node.tasks:
+            thread = threading.Thread(target=node.run_task_list, daemon=True)
+            thread.start()
+            node.get_logger().info(f'已自动启动任务列表（共 {len(node.tasks)} 个任务）')
     else:
         node.get_logger().info(
-            'Debug mode active: auto-start skipped. '
-            'Use /task/exec service to run single tasks.'
+            '调试模式已开启：跳过自动启动。'
+            '请使用 /task/exec 服务执行单个任务。'
         )
 
     try:

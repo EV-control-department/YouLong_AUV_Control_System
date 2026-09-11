@@ -22,12 +22,12 @@ def generate_launch_description():
         'simulation_rate',
         default_value = '100.0'
     )
-
     stonefish_simulator_nogpu_node = Node(
             package='stonefish_ros2',
             executable='stonefish_simulator_nogpu',
             namespace='stonefish_ros2',
             name='stonefish_simulator_nogpu',
+            exec_name='stonefish_simulator_nogpu',
             arguments=[simulation_data, scenario_desc, simulation_rate],
             output='screen',
     )

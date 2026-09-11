@@ -13,6 +13,7 @@ import numpy as np
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, LineState, PoseInfo
+from uv_camera.model_classes import configured_class_id
 
 
 # ==========================================================================
@@ -38,7 +39,7 @@ _DOWN_OPTICAL_TO_BODY = np.array([[0, -1, 0],
 
 
 # ==========================================================================
-# PID 及运动控制参数（可通过 tasks.json params 覆盖）
+# PID 及运动控制参数（可通过 YAML task params 覆盖）
 # ==========================================================================
 
 # ── 横向 PID：center_error → dy（把 AUV 推回管道中心）─────────────
@@ -82,8 +83,8 @@ _SEARCH_MAX_STEP = 0.50          # 单步最大移动 (m)
 _PERCEPTION_MAX_AGE = 0.60       # 感知数据最大有效期 (s)
 
 # ── 标记处理 ─────────────────────────────────────────────────────
-_TRIANGLE_CLASS_ID = 5
-_SQUARE_CLASS_ID = 6
+# triangle/square 是旧版模型中的类别；当前模型没有这两个类别时返回 None，
+# 不再错误地把蓝/红球 ID 当成标记 ID。旧场景仍可通过任务参数显式覆盖。
 _TASK_TIMEOUT = 120.0            # 任务总超时 (s)
 
 # 标记触发与抑制区域（bbox 中心 y / 图像高度 的比例）
@@ -203,7 +204,7 @@ class LineFollower:
         self._head_integral = 0.0
         self._head_last_t = None
 
-        # ── 参数加载（tasks.json params 覆盖模块级默认值）────
+        # ── 参数加载（YAML task params 覆盖模块级默认值）────
         self._timeout = float(params.get('timeout', _TASK_TIMEOUT))
         self._perception_max_age = float(params.get('perception_max_age', _PERCEPTION_MAX_AGE))
         self._lost_max = int(params.get('lost_tolerance', _LOST_TOLERANCE))
@@ -242,9 +243,17 @@ class LineFollower:
         self._search_max_spiral = float(params.get('search_max_spiral', _SEARCH_MAX_SPIRAL))
         self._search_max_step = float(params.get('search_max_step', _SEARCH_MAX_STEP))
 
-        # 标记 class_id
-        self._triangle_cid = int(params.get('triangle_class_id', _TRIANGLE_CLASS_ID))
-        self._square_cid = int(params.get('square_class_id', _SQUARE_CLASS_ID))
+        # 标记 class_id 默认从统一模型元数据读取。当前模型没有 triangle /
+        # square，因此没有显式覆盖时安全地禁用这两段旧标记逻辑。
+        self._triangle_cid = configured_class_id(
+            params, 'triangle_class_id', 'triangle', required=False)
+        self._square_cid = configured_class_id(
+            params, 'square_class_id', 'square', required=False)
+        if self._triangle_cid is None or self._square_cid is None:
+            self._logger.warning(
+                'LineFollower：当前模型元数据没有三角形/正方形标记类别；'
+                '除非显式提供 triangle_class_id/square_class_id 参数，'
+                '否则将禁用标记动作')
 
         # 标记触发/抑制区域
         self._mark_suppress_upper_frac = float(params.get('mark_suppress_upper_frac', _MARK_SUPPRESS_UPPER_FRAC))
@@ -278,7 +287,7 @@ class LineFollower:
         self._last_mark_y = 0.0
 
         self._logger.info(
-            f'LineFollower created: timeout={self._timeout}s')
+            f'LineFollower：已创建，超时={self._timeout}s')
 
     # ── 感知回调 ──────────────────────────────────────────────────────
 
@@ -365,9 +374,9 @@ class LineFollower:
         deadline = time.monotonic() + self._timeout
         stop_when_marker = self._params.get("stop_when_marker", False)
         self._logger.info(
-            f'LineFollower start: timeout={self._timeout:.0f}s, '
-            f'stop_when_marker={stop_when_marker}, '
-            f'lost_tolerance={self._lost_max} frames')
+            f'LineFollower：开始巡线，超时={self._timeout:.0f}s，'
+            f'遇到标记时停止={stop_when_marker}，'
+            f'允许丢帧={self._lost_max} 帧')
 
         while time.monotonic() < deadline and not self._stopped:
             line = self._latest_line()
@@ -393,25 +402,25 @@ class LineFollower:
                                 and dist > self._triangle_min_dist):
                             self._triangle_approached = False
                             self._logger.info(
-                                'LineFollower: triangle flag reset '
-                                f'(in upper 1/{1.0/self._mark_suppress_upper_frac:.0f} '
-                                f'and dist > {self._triangle_min_dist}m)')
+                                'LineFollower：三角形标记状态已重置，'
+                                f'位于上方 1/{1.0/self._mark_suppress_upper_frac:.0f} '
+                                f'区域且距离>{self._triangle_min_dist}m')
 
                     if (not self._triangle_approached
                             and bbox_center_y > height * self._mark_trigger_lower_frac):
                         det = self._best_detection([self._triangle_cid])
                         if det is not None:
                             self._logger.info(
-                                f'LineFollower: triangle (class={self._triangle_cid}) '
-                                'detected, approaching')
+                                f'LineFollower：检测到三角形标记 '
+                                f'（class={self._triangle_cid}），开始接近')
                             # 1. 对准三角形
                             self._node._align_to_class(
                                 self._triangle_cid, 'triangle')
                             # 亮红灯 — 识别到三角形
                             self._node.set_light(
-                                self._node.LIGHT_RED, 'triangle marker detected')
+                                self._node.LIGHT_RED, '检测到三角形标记')
                             self._logger.info(
-                                '🚨 LineFollower: RED LIGHT — triangle marker!')
+                                '🚨 LineFollower：红灯已亮——检测到三角形标记！')
                             time.sleep(1)
                             # 关灯
                             self._node.light_off()
@@ -441,9 +450,9 @@ class LineFollower:
                             self._last_mark_y = self._node._cmd_y
                             total = self._triangle_count + self._square_count
                             self._logger.info(
-                                f'LineFollower: triangle handled, '
-                                f'task #{self._triangle_count} done, '
-                                f'total={total}/4')
+                                f'LineFollower：三角形标记已处理，'
+                                f'第 {self._triangle_count} 个任务完成，'
+                                f'总计={total}/4')
 
                 # ── 正方形标记处理 ──
                 det = self._best_detection([self._square_cid])
@@ -460,17 +469,17 @@ class LineFollower:
                                 and dist > self._triangle_min_dist):
                             self._square_approached = False
                             self._logger.info(
-                                'LineFollower: square flag reset '
-                                f'(in upper 1/{1.0/self._mark_suppress_upper_frac:.0f} '
-                                f'and dist > {self._triangle_min_dist}m)')
+                                'LineFollower：正方形标记状态已重置，'
+                                f'位于上方 1/{1.0/self._mark_suppress_upper_frac:.0f} '
+                                f'区域且距离>{self._triangle_min_dist}m')
 
                     if (not self._square_approached
                             and bbox_center_y > height * self._mark_trigger_lower_frac):
                         det = self._best_detection([self._square_cid])
                         if det is not None:
                             self._logger.info(
-                                f'LineFollower: square (class={self._square_cid}) '
-                                'detected, approaching')
+                                f'LineFollower：检测到正方形标记 '
+                                f'（class={self._square_cid}），开始接近')
                             # 1. 对准正方形
                             self._node._align_to_class(
                                 self._square_cid, 'square')
@@ -478,10 +487,10 @@ class LineFollower:
                             for flash in range(2):
                                 self._node.set_light(
                                     self._node.LIGHT_GREEN,
-                                    f'square marker — flash #{flash+1}')
+                                    f'正方形标记——第 {flash+1} 次闪烁')
                                 self._logger.info(
-                                    f'🟢 LineFollower: GREEN LIGHT #{flash+1} '
-                                    f'— square marker!')
+                                    f'🟢 LineFollower：第 {flash+1} 次绿灯——'
+                                    '检测到正方形标记！')
                                 time.sleep(2)
                                 # 关灯
                                 self._node.light_off()
@@ -490,9 +499,9 @@ class LineFollower:
                             total_deg = (self._square_rotation_count
                                          * self._square_rotation_step)
                             self._logger.info(
-                                f'LineFollower: rotating {total_deg:.0f}° '
-                                f'({self._square_rotation_count}×'
-                                f'{self._square_rotation_step:.0f}°)')
+                                f'LineFollower：开始旋转 {total_deg:.0f}° '
+                                f'（{self._square_rotation_count}×'
+                                f'{self._square_rotation_step:.0f}°）')
                             for _ in range(self._square_rotation_count):
                                 if self._stopped:
                                     return False
@@ -508,15 +517,16 @@ class LineFollower:
                             self._last_mark_y = self._node._cmd_y
                             total = self._triangle_count + self._square_count
                             self._logger.info(
-                                f'LineFollower: square handled, '
-                                f'task #{self._square_count} done, '
-                                f'total={total}/4')
+                                f'LineFollower：正方形标记已处理，'
+                                f'第 {self._square_count} 个任务完成，'
+                                f'总计={total}/4')
             elif self._lost_count < self._lost_max and self._last_valid_line is not None:
                 # 短暂丢帧 → 用最后的有效方向盲跟一小步
                 self._lost_count += 1
                 self._logger.info(
-                    f'LineFollower: lost frame #{self._lost_count}/'
-                    f'{self._lost_max}, coasting with last heading')
+                    f'LineFollower：连续丢帧 '
+                    f'#{self._lost_count}/{self._lost_max}，'
+                    '沿用上一帧航向继续盲跟')
                 ok = self._follow_step(self._last_valid_line, coast_mode=True)
                 if not ok:
                     return False
@@ -525,8 +535,8 @@ class LineFollower:
                 total = self._triangle_count + self._square_count
                 if total >= 4:
                     self._logger.info(
-                        f'LineFollower: {total} tasks completed, '
-                        f'line lost → mission complete')
+                        f'LineFollower：已完成 {total} 个标记任务，'
+                        '巡线丢失，任务完成')
                     return True
                 # 否则进入搜索模式
                 self._lost_count = 0
@@ -536,7 +546,7 @@ class LineFollower:
 
         expired = time.monotonic() >= deadline
         self._logger.info(
-            f'LineFollower: {"timeout" if expired else "stopped"}')
+            f'LineFollower：{"已超时" if expired else "已停止"}')
         return False
 
     # ── 搜索阶段 ──────────────────────────────────────────────────────
@@ -562,8 +572,8 @@ class LineFollower:
         dx, dy = dirs[self._search_spiral_dir]
 
         self._logger.info(
-            f'Line search: dir={self._search_spiral_dir} '
-            f'size={size:.2f}m step=({dx:.2f}, {dy:.2f})')
+            f'巡线搜索：方向={self._search_spiral_dir}，'
+            f'范围={size:.2f}m，步长=({dx:.2f}, {dy:.2f})')
 
         success, _ = self._node._send_action_goal(
             BasicMotion.Goal.BMOVE,
@@ -580,8 +590,7 @@ class LineFollower:
         if self._search_spiral_dir == 0:
             self._search_spiral_size += self._search_spiral_step
             self._logger.info(
-                f'Line search: size increased to '
-                f'{self._search_spiral_size:.2f}m')
+                f'巡线搜索：范围扩大到 {self._search_spiral_size:.2f}m')
 
         return success
 
@@ -608,9 +617,9 @@ class LineFollower:
 
             self._step_count += 1
             self._logger.info(
-                f'Line follow #{self._step_count} [coast]: '
-                f'fwd={forward:.3f} dy={dy:.3f} dyaw=0 '
-                f'center={line.center_error:.3f}')
+                f'巡线跟踪 #{self._step_count}［盲跟］：'
+                f'前进={forward:.3f}，横移={dy:.3f}，偏航变化=0，'
+                f'中心误差={line.center_error:.3f}')
 
             success, _ = self._node._send_action_goal(
                 BasicMotion.Goal.BMOVE,
@@ -675,15 +684,15 @@ class LineFollower:
 
         self._step_count += 1
         self._logger.debug(
-            f'Line follow #{self._step_count}: '
-            f'fwd={forward:.3f} dy={dy:.3f}(pid={lat_pid_out:.2f}) '
-            f'dyaw={dyaw:.2f}°(pid={head_pid_out:.2f}) '
-            f'center={line.center_error:.3f} head={line.heading_error_deg:.1f}°')
+            f'巡线跟踪 #{self._step_count}：'
+            f'前进={forward:.3f}，横移={dy:.3f}（PID={lat_pid_out:.2f}），'
+            f'偏航变化={dyaw:.2f}°（PID={head_pid_out:.2f}），'
+            f'中心误差={line.center_error:.3f}，航向误差={line.heading_error_deg:.1f}°')
         if self._step_count % 20 == 1:
             self._logger.info(
-                f'Line follow #{self._step_count}: '
-                f'fwd={forward:.3f} dy={dy:.3f} dyaw={dyaw:.2f}° '
-                f'center={line.center_error:.3f} head={line.heading_error_deg:.1f}°')
+                f'巡线跟踪 #{self._step_count}：'
+                f'前进={forward:.3f}，横移={dy:.3f}，偏航变化={dyaw:.2f}°，'
+                f'中心误差={line.center_error:.3f}，航向误差={line.heading_error_deg:.1f}°')
 
         # 发送 BMOVE xyrz（同步前向 + 横向 + 偏航）
         success, _ = self._node._send_action_goal(
@@ -811,4 +820,4 @@ class LineFollower:
         for sub in self._subs:
             self._node.destroy_subscription(sub)
         self._subs.clear()
-        self._logger.info('LineFollower destroyed')
+        self._logger.info('LineFollower：已销毁')

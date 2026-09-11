@@ -11,6 +11,14 @@ data_files = [
     ('share/' + package_name + '/config', [
         'config/front.npz', 'config/down.npz',
         'config/robotcup_front.npz', 'config/robotcup_down.npz',
+        'config/object_localizer_sim.yaml',
+    ]),
+    ('share/' + package_name + '/config/profiles', [
+        'config/profiles/sim_dev.yaml',
+        'config/profiles/sim_ci.yaml',
+        'config/profiles/hil_lab.yaml',
+        'config/profiles/real_default.yaml',
+        'config/profiles/real_safe.yaml',
     ]),
 ]
 

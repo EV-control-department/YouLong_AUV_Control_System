@@ -1,0 +1,5 @@
+/hw_manager:
+  ros__parameters:
+    arm_mode: 1
+    watchdog_timeout: 3.0
+    battery_low_threshold: 15.0

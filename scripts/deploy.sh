@@ -6,7 +6,7 @@
 #   ./scripts/deploy.sh
 #   ./scripts/deploy.sh --dry-run
 #   ./scripts/deploy.sh --delete
-#   ./scripts/deploy.sh --checksum workspace_auv/src/uv_perception/uv_perception/vision.py
+#   ./scripts/deploy.sh --checksum workspace_auv/src/uv_camera/uv_camera/composed.py
 #   ./scripts/deploy.sh --git-changed --checksum
 #
 # The connection defaults can be overridden with environment variables:
@@ -60,11 +60,11 @@ usage() {
 示例：
   ./scripts/deploy.sh
   ./scripts/deploy.sh --dry-run
-  ./scripts/deploy.sh --checksum --dry-run workspace_auv/src/uv_perception/uv_perception/vision.py
+  ./scripts/deploy.sh --checksum --dry-run workspace_auv/src/uv_camera/uv_camera/composed.py
   ./scripts/deploy.sh --git-changed --checksum --dry-run
   ./scripts/deploy.sh --git-range HEAD~1..HEAD --checksum
-  ./scripts/deploy.sh workspace_auv/src/uv_perception/uv_perception/vision.py
-  ./scripts/deploy.sh workspace_auv/src/uv_perception/uv_perception/vision.py workspace_auv/src/uv_perception/config
+  ./scripts/deploy.sh workspace_auv/src/uv_camera/uv_camera/composed.py
+  ./scripts/deploy.sh workspace_auv/src/uv_camera/config
   DEPLOY_PATH='~/deploy/YouLong_AUV_Control_System' ./scripts/deploy.sh
 EOF
 }

@@ -10,7 +10,7 @@ rosbag，也不会因为编码器积压造成录制卡顿。
 仿真启动时，录制 FPS 默认跟随 `camera_stitch_fps`：
 
 ```bash
-ros2 launch uv_bringup sim_bringup.py \
+ros2 launch uv_bringup sim.launch.py \
   record_session:=true \
   record_video_mode:=raw \
   open_annotated_windows:=false \
@@ -20,7 +20,7 @@ ros2 launch uv_bringup sim_bringup.py \
 需要同时保存标注流时使用：
 
 ```bash
-ros2 launch uv_bringup sim_bringup.py \
+ros2 launch uv_bringup sim.launch.py \
   record_session:=true \
   record_video_mode:=both
 ```

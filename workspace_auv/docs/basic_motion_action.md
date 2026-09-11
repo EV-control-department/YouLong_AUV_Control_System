@@ -207,7 +207,7 @@ float32 robot_x/y/z/yaw          # 机器人当前 odom 系位姿 (yaw: 度)
 float32 target_x/y/z/yaw         # 当前运动目标 odom 系位姿 (yaw: 度)
 ```
 
-`position` 节点 (uv_perception) 订阅此话题作为射线原点，不再依赖仅仿真可用的 `/auv/state`。
+`object_localizer` 节点 (uv_camera) 订阅此话题作为射线原点，不再依赖仅仿真可用的 `/auv/state`。
 
 ---
 
@@ -305,7 +305,8 @@ if __name__ == '__main__':
 
 ## 在 task_runner 中使用
 
-task_runner 通过同样的 ActionClient 接口调用 basic_motion。JSON 任务配置文件中的任务名映射到对应命令：
+task_runner 通过同样的 ActionClient 接口调用 basic_motion。YAML mission
+中的任务名映射到对应命令：
 
 完整任务列表（SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL 单轴到多轴共 25+ 个任务）见 `docs/debug_guide.md` 的 task_runner 章节。
 

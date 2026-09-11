@@ -14,6 +14,7 @@ import numpy as np
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, PoseInfo
 from std_msgs.msg import Int32MultiArray
+from uv_camera.model_classes import configured_class_id
 
 
 # ==========================================================================
@@ -97,15 +98,20 @@ class ArrowSurfacer:
         self._logger = node.get_logger()
         self._stopped = False
 
-        # ── 箭头 class_id（可通过 tasks.json 参数覆盖）──
-        self._arrow_cid = int(params.get('arrow_class_id', 3))
+        # 默认从统一模型元数据读取。当前 robotcup 模型没有箭头/彩色扇区
+        # 类别，因此不会再误用旧模型的 0/1/2/3；旧场景可显式传入覆盖值。
+        self._arrow_cid = configured_class_id(
+            params, 'arrow_class_id', 'arrow', required=False)
 
         # ── 扇区参数 ──
         self._sector_x = float(params.get('sector_x', 0.0))
         self._sector_y = float(params.get('sector_y', 0.0))
-        self._yellow_cid = int(params.get('yellow_class_id', 0))
-        self._red_cid    = int(params.get('red_class_id', 1))
-        self._green_cid  = int(params.get('green_class_id', 2))
+        self._yellow_cid = configured_class_id(
+            params, 'yellow_class_id', 'yellow', required=False)
+        self._red_cid = configured_class_id(
+            params, 'red_class_id', 'red', required=False)
+        self._green_cid = configured_class_id(
+            params, 'green_class_id', 'green', required=False)
         self._view_yaw = float(params.get('view_yaw', 90.0))
         # 指定投掷扇区：'yellow' / 'green' / 'red'，空=ArUco 读取映射
         self._target_sector = str(params.get('target_sector', '')).strip().lower()
@@ -136,7 +142,7 @@ class ArrowSurfacer:
         self._subs.append(node.create_subscription(
             Int32MultiArray, '/perception/aruco/ids', self._aruco_cb, 10))
 
-        self._logger.info('ArrowSurfacer created')
+        self._logger.info('ArrowSurfacer：已创建')
 
     # ── 感知回调 ──────────────────────────────────────────────────────
 
@@ -154,8 +160,8 @@ class ArrowSurfacer:
                 if mid not in self._aruco_ids:
                     self._aruco_ids.add(int(mid))
                     self._logger.info(
-                        f'ArrowSurfacer: ArUco marker #{mid} detected '
-                        f'(total: {sorted(self._aruco_ids)})')
+                        f'ArrowSurfacer：检测到 ArUco 标记 #{mid}，'
+                        f'当前总数={sorted(self._aruco_ids)}')
 
     # ── 感知融合 ──────────────────────────────────────────────────────
 
@@ -262,7 +268,7 @@ class ArrowSurfacer:
                 return False
 
             if self._best_detection([class_id]) is not None:
-                self._logger.info(f'ArrowSurfacer: {label} found during search!')
+                self._logger.info(f'ArrowSurfacer：搜索过程中发现 {label}！')
                 return True
 
             dx_norm, dy_norm = self._SEARCH_DIRS[search_dir]
@@ -275,9 +281,9 @@ class ArrowSurfacer:
             step_dy = target_dy / n_steps
 
             self._logger.info(
-                f'ArrowSurfacer search [{label}]: dir={search_dir} '
-                f'size={search_size:.2f}m '
-                f'({n_steps} × {micro_step:.2f}m steps)')
+                f'ArrowSurfacer 搜索 [{label}]：方向={search_dir}，'
+                f'范围={search_size:.2f}m，'
+                f'步数={n_steps}（每步 {micro_step:.2f}m）')
 
             for _ in range(n_steps):
                 if self._stopped:
@@ -295,18 +301,18 @@ class ArrowSurfacer:
 
                 if self._best_detection([class_id]) is not None:
                     self._logger.info(
-                        f'ArrowSurfacer: {label} detected during micro-step!')
+                        f'ArrowSurfacer：微步移动过程中检测到 {label}！')
                     return True
 
             search_dir = (search_dir + 1) % 8
             if search_dir == 0:
                 search_size += spiral_step
                 self._logger.info(
-                    f'ArrowSurfacer: search size for [{label}] → '
+                    f'ArrowSurfacer：[{label}] 搜索范围扩大到 '
                     f'{search_size:.2f}m')
 
         self._logger.warn(
-            f'ArrowSurfacer: search for [{label}] exhausted, not found')
+            f'ArrowSurfacer：[{label}] 搜索范围耗尽，未找到目标')
         return False
 
     def _search_for_arrow(self) -> bool:
@@ -341,13 +347,13 @@ class ArrowSurfacer:
             return  # 已有数据，无需搜索
 
         self._logger.info(
-            'ArrowSurfacer: no ArUco ID yet, starting frontal search')
+            'ArrowSurfacer：尚未获得 ArUco ID，开始前视搜索')
 
         for rnd in range(2):
             if self._stopped or self._aruco_ids:
                 return
 
-            self._logger.info(f'ArrowSurfacer: ArUco search round {rnd + 1}/2')
+            self._logger.info(f'ArrowSurfacer：ArUco 搜索第 {rnd + 1}/2 轮')
 
             # 右转 15°
             self._node._send_action_goal(
@@ -359,7 +365,7 @@ class ArrowSurfacer:
             time.sleep(0.5)
             if self._aruco_ids:
                 self._logger.info(
-                    f'ArrowSurfacer: ArUco found at +15°: '
+                    f'ArrowSurfacer：在 +15° 处发现 ArUco：'
                     f'{sorted(self._aruco_ids)}')
                 return
 
@@ -373,7 +379,7 @@ class ArrowSurfacer:
             time.sleep(0.5)
             if self._aruco_ids:
                 self._logger.info(
-                    f'ArrowSurfacer: ArUco found at -15°: '
+                    f'ArrowSurfacer：在 -15° 处发现 ArUco：'
                     f'{sorted(self._aruco_ids)}')
                 return
 
@@ -393,7 +399,7 @@ class ArrowSurfacer:
             time.sleep(0.5)
             if self._aruco_ids:
                 self._logger.info(
-                    f'ArrowSurfacer: ArUco found after dive: '
+                    f'ArrowSurfacer：下潜后发现 ArUco：'
                     f'{sorted(self._aruco_ids)}')
                 return
 
@@ -405,42 +411,54 @@ class ArrowSurfacer:
             time.sleep(0.5)
             if self._aruco_ids:
                 self._logger.info(
-                    f'ArrowSurfacer: ArUco found after rise: '
+                    f'ArrowSurfacer：上升后发现 ArUco：'
                     f'{sorted(self._aruco_ids)}')
                 return
 
-        self._logger.warn('ArrowSurfacer: ArUco frontal search exhausted')
+        self._logger.warn('ArrowSurfacer：ArUco 前视搜索范围耗尽')
 
     # ── 主执行 ────────────────────────────────────────────────────────
 
     def execute(self) -> bool:
         """完整箭头对准 + ArUco 读数 + 出水 + 扇区投信标任务。"""
 
+        if self._arrow_cid is None:
+            self._logger.error(
+                'ArrowSurfacer：当前模型元数据没有箭头类别；'
+                '旧模型请提供 arrow_class_id，或更新模型元数据')
+            return False
+        if (self._yellow_cid is None and self._red_cid is None
+                and self._green_cid is None):
+            self._logger.error(
+                'ArrowSurfacer：当前模型元数据没有扇区类别；'
+                '旧模型请提供 yellow/red/green 类别 ID')
+            return False
+
         # 1. 转向 view_yaw
-        self._logger.info(f'ArrowSurfacer: rotating to yaw={self._view_yaw:.1f}°')
+        self._logger.info(f'ArrowSurfacer：旋转到偏航角={self._view_yaw:.1f}°')
         success, msg = self._node._send_action_goal(
             BasicMotion.Goal.SET,
             [self._node._cmd_x, self._node._cmd_y,
              self._node._cmd_z, self._view_yaw],
             'rz', timeout=15.0)
         if not success:
-            self._logger.error(f'ArrowSurfacer: setrz failed: {msg}')
+            self._logger.error(f'ArrowSurfacer：setrz 失败：{msg}')
             return False
         self._node._cmd_yaw = self._view_yaw
         self._logger.info(
-            f'ArrowSurfacer: rotation complete, yaw={self._view_yaw:.1f}°')
+            f'ArrowSurfacer：旋转完成，偏航角={self._view_yaw:.1f}°')
 
         # 2. 搜索并对准箭头
         self._logger.info(
-            f'ArrowSurfacer: align to arrow (class={self._arrow_cid})')
-        if not self._node._align_to_class(self._arrow_cid, 'arrow'):
-            self._logger.warn('ArrowSurfacer: arrow align failed')
+            f'ArrowSurfacer：对准箭头（class={self._arrow_cid}）')
+        if not self._node._align_to_class(self._arrow_cid, '箭头'):
+            self._logger.warn('ArrowSurfacer：箭头对准失败')
             return False
 
         # 3. 短暂出水：读取水面 ArUco
         self._logger.info(
-            f'ArrowSurfacer: surfacing (setz={self._surface_depth})... '
-            f'ArUco IDs collected: {sorted(self._aruco_ids)}')
+            f'ArrowSurfacer：上浮（setz={self._surface_depth}）……'
+            f'已收集 ArUco ID：{sorted(self._aruco_ids)}')
         self._node._send_action_goal(
             BasicMotion.Goal.WMOVE,
             [self._node._cmd_x, self._node._cmd_y, self._surface_depth,
@@ -449,7 +467,7 @@ class ArrowSurfacer:
 
         # 4. 恢复深度
         self._logger.info(
-            f'ArrowSurfacer: recovering depth to {self._recover_depth}')
+            f'ArrowSurfacer：恢复到深度 {self._recover_depth}')
         success, msg = self._node._send_action_goal(
             BasicMotion.Goal.WMOVE,
             [self._node._cmd_x, self._node._cmd_y, self._recover_depth,
@@ -470,19 +488,24 @@ class ArrowSurfacer:
                           'red': self._red_cid}.get(color_name)
             if sector_cid is None:
                 self._logger.warn(
-                    f'ArrowSurfacer: unknown target_sector {self._target_sector!r}, '
-                    f'defaulting to green')
+                    f'ArrowSurfacer：未知目标扇区 {self._target_sector!r}，'
+                    f'默认使用绿色')
                 color_name, sector_cid = 'green', self._green_cid
         else:
             sector = self._aruco_to_sector()
             if sector is None:
                 self._logger.warn(
-                    'ArrowSurfacer: no ArUco ID detected, defaulting to green')
+                    'ArrowSurfacer：未检测到 ArUco ID，默认使用绿色')
                 sector = ('green', self._green_cid)
             color_name, sector_cid = sector
+        if sector_cid is None:
+            self._logger.error(
+                f'ArrowSurfacer：扇区 {color_name!r} 未配置类别 ID；'
+                f'请提供对应的任务参数')
+            return False
         self._logger.info(
-            f'ArrowSurfacer: sector selected = {color_name} '
-            f'(class_id={sector_cid})')
+            f'ArrowSurfacer：已选择 {color_name} 扇区 '
+            f'（class_id={sector_cid}）')
 
         # 7. 亮对应颜色灯
         color_light = {
@@ -492,14 +515,13 @@ class ArrowSurfacer:
         }.get(color_name, 0)
         if color_light:
             self._node.set_light(
-                color_light, f'SECTOR {color_name.upper()}')
+                color_light, f'{color_name} 扇区')
             self._logger.info(
-                f'🏮 ArrowSurfacer: {color_name.upper()} LIGHT ON — '
-                f'sector selected!')
+                f'🏮 ArrowSurfacer：{color_name.upper()} 扇区指示灯已打开！')
 
         # 8. WTRAVEL to sector position
         self._logger.info(
-            f'ArrowSurfacer: traveling to sector '
+            f'ArrowSurfacer：移动到扇区 '
             f'({self._sector_x:.2f}, {self._sector_y:.2f}, '
             f'z={self._sector_travel_z:.2f})')
         success, msg = self._node._send_action_goal(
@@ -508,7 +530,7 @@ class ArrowSurfacer:
              self._view_yaw],
             timeout=60.0)
         if not success:
-            self._logger.error(f'ArrowSurfacer: sector travel failed: {msg}')
+            self._logger.error(f'ArrowSurfacer：移动到扇区失败：{msg}')
             return False
         self._node._cmd_x = self._sector_x
         self._node._cmd_y = self._sector_y
@@ -516,15 +538,15 @@ class ArrowSurfacer:
 
         # 9. 搜索并对准扇区
         self._logger.info(
-            f'ArrowSurfacer: aligning to {color_name} sector '
-            f'(class={sector_cid})')
-        self._node._align_to_class(sector_cid, f'{color_name} sector')
+            f'ArrowSurfacer：对准 {color_name} 扇区 '
+            f'（class={sector_cid}）')
+        self._node._align_to_class(sector_cid, f'{color_name} 扇区')
 
         # 9.5 对准后 BMOVE（机体系 x/y）：把信号弹撒放器挪到扇区中心正上方
         if self._drop_offset_x or self._drop_offset_y:
             self._logger.info(
-                f'ArrowSurfacer: BMOVE launcher over sector center '
-                f'(dx={self._drop_offset_x:.2f}, dy={self._drop_offset_y:.2f})')
+                f'ArrowSurfacer：使用 BMOVE 将投放器移动到扇区中心上方 '
+                f'（dx={self._drop_offset_x:.2f}，dy={self._drop_offset_y:.2f}）')
             success, msg = self._node._send_action_goal(
                 BasicMotion.Goal.BMOVE,
                 [self._drop_offset_x, self._drop_offset_y, 0.0, 0.0],
@@ -534,23 +556,23 @@ class ArrowSurfacer:
                 self._node._cmd_y += self._drop_offset_y
             else:
                 self._logger.warn(
-                    f'ArrowSurfacer: launcher BMOVE failed: {msg}')
+                    f'ArrowSurfacer：投放器 BMOVE 失败：{msg}')
 
         # 10. 投信标 + 关灯
         self._node.set_servo(
             self._node.ANGLE_DROP_BEACON,
-            f'drop beacon to {color_name} sector')
+            f'向 {color_name} 扇区投放信标')
         self._logger.info(
-            f'🔫 ArrowSurfacer: BEACON DROPPED to {color_name.upper()} sector!')
+            f'🔫 ArrowSurfacer：信标已投放到 {color_name.upper()} 扇区！')
         self._node.light_off()
 
         # 11. [保留用户修改] 延时后复位舵机
         time.sleep(self._servo_reset_delay)
-        self._node.set_servo(self._servo_reset_angle, 'reset servo')
+        self._node.set_servo(self._servo_reset_angle, '舵机复位')
 
         self._logger.info(
-            f'ArrowSurfacer: complete. '
-            f'ArUco IDs: {sorted(self._aruco_ids)}')
+            f'ArrowSurfacer：任务完成。'
+            f'ArUco ID：{sorted(self._aruco_ids)}')
         return True
 
     # ── 资源清理 ──────────────────────────────────────────────────────
@@ -560,4 +582,4 @@ class ArrowSurfacer:
         for sub in self._subs:
             self._node.destroy_subscription(sub)
         self._subs.clear()
-        self._logger.info('ArrowSurfacer destroyed')
+        self._logger.info('ArrowSurfacer：已销毁')
