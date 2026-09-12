@@ -1,0 +1,365 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "YouLong AUV 控制系统 · 仓库结构",
+    "output": "auv-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/EV-control-department/YouLong_AUV_Control_System.git",
+      "revision": "4066bffdb95660730ddcfc1261f93780fa618f44"
+    },
+    "views": [
+      {
+        "id": "main-chain",
+        "label": "主控制链",
+        "focus": [
+          "task_runner",
+          "basic_motion",
+          "sim_bridge",
+          "stonefish"
+        ],
+        "note": "任务层下发 Action 目标，经控制层与硬件抽象直达物理仿真。"
+      },
+      {
+        "id": "perception-loop",
+        "label": "感知回路",
+        "focus": [
+          "sim_bridge",
+          "vision",
+          "position",
+          "task_runner",
+          "navigator"
+        ],
+        "note": "双目图像经 4 通道检测与射线交会，回传目标位姿。"
+      },
+      {
+        "id": "real-hardware",
+        "label": "真机链路",
+        "focus": [
+          "basic_motion",
+          "hw_manager",
+          "mcu"
+        ],
+        "note": "真机由 STM32 顶替 sim_bridge 的 PID 与推力分配环节。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "task_runner",
+      "type": "backend",
+      "label": "task_runner",
+      "sublabel": "uv_task · JSON 任务序列",
+      "tag": "L5 任务层",
+      "pos": [
+        50,
+        80
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_auv/src/uv_task/uv_task/task_runner.py"
+        }
+      ]
+    },
+    {
+      "id": "basic_motion",
+      "type": "backend",
+      "label": "basic_motion",
+      "sublabel": "uv_control · Action Server",
+      "tag": "L2 控制层",
+      "pos": [
+        400,
+        80
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_auv/src/uv_control/uv_control/basic_motion.py"
+        }
+      ]
+    },
+    {
+      "id": "sim_bridge",
+      "type": "backend",
+      "label": "sim_bridge",
+      "sublabel": "uv_sim · PID + 推力分配",
+      "tag": "L1 硬件层 · 仿真",
+      "pos": [
+        750,
+        80
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_sim/src/uv_sim/uv_sim/sim_bridge.py"
+        }
+      ]
+    },
+    {
+      "id": "stonefish",
+      "type": "external",
+      "label": "stonefish_ros2",
+      "sublabel": "Stonefish 1.6 物理仿真",
+      "tag": "L0 仿真器",
+      "pos": [
+        1100,
+        80
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_sim/src/stonefish_ros2/src/stonefish_simulator.cpp"
+        }
+      ]
+    },
+    {
+      "id": "hw_manager",
+      "type": "backend",
+      "label": "hw_manager",
+      "sublabel": "uv_hm · MCU 心跳 / 解锁",
+      "tag": "L1 硬件层 · 真机",
+      "pos": [
+        50,
+        262
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_auv/src/uv_hm/uv_hm/hw_manager.py"
+        }
+      ]
+    },
+    {
+      "id": "mcu",
+      "type": "external",
+      "label": "STM32 MCU",
+      "sublabel": "micro-ROS 串口 · 机载 PID",
+      "tag": "L1 硬件层 · 真机",
+      "pos": [
+        400,
+        262
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_auv/src/uv_bringup/launch/hil_bringup.py"
+        }
+      ]
+    },
+    {
+      "id": "navigator",
+      "type": "backend",
+      "label": "navigator",
+      "sublabel": "uv_nav · A* 避障规划",
+      "tag": "L4 导航层",
+      "pos": [
+        50,
+        444
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_auv/src/uv_nav/uv_nav/astar.py"
+        }
+      ]
+    },
+    {
+      "id": "vision",
+      "type": "backend",
+      "label": "vision",
+      "sublabel": "uv_perception · 4 通道 YOLO",
+      "tag": "L3 感知层",
+      "pos": [
+        750,
+        262
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_auv/src/uv_perception/uv_perception/vision.py"
+        }
+      ]
+    },
+    {
+      "id": "position",
+      "type": "backend",
+      "label": "position",
+      "sublabel": "uv_perception · 射线 3D 定位",
+      "tag": "L3 感知层",
+      "pos": [
+        1100,
+        262
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "workspace_auv/src/uv_perception/uv_perception/position.py"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "workspace_sim · 仿真覆盖层",
+      "wraps": [
+        "sim_bridge",
+        "stonefish"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "task-to-motion",
+      "from": "task_runner",
+      "to": "basic_motion",
+      "label": "/basic_motion",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "motion-to-sim",
+      "from": "basic_motion",
+      "to": "sim_bridge",
+      "label": "/zit6/cmd/setpoint",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "sim-to-stonefish",
+      "from": "sim_bridge",
+      "to": "stonefish",
+      "label": "6 路推力",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "motion-to-mcu",
+      "from": "basic_motion",
+      "to": "mcu",
+      "label": "/zit6/cmd/setpoint",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        485,
+        215
+      ]
+    },
+    {
+      "id": "sim-state-feedback",
+      "from": "sim_bridge",
+      "to": "basic_motion",
+      "label": "/zit6/state/pos",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "id": "mcu-watchdog",
+      "from": "hw_manager",
+      "to": "mcu",
+      "label": "心跳 / 状态",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "sim-camera",
+      "from": "sim_bridge",
+      "to": "vision",
+      "label": "拼接双目图像",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        835,
+        245
+      ]
+    },
+    {
+      "id": "vision-to-position",
+      "from": "vision",
+      "to": "position",
+      "label": "/perception/detection",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "position-to-task",
+      "from": "position",
+      "to": "task_runner",
+      "label": "/perception/objects",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "position-to-nav",
+      "from": "position",
+      "to": "navigator",
+      "label": "/perception/objects",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "控制与执行",
+      "items": [
+        "basic_motion 是唯一运动入口：SET / WMOVE / BMOVE / WTRAVEL / BTRAVEL 经 Action 阻塞执行",
+        "sim_bridge 承担级联 PID 与 6 推进器推力分配，并发布 6-DOF 状态",
+        "真机由 STM32 MCU 经 micro-ROS 顶替 PID 环节，hw_manager 负责心跳与解锁"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "感知与回传",
+      "items": [
+        "vision 订阅 sim_bridge 拼接的 4 路双目图像，sim / real 模式切换",
+        "position 多帧单目射线交会，用完整 RPY 旋转射线方向",
+        "结果以 /perception/objects 同时回传任务层与导航层"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "仓库支撑",
+      "items": [
+        "uv_msgs / zit6_interfaces 定义 BasicMotion.action 与全部 msg / srv",
+        "uv_bringup 提供 sim_bringup / real_bringup / hil_bringup 三套编排",
+        "workspace_auv 不依赖仿真，workspace_sim 以 colcon 覆盖层叠加",
+        "visualization 为 PySide6 上位机：2D 地图、节点列表与遥控"
+      ]
+    }
+  ]
+}
