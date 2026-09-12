@@ -279,7 +279,11 @@ class FrameGate:
         if camera not in self._processing:
             self._log(f'Unknown camera source: {camera}')
             return
+        if self._stop.is_set():
+            return
         with self._lock:
+            if self._stop.is_set():
+                return
             self._pending_work[camera] = work
             if self._processing[camera]:
                 return
@@ -288,6 +292,10 @@ class FrameGate:
         def worker():
             while True:
                 with self._lock:
+                    if self._stop.is_set():
+                        self._pending_work[camera] = None
+                        self._processing[camera] = False
+                        return
                     work_item = self._pending_work[camera]
                     self._pending_work[camera] = None
                     if work_item is None:
@@ -308,4 +316,11 @@ class FrameGate:
 
     def shutdown(self):
         self._stop.set()
-        self._pool.shutdown(wait=True, cancel_futures=True)
+        # ``cancel_futures`` was added in Python 3.9.  ROS 2 Foxy commonly
+        # runs on Python 3.8, so keep shutdown compatible with both runtimes.
+        # Workers also observe ``_stop`` above and discard their latest
+        # pending frame, which keeps Ctrl-C from waiting on stale camera data.
+        try:
+            self._pool.shutdown(wait=True, cancel_futures=True)
+        except TypeError:
+            self._pool.shutdown(wait=True)

@@ -8,6 +8,8 @@
 供 uv_camera 使用,与控制逻辑正交。
 """
 
+from __future__ import annotations
+
 import time
 
 import numpy as np

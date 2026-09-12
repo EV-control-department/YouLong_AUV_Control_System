@@ -72,6 +72,14 @@ public:
         });
     };
 
+    void Shutdown()
+    {
+        if(app_ != nullptr)
+        {
+            app_->Shutdown();
+        }
+    }
+
 private:
     std::shared_ptr<sf::ROS2GraphicalSimulationApp> app_;
     rclcpp::TimerBase::SharedPtr tickTimer_;
@@ -83,7 +91,9 @@ private:
 
 int main(int argc, char **argv)
 {
-	rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+	// Keep initialization compatible with Foxy, which has no
+	// SignalHandlerOptions overload.
+	rclcpp::init(argc, argv);
     
     //Check number of command line arguments
 	if(argc < 7)
@@ -142,5 +152,10 @@ int main(int argc, char **argv)
     // Start simulation
     std::shared_ptr<StonefishNode> node(new StonefishNode(scenarioPath, dataPath, s, h, rate));
     rclcpp::spin(node);
+    node->Shutdown();
+    if(rclcpp::ok())
+    {
+        rclcpp::shutdown();
+    }
     return 0;
 }

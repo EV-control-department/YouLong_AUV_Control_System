@@ -2,7 +2,9 @@
 
 `uv_camera` 节点会自动启动 go2rtc，并将前、下相机的原始视频注册为 `front` 和
 `down`，将 YOLO 识别后带框的视频注册为 `front_annotated` 和
-`down_annotated`。go2rtc 的 HTTP/WebRTC 服务默认监听 `1984` 端口。
+`down_annotated`。go2rtc 的 HTTP/WebRTC 服务默认监听 `1984` 端口。如果该端口
+已被桌面端口转发或其他程序占用，`uv_camera` 会自动选择附近的空闲端口，并
+在日志中打印实际端口；本地 MJPEG 源仍固定使用 `8090`。
 
 实机视频链路为：
 

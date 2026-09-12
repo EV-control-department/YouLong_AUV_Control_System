@@ -35,6 +35,7 @@ from .common import (
     _LineFilterState,
     image_msg_to_bgr,
 )
+from .model_classes import MODEL_MAPPING_PATH, model_class_id
 
 
 # Values mirror uv_msgs/msg/Detection.msg.  Keeping the local constants avoids
@@ -42,6 +43,7 @@ from .common import (
 FEATURE_BBOX_CENTER = 0
 FEATURE_GATE_CENTERLINE = 1
 FEATURE_GATE_SEGMENTATION = 2
+GATE_FRONT_CLASS_ID = model_class_id('gate_front')
 
 
 class Ai:
@@ -156,19 +158,35 @@ class Ai:
                 model_path = os.path.expanduser(str(model_path))
             else:
                 # ``__file__`` can point into colcon's build-space symlink.
-                # Resolve it before walking up; otherwise the repository root
-                # is calculated one level too high and the weights in
-                # workspace_auv/src/datas are missed.
+                # Resolve it before walking up and search both the source
+                # package and the installed package share directory.  The
+                # old ``workspace_auv/src/datas`` path did not contain the
+                # deployed model, which made Edge silently run without AI.
                 module_path = Path(__file__).resolve()
                 candidates = []
                 for parent in (module_path.parent, *module_path.parents):
                     candidates.extend((
+                        parent / 'weights' / DEFAULT_MODEL_FILENAME,
+                        parent / 'workspace_auv' / 'src' / 'uv_camera' /
+                        'weights' / DEFAULT_MODEL_FILENAME,
                         parent / 'workspace_auv' / 'src' / 'datas' / DEFAULT_MODEL_FILENAME,
                         parent / 'datas' / DEFAULT_MODEL_FILENAME,
                     ))
                 candidates.append(
+                    Path.cwd() / 'workspace_auv' / 'src' / 'uv_camera' /
+                    'weights' / DEFAULT_MODEL_FILENAME)
+                candidates.append(
                     Path.cwd() / 'workspace_auv' / 'src' / 'datas' / DEFAULT_MODEL_FILENAME)
                 candidates.append(Path.cwd() / 'datas' / DEFAULT_MODEL_FILENAME)
+                try:
+                    from ament_index_python.packages import (
+                        get_package_share_directory)
+                    candidates.append(
+                        Path(get_package_share_directory('uv_camera')) /
+                        'weights' / DEFAULT_MODEL_FILENAME)
+                except Exception:
+                    # Keep model discovery usable for offline/unit-test imports.
+                    pass
 
                 for candidate in candidates:
                     if candidate.is_file():
@@ -178,6 +196,8 @@ class Ai:
             if model_path and os.path.isfile(model_path):
                 self._model = YOLO(str(model_path))
                 self._model_loaded = True
+                self.node.get_logger().info(
+                    f'YOLO class mapping loaded: {MODEL_MAPPING_PATH}')
                 self.node.get_logger().info(f'YOLO model loaded: {model_path}')
             else:
                 self.node.get_logger().warn('YOLO model not found, detection disabled')
@@ -371,7 +391,8 @@ class Ai:
                 det.pixel_x = (x1 + x2) / 2.0
                 det.pixel_y = (y1 + y2) / 2.0
                 poly = None
-                if det.class_id == 3 and masks is not None and len(masks.xy) > i:
+                if (det.class_id == GATE_FRONT_CLASS_ID
+                        and masks is not None and len(masks.xy) > i):
                     poly = masks.xy[i].astype(np.float32)
                     polygons.append(poly)
                     area = cv2.contourArea(poly)
@@ -484,7 +505,8 @@ class Ai:
 
     def _set_gate_feature(self, detection, polygon, cv_img):
         """Attach one repeatable gate anchor without changing bbox fields."""
-        if int(detection.class_id) != 3 or self._gate_feature_mode == 'bbox':
+        if (int(detection.class_id) != GATE_FRONT_CLASS_ID
+                or self._gate_feature_mode == 'bbox'):
             return
         feature = None
         feature_type = FEATURE_BBOX_CENTER
@@ -515,8 +537,10 @@ class Ai:
         for i, det in enumerate(det_array.detections):
             x1, y1 = int(det.bbox_x1), int(det.bbox_y1)
             x2, y2 = int(det.bbox_x2), int(det.bbox_y2)
-            color = (0, 165, 255) if det.class_id == 3 else (0, 255, 0)
-            if det.class_id == 3 and polygons and i < len(polygons) and polygons[i] is not None:
+            color = ((0, 165, 255) if det.class_id == GATE_FRONT_CLASS_ID
+                     else (0, 255, 0))
+            if (det.class_id == GATE_FRONT_CLASS_ID and polygons
+                    and i < len(polygons) and polygons[i] is not None):
                 poly = polygons[i].astype(np.int32)
                 cv2.fillPoly(overlay, [poly], color)
                 cv2.polylines(annotated, [poly], True, color, 2)

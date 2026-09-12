@@ -131,13 +131,16 @@ std::string ROS2ScenarioParser::SubstituteROSVars(const std::string& value)
         else if (results[0] == "param")
         {
             if(!nh_->has_parameter(results[1]))
-                nh_->declare_parameter(results[1], rclcpp::PARAMETER_STRING);
+                // Foxy has no declare_parameter(name, ParameterType)
+                // overload.  A NOT_SET value preserves the intended
+                // "missing parameter" path and is accepted by both APIs.
+                nh_->declare_parameter(results[1], rclcpp::ParameterValue());
             try
             {
                 auto param = nh_->get_parameter(results[1]);
                 replacedValue += param.as_string();
             }
-            catch(const rclcpp::exceptions::ParameterUninitializedException& e)
+            catch(const rclcpp::ParameterTypeException& e)
             {
                 log.Print(MessageType::ERROR, "[ROS] Could not find parameter '%s'!", results[1].c_str());
                 RCLCPP_ERROR(nh_->get_logger(), "Scenario parser: Could not find parameter '%s'!", results[1].c_str());

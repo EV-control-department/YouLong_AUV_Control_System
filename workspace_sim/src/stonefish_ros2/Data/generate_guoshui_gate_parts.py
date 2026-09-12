@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import Tuple
 
 
-Vec = tuple[float, float, float]
+Vec = Tuple[float, float, float]
 
 
 def add(a: Vec, b: Vec) -> Vec:

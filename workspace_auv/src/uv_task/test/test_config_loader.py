@@ -4,11 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from uv_task.config_loader import ConfigError, load_mission
+from uv_task.config_loader import (
+    ConfigError,
+    load_mission,
+    load_mission_or_task,
+)
 
 
 CONFIG_ROOT = Path(__file__).parents[1] / "config"
 MISSION = CONFIG_ROOT / "missions" / "robocup_26.yaml"
+GATE_TASK = CONFIG_ROOT / "tasks" / "26rb_gate_task.yaml"
 EXPECTED_TASKS = [
     "start",
     "return_origin",
@@ -50,6 +55,16 @@ def test_default_mission_preserves_order_and_values():
     assert tasks[8]["params"]["down_projection_depth_m"] == 0.8
     assert tasks[8]["params"]["down_visual_servo_gain"] == 0.8
     assert tasks[8]["params"]["down_visual_servo_max_step_m"] == 0.08
+
+
+def test_standalone_task_file_loads_as_one_task():
+    tasks = load_mission_or_task(GATE_TASK)
+
+    assert len(tasks) == 1
+    assert tasks[0]["name"] == "26rb_gate_task"
+    assert tasks[0]["params"]["gate_count"] == 4
+    assert tasks[0]["params"]["search_timeout"] == 60.0
+    assert tasks[0]["params"]["yaw_pid_kp"] == 1.2
 
 
 def test_nested_parameters_are_merged_and_flattened(tmp_path):

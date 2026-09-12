@@ -6,6 +6,8 @@ localization and GUI interfaces use conventional NED instead: ``+X`` north,
 ``+Y`` east and ``+Z`` down.
 """
 
+from __future__ import annotations
+
 import math
 
 

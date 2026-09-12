@@ -75,7 +75,7 @@
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `mission_file` | string | `config/missions/robocup_26.yaml` | 启动时加载的 YAML mission |
+| `mission_file` | string | `config/missions/robocup_26.yaml` | 启动时加载的 YAML mission 或单个 task 文件 |
 | `target_id` | string | `yellow_golf` | 比赛目标元数据 |
 | `debug_mode` | bool | `false` | 开启后跳过 mission 自动执行，仅允许 `/task/exec` |
 
@@ -91,7 +91,7 @@
 | `enable_motion` | `true` | 启用 basic_motion |
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
-| `mission_file` | `config/missions/robocup_26.yaml` | YAML mission 文件路径 |
+| `mission_file` | `config/missions/robocup_26.yaml` | YAML mission 或单个 task 文件路径 |
 | `scenario_desc` | `guoshui_2026_cruise_seeded.scn` | Stonefish 场景文件 |
 | `scene_seed` | `0` | 生成场景使用的整数 seed，运行目录隔离 |
 **用法：**
@@ -99,8 +99,9 @@
 ros2 launch uv_bringup sim.launch.py profile:=sim_dev enable_ai:=true
 ```
 
-任务配置由 `mission_file` 指定。mission 只描述任务顺序，具体参数位于
-`config/tasks/*.yaml`，mission 条目的 `params` 可以覆盖任务默认值。
+任务配置由 `mission_file` 指定。它可以指向描述任务顺序的 mission 文件，
+也可以直接指向 `config/tasks/*.yaml` 执行单个任务。mission 条目的
+`params` 可以覆盖任务默认值。
 
 ### real.launch.py
 

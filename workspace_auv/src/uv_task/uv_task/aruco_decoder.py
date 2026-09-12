@@ -1,5 +1,7 @@
 """Robust decoder for the WUURC simulated 4x4_1000 ArUco signs."""
 
+from __future__ import annotations
+
 from collections import Counter
 
 import cv2

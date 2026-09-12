@@ -54,7 +54,9 @@ private:
 
 int main(int argc, char **argv)
 {
-	rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+	// Keep initialization compatible with Foxy, which has no
+	// SignalHandlerOptions overload.
+	rclcpp::init(argc, argv);
     
     //Check number of command line arguments
 	if(argc < 4)

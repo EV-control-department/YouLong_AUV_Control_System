@@ -36,6 +36,7 @@
 
 	<materials>
 		<material name="Neutral" density="1000.0" restitution="0.5"/>
+		<material name="Fiberglass" density="1500.0" restitution="0.3"/>
 		<material name="Concrete" density="2400.0" restitution="0.2"/>
 		<material name="PVC" density="1380.0" restitution="0.3"/>
 		<material name="Plastic" density="1100.0" restitution="0.3"/>
@@ -80,6 +81,11 @@
 		<look name="collection_net" rgb="2.0 2.0 2.0" roughness="0.05"/>
 		<look name="tether" rgb="0.08 0.08 0.08" roughness="0.70"/>
 		<look name="start_marker" rgb="0.02 0.90 0.85" roughness="0.38"/>
+		<look name="yellow" rgb="1.0 0.78 0.0" roughness="0.30"/>
+		<look name="white" rgb="0.98 0.98 0.98" roughness="0.25"/>
+		<look name="duct" gray="0.10" roughness="0.40" metalness="0.50"/>
+		<look name="manipulator" rgb="0.16 0.18 0.20" roughness="0.45" metalness="0.35"/>
+		<look name="propeller" gray="0.18" roughness="0.30" metalness="0.55"/>
 	</looks>
 
 	<!-- Pool: internal dimensions 9.50 x 4.50 x 1.30 m. -->

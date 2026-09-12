@@ -45,7 +45,7 @@ def generate_launch_description():
                 "missions",
                 "robocup_26.yaml",
             ]),
-            description="YAML mission file loaded by task_runner",
+            description="YAML mission or standalone task file loaded by task_runner",
         ),
         OpaqueFunction(function=_nodes),
     ])

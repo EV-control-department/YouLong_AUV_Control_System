@@ -14,11 +14,39 @@ import random
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Tuple
 
 from generate_guoshui_gate_parts import GATES, write_gate_parts
 
 
-Vec2 = tuple[float, float]
+Vec2 = Tuple[float, float]
+
+
+def indent_xml(tree: ET.ElementTree, space: str = "  ") -> None:
+    """Indent an XML tree on Python 3.8 and newer Python versions."""
+
+    # ElementTree.indent() was added in Python 3.9.
+    if hasattr(ET, "indent"):
+        ET.indent(tree, space=space)
+        return
+
+    def _indent(element: ET.Element, level: int = 0) -> None:
+        children = list(element)
+        if children:
+            newline = "\n" + space * (level + 1)
+            if not element.text or not element.text.strip():
+                element.text = newline
+            for child in children:
+                _indent(child, level + 1)
+                if not child.tail or not child.tail.strip():
+                    child.tail = newline
+            if not children[-1].tail or not children[-1].tail.strip():
+                children[-1].tail = "\n" + space * level
+        elif level and (not element.tail or not element.tail.strip()):
+            element.tail = "\n" + space * level
+
+    _indent(tree.getroot())
+
 
 START_CENTER: Vec2 = (8.95, -1.80)
 IMPACT_CENTER: Vec2 = (8.70, 1.55)
@@ -528,7 +556,7 @@ def generate(seed: int, template: Path, output: Path) -> dict[str, object]:
     update_guides(root, layout)
 
     root.insert(0, ET.Comment(f" Generated from guoshui_2026_cruise.scn with scene_seed={seed}. "))
-    ET.indent(tree, space="  ")
+    indent_xml(tree)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     tree.write(temporary, encoding="utf-8", xml_declaration=True)

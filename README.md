@@ -66,13 +66,15 @@ workspace_auv/src/uv_task/config/
 └── tasks/*.yaml
 ```
 
-默认任务链会自动加载 `robocup_26.yaml`。切换自定义任务链时，直接传入
-YAML 文件：
+未指定时默认自动加载 `robocup_26.yaml`。`mission_file` 同时支持任务链
+YAML 和单个 task YAML；例如直接执行过门任务：
 
 ```bash
 ros2 launch uv_bringup sim.launch.py enable_task:=true \
-  mission_file:=/path/to/custom_mission.yaml
+  mission_file:=/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_task/config/tasks/26rb_gate_task.yaml
 ```
+
+自定义任务链仍可传入 `missions/*.yaml` 文件。
 
 正式运行入口按模式划分，`profile` 是标准 ROS 2 参数文件预设：
 

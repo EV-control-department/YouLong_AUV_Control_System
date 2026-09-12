@@ -26,6 +26,8 @@ from uv_control.coordinate import wrap_deg, wrap_rad
 yaw = wrap_deg(450.0)                                    # → 90.0
 """
 
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass
 

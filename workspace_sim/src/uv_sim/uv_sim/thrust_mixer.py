@@ -8,6 +8,8 @@
 thrust_mixer.py 符号约定。
 """
 
+from __future__ import annotations
+
 
 class ThrustMixer:
     """Converts 6-DOF body forces [Fx, Fy, Fz, Mroll, Mpitch, Myaw] to 6
