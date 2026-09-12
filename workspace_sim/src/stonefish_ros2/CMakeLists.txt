@@ -50,7 +50,16 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Respawn.srv"
   DEPENDENCIES std_msgs std_srvs geometry_msgs
 )
-rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
+
+# rosidl_get_typesupport_target() is available in newer ROS 2 releases,
+# while Foxy provides rosidl_target_interfaces() instead.  Keep both paths so
+# this package can be built in the Foxy edge image and in newer simulation
+# images.
+set(cpp_typesupport_target "")
+if(COMMAND rosidl_get_typesupport_target)
+  rosidl_get_typesupport_target(
+    cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
+endif()
 
 find_package(PCL REQUIRED) # Interferes with rosidl_generate_interfaces and thus has to be called after
 
@@ -62,7 +71,14 @@ add_library(stonefish_ros2_interface SHARED
   src/${PROJECT_NAME}/ROS2ScenarioParser.cpp
   src/${PROJECT_NAME}/ROS2Interface.cpp
 )
-target_link_libraries(stonefish_ros2_interface Stonefish::Stonefish "${cpp_typesupport_target}")
+target_link_libraries(stonefish_ros2_interface Stonefish::Stonefish)
+if(cpp_typesupport_target)
+  target_link_libraries(stonefish_ros2_interface
+    "${cpp_typesupport_target}")
+else()
+  rosidl_target_interfaces(
+    stonefish_ros2_interface ${PROJECT_NAME} "rosidl_typesupport_cpp")
+endif()
 target_include_directories(stonefish_ros2_interface
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

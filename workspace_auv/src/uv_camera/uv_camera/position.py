@@ -5,6 +5,8 @@ Implements ray accumulation, median filtering, and pairwise intersection.
 Tracks and remembers object world positions.
 """
 
+from __future__ import annotations
+
 import bisect
 import math
 from collections import deque
@@ -15,6 +17,12 @@ import rclpy
 from rclpy.node import Node
 
 from uv_msgs.msg import DetectionArray, ObjectPosition, ObjectPositionArray, PoseInfo
+
+from .model_classes import (
+    DEFAULT_CLASS_NAMES,
+    model_class_name,
+    multi_instance_class_ids,
+)
 
 
 # Camera intrinsic + extrinsic parameters (from xunyun_fixed.scn)
@@ -63,14 +71,13 @@ def _euler_to_rotation_matrix(rx_deg: float, ry_deg: float, rz_deg: float) -> np
 
 
 CLASS_NAMES = {
-    0: "yellow_sector", 1: "red_sector", 2: "green_sector",
-    3: "arrow", 4: "start", 5: "triangle",
-    6: "square", 7: "basket", 8: "aruco_tag",
+    class_id: model_class_name(class_id)
+    for class_id in range(len(DEFAULT_CLASS_NAMES))
 }
 
 # Class IDs that may appear multiple times in the same scene.
 # Only these use angle-based instance matching; all others always go to instance 0.
-MULTI_INSTANCE_CLASSES = {3, 5, 6}   # arrow, triangle, square
+MULTI_INSTANCE_CLASSES = multi_instance_class_ids()
 
 
 class PositionNode(Node):

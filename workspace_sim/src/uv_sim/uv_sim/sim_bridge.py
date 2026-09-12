@@ -8,6 +8,8 @@ Thruster mixing (xunyun 6-thruster geometry) happens here in Python, since the
 real firmware leaves that to the external motor controller board.
 """
 
+from __future__ import annotations
+
 import json
 import math
 import threading
@@ -60,8 +62,18 @@ def _find_firmware_config(overrides=None) -> dict:
     if overrides and "chassis" in overrides:
         return overrides["chassis"]
 
+    # The bridge runs both directly on the host and inside the Docker
+    # container.  Do not rely on the host-only absolute path: when the
+    # container cannot see it, the old code silently constructed a controller
+    # with an empty config (all PID gains became zero).
+    source_root = Path(__file__).resolve().parents[2]
     candidates = [
+        source_root / "zit6_control_core" / "sim_config.json",
+        Path("/workspace/workspace_sim/src/zit6_control_core/sim_config.json"),
+        Path("/workspace/src/zit6_control_core/sim_config.json"),
+        Path.cwd() / "workspace_sim/src/zit6_control_core/sim_config.json",
         Path("/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_sim/src/zit6_control_core/sim_config.json"),
+        Path("/workspace/third_party/AUV_zit6_cmake/UserApp/Config/config.json"),
         Path("/home/doc049/dev/UUV/YouLong_AUV_Control_System/third_party/AUV_zit6_cmake/UserApp/Config/config.json"),
     ]
     for p in candidates:

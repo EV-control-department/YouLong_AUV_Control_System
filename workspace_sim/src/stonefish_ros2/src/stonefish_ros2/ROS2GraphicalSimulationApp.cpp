@@ -33,7 +33,7 @@ namespace sf
 {
 
 ROS2GraphicalSimulationApp::ROS2GraphicalSimulationApp(std::string title, std::string dataPath, RenderSettings s, HelperSettings h, ROS2SimulationManager* sim)
-    : GraphicalSimulationApp(title, dataPath, s, h, sim), sim_(sim), configuredTrackball_(nullptr)
+    : GraphicalSimulationApp(title, dataPath, s, h, sim), sim_(sim), configuredTrackball_(nullptr), cleanedUp_(false)
 {
 }
 
@@ -69,6 +69,24 @@ void ROS2GraphicalSimulationApp::Startup()
     StartSimulation();
 }
 
+void ROS2GraphicalSimulationApp::Shutdown()
+{
+    if(cleanedUp_)
+    {
+        return;
+    }
+
+    cleanedUp_ = true;
+    // When launch sends SIGINT, rclcpp::spin() returns before the graphical
+    // app's normal FINISHED path gets a chance to call CleanUp().  Stop and
+    // join the Stonefish simulation thread before releasing OpenGL resources.
+    if(state_ == SimulationState::RUNNING)
+    {
+        StopSimulation();
+    }
+    CleanUp();
+}
+
 void ROS2GraphicalSimulationApp::Tick()
 {
     // StartSimulation() builds the scenario on Stonefish's simulation
@@ -87,7 +105,7 @@ void ROS2GraphicalSimulationApp::Tick()
     LoopInternal();
     if(state_ == SimulationState::FINISHED)
     {
-        CleanUp();
+        Shutdown();
         rclcpp::shutdown();
     }
 }

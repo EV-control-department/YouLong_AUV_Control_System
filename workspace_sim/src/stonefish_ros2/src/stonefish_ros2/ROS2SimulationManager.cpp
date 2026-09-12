@@ -73,6 +73,10 @@
 #include <Stonefish/actuators/Light.h>
 #include <Stonefish/core/Robot.h>
 
+#include <chrono>
+#include <cstdlib>
+#include <thread>
+
 using namespace std::placeholders;
 
 namespace sf
@@ -98,8 +102,10 @@ uint64_t ROS2SimulationManager::getSimulationClock() const
 
 void ROS2SimulationManager::SimulationClockSleep(uint64_t us)
 {
-    rclcpp::Duration duration(0, (uint32_t)us*1000);
-    nh_->get_clock()->sleep_for(duration);
+    // rclcpp::Clock::sleep_for() is not available in Foxy.  The Stonefish
+    // simulation loop already supplies a wall-clock interval, so use the
+    // standard library here for a common Foxy/Jazzy implementation.
+    std::this_thread::sleep_for(std::chrono::microseconds(us));
 }
 
 std::map<std::string, rclcpp::ServiceBase::SharedPtr>& ROS2SimulationManager::getServices()
@@ -168,7 +174,22 @@ void ROS2SimulationManager::BuildScenario()
     bool success = parser.Parse(scenarioPath_);
 
     // Save log
-    std::string logPath = rclcpp::get_logging_directory().string() + "/stonefish_ros2_parser.log";
+    // rclcpp::get_logging_directory() was added after Foxy.  Follow the ROS
+    // logging environment convention without depending on a newer rclcpp API.
+    std::string logDirectory;
+    const char* rosLogDir = std::getenv("ROS_LOG_DIR");
+    const char* rosHome = std::getenv("ROS_HOME");
+    const char* home = std::getenv("HOME");
+    if (rosLogDir != nullptr && *rosLogDir != '\0') {
+        logDirectory = rosLogDir;
+    } else if (rosHome != nullptr && *rosHome != '\0') {
+        logDirectory = std::string(rosHome) + "/log";
+    } else if (home != nullptr && *home != '\0') {
+        logDirectory = std::string(home) + "/.ros/log";
+    } else {
+        logDirectory = ".";
+    }
+    std::string logPath = logDirectory + "/stonefish_ros2_parser.log";
     bool success2 = parser.SaveLog(logPath);
 
     if(!success)

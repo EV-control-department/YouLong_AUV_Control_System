@@ -14,6 +14,7 @@ executable in this package and consumes /perception/detection/*.
 """
 
 import os
+import socket
 import subprocess
 import threading
 import math
@@ -75,6 +76,7 @@ class CameraAiNode(Node):
         self._stream_stop = threading.Event()
         self._mjpeg_server = None
         self._gortc_process = None
+        self._gortc_port = None
         self._gortc_config = None
 
         # JPEG/undistort work is small and frequent; prevent OpenCV from
@@ -117,13 +119,17 @@ class CameraAiNode(Node):
         self.sensor.start()
 
         # MJPEG server + go2rtc (preview only)
+        gortc_started = False
         if self._preview_enabled:
             if self._start_mjpeg_server():
-                self._start_gortc(params['gortc_port'])
+                gortc_started = self._start_gortc(params['gortc_port'])
 
         preview_text = (
-            f'preview enabled on {params["gortc_port"]}'
-            if self._preview_enabled else 'preview disabled')
+            f'preview enabled on {self._gortc_port}'
+            if gortc_started else (
+                f'MJPEG source on {params["mjpeg_port"]}; '
+                'go2rtc unavailable' if self._preview_enabled
+                else 'preview disabled'))
         self.get_logger().info(
             f'uv_camera started: sensor(source={params["sim_mode"] and "sim" or "v4l"})'
             f' + ai, {preview_text}')
@@ -348,7 +354,9 @@ class CameraAiNode(Node):
             threading.Thread(target=self._mjpeg_server.serve_forever,
                              name='uv-camera-mjpeg', daemon=True).start()
             self.get_logger().info(
-                f'uv_camera MJPEG server on port {self._mjpeg_port}')
+                f'uv_camera MJPEG server on 0.0.0.0:{self._mjpeg_port}; '
+                f'raw/annotated endpoints: /front, /down, '
+                f'/front_annotated, /down_annotated')
             return True
         except OSError as e:
             self._mjpeg_server = None
@@ -362,11 +370,42 @@ class CameraAiNode(Node):
         if executable is None:
             self.get_logger().warn(
                 'go2rtc not found; local MJPEG remains available')
-            return
+            return False
+        try:
+            requested_port = int(port)
+        except (TypeError, ValueError) as e:
+            self.get_logger().error(f'Invalid go2rtc HTTP port {port!r}: {e}')
+            return False
+        if not 1 <= requested_port <= 65535:
+            self.get_logger().error(
+                f'Invalid go2rtc HTTP port {requested_port}; expected 1..65535')
+            return False
+
+        # A desktop port forward (for example VS Code's forwarded-port
+        # helper) may already own 1984. Keep the requested port when possible;
+        # otherwise use the first nearby free port and report it clearly.
+        gortc_port = requested_port
+        if not self._tcp_port_available(gortc_port):
+            for candidate in range(requested_port + 1,
+                                   min(65535, requested_port + 101)):
+                if self._tcp_port_available(candidate):
+                    gortc_port = candidate
+                    break
+            else:
+                self.get_logger().error(
+                    f'No free go2rtc HTTP port near {requested_port}')
+                return False
+            self.get_logger().warn(
+                f'go2rtc HTTP port {requested_port} is occupied; '
+                f'using {gortc_port}')
+        self._gortc_port = gortc_port
         self._gortc_config = os.path.join(
             '/tmp', f'uv_camera_go2rtc_{os.getpid()}.yaml')
+        # Bind the HTTP API on every interface so it is reachable from the
+        # host/another machine when uv_camera runs inside Docker.  The
+        # container still needs to publish this port (or use host networking).
         cfg = ('api:\n'
-               f'  listen: ":{port}"\n'
+               f'  listen: "0.0.0.0:{gortc_port}"\n'
                'streams:\n'
                f'  front: "http://127.0.0.1:{self._mjpeg_port}/front"\n'
                f'  down: "http://127.0.0.1:{self._mjpeg_port}/down"\n')
@@ -379,11 +418,34 @@ class CameraAiNode(Node):
             self._gortc_process = subprocess.Popen(
                 [executable, '-config', self._gortc_config],
                 stdin=subprocess.DEVNULL, stdout=None, stderr=None)
+            # Popen succeeds even when go2rtc immediately exits because a
+            # listener failed. Catch that race before claiming it started.
+            time.sleep(0.25)
+            returncode = self._gortc_process.poll()
+            if returncode is not None:
+                self.get_logger().error(
+                    f'go2rtc exited during startup (code {returncode})')
+                self._gortc_process = None
+                return False
             self.get_logger().info(
-                f'go2rtc started on {port}; streams: front, down'
+                f'go2rtc started on {gortc_port}; streams: front, down'
                 + (', front_annotated, down_annotated' if self._stream_annotated else ''))
+            return True
         except (OSError, ValueError, RuntimeError) as e:
             self.get_logger().error(f'Failed to start go2rtc: {e}')
+            return False
+
+    @staticmethod
+    def _tcp_port_available(port):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(('0.0.0.0', int(port)))
+            return True
+        except OSError:
+            return False
+        finally:
+            sock.close()
 
     def _find_gortc(self):
         import shutil
@@ -395,11 +457,21 @@ class CameraAiNode(Node):
                 get_package_share_directory('uv_camera'), 'bin', 'go2rtc'))
         except Exception:
             pass
-        # repo 根下的 go2rtc(固定位置;不要用 __file__ 反推,依赖 symlink/copy 布局脆弱)
+        # Look in the checkout as well.  The absolute path below is useful on
+        # the development host, but it does not exist when this package runs
+        # from the /workspace mount inside Docker.
+        module_path = os.path.realpath(__file__)
+        repo_paths = []
+        path = module_path
+        for _ in range(7):
+            path = os.path.dirname(path)
+            repo_paths.append(os.path.join(path, 'third_party', 'go2rtc', 'go2rtc'))
         repo_paths = [
+            '/workspace/third_party/go2rtc/go2rtc',
             '/home/doc049/dev/UUV/YouLong_AUV_Control_System/third_party/go2rtc/go2rtc',
             os.path.expanduser('~/YouLong_AUV_Control_System/third_party/go2rtc/go2rtc'),
-        ]
+        ] + repo_paths
+        repo_paths.append(os.path.join(os.getcwd(), 'third_party', 'go2rtc', 'go2rtc'))
         candidates.extend(repo_paths)
         candidates.append('go2rtc')
         for c in candidates:

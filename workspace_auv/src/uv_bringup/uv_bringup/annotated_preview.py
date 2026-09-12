@@ -1,5 +1,7 @@
 """Display front/down annotated MJPEG streams in positioned OpenCV windows."""
 
+from __future__ import annotations
+
 import argparse
 import ctypes
 import ctypes.util

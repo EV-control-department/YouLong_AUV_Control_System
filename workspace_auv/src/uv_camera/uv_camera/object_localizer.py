@@ -55,6 +55,13 @@ from uv_msgs.msg import (
     TargetObservationArray,
 )
 
+from .model_classes import (
+    DEFAULT_CLASS_NAMES,
+    camera_hint,
+    model_class_id,
+    physical_class_name,
+)
+
 from .bbox_geometry import (
     CameraContext,
     CuboidModel,
@@ -79,20 +86,7 @@ FORM_DOWN_DIRECT = 4
 FORM_FRONT_BBOX_MODEL = 8
 UNASSIGNED_INSTANCE_ID = (1 << 32) - 1
 
-DEFAULT_CLASS_NAMES = [
-    "collection_frame_down",
-    "collection_frame_front",
-    "gate_down",
-    "gate_front",
-    "guide_line",
-    "impact_ball_blue",
-    "impact_ball_red",
-    "pink_golf",
-    "red_ring",
-    "target_rack_down",
-    "target_rack_front",
-    "yellow_golf",
-]
+GATE_FRONT_CLASS_ID = model_class_id("gate_front")
 
 # Heights are scene depths in the project's NED convention, where positive Z
 # is down from the water surface.  They are converted to the local odom frame
@@ -1011,7 +1005,7 @@ class ObjectLocalizer(Node):
         self.declare_parameter("max_instances_gate", 4)
         self.declare_parameter("publish_period_sec", 0.1)
         self.declare_parameter("observation_history_size", 500)
-        self.declare_parameter("class_names", DEFAULT_CLASS_NAMES)
+        self.declare_parameter("class_names", list(DEFAULT_CLASS_NAMES))
 
         self.declare_parameter(
             "front_left_translation", [0.23, -0.05, 0.076])
@@ -1328,8 +1322,17 @@ class ObjectLocalizer(Node):
         self.observation_history_size = max(
             1, int(get("observation_history_size").value))
 
-        names = get("class_names").value
-        self.class_names = [str(name) for name in names] if names else []
+        # Keep the legacy parameter readable for old launch files, but never
+        # let it replace the detector mapping.  Class IDs must come from the
+        # single YAML file loaded by uv_camera.model_classes.
+        configured_names = get("class_names").value
+        configured_names = [str(name) for name in configured_names] \
+            if configured_names else []
+        if configured_names and configured_names != list(DEFAULT_CLASS_NAMES):
+            self.get_logger().warn(
+                "Ignoring class_names override; using shared detector mapping "
+                "from {}".format("robotcup20260901.yaml"))
+        self.class_names = list(DEFAULT_CLASS_NAMES)
 
         self.body_translation = {}
         self.body_rotation = {}
@@ -2291,7 +2294,8 @@ class ObjectLocalizer(Node):
         # The current optional feature contract is specifically for the
         # front gate class.  Do not let a malformed/forward-version field on
         # another class silently change its geometric meaning.
-        if feature_type > 0 and int(getattr(detection, "class_id", -1)) == 3:
+        if (feature_type > 0
+                and int(getattr(detection, "class_id", -1)) == GATE_FRONT_CLASS_ID):
             try:
                 feature = np.array([
                     float(getattr(detection, "feature_pixel_x")),
@@ -2312,7 +2316,7 @@ class ObjectLocalizer(Node):
             feature_type = int(getattr(detection, "feature_type", 0) or 0)
         except (TypeError, ValueError):
             feature_type = 0
-        if int(getattr(detection, "class_id", -1)) != 3:
+        if int(getattr(detection, "class_id", -1)) != GATE_FRONT_CLASS_ID:
             return "bbox_center"
         return {
             1: "gate_centerline",
@@ -6686,11 +6690,17 @@ class ObjectLocalizer(Node):
 
     def _semantic_class(self, class_id: int) -> str:
         """Map camera-specific labels onto one physical target category."""
-        name = self._class_name(class_id).strip().lower()
-        for suffix in ("_front", "_down"):
-            if name.endswith(suffix):
-                name = name[:-len(suffix)]
-                break
+        configured_names = getattr(self, "class_names", DEFAULT_CLASS_NAMES)
+        if tuple(configured_names) == tuple(DEFAULT_CLASS_NAMES):
+            name = physical_class_name(class_id).strip().lower()
+        else:
+            # Keep isolated unit fixtures that intentionally provide a small
+            # synthetic class_names list independent of the deployed model.
+            name = self._class_name(class_id).strip().lower()
+            for suffix in ("_front", "_down"):
+                if name.endswith(suffix):
+                    name = name[:-len(suffix)]
+                    break
         # The legacy model uses gate_* while the 8029 model uses door.
         if name in ("gate", "door"):
             return "gate"
@@ -6698,6 +6708,9 @@ class ObjectLocalizer(Node):
 
     def _label_camera_hint(self, class_id: int) -> str | None:
         """Return the camera model implied by a camera-specific YOLO label."""
+        configured_names = getattr(self, "class_names", DEFAULT_CLASS_NAMES)
+        if tuple(configured_names) == tuple(DEFAULT_CLASS_NAMES):
+            return camera_hint(class_id)
         name = self._class_name(class_id).strip().lower()
         if name.endswith("_front"):
             return "front"

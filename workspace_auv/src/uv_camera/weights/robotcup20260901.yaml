@@ -1,0 +1,66 @@
+schema_version: 1
+model: robotcup20260901.pt
+
+# The detector class ID is the array index used by robotcup20260901.pt.
+# Every uv_* package must resolve IDs through uv_camera.model_classes.
+classes:
+  - id: 0
+    name: collection_frame_down
+    object: collection_frame
+    camera: down
+    multi_instance: false
+  - id: 1
+    name: collection_frame_front
+    object: collection_frame
+    camera: front
+    multi_instance: false
+  - id: 2
+    name: gate_down
+    object: gate
+    camera: down
+    multi_instance: true
+  - id: 3
+    name: gate_front
+    object: gate
+    camera: front
+    multi_instance: true
+  - id: 4
+    name: guide_line
+    object: guide_line
+    camera: any
+    multi_instance: true
+  - id: 5
+    name: impact_ball_blue
+    object: impact_ball_blue
+    camera: any
+    multi_instance: false
+  - id: 6
+    name: impact_ball_red
+    object: impact_ball_red
+    camera: any
+    multi_instance: false
+  - id: 7
+    name: pink_golf
+    object: pink_golf
+    camera: any
+    multi_instance: false
+  - id: 8
+    name: red_ring
+    object: red_ring
+    camera: any
+    multi_instance: false
+  - id: 9
+    name: target_rack_down
+    object: target_rack
+    camera: down
+    multi_instance: false
+  - id: 10
+    name: target_rack_front
+    object: target_rack
+    camera: front
+    multi_instance: false
+  - id: 11
+    name: yellow_golf
+    object: yellow_golf
+    camera: any
+    multi_instance: false

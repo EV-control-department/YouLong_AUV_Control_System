@@ -64,6 +64,8 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
    - 适用于需要直线轨迹的任务（过门、巡线等）
 """
 
+from __future__ import annotations
+
 import math
 import threading
 import time

@@ -8,6 +8,10 @@ data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml', 'GO2RTC.md']),
     ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
+    ('share/' + package_name + '/weights', [
+        'weights/robotcup20260901.pt',
+        'weights/robotcup20260901.yaml',
+    ]),
     ('share/' + package_name + '/config', [
         'config/front.npz', 'config/down.npz',
         'config/robotcup_front.npz', 'config/robotcup_down.npz',
@@ -28,7 +32,11 @@ setup(
     packages=[package_name],
     data_files=data_files,
     # Keep cv_bridge and NumPy on the same (1.x) ABI used by ROS 2 Jazzy.
-    install_requires=['setuptools', 'numpy==1.26.4'],
+    install_requires=[
+        'setuptools',
+        'numpy<1.25; python_version < "3.9"',
+        'numpy==1.26.4; python_version >= "3.9"',
+    ],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',

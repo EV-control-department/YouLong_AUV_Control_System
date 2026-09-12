@@ -133,7 +133,7 @@ def declare_mission_file():
             "missions",
             "robocup_26.yaml",
         ]),
-        description="YAML mission file loaded by task_runner",
+        description="YAML mission or standalone task file loaded by task_runner",
     )
 
 
@@ -300,6 +300,10 @@ def declare_observability_arguments(
         DeclareLaunchArgument(
             "preview_port", default_value="8090",
             description="uv_camera MJPEG port",
+        ),
+        DeclareLaunchArgument(
+            "gortc_http_port", default_value="1984",
+            description="go2rtc HTTP/WebRTC page port; auto-falls back if occupied",
         ),
         DeclareLaunchArgument(
             "preview_wait_timeout", default_value="60.0",

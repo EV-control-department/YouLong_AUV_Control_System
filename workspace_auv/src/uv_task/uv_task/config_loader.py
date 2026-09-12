@@ -445,6 +445,25 @@ def _load_task_defaults(path: Path, task_name: str) -> dict[str, Any]:
     return params
 
 
+def load_task(path: str | Path) -> list[dict[str, Any]]:
+    """Load one standalone task YAML as a one-item runner task list."""
+    task_path = Path(path).expanduser().resolve()
+    data = _read_yaml(task_path)
+    unknown = set(data) - {"task", "params"}
+    if unknown:
+        raise ConfigError(f"{task_path}：任务文件存在未知键：{sorted(unknown)}")
+
+    task_name = data.get("task")
+    if not isinstance(task_name, str) or task_name not in TASK_SCHEMAS:
+        raise ConfigError(
+            f"{task_path}：task 名称未知或无效：{task_name!r}")
+    params = data.get("params", {})
+    if not isinstance(params, dict):
+        raise ConfigError(f"{task_path}：params 必须是 YAML 映射")
+
+    return [{"name": task_name, "params": _validate_params(task_name, params)}]
+
+
 def load_mission(path: str | Path) -> list[dict[str, Any]]:
     """Load and validate a mission, returning runner-compatible task dicts."""
     mission_path = Path(path).expanduser().resolve()
@@ -488,6 +507,21 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
         merged = _deep_merge(defaults, overrides)
         tasks.append({"name": task_name, "params": _validate_params(task_name, merged)})
     return tasks
+
+
+def load_mission_or_task(path: str | Path) -> list[dict[str, Any]]:
+    """Load either a mission YAML or one standalone task YAML.
+
+    ``mission_file`` is kept as the public ROS parameter name for backwards
+    compatibility, but it may point to either configuration shape.
+    """
+    config_path = Path(path).expanduser().resolve()
+    data = _read_yaml(config_path)
+    if "mission" in data and "task" in data:
+        raise ConfigError(f"{config_path}：不能同时包含 mission 和 task 根节点")
+    if "task" in data:
+        return load_task(config_path)
+    return load_mission(config_path)
 
 
 def default_mission_path() -> Path:

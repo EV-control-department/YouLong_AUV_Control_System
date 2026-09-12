@@ -1,9 +1,11 @@
-"""Task runner node: loads a YAML mission and executes tasks sequentially.
+"""Task runner node: loads YAML missions or standalone tasks sequentially.
 
 Each task calls basic_motion via the BasicMotion action server.
 The task runner is the single source of truth for commanded position,
 tracked locally (not from external topics).
 """
+
+from __future__ import annotations
 
 from importlib import import_module
 import json
@@ -35,7 +37,7 @@ from uv_msgs.srv import ExecTask, RunTask
 from uv_task.config_loader import (
     ConfigError,
     default_mission_path,
-    load_mission,
+    load_mission_or_task,
 )
 
 from uv_task.arrow_surfacer import (
@@ -629,14 +631,14 @@ class TaskRunnerNode(Node):
     # ========================================================================
 
     def load_tasks(self, path: str) -> list:
-        """Load a validated YAML mission as runner-compatible task dicts."""
-        tasks = load_mission(path)
+        """Load a mission YAML or standalone task YAML."""
+        tasks = load_mission_or_task(path)
         self.get_logger().info(f'已从 {path} 加载 {len(tasks)} 个任务')
         return tasks
 
     @staticmethod
     def _resolve_mission_path(value: str) -> str:
-        """Resolve a service mission path or installed mission filename."""
+        """Resolve a mission/task path or an installed config filename."""
         text = str(value or '').strip()
         if not text:
             return str(default_mission_path())
@@ -646,12 +648,17 @@ class TaskRunnerNode(Node):
         if candidate.exists():
             return str(candidate.resolve())
         missions_dir = default_mission_path().parent
-        package_candidate = missions_dir / candidate
-        if package_candidate.exists():
-            return str(package_candidate)
+        config_dirs = (missions_dir, missions_dir.parent / 'tasks')
+        for config_dir in config_dirs:
+            package_candidate = config_dir / candidate
+            if package_candidate.exists():
+                return str(package_candidate)
         if candidate.suffix == '':
-            package_candidate = missions_dir / f'{candidate.name}.yaml'
-        return str(package_candidate)
+            for config_dir in config_dirs:
+                package_candidate = config_dir / f'{candidate.name}.yaml'
+                if package_candidate.exists():
+                    return str(package_candidate)
+        return str(missions_dir / candidate)
 
     # ========================================================================
     # Task execution
@@ -1329,7 +1336,7 @@ class TaskRunnerNode(Node):
         if not result:
             self.get_logger().error(
                 'hit_balls：撞球顺序中没有有效目标；请使用 blue/red，'
-                '或使用 robotcup20260901.json 中的有效 class_id')
+                '或使用 robotcup20260901.yaml 中的有效 class_id')
         return result
 
     def _best_impact_ball_target(self, name: str, params: dict):

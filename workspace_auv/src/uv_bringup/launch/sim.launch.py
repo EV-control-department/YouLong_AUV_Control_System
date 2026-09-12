@@ -7,9 +7,15 @@ in ``observability.launch.py``.
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
 from launch import LaunchDescription
 from launch.actions import (
     EmitEvent,
+    ExecuteProcess,
     IncludeLaunchDescription,
     LogInfo,
     RegisterEventHandler,
@@ -49,10 +55,94 @@ def _include(package, launch_file, arguments, *, condition=None):
     )
 
 
+def _auto_configure_container_display():
+    """Use the mounted desktop X server without requiring manual exports.
+
+    The NVIDIA-enabled container normally has the host X11 socket mounted,
+    but an interactive shell created with ``docker exec`` may not inherit the
+    desktop variables.  Prefer the usual X1/X0 socket and the container's
+    mounted Xauthority file; leave true headless containers to the Xvfb
+    fallback below.
+    """
+
+    actions = []
+    display = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    if not display:
+        x11_dir = Path("/tmp/.X11-unix")
+        candidates = [x11_dir / "X1", x11_dir / "X0"]
+        candidates.extend(sorted(x11_dir.glob("X*")))
+        for socket in candidates:
+            if socket.exists() and socket.name[1:].isdigit():
+                display = f":{socket.name[1:]}"
+                os.environ["DISPLAY"] = display
+                actions.append(SetEnvironmentVariable("DISPLAY", display))
+                break
+
+    if display and not os.environ.get("XAUTHORITY"):
+        for candidate in (Path("/root/.Xauthority"),
+                          Path("/run/user/1000/gdm/Xauthority")):
+            if candidate.exists():
+                os.environ["XAUTHORITY"] = str(candidate)
+                actions.append(SetEnvironmentVariable("XAUTHORITY", str(candidate)))
+                break
+
+    return actions
+
+
 def generate_launch_description():
+    desktop_environment = _auto_configure_container_display()
     sim_width, sim_height = default_sim_window()
     preview_width, preview_height = default_preview_window()
     monitor_x, monitor_y, _, _ = focused_monitor()
+
+    # Stonefish's camera sensors require the graphical executable even when
+    # the simulation runs in a container.  A plain Foxy container commonly
+    # has neither DISPLAY nor a mounted X11 socket, so provide a software X
+    # server as a transparent fallback.  Existing desktop sessions keep their
+    # original environment and are not affected.
+    headless_graphics = []
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        xvfb = shutil.which("Xvfb")
+        if xvfb:
+            display = ":99"
+            runtime_dir = tempfile.mkdtemp(prefix="uv_bringup_xdg_")
+            os.chmod(runtime_dir, 0o700)
+            if not os.environ.get("ROS_LOCALHOST_ONLY"):
+                # Set this before any child process is created.  Some Foxy
+                # RMW implementations read the variable during module
+                # initialisation, before a later launch action can affect
+                # their DDS participant.
+                os.environ["ROS_LOCALHOST_ONLY"] = "1"
+            headless_graphics = [
+                # A headless container normally shares the default DDS
+                # domain with the host.  Isolate it unless the operator
+                # explicitly chose a different setting; this prevents mixed
+                # ROS distributions from feeding malformed samples to Foxy.
+                *([] if os.environ.get("ROS_LOCALHOST_ONLY") else [
+                    SetEnvironmentVariable("ROS_LOCALHOST_ONLY", "1"),
+                ]),
+                SetEnvironmentVariable("DISPLAY", display),
+                SetEnvironmentVariable("XDG_RUNTIME_DIR", runtime_dir),
+                SetEnvironmentVariable("LIBGL_ALWAYS_SOFTWARE", "1"),
+                ExecuteProcess(
+                    cmd=[
+                        xvfb, display,
+                        "-screen", "0", f"{sim_width}x{sim_height}x24",
+                        "-ac", "+extension", "GLX", "+render", "-noreset",
+                    ],
+                    name="uv_xvfb",
+                    output="screen",
+                ),
+                LogInfo(msg=[
+                    "No display detected; using headless Xvfb on ", display,
+                ]),
+            ]
+        else:
+            headless_graphics = [LogInfo(msg=(
+                "No DISPLAY detected and Xvfb is not installed; "
+                "GPU Stonefish needs a graphical display (install xvfb or "
+                "set DISPLAY)."
+            ))]
 
     enable_ai = LaunchConfiguration("enable_ai")
     enable_motion = LaunchConfiguration("enable_motion")
@@ -78,6 +168,7 @@ def generate_launch_description():
     inference_threads = LaunchConfiguration("inference_threads")
     ai_confidence = LaunchConfiguration("ai_confidence")
     gate_feature_mode = LaunchConfiguration("gate_feature_mode")
+    gortc_http_port = LaunchConfiguration("gortc_http_port")
     target_id = LaunchConfiguration("target_id")
     startup_timeout = LaunchConfiguration("startup_timeout")
 
@@ -118,6 +209,7 @@ def generate_launch_description():
         "confidence": ai_confidence,
         "gate_feature_mode": gate_feature_mode,
         "enable_gortc": LaunchConfiguration("enable_preview"),
+        "gortc_http_port": gortc_http_port,
         "stream_annotated": LaunchConfiguration("stream_annotated"),
         "mjpeg_port": LaunchConfiguration("preview_port"),
         "annotated_max_width": LaunchConfiguration("annotated_max_width"),
@@ -242,6 +334,7 @@ def generate_launch_description():
             render_quality_default="low",
             camera_stitch_fps_default="5.0",
         ),
+        *desktop_environment,
         configure_simulator_gpu_environment(gpu, gpu_backend),
         *declare_observability_arguments(
             preview_width_default=str(preview_width),
@@ -251,6 +344,7 @@ def generate_launch_description():
         RegisterEventHandler(OnProcessExit(on_exit=_after_readiness)),
         SetEnvironmentVariable("SDL_VIDEO_WINDOW_POS", f"{monitor_x},{monitor_y}"),
         validate_profile(profile, "sim"),
+        *headless_graphics,
         observability,
         LogInfo(msg=["Simulation profile: ", profile]),
         prepare_scene(
