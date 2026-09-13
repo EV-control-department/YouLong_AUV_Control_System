@@ -40,7 +40,11 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `model_path` | str | `""` | YOLO 模型 .pt 文件路径。为空时自动查找默认路径 |
-| `save_dataset` | bool | `false` | 是否保存采集的图像到 `img/` 目录 |
+| `save_dataset` | bool | `false` | 是否保存实际送入 YOLO 的帧 |
+| `dataset_dir` | str | `""` | 数据集根目录；为空时使用工作区下的 `img/` |
+| `dataset_format` | str | `webp_lossless` | `webp_lossless` 或 `png`；WebP 不可用时自动回退 PNG |
+| `dataset_queue_size` | int | `32` | 异步写盘队列深度；满时背压，不静默丢帧 |
+| `dataset_png_compression` | int | `3` | PNG 压缩等级 0–9，仅对 PNG 生效，不影响无损性 |
 
 ### 相机标定
 

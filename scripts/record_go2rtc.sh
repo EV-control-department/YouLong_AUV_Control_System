@@ -36,7 +36,7 @@ SEGMENT_SECONDS="${SEGMENT_SECONDS:-2}"
 DURATION_SEC="${1:-0}"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "错误:需要 ffmpeg 才能录制(转 mp4)。" >&2
+  echo "错误:需要 ffmpeg 才能录制 MPEG-TS。" >&2
   exit 1
 fi
 
@@ -60,9 +60,12 @@ ts="$(date +%Y%m%d_%H%M%S)"
 declare -A PIDS
 declare -A FILES
 SYNC_PID=''
+RECORDER_FAILURE=0
+STOP_REQUESTED=0
 
 stop_recording() {
   local stream
+  STOP_REQUESTED=1
   for stream in "${!PIDS[@]}"; do
     kill -INT "${PIDS[$stream]}" 2>/dev/null || true
   done
@@ -71,7 +74,13 @@ stop_recording() {
 wait_for_recorders() {
   local stream
   for stream in "${!PIDS[@]}"; do
-    wait "${PIDS[$stream]}" 2>/dev/null || true
+    if ! wait "${PIDS[$stream]}" 2>/dev/null; then
+      # SIGINT/SIGTERM is the normal shutdown path and ffmpeg reports it as
+      # a non-zero exit.  Only treat an unexpected child exit as a failure.
+      if [ "$STOP_REQUESTED" -eq 0 ]; then
+        RECORDER_FAILURE=1
+      fi
+    fi
   done
 }
 
@@ -117,11 +126,12 @@ record_one() {
   local playlist="$OUT_DIR/${stream}_${ts}.m3u8"
   # MPEG-TS: 无 moov/tail 依赖;每 2 秒结束一个文件,降低断电损失范围。
   ffmpeg -hide_banner -loglevel warning \
+    -nostdin \
     -f mpjpeg \
     -i "$url" \
     -map 0:v:0 -an \
     -c:v libx264 -preset ultrafast -tune zerolatency \
-    -pix_fmt yuv420p -r "$VIDEO_FPS" -fps_mode cfr \
+    -pix_fmt yuv420p -r "$VIDEO_FPS" -vsync cfr \
     -force_key_frames "expr:gte(t,n_forced*${SEGMENT_SECONDS})" \
     -flush_packets 1 \
     -f segment -segment_time "$SEGMENT_SECONDS" \
@@ -165,4 +175,8 @@ for s in "${!PIDS[@]}"; do
     echo "✓ ${FILES[$s]} ($(du -h "${FILES[$s]}" | cut -f1))"
   fi
 done
+if [ "$RECORDER_FAILURE" -ne 0 ]; then
+  echo "错误:至少一路视频录制失败。" >&2
+  exit 1
+fi
 echo "完成。输出目录: $OUT_DIR"

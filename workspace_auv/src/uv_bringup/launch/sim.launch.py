@@ -14,6 +14,7 @@ from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import (
+    DeclareLaunchArgument,
     EmitEvent,
     ExecuteProcess,
     IncludeLaunchDescription,
@@ -171,6 +172,8 @@ def generate_launch_description():
     gortc_http_port = LaunchConfiguration("gortc_http_port")
     target_id = LaunchConfiguration("target_id")
     startup_timeout = LaunchConfiguration("startup_timeout")
+    record_dataset = LaunchConfiguration("record_dataset")
+    dataset_dir = LaunchConfiguration("dataset_dir")
 
     stonefish_arguments = {
         "simulation_data": LaunchConfiguration("resolved_simulation_data"),
@@ -213,6 +216,8 @@ def generate_launch_description():
         "stream_annotated": LaunchConfiguration("stream_annotated"),
         "mjpeg_port": LaunchConfiguration("preview_port"),
         "annotated_max_width": LaunchConfiguration("annotated_max_width"),
+        "save_dataset": record_dataset,
+        "dataset_dir": dataset_dir,
         "profile_params": camera_profile_params,
         "object_localizer_params": PathJoinSubstitution([
             FindPackageShare("uv_camera"),
@@ -339,6 +344,14 @@ def generate_launch_description():
         *declare_observability_arguments(
             preview_width_default=str(preview_width),
             preview_height_default=str(preview_height),
+        ),
+        DeclareLaunchArgument(
+            "record_dataset", default_value="false",
+            description="Save the frames sent to YOLO as a dataset",
+        ),
+        DeclareLaunchArgument(
+            "dataset_dir", default_value="datas/dataset_capture",
+            description="Dataset output directory relative to the launch cwd",
         ),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         RegisterEventHandler(OnProcessExit(on_exit=_after_readiness)),

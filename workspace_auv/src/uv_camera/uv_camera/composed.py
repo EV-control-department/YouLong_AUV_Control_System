@@ -155,6 +155,10 @@ class CameraAiNode(Node):
         self.declare_parameter('line_filter_process_noise', 1.0)
         self.declare_parameter('line_filter_measurement_noise', 3.0)
         self.declare_parameter('save_dataset', False)
+        self.declare_parameter('dataset_dir', '')
+        self.declare_parameter('dataset_queue_size', 32)
+        self.declare_parameter('dataset_png_compression', 3)
+        self.declare_parameter('dataset_format', 'webp_lossless')
         self.declare_parameter('model_path', '')
         # calibration (defaults come from common constants)
         from .common import (FRONT_CAMERA_MATRIX, FRONT_DIST_COEFFS,
@@ -490,9 +494,11 @@ class CameraAiNode(Node):
         if self._mjpeg_server is not None:
             self._mjpeg_server.shutdown()
             self._mjpeg_server.server_close()
+        # Stop producers before draining AI.  Otherwise FrameGate workers can
+        # enqueue new frames while the recorder is already being closed.
         self.sensor.shutdown()
-        self.ai.shutdown()
         self._gate.shutdown()
+        self.ai.shutdown()
         if self._gortc_process is not None and self._gortc_process.poll() is None:
             self._gortc_process.terminate()
             try:
