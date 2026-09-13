@@ -31,11 +31,11 @@ from .common import (
     ENABLE_UNDISTORT,
     FRONT_CAMERA_MATRIX,
     FRONT_DIST_COEFFS,
-    SAVE_DATASET,
     _LineFilterState,
     image_msg_to_bgr,
 )
 from .model_classes import MODEL_MAPPING_PATH, model_class_id
+from .dataset_recorder import DatasetRecorder
 
 
 # Values mirror uv_msgs/msg/Detection.msg.  Keeping the local constants avoids
@@ -82,18 +82,27 @@ class Ai:
             node.get_parameter('line_filter_measurement_noise').value)
         self._line_filters = {}
 
-        self._save_dataset = bool(
-            node.get_parameter('save_dataset').value)
-        self._dataset_dir = DATASET_DIR
-        self._dataset_last_s = {}
-        self._dataset_count_s = {}
+        self._save_dataset = bool(node.get_parameter('save_dataset').value)
+        self._dataset_dir = str(
+            node.get_parameter('dataset_dir').value or DATASET_DIR).strip()
+        self._dataset_recorder = None
         if self._save_dataset:
             if not self._dataset_dir:
                 self._dataset_dir = os.path.join(
                     os.path.dirname(os.path.dirname(
                         os.path.dirname(os.path.dirname(__file__)))), 'img')
-            os.makedirs(self._dataset_dir, exist_ok=True)
-            node.get_logger().info(f'Dataset saving enabled: {self._dataset_dir}')
+            self._dataset_recorder = DatasetRecorder(
+                self._dataset_dir,
+                queue_size=int(node.get_parameter('dataset_queue_size').value),
+                png_compression=int(
+                    node.get_parameter('dataset_png_compression').value),
+                image_format=str(
+                    node.get_parameter('dataset_format').value),
+                logger=node.get_logger())
+            node.get_logger().info(
+                f'Lossless YOLO dataset recording enabled: '
+                f'{self._dataset_recorder.session_dir} '
+                f'(format={self._dataset_recorder.image_format})')
 
         self._model = None
         self._confidence = min(1.0, max(0.05, float(confidence)))
@@ -312,8 +321,7 @@ class Ai:
         left_name = f'{camera}_left'
         right_name = f'{camera}_right'
         if self._save_dataset:
-            self._save_frame(left_img, left_name)
-            self._save_frame(right_img, right_name)
+            self._save_frame(left_img, left_name, header, stereo_pair_id)
 
         det_l, polys_l, line_l, dbg_l = self._detect(
             header, left_name, left_img, stereo_pair_id)
@@ -327,6 +335,8 @@ class Ai:
         right_header.frame_id = header.frame_id
         right_header.stamp = (
             right_stamp if right_stamp is not None else header.stamp)
+        if self._save_dataset:
+            self._save_frame(right_img, right_name, right_header, stereo_pair_id)
         det_r, polys_r, line_r, dbg_r = self._detect(
             right_header, right_name, right_img, stereo_pair_id)
         self._pub_det[right_name].publish(det_r)
@@ -586,23 +596,18 @@ class Ai:
                     0.65, (0, 255, 255), 2, cv2.LINE_AA)
         return annotated
 
-    def _save_frame(self, img, channel):
-        if not self._save_dataset:
-            return
-        now_s = int(time.time())
-        count = self._dataset_count_s.get(channel, 0)
-        last_s = self._dataset_last_s.get(channel, 0)
-        if now_s != last_s:
-            self._dataset_count_s[channel] = 0
-            self._dataset_last_s[channel] = now_s
-            count = 0
-        if count >= 5:
-            return
-        self._dataset_count_s[channel] = count + 1
-        ts = time.strftime('%Y%m%d%H%M%S') + f'{time.time() % 1:.6f}'[2:5]
-        cv2.imwrite(os.path.join(self._dataset_dir, f'{channel}_{ts}.jpg'), img)
+    def _save_frame(self, img, channel, header, stereo_pair_id):
+        if self._dataset_recorder is not None:
+            self._dataset_recorder.submit(
+                img, channel, header=header, stereo_pair_id=stereo_pair_id)
 
     def shutdown(self):
         self._aruco_stop.set()
         if self._aruco_thread is not None:
             self._aruco_thread.join(timeout=1.0)
+        if self._dataset_recorder is not None:
+            try:
+                self._dataset_recorder.close()
+            except Exception as error:
+                self.node.get_logger().error(
+                    f'Failed to close dataset recorder: {error}')

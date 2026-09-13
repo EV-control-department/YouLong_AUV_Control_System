@@ -1,0 +1,3 @@
+# The Dockerfile only adds a user; source code is bind-mounted by Compose.
+**
+!Dockerfile

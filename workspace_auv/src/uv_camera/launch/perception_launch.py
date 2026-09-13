@@ -18,6 +18,11 @@ def generate_launch_description():
     stream_annotated = LaunchConfiguration("stream_annotated")
     mjpeg_port = LaunchConfiguration("mjpeg_port")
     annotated_max_width = LaunchConfiguration("annotated_max_width")
+    save_dataset = LaunchConfiguration("save_dataset")
+    dataset_dir = LaunchConfiguration("dataset_dir")
+    dataset_queue_size = LaunchConfiguration("dataset_queue_size")
+    dataset_png_compression = LaunchConfiguration("dataset_png_compression")
+    dataset_format = LaunchConfiguration("dataset_format")
     profile_params = LaunchConfiguration("profile_params")
     object_localizer_params = LaunchConfiguration("object_localizer_params")
 
@@ -38,6 +43,11 @@ def generate_launch_description():
             "stream_annotated": stream_annotated,
             "mjpeg_port": mjpeg_port,
             "annotated_max_width": annotated_max_width,
+            "save_dataset": save_dataset,
+            "dataset_dir": dataset_dir,
+            "dataset_queue_size": dataset_queue_size,
+            "dataset_png_compression": dataset_png_compression,
+            "dataset_format": dataset_format,
         })
 
         localizer_parameters = []
@@ -82,6 +92,11 @@ def generate_launch_description():
         DeclareLaunchArgument("stream_annotated", default_value="true"),
         DeclareLaunchArgument("mjpeg_port", default_value="8090"),
         DeclareLaunchArgument("annotated_max_width", default_value="0"),
+        DeclareLaunchArgument("save_dataset", default_value="false"),
+        DeclareLaunchArgument("dataset_dir", default_value=""),
+        DeclareLaunchArgument("dataset_queue_size", default_value="32"),
+        DeclareLaunchArgument("dataset_png_compression", default_value="3"),
+        DeclareLaunchArgument("dataset_format", default_value="webp_lossless"),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument("object_localizer_params", default_value=""),
         OpaqueFunction(function=_nodes),
