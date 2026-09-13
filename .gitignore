@@ -42,6 +42,13 @@ venv/
 # Logs
 *.log
 
+# Dataset capture output (vision node; see docs/node_parameters.md).
+# Default lives outside the repo at ~/.ros/auv_dataset — these entries cover
+# the -p dataset_dir:=<repo>/datasets override so multi-GB captures never
+# get committed.
+/datasets/
+workspace_auv/datasets/
+
 # Claude Code local config
 .claude/
 

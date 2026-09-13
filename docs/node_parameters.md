@@ -66,7 +66,32 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `model_path` | str | `""` | YOLO 模型 .pt 文件路径。为空时自动查找默认路径 |
-| `save_dataset` | bool | `true` | 是否保存采集的图像到 `img/` 目录 |
+| `save_dataset` | bool | `true` | 是否保存采集的图像 |
+| `dataset_dir` | str | `<仓库根>/datasets` | 数据集落盘目录，支持 `~` 展开。空字符串按默认值处理 |
+
+> **默认位置与解析方式**：默认写到**仓库根下的 `datasets/`**，该目录已加入 `.gitignore`。
+>
+> 仓库根是**从 `vision.py` 逐级向上找 `.git`** 得到的，**不是**按 `__file__` 固定上溯
+> 层数 —— colcon 会把 `vision.py` 拷进 `build/uv_perception/uv_perception/`，固定上溯
+> 三层会得到 `workspace_auv/build/img`，一次 `rm -rf build` 或 colcon 清理就把数据集删掉。
+> 逐级找 `.git` 在 `src/`、`build/`、`install/` 三种布局下都能正确回到仓库根。
+> 找不到仓库根时（装到系统路径、或源码被单独拷走）退回 `~/.ros/auv_dataset`。
+>
+> 运行时可用 `-p dataset_dir:=<path>` 覆盖：
+>
+> ```bash
+> ros2 launch uv_bringup real_bringup.py \
+>   --ros-args -p dataset_dir:=/data/auv_capture
+> ```
+>
+> **数据集内容**：保存的是**整幅拼接原图**（左右目并排，**未切分、未去畸变**），
+> 文件名 `front_*.jpg` / `down_*.jpg`，JPEG **q95**，每相机限 5 帧/秒。
+> 保存点在去畸变**之前**，因此与 `K`/`D` 是否已标定解耦 —— 标定前后采的数据
+> 几何一致，可以直接混用。需要单目图时在训练前按 `mid = width // 2` 切分
+> （切分点必须与 `vision.py` 的 `mid` 一致）。
+> 保存不依赖 YOLO 模型是否加载成功，可用于采集验证集。
+> ⚠️ 这不是传感器原始像素：上游已过「摄像头内 JPEG → USB/MJPEG → OpenCV 解码」，
+> 落盘时再做一次 JPEG q95。体积约 **9.5 MB/s ≈ 34 GB/小时**，正式跑前确认磁盘余量。
 
 ### 相机标定
 

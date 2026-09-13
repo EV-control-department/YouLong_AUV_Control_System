@@ -13,6 +13,8 @@ Parameters:
     sim_mode (bool): true=ROS images, false=V4L2 capture (default: false).
     front_cam_path (str): V4L2 device path for front camera (real mode only).
     down_cam_path (str): V4L2 device path for down camera (real mode only).
+    save_dataset (bool): Save full stitched frames for dataset capture.
+    dataset_dir (str): Where to write them (default ~/.ros/auv_dataset, '~' expanded).
 """
 
 import math
@@ -92,7 +94,32 @@ STREAM_ANNOTATED = True              # 通过 go2rtc 额外提供带检测框的
 # ROS 参数默认值。
 SIM_MODE = False                      # False=V4L2，True=ROS stitched 话题
 SAVE_DATASET = True                  # 是否保存训练数据帧
-DATASET_DIR = ''                      # 空字符串=自动使用工程下的 img/
+
+
+def _find_repo_root(start):
+    """从 start 逐级向上找仓库根（判据是有 .git；worktree 里 .git 是文件）。
+
+    注意：**不能**按 __file__ 固定上溯层数 —— colcon 会把 vision.py 拷进
+    build/uv_perception/uv_perception/，固定上溯三层得到的是 workspace_auv/build，
+    数据集一旦落在那里，一次 `rm -rf build` 或 colcon 清理就没了。
+    逐级找 .git 在 src/、build/、install/ 三种布局下都能回到仓库根。
+    """
+    cur = os.path.abspath(start)
+    while True:
+        if os.path.exists(os.path.join(cur, '.git')):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+# 数据集落盘目录：默认仓库下的 datasets/（已在 .gitignore 中忽略）。
+# 找不到仓库根时（例如被装到系统路径、或源码被单独拷走）退回 ~/.ros。
+# 运行时可用 -p dataset_dir:=<path> 覆盖，路径支持 ~ 展开。
+_REPO_ROOT = _find_repo_root(os.path.dirname(os.path.abspath(__file__)))
+DATASET_DIR = (os.path.join(_REPO_ROOT, 'datasets') if _REPO_ROOT
+               else '~/.ros/auv_dataset')
 DEFAULT_MODEL_FILENAME = 'WUURC2026FINAL0052.pt'
 
 import ultralytics.utils.loss
@@ -253,15 +280,27 @@ class VisionNode(Node):
 
         self.declare_parameter('save_dataset', SAVE_DATASET)
         self._save_dataset = self.get_parameter('save_dataset').get_parameter_value().bool_value
-        self._dataset_dir = DATASET_DIR
-        self._dataset_last_s = {}  
-        self._dataset_count_s = {} 
+        self.declare_parameter('dataset_dir', DATASET_DIR)
+        _dataset_dir = str(
+            self.get_parameter('dataset_dir').get_parameter_value().string_value).strip()
+        # 空字符串按「用默认值」处理，避免误配置把数据写到不可预期的位置
+        self._dataset_dir = os.path.expanduser(_dataset_dir or DATASET_DIR)
+        self._dataset_last_s = {}
+        self._dataset_count_s = {}
+        self._dataset_write_failed = False
         if self._save_dataset:
-            if not self._dataset_dir:
-                self._dataset_dir = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'img')
-            os.makedirs(self._dataset_dir, exist_ok=True)
-            self.get_logger().info(f'Dataset saving enabled: {self._dataset_dir}')
+            try:
+                os.makedirs(self._dataset_dir, exist_ok=True)
+            except OSError as e:
+                # 目录不可用（权限/只读文件系统/磁盘满）时只关闭数据集采集，
+                # 不能让整个视觉节点起不来。
+                self._save_dataset = False
+                self.get_logger().error(
+                    f'Cannot create dataset dir {self._dataset_dir}: {e}; '
+                    f'dataset capture disabled '
+                    f'(override with -p dataset_dir:=<writable path>)')
+            else:
+                self.get_logger().info(f'Dataset saving enabled: {self._dataset_dir}')
 
         self.bridge = None
         self._model = None
@@ -701,6 +740,16 @@ class VisionNode(Node):
             self.get_logger().warn(f'{camera} frame is too small: {cv_img.shape}')
             return
 
+        # 数据集保存的是「整幅、未切分、未去畸变」的拼接原图（left+right 并排）：
+        #   * 去畸变挂在左右切片之后（见下方 left_img/right_img），保存点放在
+        #     切片之前，因此与 K/D 是否已标定完全解耦 —— 将来填入标定参数
+        #     不会改变已采集数据的几何，标定前后采的数据可以混用；
+        #   * 早于 _model_loaded 判断，模型缺失时仍能采集（可作验证集/标定用）。
+        # 注意：这不是传感器原始像素 —— 上游已经过「摄像头内 JPEG 编码 →
+        # USB/MJPEG → OpenCV 解码」，且 cv2.imwrite 会再做一次 JPEG q95。
+        if self._save_dataset:
+            self._save_frame(cv_img, camera)
+
         # 给客户端缓存最新原图，不依赖 YOLO 是否加载成功。
         if update_raw_stream:
             self._update_stream_frame(camera, cv_img)
@@ -731,10 +780,6 @@ class VisionNode(Node):
 
         left_name = f'{camera}_left'
         right_name = f'{camera}_right'
-
-        if self._save_dataset:
-            self._save_frame(left_img, left_name)
-            self._save_frame(right_img, right_name)
 
         # Run detection & filtering on left half
         det_left, polys_left, line_left, debug_info_left = self._detect(header, left_name, left_img)
@@ -960,6 +1005,14 @@ class VisionNode(Node):
         return annotated
 
     def _save_frame(self, img, channel: str):
+        """按帧率上限把整幅拼接原图写入数据集目录。
+
+        调用方传入的是**未切分、未去畸变**的 cv_img，文件名形如
+        ``front_20260913153000123.jpg`` / ``down_...jpg``（不再区分 left/right；
+        需要单目图时在训练前的预处理里按 ``mid = width // 2`` 切分）。
+        每个 channel 每秒最多 5 帧。
+        显式指定 JPEG q95 —— 与 OpenCV 的隐式默认值一致，避免依赖版本默认。
+        """
         now_s = int(time.time())
         count = self._dataset_count_s.get(channel, 0)
         last_s = self._dataset_last_s.get(channel, 0)
@@ -975,7 +1028,13 @@ class VisionNode(Node):
         self._dataset_count_s[channel] = count + 1
         ts = time.strftime('%Y%m%d%H%M%S') + f'{time.time() % 1:.6f}'[2:5]
         fname = os.path.join(self._dataset_dir, f'{channel}_{ts}.jpg')
-        cv2.imwrite(fname, img)
+        if not cv2.imwrite(fname, img, [cv2.IMWRITE_JPEG_QUALITY, 95]):
+            # cv2.imwrite 失败不抛异常（磁盘满、只读挂载），只报一次避免刷屏
+            if not self._dataset_write_failed:
+                self._dataset_write_failed = True
+                self.get_logger().error(
+                    f'Failed to write dataset frame {fname} (disk full or '
+                    f'unwritable?); further write failures will not be logged')
 
     def _capture_camera_loop(self, cap, camera: str):
         read_failures = 0
