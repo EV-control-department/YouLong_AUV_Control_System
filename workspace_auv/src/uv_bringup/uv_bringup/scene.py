@@ -27,7 +27,7 @@ def find_stonefish_data_dir(launch_file):
 
     stonefish_share = Path(get_package_share_directory("stonefish_ros2")).resolve()
     roots = (Path(launch_file).resolve(), stonefish_share)
-    candidates = []
+    candidates = [stonefish_share / "Data"]
     for root in roots:
         for base in (root, *root.parents):
             candidates.extend([

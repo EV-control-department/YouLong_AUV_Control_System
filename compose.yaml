@@ -2,8 +2,8 @@ name: youlong-auv
 
 services:
   auv:
-    # Compose pulls the official Foxy base image and builds the small local
-    # user layer from Dockerfile, so the host UID has a readable name.
+    # Compose pulls Foxy and builds the complete Stonefish + ROS environment
+    # from Dockerfile, including a user matching the host UID/GID.
     image: youlong_auv:foxy
     build:
       context: .
@@ -12,6 +12,7 @@ services:
         HOST_UID: "${HOST_UID:-1000}"
         HOST_GID: "${HOST_GID:-1000}"
         HOST_USER: "${HOST_USER:-${USER:-dev}}"
+        STONEFISH_BUILD_JOBS: "${STONEFISH_BUILD_JOBS:-1}"
 
     container_name: youlong_auv
     # HOST_USER defaults to the host's $USER. On hosts whose UID/GID is not
@@ -41,7 +42,7 @@ services:
       ROS_DISTRO: foxy
       DISPLAY: "${DISPLAY:-:1}"
       XAUTHORITY: /tmp/.Xauthority
-      HOME: /workspace/.docker/home
+      HOME: "/home/${HOST_USER:-${USER:-dev}}"
       ROS_HOME: /workspace/.docker/ros/foxy/ros
       ROS_LOG_DIR: /workspace/.docker/ros/foxy/log/ros
       NVIDIA_VISIBLE_DEVICES: all

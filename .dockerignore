@@ -1,3 +1,23 @@
-# The Dockerfile only adds a user; source code is bind-mounted by Compose.
+# Only the two ROS source workspaces are needed while building the image.
 **
 !Dockerfile
+!workspace_auv/
+!workspace_auv/**
+!workspace_sim/
+!workspace_sim/**
+!third_party/
+!third_party/AUV_zit6_cmake/
+!third_party/AUV_zit6_cmake/UserApp/
+!third_party/AUV_zit6_cmake/UserApp/**
+
+# Never send generated artifacts or local environments to the Docker daemon.
+workspace_auv/build/
+workspace_auv/install/
+workspace_auv/log/
+workspace_sim/build/
+workspace_sim/install/
+workspace_sim/log/
+third_party/AUV_zit6_cmake/.git/
+**/__pycache__/
+**/.pytest_cache/
+workspace_auv/.venv/

@@ -290,12 +290,6 @@ class Ai:
         if cv_img is None or cv_img.shape[0] < 2 or cv_img.shape[1] < 2:
             self.node.get_logger().warn(f'Invalid {camera} frame, dropping')
             return
-        # (raw preview was already updated by uv_sensor at capture/arrival time)
-
-        if not self._model_loaded:
-            return
-        if not self._allow_inference(camera):
-            return
 
         K = self._front_K if camera == 'front' else self._down_K
         D = self._front_D if camera == 'front' else self._down_D
@@ -320,8 +314,31 @@ class Ai:
 
         left_name = f'{camera}_left'
         right_name = f'{camera}_right'
+
+        # Dataset capture is intentionally independent of YOLO availability
+        # and inference throttling.  A training-data run must still save the
+        # camera frames when ultralytics/model weights are not installed.
         if self._save_dataset:
             self._save_frame(left_img, left_name, header, stereo_pair_id)
+
+        right_header = Header()
+        right_header.frame_id = header.frame_id
+        right_header.stamp = (
+            right_stamp if right_stamp is not None else header.stamp)
+        if self._save_dataset:
+            self._save_frame(right_img, right_name, right_header, stereo_pair_id)
+
+        # Keep the ROS detection topics alive with explicit empty results when
+        # optional YOLO is unavailable.  This lets readiness finish for data
+        # collection without pretending that detections were produced.
+        if not self._model_loaded:
+            self._publish_empty_results(
+                left_name, header, stereo_pair_id)
+            self._publish_empty_results(
+                right_name, right_header, stereo_pair_id)
+            return
+        if not self._allow_inference(camera):
+            return
 
         det_l, polys_l, line_l, dbg_l = self._detect(
             header, left_name, left_img, stereo_pair_id)
@@ -331,12 +348,6 @@ class Ai:
         if annotate:
             ann_l = self._draw_boxes(left_img, det_l, polys_l, line_l, dbg_l)
 
-        right_header = Header()
-        right_header.frame_id = header.frame_id
-        right_header.stamp = (
-            right_stamp if right_stamp is not None else header.stamp)
-        if self._save_dataset:
-            self._save_frame(right_img, right_name, right_header, stereo_pair_id)
         det_r, polys_r, line_r, dbg_r = self._detect(
             right_header, right_name, right_img, stereo_pair_id)
         self._pub_det[right_name].publish(det_r)
@@ -347,6 +358,21 @@ class Ai:
         if annotate:
             self._update_annotated(
                 camera, np.hstack((ann_l, ann_r)), header.stamp)
+
+    def _publish_empty_results(self, camera_name, header, stereo_pair_id):
+        """Publish an empty detection/line result when AI is unavailable."""
+        detections = DetectionArray()
+        detections.header = header
+        detections.camera_name = camera_name
+        if hasattr(detections, 'stereo_pair_id'):
+            detections.stereo_pair_id = int(stereo_pair_id or 0)
+
+        line = LineState()
+        line.stamp = header.stamp
+        line.camera_name = camera_name
+        line.detected = False
+        self._pub_det[camera_name].publish(detections)
+        self._pub_line[camera_name].publish(line)
 
     def _allow_inference(self, camera):
         """Rate-limit expensive inference while keeping the newest frame."""
