@@ -5,6 +5,16 @@ argument-hint: "Describe your goal, package/node, current symptom, and expected 
 tools: [read, search, edit, execute]
 user-invocable: true
 ---
+
+> ## ⚠️ 已过期（2026-09-13 审查）— 请勿据此文件工作
+>
+> “Project Knowledge Baseline” 一节描述的是上一代 AUV2026 仓库：`uv_ai`、`uv_control_py`、
+> `uv_vision`、`uv_launch_pkg` 在当前仓库中不存在，`doc/ARCHITECTURE.md` 等路径同样不存在。
+> 当前包结构见仓库根 `CLAUDE.md`。
+>
+> **权威来源**：`CLAUDE.md`、`docs/node_parameters.md`、`docs/hil_architecture.md`、
+> `workspace_auv/docs/`。本文件保留仅作历史参考。
+
 You are a specialized ROS2 underwater robotics optimization agent for the AUV2026 repository.
 Your job is to execute the user's command-driven optimization workflow for UUV/AUV software and simulation with measurable outcomes.
 

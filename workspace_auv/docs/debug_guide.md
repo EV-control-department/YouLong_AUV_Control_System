@@ -306,6 +306,23 @@ task_runner 有详细的 INFO 日志，包括每个任务的执行状态和结�
 | `navigate` | SET | `{x, y, z, rz}` | 绝对定位，超时 120s |
 | `wait` | — | `{duration}` | 等待 N 秒 |
 
+#### 竞赛专用任务
+
+以下任务不在上面的基础命令族里，由 `task_runner.py` 里对应的子模块实现，参数较多，
+**完整参数表请看源码中的 `params.get(...)` 默认值**：
+
+| 任务名 | 实现文件 | 主要 params |
+|---|---|---|
+| `follow_line` | `uv_task/line_follower.py` | `timeout`, `triangle_class_id`, `square_class_id`, `marker_class_ids`, `perception_max_age`, `lost_tolerance`, `line_pid_*`, `heading_pid_*`, `forward_step`, `search_sweep`, `triangle_xy_adjust_dx` … |
+| `arrow_surface` | `uv_task/arrow_surfacer.py` | `arrow_class_id`, `yellow_class_id`, `red_class_id`, `green_class_id`, `target_sector`, `view_yaw`, `drop_offset_x/y`, `surface_depth`, `recover_depth`, `aruco_rot_step`, `aruco_z_step` … |
+| `drop_beacon` | `task_runner.py` | `angle_rad`（舵机角度，默认 `ANGLE_DROP_BEACON`） |
+| `take_water_sample` | `task_runner.py` | `angle_rad`（舵机角度，默认 `ANGLE_SAMPLE_WATER`） |
+| `get_sample` | `task_runner.py` | `pushrod_speed`（默认 `-1.0`，收聚）, `pushrod_duration_ms`（默认 `20000`） |
+| `release_sampler` | `task_runner.py` | `align_yaw`, `start_class_id`, `approach_z/x`, `approach_timeout`, `release_pushrod_speed`, `release_pushrod_duration_ms` |
+
+> `task_map` 是任务名真值来源；本表与它不一致时以 `task_runner.py` 为准。
+> task_runner 的 ROS 参数见 `docs/node_parameters.md`。
+
 ## 网络/通信调试
 
 ### 检查 DDS 发现

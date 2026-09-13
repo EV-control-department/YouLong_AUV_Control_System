@@ -319,17 +319,20 @@
 			<ros_publisher topic="/sim/front_cam/right"/>
 		</sensor>
 
+		<!-- 分辨率与实机对齐（2026-09-12 实测录像 /home/origin/recordings）：
+		     前视单目 1280x960（实机 2560x960 stitched），下视单目 1920x1080（实机 3840x1080 stitched）。
+		     horizontal_fov 严格作用于宽度，垂直视场由宽高比推出（Stonefish OpenGLRealCamera）。 -->
 		<sensor name="down_cam_left" type="camera" rate="30.0">
 			<link name="Vehicle"/>
 			<origin rpy="0 0 1.5708" xyz="-0.13 -0.05 0.2645"/>
-			<specs resolution_x="1280" resolution_y="960" horizontal_fov="87.19"/>
+			<specs resolution_x="1920" resolution_y="1080" horizontal_fov="87.19"/>
 			<ros_publisher topic="/sim/down_cam/left"/>
 		</sensor>
 
 		<sensor name="down_cam_right" type="camera" rate="30.0">
 			<link name="Vehicle"/>
 			<origin rpy="0 0 1.5708" xyz="-0.13 0.05 0.2645"/>
-			<specs resolution_x="1280" resolution_y="960" horizontal_fov="87.19"/>
+			<specs resolution_x="1920" resolution_y="1080" horizontal_fov="87.19"/>
 			<ros_publisher topic="/sim/down_cam/right"/>
 		</sensor>
 

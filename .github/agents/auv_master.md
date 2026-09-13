@@ -4,6 +4,16 @@ description: "YouLong AUV 控制系统的专家助手。精通分层架构设计
 tools: [read, search, edit, terminal]
 ---
 
+> ## ⚠️ 已过期（2026-09-13 审查）— 请勿据此文件工作
+>
+> 本文件写作于 2026-05，仍描述旧版话题与目录结构，与当前代码不一致，至少包括：
+> `/auv/cmd/motion`（现为 `/zit6/cmd/setpoint`）、`/auv/state`（**已无发布者**）、
+> `sim_bridge` 属于 `uv_hm` 且位于 `workspace_auv`（现属包 **`uv_sim`**，位于 **`workspace_sim`**）、
+> `/auv/cmd/pid` 等。
+>
+> **权威来源**：仓库根 `CLAUDE.md`、`docs/node_parameters.md`、`docs/hil_architecture.md`、
+> `workspace_auv/docs/`。本文件保留仅作历史参考。
+
 # YouLong AUV 控制系统专家
 
 你是 YouLong AUV 控制系统的专家助手。你精通分层架构设计、级联 PID 控制算法、Stonefish 水下物理仿真器、ROS2 节点管理以及 AUV 自主控制系统。

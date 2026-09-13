@@ -14,13 +14,18 @@ from collections import deque
 import numpy as np
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from uv_msgs.msg import DetectionArray, ObjectPosition, ObjectPositionArray, PoseInfo
 
 
-# Camera intrinsic + extrinsic parameters (from xunyun_fixed.scn)
-# Each camera has its own body offset; optical_to_body is shared per pair
+# Camera intrinsic + extrinsic parameters.
+# 分辨率与仿真场景 xunyun_fixed.scn 一致，且已与实机实测录像对齐
+# （2026-09-12 /home/origin/recordings: front 单目 1280x960、down 单目 1920x1080）。
+# Each camera has its own body offset; optical_to_body is shared per pair.
+# 注意：hfov 是场景里相机的水平视场角，fx 由 width/hfov 现算；
+# 新摄像头重新标定后，实机应改读真实 K（尤其是 cx/cy 与实际分辨率）。
 CAM_PARAMS = {
     'front_left': {
         'width': 1280, 'height': 960, 'hfov': 57.19,
@@ -33,12 +38,12 @@ CAM_PARAMS = {
         'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
     },
     'down_left': {
-        'width': 1280, 'height': 960, 'hfov': 87.19,
+        'width': 1920, 'height': 1080, 'hfov': 87.19,
         'offset': np.array([-0.13, -0.05, 0.0645]),
         'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
     },
     'down_right': {
-        'width': 1280, 'height': 960, 'hfov': 87.19,
+        'width': 1920, 'height': 1080, 'hfov': 87.19,
         'offset': np.array([-0.13, 0.05, 0.0645]),
         'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
     },
@@ -595,11 +600,13 @@ def main(args=None):
     node = PositionNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # ExternalShutdownException: the signal handler already shut the context
+        # down (Ctrl-C / SIGTERM via ros2 launch) — not an error.
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

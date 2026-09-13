@@ -7,10 +7,11 @@ import math
 import threading
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
-from uv_msgs.msg import AuvState, ObjectPositionArray, Waypoint, WaypointPath
+from uv_msgs.msg import ObjectPositionArray, PoseInfo, Waypoint, WaypointPath
 from uv_msgs.srv import RunTask
 
 from uv_nav.astar import AStarPlanner
@@ -22,14 +23,17 @@ class NavigatorNode(Node):
     def __init__(self):
         super().__init__('navigator')
 
-        self.state = AuvState()
+        self.state = PoseInfo()
+        self._have_pose = False
         self.obstacles = []  # list of (x, y)
         self._state_lock = threading.Lock()
 
         self.planner = AStarPlanner(resolution=0.5, safe_radius=2.0)
 
         # Subscribers
-        self.create_subscription(AuvState, '/auv/state', self._state_cb, 10)
+        # Pose comes from basic_motion (works in sim AND on the real AUV).
+        # /auv/state has no publisher and must not be used.
+        self.create_subscription(PoseInfo, '/basic_motion/pose_info', self._state_cb, 10)
         self.create_subscription(ObjectPositionArray, '/perception/objects', self._objects_cb, 10)
 
         # Publishers
@@ -38,11 +42,13 @@ class NavigatorNode(Node):
         # Services
         self.create_service(RunTask, '/nav/navigate_to', self._navigate_to_cb)
 
-        self.get_logger().info('Navigator node started')
+        self.get_logger().info(
+            'Navigator node started (pose source: /basic_motion/pose_info)')
 
-    def _state_cb(self, msg: AuvState):
+    def _state_cb(self, msg: PoseInfo):
         with self._state_lock:
             self.state = msg
+            self._have_pose = True
 
     def _objects_cb(self, msg: ObjectPositionArray):
         """Update obstacle list from perception."""
@@ -67,30 +73,41 @@ class NavigatorNode(Node):
         Returns:
             True if navigation planned successfully
         """
-        s = self.state
-        start_x, start_y = s.pos_x, s.pos_y
+        with self._state_lock:
+            s = self.state
+            have_pose = self._have_pose
+
+        if not have_pose:
+            self.get_logger().warn(
+                'navigate_to rejected: no pose yet on /basic_motion/pose_info '
+                '(is basic_motion running and has START been sent?)')
+            return False
+
+        # PoseInfo carries odom-frame NED position in metres and yaw in DEGREES.
+        start_x, start_y, start_z = s.robot_x, s.robot_y, s.robot_z
+        start_yaw_rad = math.radians(s.robot_yaw)
 
         # Plan path
         next_x, next_y = self.planner.plan(
             start_x, start_y, goal_x, goal_y, self.obstacles
         )
 
-        # Publish planned path
+        # Publish planned path (Waypoint.yaw is in radians)
         path_msg = WaypointPath()
         path_msg.header.stamp = self.get_clock().now().to_msg()
 
         wp_start = Waypoint()
         wp_start.x = start_x
         wp_start.y = start_y
-        wp_start.z = s.pos_z
-        wp_start.yaw = s.yaw
+        wp_start.z = start_z
+        wp_start.yaw = start_yaw_rad
         path_msg.waypoints.append(wp_start)
 
         wp_next = Waypoint()
         wp_next.x = next_x
         wp_next.y = next_y
-        wp_next.z = goal_z if goal_z is not None else s.pos_z
-        wp_next.yaw = goal_yaw if goal_yaw is not None else s.yaw
+        wp_next.z = goal_z if goal_z is not None else start_z
+        wp_next.yaw = goal_yaw if goal_yaw is not None else start_yaw_rad
         path_msg.waypoints.append(wp_next)
 
         self.pub_path.publish(path_msg)
@@ -124,11 +141,13 @@ def main(args=None):
     node = NavigatorNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # ExternalShutdownException is raised when the signal handler already
+        # shut the context down (e.g. Ctrl-C / SIGTERM via ros2 launch).
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

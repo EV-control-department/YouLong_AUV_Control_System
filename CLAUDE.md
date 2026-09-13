@@ -59,8 +59,8 @@ This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater
 
 | Layer | Package | Role |
 |---|---|---|
-| 0 | `stonefish_ros2` (C++) | Stonefish 1.6 marine physics simulator, GPU mode (runs `stonefish_simulator`) |
-| 1 | `uv_hm` | Cascaded PID + thruster mixing → 6 thrusters. `sim_bridge` for simulation, `hw_manager` placeholder for STM32 MCU |
+| 0 | `stonefish_ros2` (C++) | Stonefish 1.6 marine physics simulator. GPU mode runs `stonefish_simulator`, headless runs `stonefish_simulator_nogpu`. Lives in `workspace_sim/` |
+| 1 | `uv_hm` + `uv_sim` | Cascaded PID + thruster mixing → 6 thrusters. `sim_bridge` (package **`uv_sim`**, **`workspace_sim/`**) for SIL; `hw_manager` (package `uv_hm`, `workspace_auv/`) keeps the STM32 MCU armed and monitors `/zit6/state/*` |
 | 2 | `uv_control` | Motion API: SET/WMOVE/BMOVE/TRAVEL. Only entry point is `basic_motion` |
 | 3 | `uv_perception` | 4 通道双目 YOLO 检测 + 多帧单目射线交会 3D 定位。sim/real 模式切换，发布 PoseInfo 位姿源 |
 | 4 | `uv_nav` | A* pathfinding + obstacle avoidance waypoint following |
@@ -239,7 +239,8 @@ print('SET:', result.success, result.message)
 
 **Key behaviors:**
 - **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them (no service call needed)
-- **Task map**: JSON `name` field maps to a method via `task_map` dict. Supports SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL tasks, plus `start`, `navigate`, `wait`. See `docs/debug_guide.md` for full task list.
+- **Task map**: JSON `name` field maps to a method via the `task_map` dict in `task_runner.py`. Beyond the SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL axis variants (e.g. `setxyzrz`, `bmovexy`, `wtravelx`), plus `start`, `navigate`, `wait`, it exposes competition-specific actions: `follow_line`, `arrow_surface`, `drop_beacon`, `take_water_sample`, `get_sample`, `release_sampler`. **`task_runner.py`'s `task_map` is the authoritative list**; `docs/debug_guide.md` lags behind it.
+- **ROS parameters**: `debug_mode`, `down_image_width`, `down_image_height`, `align_ema_alpha` (see `docs/node_parameters.md`)
 - **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
 - **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
 
@@ -259,21 +260,19 @@ The main thread runs `rclpy.spin(node)` with SingleThreadedExecutor; the work th
 
 ### AuvState — Sim-Only Topic
 
-`auv_msgs/msg/AuvState` is published **only** by `stonefish_ros2` (the simulator). Real AUV hardware does not publish this topic. Nodes running on the real AUV must not depend on it.
+`uv_msgs/msg/AuvState` is intended for simulation only, and **nothing publishes `/auv/state`** any more (the old `stonefish_ros2` publisher is gone; sim_bridge publishes `/zit6/state/*` and `/zit6/sim/nav`). Real AUV hardware never publishes it. Nodes running on the real AUV must not depend on it.
 
-For pose feedback, perception nodes use `/basic_motion/pose_info` (`uv_msgs/PoseInfo`, 30Hz) published by `basic_motion`. This works in both simulation and real-hardware modes.
+For pose feedback, both perception and navigation use `/basic_motion/pose_info` (`uv_msgs/PoseInfo`, 30Hz) published by `basic_motion`. This works in both simulation and real-hardware modes — `navigator.py` was migrated to it (2026-09-13), and it refuses to plan until a pose has arrived.
 
-### sim_bridge Known Issues
+The `AuvState` message itself is now unused by any node; only `uv_msgs` still defines it.
 
-`workspace_sim/src/uv_sim/uv_sim/sim_bridge.py` line 616:
+### sim_bridge (`uv_sim`, workspace_sim)
 
-```python
-cmd_rz = -float(self.pid_yaw_rate.step(eyaw_rate, dt))    # BUG: negation inverts yaw polarity
-```
+`sim_bridge` lives at `workspace_sim/src/uv_sim/uv_sim/sim_bridge.py` (package `uv_sim`, **not** `uv_hm`). It plays the role of the MCU in SIL mode: `ZitSetpoint` in → PID + thruster mixing → `/auv/thrusters_cmd`, and publishes `/zit6/state/{pos,vel,thr,status,zithbt}`. With `hil_mode:=True` it only forwards camera images and relays `/zit6/state/thr` → thrusters, leaving PID/mixing to the real MCU.
 
-The `-` sign inverts yaw control polarity, causing the AUV to spin instead of holding depth/yaw. Fix: remove the negation → `cmd_rz = float(...)`.
+Historical note: the yaw-polarity bug documented in earlier revisions (`cmd_rz = -float(self.pid_yaw_rate.step(...))`) has been **fixed** — the negation is gone (now `cmd_rz = float(...)`). Do not re-apply that fix.
 
-### 6-DOF State Feedback (migrated 2026-07-20)
+### 6-DOF State Feedback (migrated 2026-07-20, MCU side complete)
 
 控制栈保持 4-DOF，状态反馈升级为 6-DOF 以携带完整姿态，用于纠正 position 节点的位置估计。
 
@@ -281,10 +280,12 @@ The `-` sign inverts yaw control polarity, causing the AUV to spin instead of ho
 
 | 话题 | 格式 | 发布者 |
 |---|---|---|
-| `/zit6/state/pos` | `[x, y, z, roll_rad, pitch_rad, yaw_rad]` | sim_bridge |
-| `/zit6/state/vel` | `[vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad_s]` | sim_bridge |
-| `/zit6/state/thr` | `[Fx, Fy, Fz, 0, 0, Mz]` | sim_bridge |
+| `/zit6/state/pos` | `[x, y, z, roll_rad, pitch_rad, yaw_rad]` | sim_bridge (SIL) / MCU (HIL·实机) |
+| `/zit6/state/vel` | `[vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad_s]` | sim_bridge (SIL) / MCU (HIL·实机) |
+| `/zit6/state/thr` | `[Fx, Fy, Fz, Mx, My, Mz]`（sim_bridge 的 Mx/My 恒为 0） | sim_bridge (SIL) / MCU (HIL·实机) |
 | `PoseInfo` | 含 `robot_roll`, `robot_pitch` (deg) | basic_motion 30Hz |
+
+**MCU 固件状态（`third_party/AUV_zit6_cmake`，`MicroRosPublisher.cpp`）：** 已完成 4→6 元素升级，`pos/vel/thr` 的 `data.size = capacity = 6`，`pos_world[3..5]` = roll/pitch/yaw。devlog #2 记录的「协议层截断 roll/pitch」问题已不存在。
 
 **数据流：**
 ```
@@ -294,7 +295,7 @@ IMU → sim_bridge._odom_cb (全 RPY 提取)
   → 射线方向 v_world = R_robot @ v_body (完整姿态)
 ```
 
-**注意：** `_vel_cb` 和 `_pos_cb` 都兼容旧 4 元素格式（通过 `len(msg.data) >= 6` 检查）。
+**注意：** `_vel_cb` 和 `_pos_cb` 都兼容旧 4 元素格式（通过 `len(msg.data) >= 6` 检查）；`hw_manager._thr_cb` 也用同一守卫，4 元素来源会让推力饱和监控静默失效。
 
 ### Coordinate System & Conventions
 
@@ -329,9 +330,9 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_auv/src/uv_task/config/tasks.json` | Competition task list (JSON array of `{name, params}`) |
 | `workspace_auv/src/uv_task/uv_task/task_runner.py` | Task executor, BasicMotion action client |
 | `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
-| `workspace_auv/src/uv_hm/uv_hm/sim_bridge.py` | Simulation hardware bridge (PID + thruster mixing) |
-| `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, dataset capture |
-| `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization (now uses full RPY for ray casting) |
+| `workspace_sim/src/uv_sim/uv_sim/sim_bridge.py` | Simulation hardware bridge (SIL PID + thruster mixing / HIL passthrough); package `uv_sim` |
+| `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, dataset capture. Camera calibration is intentionally **empty** (new cameras, not yet calibrated) → undistortion skipped; sim images have no distortion anyway. `*_CAPTURE_RESOLUTION` are V4L2 **request** values; actual frame size is read back and a mismatch is warned. front 2560×960 / down 3840×1080 stitched (left+right eyes) |
+| `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization (now uses full RPY for ray casting). `CAM_PARAMS` per-eye geometry: front 1280×960 @ hfov 57.19°, down **1920×1080** @ hfov 87.19°; intrinsics are derived from HFOV, not from any calibration file |
 | `visualization/auv_visualizer.py` | PySide6 GUI: 2D map, objects/rays, node list, task status, force remote control |
 | `workspace_auv/docs/basic_motion_action.md` | BasicMotion action interface reference |
 | `workspace_auv/docs/perception.md` | Perception system architecture + data flow |

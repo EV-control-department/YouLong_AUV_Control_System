@@ -71,9 +71,9 @@ SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_perception` �
 │  发布的 ROS 2 主题:                                               │
 │    /auv/thrusters_cmd   (Float64MultiArray[6]) — 推力指令       │
 │    /zit6/state/status   (ZitStatus)          — 系统状态          │
-│    /zit6/state/pos      (Float32MultiArray[4]) — 位置            │
-│    /zit6/state/vel      (Float32MultiArray[4]) — 速度            │
-│    /zit6/state/thr      (Float32MultiArray[4]) — 当前力          │
+│    /zit6/state/pos      (Float32MultiArray[6]) — 位姿            │
+│    /zit6/state/vel      (Float32MultiArray[6]) — 机体速度        │
+│    /zit6/state/thr      (Float32MultiArray[6]) — 当前力          │
 │    /zit6/state/zithbt   (UInt32)              — 心跳             │
 │                                                                   │
 │  提供的服务:                                                       │
@@ -124,12 +124,12 @@ MCU 通过 micro-ROS 发布以下主题：
 | ---------------------- | ------------------------------ | ----- | ------------------------------------------------------------------------ |
 | `/auv/thrusters_cmd` | `std_msgs/Float64MultiArray` | 60 Hz | 6 路归一化推力值`[-1.0, 1.0]`，直接驱动 Stonefish 推进器               |
 | `/zit6/state/status` | `zit6_interfaces/ZitStatus`  | 10 Hz | 布防状态、控制模式、INS 状态、力输出、电池电压、错误标志                 |
-| `/zit6/state/pos`    | `std_msgs/Float32MultiArray` | 30 Hz | 地图坐标系位置`[x, y, z, yaw_rad]`；`uv_control` 依赖此话题          |
-| `/zit6/state/vel`    | `std_msgs/Float32MultiArray` | 60 Hz | 机体坐标系速度`[vx, vy, vz, vyaw_rate_rad]`；`uv_control` 依赖此话题 |
-| `/zit6/state/thr`    | `std_msgs/Float32MultiArray` | 30 Hz | 当前施加的 4-DOF 力`[Fx, Fy, Fz, Mz]`                                  |
+| `/zit6/state/pos`    | `std_msgs/Float32MultiArray` | 30 Hz | 地图坐标系位姿 `[x, y, z, roll_rad, pitch_rad, yaw_rad]`（6 元素）；`uv_control` 依赖此话题 |
+| `/zit6/state/vel`    | `std_msgs/Float32MultiArray` | 50 Hz | 机体坐标系速度 `[vx, vy, vz, vroll, vpitch, vyaw_rad]`（6 元素）；`uv_control` 依赖此话题 |
+| `/zit6/state/thr`    | `std_msgs/Float32MultiArray` | 30 Hz | 当前施加的 6-DOF 力 `[Fx, Fy, Fz, Mx, My, Mz]`                      |
 | `/zit6/state/zithbt` | `std_msgs/UInt32`            | 10 Hz | 心跳序列号，用于上层心跳监控                                             |
 
-**带宽估算**: thrusters_cmd 约 50B×60 + status 约 100B×10 + pos 约 50B×30 + vel 约 50B×60 ≈ **8 KB/s**
+**带宽估算**: thrusters_cmd 约 50B×60 + status 约 100B×10 + pos 约 60B×30 + vel 约 60B×50 ≈ **8 KB/s**
 
 **总带宽**: 上下行合计约 22 KB/s，远低于 921600 baud (≈92 KB/s) 的理论上限，串口链路充足。
 
@@ -212,6 +212,12 @@ MCU 通过 `ZitSetpoint.control_key & 0x03` 解析控制模式：
 
 ## 四、与 SIL 的对比
 
+> ⚠️ **已知缺口 — navigator 的位姿源**：`navigator.py` 目前订阅 `uv_msgs/AuvState` 的 `/auv/state`，
+> 但该话题在 SIL 与 HIL 下**都没有发布者**（真值里程计已改走 `/zit6/state/pos` 与 `/zit6/sim/nav`）。
+> 因此在两种模式下导航器都拿不到自身位姿，A* 规划不可用。规划中的修法是改用
+> `/basic_motion/pose_info`（仿真/实机通用）。在此之前，`real_bringup.py` 虽默认 `enable_nav:=true`，
+> 也只是拉起一个空转节点。
+
 | 组件          | SIL (`sim_bridge` 正常模式)              | HIL (`sim_bridge hil_mode:=True`) |
 | ------------- | ------------------------------------------ | ----------------------------------- |
 | PID 控制      | Python`_Pid` 数据类                      | STM32 C 实现                        |
@@ -281,10 +287,15 @@ Launch 参数:
 | --------------- | ------------------------- | ------------------ |
 | `serial_dev`  | `/dev/ttyUSB0`          | MCU 串口设备路径   |
 | `serial_baud` | `921600`                | 串口波特率         |
-| `enable_ai`   | `true`                  | 启用感知节点       |
-| `enable_nav`  | `true`                  | 启用导航节点       |
+| `enable_ai`   | `false`                 | 启用感知节点       |
+| `enable_nav`  | `false`                 | 启用导航节点       |
 | `enable_task` | `false`                 | 启用任务执行器     |
-| `scenario`    | `underwater_xunyun.scn` | Stonefish 场景文件 |
+| `enable_motion` | `false`               | 启用 basic_motion  |
+| `scenario`    | `underwater_xunyun.scn` | ⚠️ 仅用于日志打印，仿真器实际加载的场景名硬编码在 launch 文件内 |
+
+> ⚠️ HIL 默认全部为 `false`（launch 只拉起 MCU 链路与相机），需要显式 `enable_ai:=true` 等开启上层节点。
+> 另外 `hil_bringup.py` 与 `sim_core.py` 的 `scenario` 参数**没有被传进仿真器的 `arguments`**，改它不会换场景；
+> `hil_bringup.py` 也没有 `gpu` 参数，固定使用 GPU 版 `stonefish_simulator`（无图形环境需自行加 `xvfb-run`）。
 
 ---
 

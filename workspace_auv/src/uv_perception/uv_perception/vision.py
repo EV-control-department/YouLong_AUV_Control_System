@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 import numpy as np
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Header, Int32MultiArray
@@ -43,34 +44,41 @@ DOWN_CAMERA_DEVICE = '/dev/video2'
 ENABLE_FRONT_CAMERA = True
 ENABLE_DOWN_CAMERA = True
 
-# 每个 stitched 相机拆分后的单目图像分辨率。
-# stitched 图像应为：(width * 2, height)，例如前/下相机均为 2560x960。
-FRONT_CAMERA_RESOLUTION = (1280, 960)  # width, height
-DOWN_CAMERA_RESOLUTION = (1280, 960)   # width, height
+# 每个 stitched 相机拆分后的单目图像分辨率（改用实机实测值）。
+# stitched 图像为左右目并排：(width * 2, height)。
+#   前视 1280x960  -> stitched 2560x960
+#   下视 1920x1080 -> stitched 3840x1080
+# 注意：这两个常量仅作说明用途，实际尺寸由输入图像的 shape 决定。
+FRONT_CAMERA_RESOLUTION = (1280, 960)   # width, height (实机实测 / 仿真场景一致)
+DOWN_CAMERA_RESOLUTION = (1920, 1080)   # width, height (实机实测 3840x1080 的一半)
 
-# 真实 V4L2 设备的实际采集分辨率；由 v4l2-ctl 检测得到。
-FRONT_CAPTURE_RESOLUTION = (1280, 720)
-DOWN_CAPTURE_RESOLUTION = (2560, 960)
+# 真实 V4L2 设备的采集分辨率 —— 这两个值只是**请求值**！
+# cv2.VideoCapture 的 CAP_PROP_FRAME_WIDTH/HEIGHT 不保证被驱动满足，
+# 设备实际可能给出别的尺寸（例如曾出现常量写 2560x960、实机实际输出 3840x1080）。
+# 因此 _capture_camera_loop 会回读实际尺寸并与这里比对，不一致时打 WARN。
+# 当前值取自实机录像实测（/home/origin/recordings，2026-09-12）：
+#   front = 2560x960（单目 1280x960）、down = 3840x1080（单目 1920x1080）
+FRONT_CAPTURE_RESOLUTION = (2560, 960)
+DOWN_CAPTURE_RESOLUTION = (3840, 1080)
 
 PIPE_CLASS_ID = 3                # 实机模型: pipe=3
 PIPE_CONFIDENCE = 0.7            # pipe 单独的高置信度阈值 (巡线目标需可靠)
 
 
-# 相机标定常量：K 为 3x3 内参矩阵，D 的顺序为
-# (k1, k2, p1, p2, k3)。请用实际标定结果替换 D。
-FRONT_CAMERA_MATRIX = (
-    2158.4, 0.0, 640.0,
-    0.0, 2158.4, 480.0,
-    0.0, 0.0, 1.0,
-)
-FRONT_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
+# ── 相机标定（待重新标定，当前留空）─────────────────────────────────
+# 换了新摄像头后，旧的内参矩阵与畸变系数全部作废，因此这里留空。
+# 留空时 vision 会跳过去畸变（cv2.undistort），检测/定位不受影响。
+#
+# 说明：
+#   * 仿真模式下 Stonefish 渲染的图像本身没有畸变，永远不需要去畸变；
+#   * 实机模式需要重新标定后填入，K 为 3x3 行优先内参（9 个值），
+#     D 为畸变系数 (k1, k2, p1, p2, k3)。
+# 填好后 position.py 的射线几何仍需使用与该分辨率一致的内参。
+FRONT_CAMERA_MATRIX = ()             # 留空 = 未标定
+FRONT_DIST_COEFFS = ()               # 留空 = 未标定
 
-DOWN_CAMERA_MATRIX = (
-    2307.6, 0.0, 640.0,
-    0.0, 2307.6, 480.0,
-    0.0, 0.0, 1.0,
-)
-DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
+DOWN_CAMERA_MATRIX = ()              # 留空 = 未标定
+DOWN_DIST_COEFFS = ()                # 留空 = 未标定
 
 CONFIDENCE = 0.55
 
@@ -514,20 +522,30 @@ class VisionNode(Node):
         super().destroy_node()
 
     def _init_undistort(self):
+        """Load camera calibration.
+
+        Calibration is intentionally EMPTY right now (new cameras, not yet
+        calibrated): an empty ``*_camera_matrix`` means "not calibrated", so
+        undistortion is skipped instead of failing.
+        """
         self.declare_parameter('front_camera_matrix', list(FRONT_CAMERA_MATRIX))
         self.declare_parameter('front_dist_coeffs', list(FRONT_DIST_COEFFS))
         self.declare_parameter('down_camera_matrix', list(DOWN_CAMERA_MATRIX))
         self.declare_parameter('down_dist_coeffs', list(DOWN_DIST_COEFFS))
 
         def _load_calib(prefix):
+            k_values = self.get_parameter(
+                f'{prefix}_camera_matrix').get_parameter_value().double_array_value
+            d_values = self.get_parameter(
+                f'{prefix}_dist_coeffs').get_parameter_value().double_array_value
+
+            # 空矩阵 = 尚未标定，这是当前预期状态，不是错误。
+            if len(k_values) == 0:
+                return None, None
             try:
-                k_values = self.get_parameter(
-                    f'{prefix}_camera_matrix').get_parameter_value().double_array_value
-                d_values = self.get_parameter(
-                    f'{prefix}_dist_coeffs').get_parameter_value().double_array_value
                 if len(k_values) != 9:
                     raise ValueError(f'camera matrix has {len(k_values)} values, expected 9')
-                if len(d_values) not in (4, 5, 8, 12, 14):
+                if len(d_values) not in (0, 4, 5, 8, 12, 14):
                     raise ValueError(
                         f'distortion coefficients have {len(d_values)} values')
                 return (
@@ -541,6 +559,22 @@ class VisionNode(Node):
 
         self._front_K, self._front_D = _load_calib('front')
         self._down_K, self._down_D = _load_calib('down')
+
+        if self._sim_mode:
+            self.get_logger().info(
+                'sim_mode: Stonefish images are distortion-free, undistortion not needed')
+
+        for cam, K in (('front', self._front_K), ('down', self._down_K)):
+            if K is None:
+                self.get_logger().warn(
+                    f'{cam} camera has no calibration -> undistortion skipped. '
+                    f'This is the expected state until the new cameras are '
+                    f'calibrated (fill {cam.upper()}_CAMERA_MATRIX / '
+                    f'{cam.upper()}_DIST_COEFFS in vision.py).')
+            else:
+                self.get_logger().info(
+                    f'{cam} camera calibration loaded: fx={K[0, 0]:.1f}, '
+                    f'fy={K[1, 1]:.1f}, cx={K[0, 2]:.1f}, cy={K[1, 2]:.1f}')
 
     def _load_model(self):
         self.declare_parameter('model_path', '')
@@ -680,7 +714,10 @@ class VisionNode(Node):
 
         h, w = cv_img.shape[:2]
         mid = w // 2
-        if ENABLE_UNDISTORT and K is not None and D is not None:
+        # 去畸变仅在「实机 + 已标定」时执行：
+        #   * 仿真图像由 Stonefish 渲染，本身无畸变；
+        #   * 新摄像头尚未标定时 K/D 为空，直接按原图切分（分辨率不变）。
+        if ENABLE_UNDISTORT and not self._sim_mode and K is not None and D is not None:
             left_img = cv2.undistort(cv_img[:, :mid], K, D)
             right_img = cv2.undistort(cv_img[:, mid:], K, D)
         else:
@@ -963,7 +1000,27 @@ class VisionNode(Node):
 
             if not self._capture_frame_logged[camera]:
                 self._capture_frame_logged[camera] = True
-                self.get_logger().info(f'{camera} camera frame received: shape={frame.shape}, stream_frames={frame_count}')
+                h, w = normalized.shape[:2]
+                self.get_logger().info(
+                    f'{camera} camera frame received: shape={normalized.shape}, '
+                    f'stream_frames={frame_count}')
+
+                # CAP_PROP_FRAME_WIDTH/HEIGHT 只是请求值，驱动可能给出别的尺寸。
+                # 回读实际尺寸并与常量比对，避免静默偏差。
+                requested = (FRONT_CAPTURE_RESOLUTION if camera == 'front'
+                             else DOWN_CAPTURE_RESOLUTION)
+                actual = (w, h)
+                if actual != requested:
+                    self.get_logger().warn(
+                        f'{camera} camera capture resolution mismatch: '
+                        f'requested {requested[0]}x{requested[1]}, '
+                        f'actual {actual[0]}x{actual[1]}. '
+                        f'Update {camera.upper()}_CAPTURE_RESOLUTION and check '
+                        f'that position.py per-eye geometry (cx/cy/fx) matches.')
+                if w % 2 != 0:
+                    self.get_logger().warn(
+                        f'{camera} frame width {w} is odd, the L/R split at '
+                        f'width//2 will drop one column')
 
             self._submit_frame(
                 normalized,
@@ -978,11 +1035,13 @@ def main(args=None):
     node = VisionNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # ExternalShutdownException: the signal handler already shut the context
+        # down (Ctrl-C / SIGTERM via ros2 launch) — not an error.
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 if __name__ == '__main__':
     main()
