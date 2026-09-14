@@ -42,8 +42,12 @@ class DatasetRecorder:
         png_compression: int = 3,
         image_format: str = 'png',
         logger: Optional[Any] = None,
+        debug: bool = False,
+        debug_period_s: float = 1.0,
     ):
         self._logger = logger
+        self._debug_enabled = bool(debug)
+        self._debug_period_s = max(0.1, float(debug_period_s))
         self._root_dir = Path(root_dir).expanduser()
         self._root_dir.mkdir(parents=True, exist_ok=True)
         self._session_dir = self._make_session_dir(self._root_dir)
@@ -85,6 +89,11 @@ class DatasetRecorder:
         self._written = 0
         self._failed = 0
         self._last_status_s = 0.0
+        self._debug_last_log_s = 0.0
+        self._debug_blocked_submits = 0
+        self._debug_blocked_wait_s = 0.0
+        self._debug_last_write_ms = 0.0
+        self._debug_max_write_ms = 0.0
 
         self._write_json_atomic(
             self._session_dir / 'session.json',
@@ -220,12 +229,21 @@ class DatasetRecorder:
                 self._next_sequence += 1
                 self._submitted += 1
             item = (sequence, image_copy, str(channel), header, int(stereo_pair_id))
+            wait_started = time.monotonic()
+            blocked_events = 0
             while True:
                 self._raise_worker_error()
                 try:
                     self._queue.put(item, timeout=0.5)
+                    wait_s = time.monotonic() - wait_started
+                    if self._debug_enabled:
+                        with self._state_lock:
+                            self._debug_blocked_submits += blocked_events
+                            self._debug_blocked_wait_s += wait_s
+                        self._maybe_log_debug()
                     return True
                 except queue.Full:
+                    blocked_events += 1
                     continue
 
     def _write_item(
@@ -236,6 +254,7 @@ class DatasetRecorder:
         header: Optional[Any],
         stereo_pair_id: int,
     ) -> None:
+        write_started = time.monotonic()
         channel_dir = self._images_dir / channel
         if not channel_dir.exists():
             channel_dir.mkdir(parents=True)
@@ -284,6 +303,60 @@ class DatasetRecorder:
         os.fsync(self._manifest.fileno())
         with self._state_lock:
             self._written += 1
+            if self._debug_enabled:
+                write_ms = (time.monotonic() - write_started) * 1000.0
+                self._debug_last_write_ms = write_ms
+                self._debug_max_write_ms = max(
+                    self._debug_max_write_ms, write_ms)
+
+    def debug_snapshot(self) -> Dict[str, Union[int, float]]:
+        """Return recorder counters used by the opt-in capture diagnostics."""
+        with self._state_lock:
+            return {
+                'submitted': self._submitted,
+                'written': self._written,
+                'failed': self._failed,
+                'queue_depth': self._queue.qsize(),
+                'queue_capacity': self._queue.maxsize,
+                'blocked_submits': self._debug_blocked_submits,
+                'blocked_wait_ms': self._debug_blocked_wait_s * 1000.0,
+                'last_write_ms': self._debug_last_write_ms,
+                'max_write_ms': self._debug_max_write_ms,
+            }
+
+    def _maybe_log_debug(self) -> None:
+        if not self._debug_enabled or self._logger is None:
+            return
+        now = time.monotonic()
+        with self._state_lock:
+            if now - self._debug_last_log_s < self._debug_period_s:
+                return
+            self._debug_last_log_s = now
+            snapshot = {
+                'submitted': self._submitted,
+                'written': self._written,
+                'failed': self._failed,
+                'queue_depth': self._queue.qsize(),
+                'queue_capacity': self._queue.maxsize,
+                'blocked_submits': self._debug_blocked_submits,
+                'blocked_wait_ms': self._debug_blocked_wait_s * 1000.0,
+                'last_write_ms': self._debug_last_write_ms,
+                'max_write_ms': self._debug_max_write_ms,
+            }
+            self._debug_blocked_submits = 0
+            self._debug_blocked_wait_s = 0.0
+            self._debug_max_write_ms = 0.0
+        log_info = getattr(self._logger, 'info', None)
+        if log_info is not None:
+            log_info(
+                'dataset-debug recorder: '
+                f"submitted={snapshot['submitted']} "
+                f"written={snapshot['written']} failed={snapshot['failed']} "
+                f"queue={snapshot['queue_depth']}/{snapshot['queue_capacity']} "
+                f"blocked_submits={snapshot['blocked_submits']} "
+                f"blocked_wait_ms={snapshot['blocked_wait_ms']:.1f} "
+                f"last_write_ms={snapshot['last_write_ms']:.1f} "
+                f"max_write_ms={snapshot['max_write_ms']:.1f}")
 
     def _run(self) -> None:
         try:
@@ -293,6 +366,7 @@ class DatasetRecorder:
                     if item is self._SENTINEL:
                         return
                     self._write_item(*item)
+                    self._maybe_log_debug()
                     now = time.monotonic()
                     if now - self._last_status_s >= 1.0:
                         self._last_status_s = now

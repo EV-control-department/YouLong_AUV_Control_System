@@ -810,7 +810,12 @@ class ObjectLocalizer(Node):
         self.create_timer(0.05, self._flush_stale_pending)
         self.create_timer(self.front_bearing_rebuild_period,
                          self._rebuild_dirty_front_bearings)
-        self.create_timer(5.0, self._summary)
+        # The full counter dump is useful during focused estimator diagnosis,
+        # but is too noisy for normal runs.  Keep it opt-in.
+        self._summary_timer = None
+        if self.summary_period > 0.0:
+            self._summary_timer = self.create_timer(
+                self.summary_period, self._summary)
 
         if self._calibration_ready or self._front_calibration_ready:
             self.get_logger().info(
@@ -1004,6 +1009,7 @@ class ObjectLocalizer(Node):
         self.declare_parameter("max_instances_guide_line", 6)
         self.declare_parameter("max_instances_gate", 4)
         self.declare_parameter("publish_period_sec", 0.1)
+        self.declare_parameter("summary_period_sec", 0.0)
         self.declare_parameter("observation_history_size", 500)
         self.declare_parameter("class_names", list(DEFAULT_CLASS_NAMES))
 
@@ -1319,6 +1325,7 @@ class ObjectLocalizer(Node):
         self.max_instances_gate = max(
             1, int(get("max_instances_gate").value))
         self.publish_period = float(get("publish_period_sec").value)
+        self.summary_period = max(0.0, float(get("summary_period_sec").value))
         self.observation_history_size = max(
             1, int(get("observation_history_size").value))
 

@@ -90,11 +90,22 @@ ARG HOST_UID=1000
 ARG HOST_GID=1000
 ARG HOST_USER=dev
 
-# Give the numeric host UID/GID a name inside the container. This keeps bind
-# mounted files owned by the host user without producing "I have no name!".
-RUN groupadd --gid "${HOST_GID}" "${HOST_USER}" \
-    && useradd --uid "${HOST_UID}" --gid "${HOST_GID}" \
-        --create-home --shell /bin/bash "${HOST_USER}"
+# Give the numeric host UID/GID a name inside the container. The ROS base
+# image may already contain the requested numeric group (commonly GID 1000),
+# so reuse it instead of unconditionally trying to create a duplicate group.
+# Likewise, allow a second login name for an already-used UID: the numeric UID
+# is what controls ownership of bind-mounted files, while HOST_USER is needed
+# by Compose's `user:` setting and by the shell environment below.
+RUN set -eux; \
+    if ! getent group "${HOST_GID}" >/dev/null; then \
+        groupadd --gid "${HOST_GID}" "${HOST_USER}"; \
+    fi; \
+    if getent passwd "${HOST_USER}" >/dev/null; then \
+        test "$(id -u "${HOST_USER}")" = "${HOST_UID}"; \
+    else \
+        useradd --uid "${HOST_UID}" --non-unique --gid "${HOST_GID}" \
+            --create-home --shell /bin/bash "${HOST_USER}"; \
+    fi
 
 RUN printf '%s\n' \
         'source /opt/ros/${ROS_DISTRO}/setup.bash' \

@@ -12,6 +12,8 @@ def generate_launch_description():
     sim_mode = LaunchConfiguration("sim_mode")
     inference_fps = LaunchConfiguration("inference_fps")
     dataset_fps = LaunchConfiguration("dataset_fps")
+    dataset_debug = LaunchConfiguration("dataset_debug")
+    dataset_debug_period_sec = LaunchConfiguration("dataset_debug_period_sec")
     inference_threads = LaunchConfiguration("inference_threads")
     confidence = LaunchConfiguration("confidence")
     gate_feature_mode = LaunchConfiguration("gate_feature_mode")
@@ -38,6 +40,8 @@ def generate_launch_description():
             "sim_mode": sim_mode,
             "inference_fps": inference_fps,
             "dataset_fps": dataset_fps,
+            "dataset_debug": dataset_debug,
+            "dataset_debug_period_sec": dataset_debug_period_sec,
             "inference_threads": inference_threads,
             "confidence": confidence,
             "gate_feature_mode": gate_feature_mode,
@@ -88,6 +92,8 @@ def generate_launch_description():
         DeclareLaunchArgument("sim_mode", default_value="false"),
         DeclareLaunchArgument("inference_fps", default_value="5.0"),
         DeclareLaunchArgument("dataset_fps", default_value="5.0"),
+        DeclareLaunchArgument("dataset_debug", default_value="false"),
+        DeclareLaunchArgument("dataset_debug_period_sec", default_value="1.0"),
         DeclareLaunchArgument("inference_threads", default_value="2"),
         DeclareLaunchArgument("confidence", default_value="0.8"),
         DeclareLaunchArgument("gate_feature_mode", default_value="auto"),

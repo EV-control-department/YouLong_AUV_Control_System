@@ -1,0 +1,26 @@
+name: smartcar-ros1-course
+
+services:
+  ros1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: smartcar-ros1-noetic:course
+    container_name: smartcar_ros1_noetic
+    network_mode: host
+    environment:
+      DISPLAY: "${DISPLAY:-:0}"
+      QT_X11_NO_MITSHM: "1"
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    volumes:
+      - type: bind
+        source: /tmp/.X11-unix
+        target: /tmp/.X11-unix
+      - type: bind
+        source: ${XAUTHORITY:-/tmp/.Xauthority}
+        target: /tmp/.Xauthority
+        read_only: true
+    stdin_open: true
+    tty: true
+    command: ["bash", "-lc", "tail -f /dev/null"]

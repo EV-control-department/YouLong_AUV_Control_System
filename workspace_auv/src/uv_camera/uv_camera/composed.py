@@ -107,6 +107,8 @@ class CameraAiNode(Node):
             self, self.update_annotated_stream, cameras=active,
             inference_fps=params['inference_fps'],
             dataset_fps=params['dataset_fps'],
+            dataset_debug=params['dataset_debug'],
+            dataset_debug_period_s=params['dataset_debug_period_s'],
             inference_threads=params['inference_threads'],
             gate_feature_mode=params['gate_feature_mode'],
             confidence=params['confidence'])
@@ -141,6 +143,8 @@ class CameraAiNode(Node):
         self.declare_parameter('sim_mode', False)
         self.declare_parameter('inference_fps', 5.0)
         self.declare_parameter('dataset_fps', 5.0)
+        self.declare_parameter('dataset_debug', False)
+        self.declare_parameter('dataset_debug_period_sec', 1.0)
         self.declare_parameter('inference_threads', 2)
         self.declare_parameter('confidence', 0.8)
         self.declare_parameter('gate_feature_mode', 'auto')
@@ -177,6 +181,9 @@ class CameraAiNode(Node):
             'sim_mode': g('sim_mode').value,
             'inference_fps': max(0.0, float(g('inference_fps').value)),
             'dataset_fps': max(0.0, float(g('dataset_fps').value)),
+            'dataset_debug': _as_bool(g('dataset_debug').value),
+            'dataset_debug_period_s': max(
+                0.1, float(g('dataset_debug_period_sec').value)),
             'inference_threads': max(1, int(g('inference_threads').value)),
             'confidence': min(1.0, max(0.05, float(g('confidence').value))),
             'gate_feature_mode': str(g('gate_feature_mode').value).strip().lower(),

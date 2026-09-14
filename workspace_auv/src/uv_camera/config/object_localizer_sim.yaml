@@ -19,6 +19,7 @@
     down_ignored_classes: [gate]
     down_min_plane_incidence: 0.15
     use_rejected_front_pairs_for_multiview: true
+    summary_period_sec: 0.0
     front_stereo_noise_scale: 1.8
     front_stereo_trusted_min_range_m: 0.5
     front_stereo_trusted_max_range_m: 2.5

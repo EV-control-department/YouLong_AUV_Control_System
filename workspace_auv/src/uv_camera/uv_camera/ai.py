@@ -57,6 +57,8 @@ class Ai:
         cameras=('front', 'down'),
         inference_fps=0.0,
         dataset_fps=5.0,
+        dataset_debug=False,
+        dataset_debug_period_s=1.0,
         inference_threads=2,
         gate_feature_mode='auto',
         confidence=CONFIDENCE,
@@ -74,6 +76,11 @@ class Ai:
         )
         self._dataset_timing_lock = threading.Lock()
         self._last_dataset_s = {camera: float('-inf') for camera in cameras}
+        self._dataset_debug = bool(dataset_debug)
+        self._dataset_debug_period_s = max(0.1, float(dataset_debug_period_s))
+        self._dataset_debug_lock = threading.Lock()
+        self._dataset_debug_last_capture_s = {}
+        self._dataset_debug_last_log_s = {}
         self._inference_threads = max(1, int(inference_threads))
         self._gate_feature_mode = str(gate_feature_mode).strip().lower()
         if self._gate_feature_mode not in {
@@ -103,7 +110,9 @@ class Ai:
                     node.get_parameter('dataset_png_compression').value),
                 image_format=str(
                     node.get_parameter('dataset_format').value),
-                logger=node.get_logger())
+                logger=node.get_logger(),
+                debug=self._dataset_debug,
+                debug_period_s=self._dataset_debug_period_s)
             node.get_logger().info(
                 f'Lossless YOLO dataset recording enabled: '
                 f'{self._dataset_recorder.session_dir} '
@@ -382,28 +391,61 @@ class Ai:
         than capture, while dataset recording should retain the requested
         capture cadence.
         """
-        if self._dataset_recorder is None or not self._allow_dataset(camera):
+        if self._dataset_recorder is None:
             return
-        prepared = self._prepare_stereo_views(camera, frame)
-        if prepared is None:
+        started = time.monotonic()
+        sampled = False
+        try:
+            if not self._allow_dataset(camera):
+                return
+            prepared = self._prepare_stereo_views(camera, frame)
+            if prepared is None:
+                return
+            _, left_img, right_img = prepared
+
+            left_header = Header()
+            if header is not None:
+                left_header.frame_id = str(getattr(header, 'frame_id', ''))
+                left_header.stamp = header.stamp
+            else:
+                left_header.stamp = self.node.get_clock().now().to_msg()
+
+            right_header = Header()
+            right_header.frame_id = left_header.frame_id
+            right_header.stamp = (
+                right_stamp if right_stamp is not None else left_header.stamp)
+            self._save_frame(left_img, f'{camera}_left', left_header,
+                             stereo_pair_id)
+            self._save_frame(right_img, f'{camera}_right', right_header,
+                             stereo_pair_id)
+            sampled = True
+        finally:
+            self._maybe_log_dataset_debug(camera, started, sampled)
+
+    def _maybe_log_dataset_debug(self, camera, started, sampled):
+        if not self._dataset_debug:
             return
-        _, left_img, right_img = prepared
-
-        left_header = Header()
-        if header is not None:
-            left_header.frame_id = str(getattr(header, 'frame_id', ''))
-            left_header.stamp = header.stamp
-        else:
-            left_header.stamp = self.node.get_clock().now().to_msg()
-
-        right_header = Header()
-        right_header.frame_id = left_header.frame_id
-        right_header.stamp = (
-            right_stamp if right_stamp is not None else left_header.stamp)
-        self._save_frame(left_img, f'{camera}_left', left_header,
-                         stereo_pair_id)
-        self._save_frame(right_img, f'{camera}_right', right_header,
-                         stereo_pair_id)
+        now = time.monotonic()
+        duration_ms = (now - started) * 1000.0
+        with self._dataset_debug_lock:
+            previous = self._dataset_debug_last_capture_s.get(camera)
+            interval_ms = (
+                (now - previous) * 1000.0 if previous is not None else 0.0)
+            self._dataset_debug_last_capture_s[camera] = now
+            last_log = self._dataset_debug_last_log_s.get(camera, 0.0)
+            if now - last_log < self._dataset_debug_period_s:
+                return
+            self._dataset_debug_last_log_s[camera] = now
+        snapshot = self._dataset_recorder.debug_snapshot()
+        self.node.get_logger().info(
+            'dataset-debug capture: '
+            f'camera={camera} interval_ms={interval_ms:.1f} '
+            f'record_call_ms={duration_ms:.1f} sampled={int(sampled)} '
+            f"queue={snapshot['queue_depth']}/{snapshot['queue_capacity']} "
+            f"submitted={snapshot['submitted']} written={snapshot['written']} "
+            f"blocked_submits={snapshot['blocked_submits']} "
+            f"blocked_wait_ms={snapshot['blocked_wait_ms']:.1f} "
+            f"last_write_ms={snapshot['last_write_ms']:.1f}")
 
     def _publish_empty_results(self, camera_name, header, stereo_pair_id):
         """Publish an empty detection/line result when AI is unavailable."""
