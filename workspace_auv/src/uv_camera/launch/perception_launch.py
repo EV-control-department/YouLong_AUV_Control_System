@@ -46,6 +46,7 @@ def generate_launch_description():
         if profile:
             vision_parameters.append(profile)
         vision_parameters.append({
+            "enable_ai": enable_ai,
             "sim_mode": sim_mode,
             "inference_fps": inference_fps,
             "dataset_fps": dataset_fps,
