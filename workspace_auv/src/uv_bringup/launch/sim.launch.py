@@ -351,7 +351,7 @@ def generate_launch_description():
             description="Sample sensor frames in YOLO input format as a dataset",
         ),
         DeclareLaunchArgument(
-            "dataset_dir", default_value="/workspace/records/datasets",
+            "dataset_dir", default_value="records/datasets",
             description="Dataset output directory",
         ),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),

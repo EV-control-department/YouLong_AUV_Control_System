@@ -48,7 +48,10 @@ STREAM_ANNOTATED = True
 
 SIM_MODE = False
 SAVE_DATASET = False
-DATASET_DIR = '/workspace/records/datasets'
+# Relative to the repository directory from which the launch is normally run.
+# This keeps host and Edge deployments independent of the Docker /workspace
+# mount; callers can still override it with the dataset_dir parameter.
+DATASET_DIR = 'records/datasets'
 DEFAULT_MODEL_FILENAME = 'robotcup20260901.pt'
 
 

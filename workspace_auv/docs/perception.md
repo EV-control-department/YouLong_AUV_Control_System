@@ -89,7 +89,7 @@ go2rtc 视频流（默认端口 `1984`）：
 | `enable_ai` | `bool` | `false` | 是否加载/运行 YOLO；关闭时仍可单独录制传感器图像 |
 | `save_dataset` | `bool` | `false` | 显式设为 `true` 后开始录制；录制默认使用 WebP 无损格式和诊断日志 |
 | `dataset_fps` | `float` | `5.0` | 数据集采集频率，按相机计；独立于 YOLO 推理频率 |
-| `dataset_dir` | `str` | `/workspace/records/datasets` | 数据集根目录 |
+| `dataset_dir` | `str` | `records/datasets` | 相对于启动时仓库目录的数据集根目录 |
 | `dataset_format` | `str` | `webp_lossless` | WebP 无损；也可选 `png`，PNG 通常编码更快但占用空间更大 |
 | `dataset_queue_size` | `int` | `32` | 写盘队列深度，满时背压 |
 

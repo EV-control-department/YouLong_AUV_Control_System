@@ -109,7 +109,7 @@ def generate_launch_description():
         DeclareLaunchArgument("mjpeg_port", default_value="8090"),
         DeclareLaunchArgument("annotated_max_width", default_value="0"),
         DeclareLaunchArgument("save_dataset", default_value="false"),
-        DeclareLaunchArgument("dataset_dir", default_value="/workspace/records/datasets"),
+        DeclareLaunchArgument("dataset_dir", default_value="records/datasets"),
         DeclareLaunchArgument("dataset_queue_size", default_value="32"),
         DeclareLaunchArgument("dataset_png_compression", default_value="1"),
         DeclareLaunchArgument("dataset_format", default_value="webp_lossless"),
