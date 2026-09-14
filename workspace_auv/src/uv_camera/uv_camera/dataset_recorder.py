@@ -46,11 +46,15 @@ class DatasetRecorder:
         debug: bool = False,
         debug_period_s: float = 1.0,
         submit_timeout_s: float = 1.0,
+        writer_workers: int = 4,
+        webp_method: int = 0,
     ):
         self._logger = logger
         self._debug_enabled = bool(debug)
         self._debug_period_s = max(0.1, float(debug_period_s))
         self._submit_timeout_s = max(0.1, float(submit_timeout_s))
+        self._writer_workers = max(1, min(8, int(writer_workers)))
+        self._webp_method = max(0, min(6, int(webp_method)))
         self._root_dir = Path(root_dir).expanduser()
         self._root_dir.mkdir(parents=True, exist_ok=True)
         self._session_dir = self._make_session_dir(self._root_dir)
@@ -85,6 +89,8 @@ class DatasetRecorder:
         self._state_lock = threading.Lock()
         self._submit_condition = threading.Condition(self._state_lock)
         self._status_lock = threading.Lock()
+        self._manifest_lock = threading.Lock()
+        self._channel_dir_lock = threading.Lock()
         self._accepting = True
         self._closed = False
         self._active_submitters = 0
@@ -110,12 +116,23 @@ class DatasetRecorder:
                 'pixel_format': 'bgr8',
                 'image_format': self._image_format,
                 'png_compression': self._png_compression,
+                'webp_method': self._webp_method,
+                'writer_workers': self._writer_workers,
             },
         )
         self._write_status('recording')
-        self._worker = threading.Thread(
-            target=self._run, name='dataset-png-writer', daemon=True)
-        self._worker.start()
+        self._workers = [
+            threading.Thread(
+                target=self._run,
+                name=f'dataset-writer-{index}',
+                daemon=True)
+            for index in range(self._writer_workers)
+        ]
+        # Keep the old private name available for diagnostics/integrations
+        # that only inspect the first writer.
+        self._worker = self._workers[0]
+        for worker in self._workers:
+            worker.start()
 
     @property
     def session_dir(self) -> Path:
@@ -317,8 +334,8 @@ class DatasetRecorder:
     ) -> None:
         write_started = time.monotonic()
         channel_dir = self._images_dir / channel
-        if not channel_dir.exists():
-            channel_dir.mkdir(parents=True)
+        with self._channel_dir_lock:
+            channel_dir.mkdir(parents=True, exist_ok=True)
             self._fsync_directory(self._images_dir)
         if self._image_format == 'webp_lossless':
             from PIL import Image
@@ -326,7 +343,8 @@ class DatasetRecorder:
             # Pillow's explicit lossless flag is required.  OpenCV's WebP
             # quality=100 is not pixel-exact on all builds.
             Image.fromarray(image[:, :, ::-1], mode='RGB').save(
-                output, format='WEBP', lossless=True, method=4)
+                output, format='WEBP', lossless=True,
+                method=self._webp_method)
             data = output.getvalue()
             extension = 'webp'
         else:
@@ -359,9 +377,13 @@ class DatasetRecorder:
             'crc32': f'{zlib.crc32(data) & 0xffffffff:08x}',
         }
         line = (json.dumps(metadata, ensure_ascii=False, sort_keys=True) + '\n')
-        self._manifest.write(line)
-        self._manifest.flush()
-        os.fsync(self._manifest.fileno())
+        # Multiple writers may finish out of order. The monotonically
+        # increasing sequence in each row remains the authoritative order,
+        # while this lock keeps the JSONL file valid.
+        with self._manifest_lock:
+            self._manifest.write(line)
+            self._manifest.flush()
+            os.fsync(self._manifest.fileno())
         with self._state_lock:
             self._written += 1
             if self._debug_enabled:
@@ -473,12 +495,15 @@ class DatasetRecorder:
         if failed:
             self._discard_pending()
         self._queue.join()
-        if self._worker.is_alive():
+        alive_workers = [worker for worker in self._workers if worker.is_alive()]
+        if alive_workers:
             # At this point all regular items are complete, so this cannot
             # block behind a full queue.
-            self._queue.put(self._SENTINEL)
+            for _ in alive_workers:
+                self._queue.put(self._SENTINEL)
             self._queue.join()
-            self._worker.join(timeout=10.0)
+        for worker in self._workers:
+            worker.join(timeout=10.0)
         try:
             with self._state_lock:
                 state = 'failed' if self._failure_reason else 'stopped'

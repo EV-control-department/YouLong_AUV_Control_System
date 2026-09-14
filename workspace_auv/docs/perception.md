@@ -93,6 +93,8 @@ go2rtc 视频流（默认端口 `1984`）：
 | `dataset_format` | `str` | `webp_lossless` | WebP 无损；也可选 `png`，PNG 通常编码更快但占用空间更大 |
 | `dataset_queue_size` | `int` | `32` | 写盘队列深度，满时背压 |
 | `dataset_submit_timeout_sec` | `float` | `1.0` | 写盘队列持续满超过该时间后，录制标记为 `failed` 并停止接收新帧 |
+| `dataset_writer_workers` | `int` | `4` | 并行无损编码/写盘线程数，通常 4 比单线程快；过大可能与相机争用 CPU/磁盘 |
+| `dataset_webp_method` | `int` | `0` | WebP 无损编码速度档位，`0` 最快、文件略大；仍然是像素级无损 |
 | `camera_startup_timeout_sec` | `float` | `5.0` | 两个启用的 V4L2 摄像头都必须在该时间内打开并读到有效首帧，否则不开始录制 |
 
 实车 V4L2 模式会先打开并检查所有启用的摄像头，再启动采集线程；任一摄像头打不开或读不到有效首帧，节点会报错并拒绝开始录制。运行中持续读帧失败也会将当前数据集的 `status.json` 标记为 `failed`。
@@ -272,6 +274,11 @@ ros2 launch uv_camera perception_launch.py
 
 # 开启录制后，默认使用 dataset_format=webp_lossless、dataset_debug=true
 ros2 launch uv_camera perception_launch.py save_dataset:=true
+
+# 推荐：WebP 像素级无损 + 快速编码 + 并行写盘
+ros2 launch uv_camera perception_launch.py \
+  save_dataset:=true dataset_format:=webp_lossless \
+  dataset_webp_method:=0 dataset_writer_workers:=4
 
 # 只录制原始传感器图像，不加载 YOLO
 ros2 launch uv_camera perception_launch.py \

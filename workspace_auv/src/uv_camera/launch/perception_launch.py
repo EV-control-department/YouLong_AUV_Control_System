@@ -18,6 +18,8 @@ def generate_launch_description():
     dataset_debug = LaunchConfiguration("dataset_debug")
     dataset_debug_period_sec = LaunchConfiguration("dataset_debug_period_sec")
     dataset_submit_timeout_sec = LaunchConfiguration("dataset_submit_timeout_sec")
+    dataset_writer_workers = LaunchConfiguration("dataset_writer_workers")
+    dataset_webp_method = LaunchConfiguration("dataset_webp_method")
     camera_startup_timeout_sec = LaunchConfiguration("camera_startup_timeout_sec")
     inference_threads = LaunchConfiguration("inference_threads")
     confidence = LaunchConfiguration("confidence")
@@ -50,6 +52,8 @@ def generate_launch_description():
             "dataset_debug": dataset_debug,
             "dataset_debug_period_sec": dataset_debug_period_sec,
             "dataset_submit_timeout_sec": dataset_submit_timeout_sec,
+            "dataset_writer_workers": dataset_writer_workers,
+            "dataset_webp_method": dataset_webp_method,
             "camera_startup_timeout_sec": camera_startup_timeout_sec,
             "inference_threads": inference_threads,
             "confidence": confidence,
@@ -106,6 +110,8 @@ def generate_launch_description():
         DeclareLaunchArgument("dataset_debug", default_value="true"),
         DeclareLaunchArgument("dataset_debug_period_sec", default_value="1.0"),
         DeclareLaunchArgument("dataset_submit_timeout_sec", default_value="1.0"),
+        DeclareLaunchArgument("dataset_writer_workers", default_value="4"),
+        DeclareLaunchArgument("dataset_webp_method", default_value="0"),
         DeclareLaunchArgument("camera_startup_timeout_sec", default_value="5.0"),
         DeclareLaunchArgument("inference_threads", default_value="2"),
         DeclareLaunchArgument("confidence", default_value="0.8"),

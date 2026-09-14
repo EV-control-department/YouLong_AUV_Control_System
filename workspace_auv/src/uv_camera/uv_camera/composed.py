@@ -110,6 +110,8 @@ class CameraAiNode(Node):
             dataset_debug=params['dataset_debug'],
             dataset_debug_period_s=params['dataset_debug_period_s'],
             dataset_submit_timeout_s=params['dataset_submit_timeout_s'],
+            dataset_writer_workers=params['dataset_writer_workers'],
+            dataset_webp_method=params['dataset_webp_method'],
             inference_threads=params['inference_threads'],
             gate_feature_mode=params['gate_feature_mode'],
             confidence=params['confidence'])
@@ -163,6 +165,8 @@ class CameraAiNode(Node):
         self.declare_parameter('dataset_debug', False)
         self.declare_parameter('dataset_debug_period_sec', 1.0)
         self.declare_parameter('dataset_submit_timeout_sec', 1.0)
+        self.declare_parameter('dataset_writer_workers', 4)
+        self.declare_parameter('dataset_webp_method', 0)
         self.declare_parameter('camera_startup_timeout_sec', 5.0)
         self.declare_parameter('inference_threads', 2)
         self.declare_parameter('confidence', 0.8)
@@ -206,6 +210,10 @@ class CameraAiNode(Node):
                 0.1, float(g('dataset_debug_period_sec').value)),
             'dataset_submit_timeout_s': max(
                 0.1, float(g('dataset_submit_timeout_sec').value)),
+            'dataset_writer_workers': max(
+                1, min(8, int(g('dataset_writer_workers').value))),
+            'dataset_webp_method': max(
+                0, min(6, int(g('dataset_webp_method').value))),
             'camera_startup_timeout_s': max(
                 1.0, float(g('camera_startup_timeout_sec').value)),
             'inference_threads': max(1, int(g('inference_threads').value)),
