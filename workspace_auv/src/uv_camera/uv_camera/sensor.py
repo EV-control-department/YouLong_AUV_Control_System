@@ -31,12 +31,14 @@ except ImportError:  # Older installed interfaces remain usable as a fallback.
 class Sensor:
     """Frame producer: chooses source, updates raw preview, feeds FrameGate."""
 
-    def __init__(self, node, gate, sim_mode, enable_front, enable_down):
+    def __init__(self, node, gate, sim_mode, enable_front, enable_down,
+                 startup_timeout_s=5.0):
         self.node = node                 # composed uv_camera rclpy Node
         self.gate = gate                 # common.FrameGate -> ai consumer
         self._sim_mode = sim_mode
         self._enable_front = enable_front
         self._enable_down = enable_down
+        self._startup_timeout_s = max(1.0, float(startup_timeout_s))
 
         self._capture_stop = threading.Event()
         self._capture_threads = []
@@ -88,34 +90,102 @@ class Sensor:
             'uv_sensor started (sim mode: ROS stitched topics)')
 
     def _start_v4l2(self):
-        front_path = self.node.get_parameter('front_cam_path').value
-        down_path = self.node.get_parameter('down_cam_path').value
+        front_path = str(self.node.get_parameter('front_cam_path').value)
+        down_path = str(self.node.get_parameter('down_cam_path').value)
+        specs = []
         if self._enable_front:
-            self._front_cap = self._open_cap(front_path, FRONT_CAPTURE_RESOLUTION)
+            specs.append(('front', front_path, FRONT_CAPTURE_RESOLUTION))
         if self._enable_down:
-            self._down_cap = self._open_cap(down_path, DOWN_CAPTURE_RESOLUTION)
-        for cap, camera, path in ((self._front_cap, 'front', front_path),
-                                  (self._down_cap, 'down', down_path)):
-            if cap is not None and cap.isOpened():
-                thread = threading.Thread(target=self._capture_loop,
-                                          args=(cap, camera),
-                                          name=f'capture-{camera}', daemon=True)
-                self._capture_threads.append(thread)
-                thread.start()
-            elif cap is not None:
-                self.node.get_logger().error(
-                    f'Cannot open {camera} camera: {path}')
+            specs.append(('down', down_path, DOWN_CAPTURE_RESOLUTION))
+
+        # Open and probe every enabled camera before starting either capture
+        # thread. This prevents a partial recording containing only one side.
+        opened = []
+        failures = []
+        for camera, path, resolution in specs:
+            try:
+                cap = self._open_cap(path, resolution)
+                if cap is None or not cap.isOpened():
+                    failures.append(f'{camera} camera cannot be opened: {path}')
+                    if cap is not None:
+                        cap.release()
+                    continue
+                opened.append((camera, path, cap))
+            except Exception as error:
+                failures.append(
+                    f'{camera} camera open failed ({path}): {error}')
+
+        probed = []
+        for camera, path, cap in opened:
+            try:
+                initial_frame = self._probe_first_frame(cap, camera, path)
+                probed.append((camera, path, cap, initial_frame))
+            except Exception as error:
+                failures.append(str(error))
+
+        if failures:
+            for _, _, cap in opened:
+                cap.release()
+            self._front_cap = None
+            self._down_cap = None
+            message = 'camera preflight failed; recording not started: ' + '; '.join(failures)
+            self.node.get_logger().error(message)
+            raise RuntimeError(message)
+
+        for camera, path, cap, initial_frame in probed:
+            if camera == 'front':
+                self._front_cap = cap
+            else:
+                self._down_cap = cap
+            thread = threading.Thread(
+                target=self._capture_loop,
+                args=(cap, camera, initial_frame, path),
+                name=f'capture-{camera}', daemon=True)
+            self._capture_threads.append(thread)
+            thread.start()
+
+        summary = ', '.join(
+            f'{camera}={path} shape={frame.shape}'
+            for camera, path, _, frame in probed)
+        self.node.get_logger().info(f'uv_sensor preflight passed: {summary}')
         self.node.get_logger().info(
             f'uv_sensor started (real mode: front={front_path}, down={down_path})')
 
     @staticmethod
     def _open_cap(path, res):
         cap = cv2.VideoCapture(path)
+        # These properties are honored by V4L2/GStreamer builds that expose
+        # them. Unsupported backends simply ignore the setting.
+        for property_name in ('CAP_PROP_OPEN_TIMEOUT_MSEC',
+                              'CAP_PROP_READ_TIMEOUT_MSEC'):
+            property_id = getattr(cv2, property_name, None)
+            if property_id is not None:
+                try:
+                    cap.set(property_id, 3000)
+                except cv2.error:
+                    pass
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, res[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res[1])
         return cap
+
+    def _probe_first_frame(self, cap, camera, path):
+        deadline = time.monotonic() + self._startup_timeout_s
+        attempts = 0
+        while True:
+            attempts += 1
+            ret, frame = cap.read()
+            if ret:
+                normalized = normalize_frame(frame)
+                if normalized is not None:
+                    return normalized
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f'{camera} camera opened but produced no valid frame '
+                    f'within {self._startup_timeout_s:.1f}s '
+                    f'(path={path}, attempts={attempts})')
+            time.sleep(0.05)
 
     # ── sim callbacks (ROS Image -> BGR -> preview + gate) ──────────────
     def _front_img_cb(self, msg):
@@ -203,24 +273,88 @@ class Sensor:
                 stereo_pair_id=pair_id)
 
     # ── v4l2 capture loop ───────────────────────────────────────────────
-    def _capture_loop(self, cap, camera):
+    def _capture_loop(self, cap, camera, initial_frame=None, path=''):
         read_failures = 0
-        while not self._capture_stop.is_set():
-            ret, frame = cap.read()
-            if not ret:
-                read_failures = min(read_failures + 1, 6)
-                import time
-                time.sleep(min(0.5, 0.01 * (2 ** read_failures)))
-                continue
-            read_failures = 0
-            normalized = normalize_frame(frame)
-            if normalized is None:
-                self.node.get_logger().warn(f'Invalid frame from {camera} camera')
-                continue
-            # raw preview at capture rate, then hand to ai via gate
-            stamp = self.node.get_clock().now().to_msg()
-            self.node.update_raw_preview(camera, normalized, stamp)
-            self.node.submit_frame(camera, normalized, stamp)
+        failure_started = None
+        last_failure_log = 0.0
+        failure_reported = False
+        frame = initial_frame
+        try:
+            while not self._capture_stop.is_set():
+                if frame is not None:
+                    ret, current = True, frame
+                    frame = None
+                else:
+                    try:
+                        ret, current = cap.read()
+                    except Exception as error:
+                        self._report_camera_failure(
+                            camera, f'camera read raised {error} (path={path})')
+                        return
+
+                if not ret:
+                    now = time.monotonic()
+                    if failure_started is None:
+                        failure_started = now
+                    read_failures = min(read_failures + 1, 6)
+                    if now - last_failure_log >= 5.0:
+                        self.node.get_logger().error(
+                            f'{camera} camera read failed; no valid frame for '
+                            f'{now - failure_started:.1f}s '
+                            f'(consecutive_failures={read_failures}, path={path})')
+                        last_failure_log = now
+                    if (not failure_reported
+                            and now - failure_started >= self._startup_timeout_s):
+                        self._report_camera_failure(
+                            camera,
+                            f'no valid frame for {now - failure_started:.1f}s '
+                            f'(path={path})')
+                        failure_reported = True
+                    time.sleep(min(0.5, 0.01 * (2 ** read_failures)))
+                    continue
+
+                normalized = normalize_frame(current)
+                if normalized is None:
+                    now = time.monotonic()
+                    if failure_started is None:
+                        failure_started = now
+                    if now - last_failure_log >= 5.0:
+                        self.node.get_logger().error(
+                            f'Invalid frame from {camera} camera '
+                            f'(path={path})')
+                        last_failure_log = now
+                    if (not failure_reported
+                            and now - failure_started >= self._startup_timeout_s):
+                        self._report_camera_failure(
+                            camera,
+                            f'camera returned invalid frames for '
+                            f'{now - failure_started:.1f}s (path={path})')
+                        failure_reported = True
+                    time.sleep(0.05)
+                    continue
+
+                if failure_started is not None:
+                    self.node.get_logger().info(
+                        f'{camera} camera recovered after '
+                        f'{time.monotonic() - failure_started:.1f}s')
+                    failure_started = None
+                    failure_reported = False
+                    last_failure_log = 0.0
+                read_failures = 0
+                # raw preview at capture rate, then hand to ai via gate
+                stamp = self.node.get_clock().now().to_msg()
+                self.node.update_raw_preview(camera, normalized, stamp)
+                self.node.submit_frame(camera, normalized, stamp)
+        except Exception as error:
+            self._report_camera_failure(
+                camera, f'capture loop stopped unexpectedly: {error} (path={path})')
+
+    def _report_camera_failure(self, camera, reason):
+        report = getattr(self.node, 'report_camera_failure', None)
+        if report is not None:
+            report(camera, reason)
+        else:
+            self.node.get_logger().error(f'{camera} camera failure: {reason}')
 
     # ── shutdown ────────────────────────────────────────────────────────
     def shutdown(self):
@@ -231,3 +365,10 @@ class Sensor:
         for cap in (self._front_cap, self._down_cap):
             if cap is not None:
                 cap.release()
+        current_thread = threading.current_thread()
+        for thread in self._capture_threads:
+            if thread is not current_thread:
+                thread.join(timeout=2.0)
+        self._capture_threads.clear()
+        self._front_cap = None
+        self._down_cap = None

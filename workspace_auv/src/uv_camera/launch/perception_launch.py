@@ -17,6 +17,8 @@ def generate_launch_description():
     dataset_fps = LaunchConfiguration("dataset_fps")
     dataset_debug = LaunchConfiguration("dataset_debug")
     dataset_debug_period_sec = LaunchConfiguration("dataset_debug_period_sec")
+    dataset_submit_timeout_sec = LaunchConfiguration("dataset_submit_timeout_sec")
+    camera_startup_timeout_sec = LaunchConfiguration("camera_startup_timeout_sec")
     inference_threads = LaunchConfiguration("inference_threads")
     confidence = LaunchConfiguration("confidence")
     gate_feature_mode = LaunchConfiguration("gate_feature_mode")
@@ -47,6 +49,8 @@ def generate_launch_description():
             "dataset_fps": dataset_fps,
             "dataset_debug": dataset_debug,
             "dataset_debug_period_sec": dataset_debug_period_sec,
+            "dataset_submit_timeout_sec": dataset_submit_timeout_sec,
+            "camera_startup_timeout_sec": camera_startup_timeout_sec,
             "inference_threads": inference_threads,
             "confidence": confidence,
             "gate_feature_mode": gate_feature_mode,
@@ -101,6 +105,8 @@ def generate_launch_description():
         DeclareLaunchArgument("dataset_fps", default_value="5.0"),
         DeclareLaunchArgument("dataset_debug", default_value="true"),
         DeclareLaunchArgument("dataset_debug_period_sec", default_value="1.0"),
+        DeclareLaunchArgument("dataset_submit_timeout_sec", default_value="1.0"),
+        DeclareLaunchArgument("camera_startup_timeout_sec", default_value="5.0"),
         DeclareLaunchArgument("inference_threads", default_value="2"),
         DeclareLaunchArgument("confidence", default_value="0.8"),
         DeclareLaunchArgument("gate_feature_mode", default_value="auto"),

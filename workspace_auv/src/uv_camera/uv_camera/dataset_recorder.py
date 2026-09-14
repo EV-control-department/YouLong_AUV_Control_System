@@ -26,11 +26,12 @@ import numpy as np
 
 
 class DatasetRecorder:
-    """Asynchronously persist every frame submitted by the YOLO path.
+    """Asynchronously persist frames submitted by the sensor path.
 
-    ``submit`` applies backpressure when the queue is full instead of silently
-    dropping a frame.  This protects the dataset's frame completeness; the
-    trade-off is that a slow disk can slow the inference worker.
+    The queue is bounded. A writer that cannot keep up is allowed a short
+    grace period, after which recording is failed explicitly. This protects
+    the camera threads from an unbounded stall and keeps one camera from
+    holding a global submit lock while another camera waits behind it.
     """
 
     _SENTINEL = object()
@@ -44,10 +45,12 @@ class DatasetRecorder:
         logger: Optional[Any] = None,
         debug: bool = False,
         debug_period_s: float = 1.0,
+        submit_timeout_s: float = 1.0,
     ):
         self._logger = logger
         self._debug_enabled = bool(debug)
         self._debug_period_s = max(0.1, float(debug_period_s))
+        self._submit_timeout_s = max(0.1, float(submit_timeout_s))
         self._root_dir = Path(root_dir).expanduser()
         self._root_dir.mkdir(parents=True, exist_ok=True)
         self._session_dir = self._make_session_dir(self._root_dir)
@@ -80,10 +83,13 @@ class DatasetRecorder:
                              'to lossless PNG')
 
         self._state_lock = threading.Lock()
-        self._submit_lock = threading.Lock()
+        self._submit_condition = threading.Condition(self._state_lock)
+        self._status_lock = threading.Lock()
         self._accepting = True
         self._closed = False
+        self._active_submitters = 0
         self._worker_error: Optional[BaseException] = None
+        self._failure_reason: Optional[str] = None
         self._next_sequence = 0
         self._submitted = 0
         self._written = 0
@@ -171,29 +177,65 @@ class DatasetRecorder:
         self._fsync_directory(path.parent)
 
     def _write_status(self, state: str) -> None:
-        with self._state_lock:
-            payload = {
-                'state': state,
-                'session_dir': str(self._session_dir),
-                'updated_unix_ns': time.time_ns(),
-                'frames_submitted': self._submitted,
-                'frames_written': self._written,
-                'frames_failed': self._failed,
-                'queue_depth': self._queue.qsize(),
-            }
-        self._write_json_atomic(self._status_path, payload)
+        with self._status_lock:
+            with self._state_lock:
+                payload = {
+                    'state': state,
+                    'session_dir': str(self._session_dir),
+                    'updated_unix_ns': time.time_ns(),
+                    'frames_submitted': self._submitted,
+                    'frames_written': self._written,
+                    'frames_failed': self._failed,
+                    'queue_depth': self._queue.qsize(),
+                    'error': self._failure_reason or '',
+                }
+            self._write_json_atomic(self._status_path, payload)
 
-    def _set_worker_error(self, error: BaseException) -> None:
+    def _log_error(self, message: str) -> None:
+        if self._logger is None:
+            return
+        log_error = getattr(self._logger, 'error', None)
+        if log_error is not None:
+            log_error(message)
+
+    def _discard_pending(self) -> None:
+        """Release queued frames after recording has been failed."""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                return
+            else:
+                self._queue.task_done()
+
+    def _fail_recording(
+        self,
+        reason: str,
+        error: Optional[BaseException] = None,
+    ) -> None:
+        """Stop accepting frames and report one durable recording failure."""
+        first_failure = False
         with self._state_lock:
-            if self._worker_error is None:
+            if self._failure_reason is None:
+                self._failure_reason = str(reason)
+                first_failure = True
+            self._accepting = False
+            if error is not None and self._worker_error is None:
                 self._worker_error = error
-            self._failed += 1
+            if first_failure:
+                self._failed += 1
+            self._submit_condition.notify_all()
 
-    def _raise_worker_error(self) -> None:
-        with self._state_lock:
-            error = self._worker_error
-        if error is not None:
-            raise RuntimeError(f'dataset writer failed: {error}')
+        # Do not leave a full queue behind after a terminal recording error.
+        # The currently active writer item, if any, is allowed to finish.
+        self._discard_pending()
+        if first_failure:
+            self._log_error(f'dataset recording failed: {reason}')
+            try:
+                self._write_status('failed')
+            except Exception as status_error:
+                self._log_error(
+                    f'could not write failed dataset status: {status_error}')
 
     @staticmethod
     def _stamp_ns(header: Optional[Any]) -> Optional[int]:
@@ -212,7 +254,7 @@ class DatasetRecorder:
         header: Optional[Any] = None,
         stereo_pair_id: int = 0,
     ) -> bool:
-        """Queue one exact YOLO input frame; block rather than drop on pressure."""
+        """Queue one exact input frame, failing explicitly on sustained pressure."""
         if not isinstance(image, np.ndarray) or image.dtype != np.uint8:
             raise ValueError('DatasetRecorder expects a uint8 BGR ndarray')
         if image.ndim != 3 or image.shape[2] != 3:
@@ -221,20 +263,36 @@ class DatasetRecorder:
         # The detector and ArUco worker may continue reading the source array,
         # so the queued item must own its pixels.
         image_copy = np.ascontiguousarray(image).copy()
-        with self._submit_lock:
-            with self._state_lock:
-                if not self._accepting or self._closed:
-                    return False
-                sequence = self._next_sequence
-                self._next_sequence += 1
-                self._submitted += 1
-            item = (sequence, image_copy, str(channel), header, int(stereo_pair_id))
-            wait_started = time.monotonic()
-            blocked_events = 0
+        with self._state_lock:
+            if not self._accepting or self._closed:
+                return False
+            sequence = self._next_sequence
+            self._next_sequence += 1
+            self._submitted += 1
+            self._active_submitters += 1
+
+        item = (sequence, image_copy, str(channel), header, int(stereo_pair_id))
+        wait_started = time.monotonic()
+        blocked_events = 0
+        try:
+            deadline = wait_started + self._submit_timeout_s
             while True:
-                self._raise_worker_error()
+                with self._state_lock:
+                    if not self._accepting or self._closed:
+                        return False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    self._fail_recording(
+                        f'write queue stayed full for '
+                        f'{self._submit_timeout_s:.1f}s while queuing '
+                        f'{channel}; queue={self._queue.qsize()}/'
+                        f'{self._queue.maxsize}')
+                    return False
                 try:
-                    self._queue.put(item, timeout=0.5)
+                    # No global lock is held while waiting. Front and down
+                    # capture threads can therefore make progress independently
+                    # until the recorder reports a terminal backpressure error.
+                    self._queue.put(item, timeout=min(0.1, remaining))
                     wait_s = time.monotonic() - wait_started
                     if self._debug_enabled:
                         with self._state_lock:
@@ -244,7 +302,10 @@ class DatasetRecorder:
                     return True
                 except queue.Full:
                     blocked_events += 1
-                    continue
+        finally:
+            with self._state_lock:
+                self._active_submitters -= 1
+                self._submit_condition.notify_all()
 
     def _write_item(
         self,
@@ -309,7 +370,7 @@ class DatasetRecorder:
                 self._debug_max_write_ms = max(
                     self._debug_max_write_ms, write_ms)
 
-    def debug_snapshot(self) -> Dict[str, Union[int, float]]:
+    def debug_snapshot(self) -> Dict[str, Union[int, float, str]]:
         """Return recorder counters used by the opt-in capture diagnostics."""
         with self._state_lock:
             return {
@@ -318,6 +379,8 @@ class DatasetRecorder:
                 'failed': self._failed,
                 'queue_depth': self._queue.qsize(),
                 'queue_capacity': self._queue.maxsize,
+                'state': 'failed' if self._failure_reason else 'recording',
+                'error': self._failure_reason or '',
                 'blocked_submits': self._debug_blocked_submits,
                 'blocked_wait_ms': self._debug_blocked_wait_s * 1000.0,
                 'last_write_ms': self._debug_last_write_ms,
@@ -338,6 +401,8 @@ class DatasetRecorder:
                 'failed': self._failed,
                 'queue_depth': self._queue.qsize(),
                 'queue_capacity': self._queue.maxsize,
+                'state': 'failed' if self._failure_reason else 'recording',
+                'error': self._failure_reason or '',
                 'blocked_submits': self._debug_blocked_submits,
                 'blocked_wait_ms': self._debug_blocked_wait_s * 1000.0,
                 'last_write_ms': self._debug_last_write_ms,
@@ -352,6 +417,7 @@ class DatasetRecorder:
                 'dataset-debug recorder: '
                 f"submitted={snapshot['submitted']} "
                 f"written={snapshot['written']} failed={snapshot['failed']} "
+                f"state={snapshot['state']} "
                 f"queue={snapshot['queue_depth']}/{snapshot['queue_capacity']} "
                 f"blocked_submits={snapshot['blocked_submits']} "
                 f"blocked_wait_ms={snapshot['blocked_wait_ms']:.1f} "
@@ -370,42 +436,62 @@ class DatasetRecorder:
                     now = time.monotonic()
                     if now - self._last_status_s >= 1.0:
                         self._last_status_s = now
-                        self._write_status('recording')
+                        with self._state_lock:
+                            state = 'failed' if self._failure_reason else 'recording'
+                        self._write_status(state)
                 except BaseException as error:
-                    self._set_worker_error(error)
-                    # Keep the worker alive until close() supplies the
-                    # sentinel.  This lets queue.join() complete even after
-                    # a disk/encoder error and avoids a shutdown deadlock.
-                    while True:
-                        pending = self._queue.get()
-                        try:
-                            if pending is self._SENTINEL:
-                                return
-                        finally:
-                            self._queue.task_done()
+                    self._fail_recording(
+                        f'writer failed while persisting a frame: {error}',
+                        error=error)
+                    return
                 finally:
                     self._queue.task_done()
         except BaseException as error:
-            self._set_worker_error(error)
+            self._fail_recording(
+                f'dataset writer stopped unexpectedly: {error}',
+                error=error)
+
+    def fail(self, reason: str) -> None:
+        """Mark the session failed from an external source such as a camera."""
+        self._fail_recording(str(reason))
 
     def close(self) -> None:
         """Stop accepting frames, drain the queue, and mark the session closed."""
-        with self._submit_lock:
-            with self._state_lock:
-                if self._closed:
-                    return
-                self._accepting = False
-                self._closed = True
-            self._queue.put(self._SENTINEL)
+        with self._submit_condition:
+            if self._closed:
+                return
+            self._accepting = False
+            self._closed = True
+            self._submit_condition.notify_all()
+            while self._active_submitters:
+                self._submit_condition.wait(timeout=0.1)
+
+        # A failed writer has already stopped; discard any item submitted in
+        # the small race between its failure and the submitter wake-up.
+        with self._state_lock:
+            failed = self._failure_reason is not None
+        if failed:
+            self._discard_pending()
         self._queue.join()
-        self._worker.join(timeout=10.0)
+        if self._worker.is_alive():
+            # At this point all regular items are complete, so this cannot
+            # block behind a full queue.
+            self._queue.put(self._SENTINEL)
+            self._queue.join()
+            self._worker.join(timeout=10.0)
         try:
-            self._raise_worker_error()
-            self._write_status('stopped')
-        except Exception:
-            self._write_status('failed')
-            raise
+            with self._state_lock:
+                state = 'failed' if self._failure_reason else 'stopped'
+            self._write_status(state)
+        except Exception as status_error:
+            self._log_error(f'could not write final dataset status: {status_error}')
         finally:
-            self._manifest.flush()
-            os.fsync(self._manifest.fileno())
-            self._manifest.close()
+            try:
+                self._manifest.flush()
+                os.fsync(self._manifest.fileno())
+            except OSError as manifest_error:
+                self._log_error(
+                    f'could not flush dataset manifest during shutdown: '
+                    f'{manifest_error}')
+            finally:
+                self._manifest.close()

@@ -59,6 +59,7 @@ class Ai:
         dataset_fps=5.0,
         dataset_debug=False,
         dataset_debug_period_s=1.0,
+        dataset_submit_timeout_s=1.0,
         inference_threads=2,
         gate_feature_mode='auto',
         confidence=CONFIDENCE,
@@ -78,6 +79,7 @@ class Ai:
         self._last_dataset_s = {camera: float('-inf') for camera in cameras}
         self._dataset_debug = bool(dataset_debug)
         self._dataset_debug_period_s = max(0.1, float(dataset_debug_period_s))
+        self._dataset_submit_timeout_s = max(0.1, float(dataset_submit_timeout_s))
         self._dataset_debug_lock = threading.Lock()
         self._dataset_debug_last_capture_s = {}
         self._dataset_debug_last_log_s = {}
@@ -112,7 +114,8 @@ class Ai:
                     node.get_parameter('dataset_format').value),
                 logger=node.get_logger(),
                 debug=self._dataset_debug,
-                debug_period_s=self._dataset_debug_period_s)
+                debug_period_s=self._dataset_debug_period_s,
+                submit_timeout_s=self._dataset_submit_timeout_s)
             node.get_logger().info(
                 f'Lossless YOLO dataset recording enabled: '
                 f'{self._dataset_recorder.session_dir} '
@@ -414,11 +417,13 @@ class Ai:
             right_header.frame_id = left_header.frame_id
             right_header.stamp = (
                 right_stamp if right_stamp is not None else left_header.stamp)
-            self._save_frame(left_img, f'{camera}_left', left_header,
-                             stereo_pair_id)
-            self._save_frame(right_img, f'{camera}_right', right_header,
-                             stereo_pair_id)
-            sampled = True
+            left_ok = self._save_frame(
+                left_img, f'{camera}_left', left_header, stereo_pair_id)
+            if not left_ok:
+                return
+            right_ok = self._save_frame(
+                right_img, f'{camera}_right', right_header, stereo_pair_id)
+            sampled = bool(right_ok)
         finally:
             self._maybe_log_dataset_debug(camera, started, sampled)
 
@@ -441,6 +446,7 @@ class Ai:
             'dataset-debug capture: '
             f'camera={camera} interval_ms={interval_ms:.1f} '
             f'record_call_ms={duration_ms:.1f} sampled={int(sampled)} '
+            f"state={snapshot['state']} "
             f"queue={snapshot['queue_depth']}/{snapshot['queue_capacity']} "
             f"submitted={snapshot['submitted']} written={snapshot['written']} "
             f"blocked_submits={snapshot['blocked_submits']} "
@@ -712,8 +718,14 @@ class Ai:
 
     def _save_frame(self, img, channel, header, stereo_pair_id):
         if self._dataset_recorder is not None:
-            self._dataset_recorder.submit(
+            return self._dataset_recorder.submit(
                 img, channel, header=header, stereo_pair_id=stereo_pair_id)
+        return False
+
+    def fail_dataset_recording(self, reason):
+        """Fail the active dataset session from a sensor or node error."""
+        if self._dataset_recorder is not None:
+            self._dataset_recorder.fail(str(reason))
 
     def shutdown(self):
         self._aruco_stop.set()

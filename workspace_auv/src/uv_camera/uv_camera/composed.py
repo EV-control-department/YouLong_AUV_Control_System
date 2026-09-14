@@ -109,6 +109,7 @@ class CameraAiNode(Node):
             dataset_fps=params['dataset_fps'],
             dataset_debug=params['dataset_debug'],
             dataset_debug_period_s=params['dataset_debug_period_s'],
+            dataset_submit_timeout_s=params['dataset_submit_timeout_s'],
             inference_threads=params['inference_threads'],
             gate_feature_mode=params['gate_feature_mode'],
             confidence=params['confidence'])
@@ -124,8 +125,17 @@ class CameraAiNode(Node):
         # uv_sensor
         self.sensor = sensor_mod.Sensor(
             self, self._gate, params['sim_mode'],
-            params['enable_front'], params['enable_down'])
-        self.sensor.start()
+            params['enable_front'], params['enable_down'],
+            startup_timeout_s=params['camera_startup_timeout_s'])
+        try:
+            self.sensor.start()
+        except Exception as error:
+            self.get_logger().error(
+                f'Camera startup failed; recording not started: {error}')
+            self.sensor.shutdown()
+            self.ai.fail_dataset_recording(f'camera startup failed: {error}')
+            self.ai.shutdown()
+            raise
 
         # MJPEG server + go2rtc (preview only)
         gortc_started = False
@@ -152,6 +162,8 @@ class CameraAiNode(Node):
         self.declare_parameter('dataset_fps', 5.0)
         self.declare_parameter('dataset_debug', False)
         self.declare_parameter('dataset_debug_period_sec', 1.0)
+        self.declare_parameter('dataset_submit_timeout_sec', 1.0)
+        self.declare_parameter('camera_startup_timeout_sec', 5.0)
         self.declare_parameter('inference_threads', 2)
         self.declare_parameter('confidence', 0.8)
         self.declare_parameter('gate_feature_mode', 'auto')
@@ -192,6 +204,10 @@ class CameraAiNode(Node):
             'dataset_debug': _as_bool(g('dataset_debug').value),
             'dataset_debug_period_s': max(
                 0.1, float(g('dataset_debug_period_sec').value)),
+            'dataset_submit_timeout_s': max(
+                0.1, float(g('dataset_submit_timeout_sec').value)),
+            'camera_startup_timeout_s': max(
+                1.0, float(g('camera_startup_timeout_sec').value)),
             'inference_threads': max(1, int(g('inference_threads').value)),
             'confidence': min(1.0, max(0.05, float(g('confidence').value))),
             'gate_feature_mode': str(g('gate_feature_mode').value).strip().lower(),
@@ -207,6 +223,12 @@ class CameraAiNode(Node):
 
     def _warn(self, msg):
         self.get_logger().warn(msg)
+
+    def report_camera_failure(self, camera, reason):
+        """Report a persistent sensor failure and terminate recording safely."""
+        message = f'{camera} camera failure: {reason}'
+        self.get_logger().error(message)
+        self.ai.fail_dataset_recording(message)
 
     def _rclpy_ok(self):
         return rclpy.ok()
