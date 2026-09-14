@@ -86,9 +86,10 @@ go2rtc 视频流（默认端口 `1984`）：
 | `mjpeg_port` | `int` | `8090` | vision 本地 MJPEG 端口 |
 | `gortc_http_port` | `int` | `1984` | go2rtc HTTP/WebRTC 端口 |
 | `stream_annotated` | `bool` | `true` | 是否通过 go2rtc 转发带检测框的视频 |
-| `save_dataset` | `bool` | `false` | 保存实际送入 YOLO 的帧 |
-| `dataset_dir` | `str` | `""` | 数据集根目录 |
-| `dataset_format` | `str` | `webp_lossless` | WebP 无损；不可用时回退 PNG |
+| `save_dataset` | `bool` | `false` | 从传感器采样并保存 YOLO 输入格式的帧 |
+| `dataset_fps` | `float` | `5.0` | 数据集采集频率，按相机计；独立于 YOLO 推理频率 |
+| `dataset_dir` | `str` | `/workspace/records/datasets` | 数据集根目录 |
+| `dataset_format` | `str` | `png` | PNG 无损；也可选 `webp_lossless`，但编码速度较慢 |
 | `dataset_queue_size` | `int` | `32` | 写盘队列深度，满时背压 |
 
 ### 图像拆分

@@ -1,0 +1,5 @@
+# Optional dependencies for YOLO inference, auto-labeling and training.
+# They are intentionally separate from the ROS runtime because torch wheels
+# depend on the host GPU/CUDA setup. pip selects a release compatible with
+# the active Python version (including Python 3.8 on ROS 2 Foxy).
+ultralytics>=8.0,<9

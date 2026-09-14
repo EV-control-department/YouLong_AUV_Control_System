@@ -46,7 +46,7 @@ def project_root() -> Path:
 
 def default_output_root() -> Path:
     """Return the default session directory for this project."""
-    return project_root() / 'sessions'
+    return project_root() / 'records' / 'sessions'
 
 
 def _utc_now() -> str:

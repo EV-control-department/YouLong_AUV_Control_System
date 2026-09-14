@@ -6,6 +6,7 @@ import argparse
 import bisect
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -31,9 +32,12 @@ def _part_sort_key(path: Path):
     return (int(match.group(1)) if match else -1, path.name)
 
 
-def _mcap_files(directory: Path) -> list[Path]:
+def _bag_files(directory: Path) -> list[Path]:
     try:
-        candidates = directory.glob('*.mcap')
+        candidates = (
+            path for suffix in ('.mcap', '.db3')
+            for path in directory.glob(f'*{suffix}')
+        )
         files = []
         for path in candidates:
             try:
@@ -55,21 +59,26 @@ def _bag_part_paths(bag_root: Path) -> list[Path]:
     except OSError:
         return []
     if not parts:
-        return _mcap_files(bag_root)
+        return _bag_files(bag_root)
 
-    # Read MCAP files individually.  This works for normal bags and also for
-    # power-loss sessions where metadata.yaml is absent or damaged.  Empty
+    # Read bag files individually.  This works for normal bags and also for
+    # power-loss sessions where metadata.yaml is absent or damaged. Empty
     # files are ignored because they contain no recoverable messages.
     recovered = []
     for part in parts:
-        recovered.extend(_mcap_files(part))
+        recovered.extend(_bag_files(part))
     return recovered
 
 
 def _rosbag_modules():
     """Import ROS bag support lazily so video-only playback still works."""
     import rclpy
-    import rosbag2_py
+    try:
+        import rosbag2_py
+    except ImportError:
+        # ROS 2 Foxy may not ship the Python rosbag2 reader.  The standard
+        # sqlite3 module below is sufficient for Foxy's default .db3 bags.
+        rosbag2_py = None
     from rclpy.serialization import deserialize_message
     from rosidl_runtime_py.utilities import get_message
     return rclpy, rosbag2_py, deserialize_message, get_message
@@ -91,6 +100,9 @@ class BagPlayback:
         self._part_index = 0
         self._reader = None
         self._reader_path = None
+        self._reader_backend = None
+        self._sqlite_connection = None
+        self._sqlite_cursor = None
         self._next = None
         self._topic_types: dict[str, str] = {}
         self._message_types = {}
@@ -101,6 +113,13 @@ class BagPlayback:
         self._first_raw_ns = None
         self._last_raw_ns = None
         self._raw_end_ns = None
+        if (self._parts and self._rosbag2_py is None and
+                any(path.suffix.lower() == '.mcap' for path in self._parts) and
+                not any(path.suffix.lower() == '.db3'
+                        for path in self._parts)):
+            raise RuntimeError(
+                'this session contains MCAP, but rosbag2_py is not installed; '
+                'install the MCAP reader or record with sqlite3 on ROS 2 Foxy')
         self._collect_metadata_bounds()
         self._open_next_part()
         self._next = self._read_next()
@@ -163,11 +182,29 @@ class BagPlayback:
             pass
 
     def _collect_metadata_bounds(self) -> None:
-        try:
-            info = self._rosbag2_py.Info()
-        except AttributeError:
-            return
+        info = None
+        if self._rosbag2_py is not None:
+            try:
+                info = self._rosbag2_py.Info()
+            except AttributeError:
+                pass
         for path in self._parts:
+            if path.suffix.lower() == '.db3':
+                try:
+                    connection = sqlite3.connect(
+                        f'{path.as_uri()}?mode=ro', uri=True)
+                    row = connection.execute(
+                        'SELECT MIN(timestamp), MAX(timestamp) FROM messages'
+                    ).fetchone()
+                    connection.close()
+                    if row and row[1] is not None:
+                        self._raw_end_ns = max(
+                            self._raw_end_ns or int(row[1]), int(row[1]))
+                except (OSError, sqlite3.Error, TypeError, ValueError):
+                    continue
+                continue
+            if info is None:
+                continue
             try:
                 metadata = info.read_metadata(str(path), 'mcap')
                 self._update_metadata_bounds(metadata)
@@ -176,35 +213,55 @@ class BagPlayback:
                 # older bags whose metadata cannot be read by Info.
                 continue
 
+    def _register_topic(
+            self, topic: str, topic_type: str, profiles=None) -> bool:
+        if topic_type in IMAGE_TOPIC_TYPES:
+            return False
+        self._topic_types[topic] = topic_type
+        try:
+            message_type = self._message_types.get(topic)
+            if message_type is None:
+                message_type = self._get_message(topic_type)
+                self._message_types[topic] = message_type
+            if topic not in self._publishers:
+                qos = 10
+                if profiles and self._rosbag2_py is not None:
+                    try:
+                        converted_qos = (
+                            self._rosbag2_py
+                            .convert_rclcpp_qos_to_rclpy_qos(profiles[0]))
+                        qos = self._safe_replay_qos(converted_qos)
+                    except Exception:
+                        pass
+                self._publishers[topic] = self.node.create_publisher(
+                    message_type, topic, qos)
+            return True
+        except Exception as error:
+            self._errors.append(f'{topic} ({topic_type}): {error}')
+            return False
+
     def _register_topics(self, reader) -> list[str]:
         selected = []
         for metadata in reader.get_all_topics_and_types():
             topic = str(metadata.name)
             topic_type = str(metadata.type)
-            if topic_type in IMAGE_TOPIC_TYPES:
-                continue
-            self._topic_types[topic] = topic_type
-            try:
-                message_type = self._message_types.get(topic)
-                if message_type is None:
-                    message_type = self._get_message(topic_type)
-                    self._message_types[topic] = message_type
-                if topic not in self._publishers:
-                    qos = 10
-                    profiles = getattr(metadata, 'offered_qos_profiles', [])
-                    if profiles:
-                        try:
-                            converted_qos = (
-                                self._rosbag2_py
-                                .convert_rclcpp_qos_to_rclpy_qos(profiles[0]))
-                            qos = self._safe_replay_qos(converted_qos)
-                        except Exception:
-                            pass
-                    self._publishers[topic] = self.node.create_publisher(
-                        message_type, topic, qos)
+            if self._register_topic(
+                    topic, topic_type,
+                    getattr(metadata, 'offered_qos_profiles', [])):
                 selected.append(topic)
-            except Exception as error:
-                self._errors.append(f'{topic} ({topic_type}): {error}')
+        return selected
+
+    def _register_sqlite_topics(self, connection) -> list[str]:
+        selected = []
+        try:
+            rows = connection.execute(
+                'SELECT name, type FROM topics ORDER BY id')
+            for topic, topic_type in rows:
+                if self._register_topic(str(topic), str(topic_type)):
+                    selected.append(str(topic))
+        except sqlite3.Error as error:
+            self._errors.append(
+                f'{self._reader_path}: topic scan failed: {error}')
         return selected
 
     @staticmethod
@@ -234,40 +291,123 @@ class BagPlayback:
             return 10
         return qos
 
+    def _close_current_part(self) -> None:
+        if self._reader is not None:
+            try:
+                self._reader.close()
+            except Exception:
+                pass
+        if self._sqlite_cursor is not None:
+            try:
+                self._sqlite_cursor.close()
+            except Exception:
+                pass
+        if self._sqlite_connection is not None:
+            try:
+                self._sqlite_connection.close()
+            except Exception:
+                pass
+        self._reader = None
+        self._sqlite_cursor = None
+        self._sqlite_connection = None
+        self._reader_backend = None
+        self._reader_path = None
+
+    def _open_sqlite_part(self, path: Path) -> bool:
+        connection = None
+        self._reader_path = path
+        try:
+            connection = sqlite3.connect(
+                f'{path.resolve().as_uri()}?mode=ro', uri=True)
+            topics = self._register_sqlite_topics(connection)
+            if not topics:
+                connection.close()
+                self._reader_path = None
+                return False
+            placeholders = ','.join('?' for _ in topics)
+            cursor = connection.execute(
+                'SELECT messages.timestamp, topics.name, messages.data '
+                'FROM messages JOIN topics ON topics.id = messages.topic_id '
+                f'WHERE topics.name IN ({placeholders}) '
+                'ORDER BY messages.timestamp, messages.id',
+                topics,
+            )
+            self._sqlite_connection = connection
+            self._sqlite_cursor = cursor
+            self._reader_backend = 'sqlite3'
+            return True
+        except (OSError, sqlite3.Error, TypeError, ValueError) as error:
+            self._errors.append(f'{path}: sqlite3 open failed: {error}')
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            self._reader_path = None
+            return False
+
+    def _open_mcap_part(self, path: Path) -> bool:
+        if self._rosbag2_py is None:
+            self._errors.append(
+                f'{path}: rosbag2_py is not installed for MCAP playback')
+            return False
+        reader = self._rosbag2_py.SequentialReader()
+        self._reader_path = path
+        try:
+            reader.open(
+                self._rosbag2_py.StorageOptions(
+                    uri=str(path), storage_id='mcap'),
+                self._rosbag2_py.ConverterOptions('', ''),
+            )
+            self._update_metadata_bounds(reader.get_metadata())
+            topics = self._register_topics(reader)
+            if topics:
+                reader.set_filter(
+                    self._rosbag2_py.StorageFilter(topics=topics))
+            self._reader = reader
+            self._reader_backend = 'rosbag2'
+            return True
+        except Exception as error:
+            self._errors.append(f'{path}: {error}')
+            try:
+                reader.close()
+            except Exception:
+                pass
+            self._reader = None
+            self._reader_path = None
+            return False
+
     def _open_next_part(self) -> bool:
         while self._part_index < len(self._parts):
             path = self._parts[self._part_index]
             self._part_index += 1
-            reader = self._rosbag2_py.SequentialReader()
-            try:
-                reader.open(
-                    self._rosbag2_py.StorageOptions(
-                        uri=str(path), storage_id='mcap'),
-                    self._rosbag2_py.ConverterOptions('', ''),
-                )
-                self._update_metadata_bounds(reader.get_metadata())
-                topics = self._register_topics(reader)
-                if topics:
-                    reader.set_filter(
-                        self._rosbag2_py.StorageFilter(topics=topics))
-                self._reader = reader
-                self._reader_path = path
-                return True
-            except Exception as error:
-                self._errors.append(f'{path}: {error}')
-                try:
-                    reader.close()
-                except Exception:
-                    pass
-        self._reader = None
-        self._reader_path = None
+            self._close_current_part()
+            if path.suffix.lower() == '.db3':
+                if self._open_sqlite_part(path):
+                    return True
+            elif path.suffix.lower() == '.mcap':
+                if self._open_mcap_part(path):
+                    return True
+        self._close_current_part()
         return False
 
     def _read_next(self):
         while True:
-            if self._reader is None and not self._open_next_part():
+            if (self._reader_backend is None and
+                    not self._open_next_part()):
                 return None
             try:
+                if self._reader_backend == 'sqlite3':
+                    row = self._sqlite_cursor.fetchone()
+                    if row is None:
+                        self._close_current_part()
+                        continue
+                    timestamp_ns, topic, payload = row
+                    if topic in self._publishers:
+                        timestamp_ns = int(timestamp_ns)
+                        self._last_raw_ns = timestamp_ns
+                        return timestamp_ns, topic, bytes(payload)
+                    continue
                 if self._reader.has_next():
                     item = self._reader.read_next()
                     if len(item) < 3:
@@ -278,25 +418,14 @@ class BagPlayback:
                         self._last_raw_ns = timestamp_ns
                         return timestamp_ns, topic, payload
                     continue
-                self._reader.close()
+                self._close_current_part()
             except Exception as error:
-                path = self._reader_path or '<unknown MCAP>'
+                path = self._reader_path or '<unknown bag>'
                 self._errors.append(f'{path}: read failed: {error}')
-                try:
-                    self._reader.close()
-                except Exception:
-                    pass
-            self._reader = None
-            self._reader_path = None
+                self._close_current_part()
 
     def _reset(self):
-        if self._reader is not None:
-            try:
-                self._reader.close()
-            except Exception:
-                pass
-        self._reader = None
-        self._reader_path = None
+        self._close_current_part()
         self._part_index = 0
         self._next = None
         self._open_next_part()
@@ -326,13 +455,7 @@ class BagPlayback:
         self.publish_until(target_ns)
 
     def close(self):
-        if self._reader is not None:
-            try:
-                self._reader.close()
-            except Exception:
-                pass
-            self._reader = None
-            self._reader_path = None
+        self._close_current_part()
 
 
 def _probe_duration(path: Path) -> float | None:
@@ -397,10 +520,17 @@ def _session_candidates(value: str) -> list[Path]:
         return [raw.resolve()]
 
     project_sessions = default_output_root()
-    roots = [Path.cwd(), project_sessions.parent]
-    # ``sessions/name`` is already relative to the repository root; a bare
-    # ``name`` is also accepted as shorthand for ``<repo>/sessions/name``.
-    if not raw.parts or raw.parts[0] != project_sessions.name:
+    roots = [Path.cwd()]
+    # ``records/sessions/name`` is relative to the repository root.  The
+    # legacy ``sessions/name`` form and a bare name remain accepted too.
+    project_root_dir = project_sessions.parent.parent
+    if (len(raw.parts) >= 2
+            and raw.parts[:2] == (
+                project_sessions.parent.name, project_sessions.name)):
+        roots.append(project_root_dir)
+    elif raw.parts and raw.parts[0] == project_sessions.name:
+        roots.append(project_sessions.parent)
+    else:
         roots.append(project_sessions)
     candidates = []
     for root in roots:

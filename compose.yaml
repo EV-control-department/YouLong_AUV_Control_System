@@ -2,13 +2,14 @@ name: youlong-auv
 
 services:
   auv:
-    # Compose pulls Foxy and builds the complete Stonefish + ROS environment
-    # from Dockerfile, including a user matching the host UID/GID.
-    image: youlong_auv:foxy
+    # Defaults to Foxy for the Edge machine. Set ROS_DISTRO=jazzy for a
+    # Jazzy development image; both variants use the same Dockerfile.
+    image: youlong_auv:${ROS_DISTRO:-foxy}
     build:
       context: .
       dockerfile: Dockerfile
       args:
+        ROS_DISTRO: "${ROS_DISTRO:-foxy}"
         HOST_UID: "${HOST_UID:-1000}"
         HOST_GID: "${HOST_GID:-1000}"
         HOST_USER: "${HOST_USER:-${USER:-dev}}"
@@ -39,12 +40,12 @@ services:
               capabilities: [gpu]
 
     environment:
-      ROS_DISTRO: foxy
+      ROS_DISTRO: "${ROS_DISTRO:-foxy}"
       DISPLAY: "${DISPLAY:-:1}"
       XAUTHORITY: /tmp/.Xauthority
       HOME: "/home/${HOST_USER:-${USER:-dev}}"
-      ROS_HOME: /workspace/.docker/ros/foxy/ros
-      ROS_LOG_DIR: /workspace/.docker/ros/foxy/log/ros
+      ROS_HOME: "/workspace/.docker/ros/${ROS_DISTRO:-foxy}/ros"
+      ROS_LOG_DIR: "/workspace/.docker/ros/${ROS_DISTRO:-foxy}/log/ros"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
       __NV_PRIME_RENDER_OFFLOAD: "1"

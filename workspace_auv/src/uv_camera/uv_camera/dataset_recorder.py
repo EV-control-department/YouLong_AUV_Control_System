@@ -1,4 +1,4 @@
-"""Crash-resilient, lossless recorder for frames submitted to YOLO.
+"""Crash-resilient, lossless recorder for sampled YOLO input frames.
 
 The recorder deliberately stores decoded BGR frames as PNG.  PNG is lossless
 with respect to the BGR array handed to the detector; it does not attempt to
@@ -91,7 +91,7 @@ class DatasetRecorder:
             {
                 'format': 'yolo_input_images_v1',
                 'created_unix_ns': time.time_ns(),
-                'source': 'decoded BGR frame immediately before YOLO',
+                'source': 'decoded BGR sensor frame split/undistorted as YOLO input',
                 'pixel_format': 'bgr8',
                 'image_format': self._image_format,
                 'png_compression': self._png_compression,

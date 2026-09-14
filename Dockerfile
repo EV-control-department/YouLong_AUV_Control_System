@@ -1,5 +1,8 @@
-FROM osrf/ros:foxy-desktop
+ARG ROS_DISTRO=foxy
+FROM osrf/ros:${ROS_DISTRO}-desktop
 
+ARG ROS_DISTRO
+ENV ROS_DISTRO=${ROS_DISTRO}
 ARG STONEFISH_COMMIT=b21eb8e194c570ff2f61e91aeffb38d73dc25f42
 ARG STONEFISH_BUILD_JOBS=1
 
@@ -14,6 +17,8 @@ RUN apt-get update \
         libgl1-mesa-dev \
         libglu1-mesa-dev \
         libglm-dev \
+        libeigen3-dev \
+        libpcl-dev \
         pybind11-dev \
         python3-dev \
         python3-pybind11 \
@@ -37,20 +42,26 @@ RUN apt-get update \
     && ldconfig \
     && rm -rf /opt/stonefish/.git /var/lib/apt/lists/*
 
-# Ubuntu 20.04 ships Pillow 7, while uv_camera requires Pillow >= 9.
+# Ubuntu 20.04 ships Pillow 7, while uv_camera requires Pillow >= 9.  The
+# same image also needs PySide6 for the uv_log player and visualization tools.
+# The lower bound still resolves to a Python 3.8-compatible release on Foxy,
+# while Jazzy can resolve a newer wheel for its newer interpreter.
 # Keep this in a separate layer so changing the Python dependency does not
 # invalidate the Stonefish build above.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-pip \
     && python3 -m pip install --no-cache-dir --upgrade \
         --ignore-installed \
-        --target=/usr/local/lib/python3.8/dist-packages \
+        --target="/usr/local/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/dist-packages" \
         'Pillow>=9.0,<11' \
-    && PYTHONPATH=/usr/local/lib/python3.8/dist-packages \
-       python3 -c 'import PIL; assert int(PIL.__version__.split(".")[0]) >= 9, PIL.__version__' \
+        'PySide6>=6.5,<7' \
+    && PYTHONPATH="/usr/local/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/dist-packages" \
+       python3 -c 'import PIL; assert int(PIL.__version__.split(".")[0]) >= 9, PIL.__version__; import PySide6; print(PySide6.__version__)' \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PYTHONPATH=/usr/local/lib/python3.8/dist-packages
+# Keep both supported interpreter paths available. Only one exists in a
+# concrete image, and this avoids a second distro-specific Dockerfile.
+ENV PYTHONPATH=/usr/local/lib/python3.8/dist-packages:/usr/local/lib/python3.12/dist-packages
 
 # Build both ROS overlays into the image. The repository is still bind-mounted
 # at /workspace at runtime, but the compiled overlays live outside that mount
@@ -60,7 +71,7 @@ COPY workspace_sim /opt/youlong/src/workspace_sim
 COPY third_party/AUV_zit6_cmake /opt/youlong/src/third_party/AUV_zit6_cmake
 
 RUN /bin/bash -lc 'set -eo pipefail && \
-    source /opt/ros/foxy/setup.bash && \
+    source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd /opt/youlong/src/workspace_auv && \
     CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build \
         --build-base /opt/youlong/build/auv \
@@ -86,9 +97,11 @@ RUN groupadd --gid "${HOST_GID}" "${HOST_USER}" \
         --create-home --shell /bin/bash "${HOST_USER}"
 
 RUN printf '%s\n' \
-        'source /opt/ros/foxy/setup.bash' \
+        'source /opt/ros/${ROS_DISTRO}/setup.bash' \
         'source /opt/youlong/install/auv/setup.bash' \
         'source /opt/youlong/install/sim/setup.bash' \
+        'alias uuv_src="source /workspace/install/setup.bash"' \
+        'cd /workspace' \
         > "/home/${HOST_USER}/.bashrc" \
     && printf '%s\n' \
         '[ -f ~/.bashrc ] && . ~/.bashrc' \

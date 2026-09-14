@@ -31,6 +31,7 @@ from std_msgs.msg import Float32MultiArray, Header
 from . import ai as ai_mod
 from . import sensor as sensor_mod
 from .common import (
+    DATASET_DIR,
     ENABLE_GORTC,
     GORTC_EXECUTABLE,
     GORTC_HTTP_PORT,
@@ -105,6 +106,7 @@ class CameraAiNode(Node):
         self.ai = ai_mod.Ai(
             self, self.update_annotated_stream, cameras=active,
             inference_fps=params['inference_fps'],
+            dataset_fps=params['dataset_fps'],
             inference_threads=params['inference_threads'],
             gate_feature_mode=params['gate_feature_mode'],
             confidence=params['confidence'])
@@ -138,6 +140,7 @@ class CameraAiNode(Node):
     def _declare_params(self):
         self.declare_parameter('sim_mode', False)
         self.declare_parameter('inference_fps', 5.0)
+        self.declare_parameter('dataset_fps', 5.0)
         self.declare_parameter('inference_threads', 2)
         self.declare_parameter('confidence', 0.8)
         self.declare_parameter('gate_feature_mode', 'auto')
@@ -155,10 +158,10 @@ class CameraAiNode(Node):
         self.declare_parameter('line_filter_process_noise', 1.0)
         self.declare_parameter('line_filter_measurement_noise', 3.0)
         self.declare_parameter('save_dataset', False)
-        self.declare_parameter('dataset_dir', '')
+        self.declare_parameter('dataset_dir', DATASET_DIR)
         self.declare_parameter('dataset_queue_size', 32)
-        self.declare_parameter('dataset_png_compression', 3)
-        self.declare_parameter('dataset_format', 'webp_lossless')
+        self.declare_parameter('dataset_png_compression', 1)
+        self.declare_parameter('dataset_format', 'png')
         self.declare_parameter('model_path', '')
         # calibration (defaults come from common constants)
         from .common import (FRONT_CAMERA_MATRIX, FRONT_DIST_COEFFS,
@@ -173,6 +176,7 @@ class CameraAiNode(Node):
         return {
             'sim_mode': g('sim_mode').value,
             'inference_fps': max(0.0, float(g('inference_fps').value)),
+            'dataset_fps': max(0.0, float(g('dataset_fps').value)),
             'inference_threads': max(1, int(g('inference_threads').value)),
             'confidence': min(1.0, max(0.05, float(g('confidence').value))),
             'gate_feature_mode': str(g('gate_feature_mode').value).strip().lower(),
@@ -270,6 +274,8 @@ class CameraAiNode(Node):
             if not annotated_ready:
                 self.update_annotated_stream(
                     camera, cv_img, msg.header.stamp)
+        self.ai.record_capture_frame(
+            camera, cv_img, msg.header, right_stamp, int(stereo_pair_id or 0))
         self._gate.submit(
             camera,
             ('opencv', cv_img, msg.header.stamp, False,
@@ -285,6 +291,9 @@ class CameraAiNode(Node):
                     self._stream_annotated_jpegs[camera] is not None)
             if not annotated_ready:
                 self.update_annotated_stream(camera, frame, stamp)
+        capture_header = Header()
+        capture_header.stamp = stamp
+        self.ai.record_capture_frame(camera, frame, capture_header)
         self._gate.submit(camera, ('opencv', frame, stamp, True, None, 0))
 
     @staticmethod

@@ -31,7 +31,7 @@ setup(
     version='0.1.0',
     packages=[package_name],
     data_files=data_files,
-    # Keep cv_bridge and NumPy on the same (1.x) ABI used by ROS 2 Jazzy.
+    # Keep cv_bridge and NumPy on the same (1.x) ABI used by ROS 2 Foxy/Jazzy.
     install_requires=[
         'setuptools',
         'Pillow>=9.0',

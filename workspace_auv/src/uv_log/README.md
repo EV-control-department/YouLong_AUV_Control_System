@@ -33,8 +33,8 @@ ros2 launch uv_bringup sim.launch.py \
 后如需整理未正常结束的 session：
 
 ```bash
-ros2 run uv_log recover --session-dir sessions/YYYYMMDD_HHMMSS
-ros2 run uv_log player sessions/YYYYMMDD_HHMMSS
+ros2 run uv_log recover --session-dir records/sessions/YYYYMMDD_HHMMSS
+ros2 run uv_log player records/sessions/YYYYMMDD_HHMMSS
 ```
 
 `record_video_fps` 应与 `camera_stitch_fps` 保持一致。默认仿真值为 5 FPS；
@@ -69,7 +69,11 @@ rosbag 只保存状态、控制、检测和其他元数据等小消息。录制�
 `sensor_msgs/msg/Image`、`sensor_msgs/msg/CompressedImage` 和
 `stereo_msgs/msg/DisparityImage`；旧参数 `record_image_topics` 仅为兼容保留，
 即使设为 `true` 也不会把图像写入 bag。播放器会将剩余的 rosbag 话题按同一
-时间轴反序列化并发布；拖动进度条时也会重放到对应时刻。
+时间轴反序列化并发布；拖动进度条时也会重放到对应时刻。录包后端默认为
+`--bag-storage auto`：Foxy 自动使用内置 `sqlite3`（`.db3`），Jazzy 在安装
+`rosbag2_storage_mcap` 时使用 MCAP，否则也回退到 `sqlite3`。播放器同时支持
+两种格式。Foxy 的旧版 rosbag CLI 不支持正则、按类型排除和按时间分段，录制器
+会自动改用启动时发现的显式话题列表，并由 supervisor 管理单个 bag 进程。
 
 如果只需要快速录制原始 MJPEG，不需要 ROS session，可以使用：
 

@@ -278,6 +278,7 @@ def generate_launch_description():
         "record_image_topics": LaunchConfiguration("record_image_topics"),
         "video_segment_seconds": LaunchConfiguration("video_segment_seconds"),
         "bag_segment_seconds": LaunchConfiguration("bag_segment_seconds"),
+        "record_bag_storage": LaunchConfiguration("record_bag_storage"),
         "record_use_sim_time": LaunchConfiguration("record_use_sim_time"),
         "camera_stitch_fps": camera_stitch_fps,
     })
@@ -347,11 +348,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "record_dataset", default_value="false",
-            description="Save the frames sent to YOLO as a dataset",
+            description="Sample sensor frames in YOLO input format as a dataset",
         ),
         DeclareLaunchArgument(
-            "dataset_dir", default_value="datas/dataset_capture",
-            description="Dataset output directory relative to the launch cwd",
+            "dataset_dir", default_value="/workspace/records/datasets",
+            description="Dataset output directory",
         ),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         RegisterEventHandler(OnProcessExit(on_exit=_after_readiness)),

@@ -11,6 +11,7 @@ def generate_launch_description():
     enable_ai = LaunchConfiguration("enable_ai")
     sim_mode = LaunchConfiguration("sim_mode")
     inference_fps = LaunchConfiguration("inference_fps")
+    dataset_fps = LaunchConfiguration("dataset_fps")
     inference_threads = LaunchConfiguration("inference_threads")
     confidence = LaunchConfiguration("confidence")
     gate_feature_mode = LaunchConfiguration("gate_feature_mode")
@@ -36,6 +37,7 @@ def generate_launch_description():
         vision_parameters.append({
             "sim_mode": sim_mode,
             "inference_fps": inference_fps,
+            "dataset_fps": dataset_fps,
             "inference_threads": inference_threads,
             "confidence": confidence,
             "gate_feature_mode": gate_feature_mode,
@@ -85,6 +87,7 @@ def generate_launch_description():
         DeclareLaunchArgument("enable_ai", default_value="true"),
         DeclareLaunchArgument("sim_mode", default_value="false"),
         DeclareLaunchArgument("inference_fps", default_value="5.0"),
+        DeclareLaunchArgument("dataset_fps", default_value="5.0"),
         DeclareLaunchArgument("inference_threads", default_value="2"),
         DeclareLaunchArgument("confidence", default_value="0.8"),
         DeclareLaunchArgument("gate_feature_mode", default_value="auto"),
@@ -93,10 +96,10 @@ def generate_launch_description():
         DeclareLaunchArgument("mjpeg_port", default_value="8090"),
         DeclareLaunchArgument("annotated_max_width", default_value="0"),
         DeclareLaunchArgument("save_dataset", default_value="false"),
-        DeclareLaunchArgument("dataset_dir", default_value=""),
+        DeclareLaunchArgument("dataset_dir", default_value="/workspace/records/datasets"),
         DeclareLaunchArgument("dataset_queue_size", default_value="32"),
-        DeclareLaunchArgument("dataset_png_compression", default_value="3"),
-        DeclareLaunchArgument("dataset_format", default_value="webp_lossless"),
+        DeclareLaunchArgument("dataset_png_compression", default_value="1"),
+        DeclareLaunchArgument("dataset_format", default_value="png"),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument("object_localizer_params", default_value=""),
         OpaqueFunction(function=_nodes),

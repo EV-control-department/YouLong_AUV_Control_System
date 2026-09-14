@@ -15,6 +15,7 @@ from launch_ros.actions import Node
 
 from uv_bringup.desktop import focused_monitor
 from uv_bringup.session_logging import session_log_handlers
+from uv_log.session import default_output_root
 
 
 def generate_launch_description():
@@ -37,6 +38,7 @@ def generate_launch_description():
     record_image_topics = LaunchConfiguration("record_image_topics")
     video_segment_seconds = LaunchConfiguration("video_segment_seconds")
     bag_segment_seconds = LaunchConfiguration("bag_segment_seconds")
+    record_bag_storage = LaunchConfiguration("record_bag_storage")
     record_use_sim_time = LaunchConfiguration("record_use_sim_time")
 
     monitor_x, monitor_y, monitor_width, monitor_height = focused_monitor()
@@ -59,6 +61,7 @@ def generate_launch_description():
                 "--session-dir", str(paths.root),
                 "--segment-duration", video_segment_seconds.perform(context),
                 "--bag-duration", bag_segment_seconds.perform(context),
+                "--bag-storage", record_bag_storage.perform(context),
                 "--record-raw", record_raw_video.perform(context),
                 "--video-mode", record_video_mode.perform(context),
                 "--video-format", record_video_format.perform(context),
@@ -115,7 +118,7 @@ def generate_launch_description():
         DeclareLaunchArgument("preview_wait_timeout", default_value="60.0"),
         DeclareLaunchArgument("sim_window_width", default_value="960"),
         DeclareLaunchArgument("record_session", default_value="false"),
-        DeclareLaunchArgument("record_root", default_value="sessions"),
+        DeclareLaunchArgument("record_root", default_value=str(default_output_root())),
         DeclareLaunchArgument("record_raw_video", default_value="false"),
         DeclareLaunchArgument("record_video_mode", default_value="raw"),
         DeclareLaunchArgument("record_video_format", default_value="jpeg"),
@@ -130,6 +133,7 @@ def generate_launch_description():
         DeclareLaunchArgument("record_image_topics", default_value="false"),
         DeclareLaunchArgument("video_segment_seconds", default_value="2.0"),
         DeclareLaunchArgument("bag_segment_seconds", default_value="10.0"),
+        DeclareLaunchArgument("record_bag_storage", default_value="auto"),
         DeclareLaunchArgument("record_use_sim_time", default_value="false"),
         OpaqueFunction(function=_recording_actions),
         preview,

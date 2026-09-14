@@ -1,9 +1,11 @@
 """Regressions for incomplete indexes, torn writes and incremental syncing."""
 
 import os
+import sqlite3
 from unittest.mock import patch
 
 from uv_log.jpeg_archive import JpegArchiveWriter, load_chunk_entries, read_payload
+from uv_log.player import BagPlayback, _bag_part_paths
 from uv_log.performance import ProcessSampler
 from uv_log.recorder import SegmentSyncer
 
@@ -58,6 +60,65 @@ def test_syncer_syncs_growing_tail_and_skips_unchanged_shutdown_files(tmp_path):
         assert sync.call_count == 2
         syncer.sync_all()
         assert sync.call_count == 2
+
+
+def test_bag_discovery_accepts_foxy_sqlite_and_jazzy_mcap(tmp_path):
+    (tmp_path / 'part_000').mkdir()
+    (tmp_path / 'part_000' / 'bag_0.db3').write_bytes(b'sqlite')
+    (tmp_path / 'part_001').mkdir()
+    (tmp_path / 'part_001' / 'bag_1.mcap').write_bytes(b'mcap')
+    assert [path.suffix for path in _bag_part_paths(tmp_path)] == [
+        '.db3', '.mcap']
+
+
+def test_sqlite_bag_playback_without_rosbag2_py(tmp_path):
+    part = tmp_path / 'part_000'
+    part.mkdir()
+    bag = part / 'bag_0.db3'
+    connection = sqlite3.connect(str(bag))
+    connection.executescript(
+        'CREATE TABLE topics ('
+        'id INTEGER PRIMARY KEY, name TEXT, type TEXT, '
+        'serialization_format TEXT, offered_qos_profiles TEXT);'
+        'CREATE TABLE messages ('
+        'id INTEGER PRIMARY KEY, topic_id INTEGER, timestamp INTEGER, '
+        'data BLOB);')
+    connection.execute(
+        'INSERT INTO topics VALUES (1, "/test", "std_msgs/msg/String", '
+        '"cdr", "")')
+    connection.execute(
+        'INSERT INTO messages VALUES (1, 1, 100, ?)',
+        (sqlite3.Binary(b'payload'),))
+    connection.commit()
+    connection.close()
+
+    class Publisher:
+        def __init__(self):
+            self.messages = []
+
+        def publish(self, message):
+            self.messages.append(message)
+
+    class Node:
+        def __init__(self):
+            self.publishers = {}
+
+        def create_publisher(self, _message_type, topic, _qos):
+            publisher = Publisher()
+            self.publishers[topic] = publisher
+            return publisher
+
+    node = Node()
+    modules = (
+        object(), None, lambda payload, _type: payload,
+        lambda _type: object())
+    with patch('uv_log.player._rosbag_modules', return_value=modules):
+        playback = BagPlayback(tmp_path, node)
+        assert playback.topic_count == 1
+        assert playback.start_ns == 100
+        assert playback.publish_until(100) == 1
+        assert node.publishers['/test'].messages == [b'payload']
+        playback.close()
 
 
 def test_sampler_reports_current_process_without_commandline_secrets():

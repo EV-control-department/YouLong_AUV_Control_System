@@ -53,7 +53,11 @@ Note: `workspace_sim` uses colcon overlay — source `workspace_auv/install/setu
 
 ## Architecture
 
-This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater vehicle), designed for the SAUVC competition. It uses colcon with mixed ament_python (application logic) and ament_cmake (custom messages, Stonefish wrapper) packages.
+This is a **ROS 2 Foxy/Jazzy** project for the **YouLong AUV** (autonomous
+underwater vehicle), designed for the SAUVC competition. Edge deployments stay
+on Foxy; development and simulation may use Jazzy. It uses colcon with mixed
+ament_python (application logic) and ament_cmake (custom messages, Stonefish
+wrapper) packages.
 
 ### 6-Layer Stack (bottom-up)
 

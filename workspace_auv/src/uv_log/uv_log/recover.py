@@ -41,7 +41,8 @@ def recover_one(session_dir: Path) -> bool:
     ] if video_root.is_dir() else []
     syncer = SegmentSyncer(
         directories + [session_dir / 'bag'],
-        patterns=('*.ts', '*.mjpg', '*.jsonl', '*.mcap', 'metadata.yaml'),
+        patterns=(
+            '*.ts', '*.mjpg', '*.jsonl', '*.mcap', '*.db3', 'metadata.yaml'),
     )
     syncer.sync_all()
     for directory in directories:

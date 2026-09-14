@@ -347,10 +347,18 @@ def declare_observability_arguments(
         ),
         DeclareLaunchArgument(
             "bag_segment_seconds", default_value="10.0",
-            description="Rosbag recording segment length",
+            description=(
+                "Rosbag segment length when supported by this ROS distro; "
+                "Foxy records one sqlite3 bag per supervised child"),
+        ),
+        DeclareLaunchArgument(
+            "record_bag_storage", default_value="auto",
+            description=(
+                "Bag backend: auto, sqlite3, or mcap; auto keeps Foxy on "
+                "sqlite3 and uses MCAP when the plugin is installed"),
         ),
         DeclareLaunchArgument(
             "record_use_sim_time", default_value="false",
-            description="Use /clock for rosbag timestamps",
+            description="Use /clock when supported by the active rosbag CLI",
         ),
     ]

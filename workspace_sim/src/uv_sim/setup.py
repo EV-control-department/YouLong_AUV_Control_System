@@ -17,9 +17,15 @@ setup(
     ]),
     ('lib/' + package_name, ['libexec/uv_sim/sim_bridge']),
     ],
-    # cv_bridge shipped with ROS 2 Jazzy in this environment uses the NumPy
-    # 1.x C ABI. Keep the simulation runtime on the known-compatible version.
-    install_requires=['setuptools', 'numpy==1.26.4'],
+    # Keep the NumPy 1.x ABI used by cv_bridge on both ROS 2 Foxy/Python 3.8
+    # and ROS 2 Jazzy/newer Python runtimes.
+    # Keep the NumPy 1.x ABI used by cv_bridge on both ROS 2 Foxy/Python 3.8
+    # and ROS 2 Jazzy/newer Python runtimes.
+    install_requires=[
+        'setuptools',
+        'numpy<1.25; python_version < "3.9"',
+        'numpy==1.26.4; python_version >= "3.9"',
+    ],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',

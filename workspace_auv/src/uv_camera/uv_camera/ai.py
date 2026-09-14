@@ -33,6 +33,7 @@ from .common import (
     FRONT_DIST_COEFFS,
     _LineFilterState,
     image_msg_to_bgr,
+    normalize_frame,
 )
 from .model_classes import MODEL_MAPPING_PATH, model_class_id
 from .dataset_recorder import DatasetRecorder
@@ -55,6 +56,7 @@ class Ai:
         update_annotated_fn,
         cameras=('front', 'down'),
         inference_fps=0.0,
+        dataset_fps=5.0,
         inference_threads=2,
         gate_feature_mode='auto',
         confidence=CONFIDENCE,
@@ -67,6 +69,11 @@ class Ai:
         )
         self._inference_timing_lock = threading.Lock()
         self._last_inference_s = {camera: float('-inf') for camera in cameras}
+        self._dataset_period_s = (
+            0.0 if float(dataset_fps) <= 0.0 else 1.0 / float(dataset_fps)
+        )
+        self._dataset_timing_lock = threading.Lock()
+        self._last_dataset_s = {camera: float('-inf') for camera in cameras}
         self._inference_threads = max(1, int(inference_threads))
         self._gate_feature_mode = str(gate_feature_mode).strip().lower()
         if self._gate_feature_mode not in {
@@ -88,9 +95,7 @@ class Ai:
         self._dataset_recorder = None
         if self._save_dataset:
             if not self._dataset_dir:
-                self._dataset_dir = os.path.join(
-                    os.path.dirname(os.path.dirname(
-                        os.path.dirname(os.path.dirname(__file__)))), 'img')
+                self._dataset_dir = DATASET_DIR
             self._dataset_recorder = DatasetRecorder(
                 self._dataset_dir,
                 queue_size=int(node.get_parameter('dataset_queue_size').value),
@@ -285,26 +290,11 @@ class Ai:
                        stereo_pair_id=0):
         if f'{camera}_left' not in self._active_channels:
             return
-        from .common import normalize_frame
-        cv_img = normalize_frame(frame)
-        if cv_img is None or cv_img.shape[0] < 2 or cv_img.shape[1] < 2:
+        prepared = self._prepare_stereo_views(camera, frame)
+        if prepared is None:
             self.node.get_logger().warn(f'Invalid {camera} frame, dropping')
             return
-
-        K = self._front_K if camera == 'front' else self._down_K
-        D = self._front_D if camera == 'front' else self._down_D
-        h, w = cv_img.shape[:2]
-        mid = w // 2
-        if ENABLE_UNDISTORT and K is not None and D is not None:
-            distortion_active = bool(np.any(np.abs(D) > 1e-12))
-        else:
-            distortion_active = False
-        if distortion_active:
-            left_img = cv2.undistort(cv_img[:, :mid], K, D)
-            right_img = cv2.undistort(cv_img[:, mid:], K, D)
-        else:
-            left_img = cv_img[:, :mid]
-            right_img = cv_img[:, mid:]
+        cv_img, left_img, right_img = prepared
 
         if camera == 'front' and self._aruco_detector is not None:
             with self._aruco_lock:
@@ -315,19 +305,10 @@ class Ai:
         left_name = f'{camera}_left'
         right_name = f'{camera}_right'
 
-        # Dataset capture is intentionally independent of YOLO availability
-        # and inference throttling.  A training-data run must still save the
-        # camera frames when ultralytics/model weights are not installed.
-        if self._save_dataset:
-            self._save_frame(left_img, left_name, header, stereo_pair_id)
-
         right_header = Header()
         right_header.frame_id = header.frame_id
         right_header.stamp = (
             right_stamp if right_stamp is not None else header.stamp)
-        if self._save_dataset:
-            self._save_frame(right_img, right_name, right_header, stereo_pair_id)
-
         # Keep the ROS detection topics alive with explicit empty results when
         # optional YOLO is unavailable.  This lets readiness finish for data
         # collection without pretending that detections were produced.
@@ -358,6 +339,71 @@ class Ai:
         if annotate:
             self._update_annotated(
                 camera, np.hstack((ann_l, ann_r)), header.stamp)
+
+    def _prepare_stereo_views(self, camera, frame):
+        """Normalize and split one stitched frame into YOLO input views."""
+        cv_img = normalize_frame(frame)
+        if cv_img is None or cv_img.shape[0] < 2 or cv_img.shape[1] < 2:
+            return None
+
+        K = self._front_K if camera == 'front' else self._down_K
+        D = self._front_D if camera == 'front' else self._down_D
+        mid = cv_img.shape[1] // 2
+        distortion_active = (
+            ENABLE_UNDISTORT and K is not None and D is not None
+            and bool(np.any(np.abs(D) > 1e-12))
+        )
+        if distortion_active:
+            left_img = cv2.undistort(cv_img[:, :mid], K, D)
+            right_img = cv2.undistort(cv_img[:, mid:], K, D)
+        else:
+            left_img = cv_img[:, :mid]
+            right_img = cv_img[:, mid:]
+        return cv_img, left_img, right_img
+
+    def _allow_dataset(self, camera):
+        """Rate-limit dataset sampling independently from YOLO inference."""
+        if self._dataset_period_s <= 0.0:
+            return True
+        now = time.monotonic()
+        with self._dataset_timing_lock:
+            last = self._last_dataset_s.get(camera, float('-inf'))
+            if now - last < self._dataset_period_s:
+                return False
+            self._last_dataset_s[camera] = now
+        return True
+
+    def record_capture_frame(self, camera, frame, header=None,
+                             right_stamp=None, stereo_pair_id=0):
+        """Record a sampled sensor frame before it enters the AI FrameGate.
+
+        This must be called by the sensor path, not by ``_process_frame``:
+        FrameGate intentionally drops stale frames when inference is slower
+        than capture, while dataset recording should retain the requested
+        capture cadence.
+        """
+        if self._dataset_recorder is None or not self._allow_dataset(camera):
+            return
+        prepared = self._prepare_stereo_views(camera, frame)
+        if prepared is None:
+            return
+        _, left_img, right_img = prepared
+
+        left_header = Header()
+        if header is not None:
+            left_header.frame_id = str(getattr(header, 'frame_id', ''))
+            left_header.stamp = header.stamp
+        else:
+            left_header.stamp = self.node.get_clock().now().to_msg()
+
+        right_header = Header()
+        right_header.frame_id = left_header.frame_id
+        right_header.stamp = (
+            right_stamp if right_stamp is not None else left_header.stamp)
+        self._save_frame(left_img, f'{camera}_left', left_header,
+                         stereo_pair_id)
+        self._save_frame(right_img, f'{camera}_right', right_header,
+                         stereo_pair_id)
 
     def _publish_empty_results(self, camera_name, header, stereo_pair_id):
         """Publish an empty detection/line result when AI is unavailable."""

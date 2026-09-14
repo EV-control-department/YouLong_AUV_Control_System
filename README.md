@@ -1,6 +1,7 @@
 # YouLong AUV Control System
 
-无人自主水下航行器（AUV）控制系统，基于 ROS 2 Jazzy 构建，面向 SAUVC 竞赛。
+无人自主水下航行器（AUV）控制系统，兼容 ROS 2 Foxy 和 Jazzy，面向 SAUVC
+竞赛。Edge 设备保持 Foxy，开发/仿真环境可使用 Jazzy。
 
 ## 架构
 
@@ -55,8 +56,9 @@ colcon build && source install/setup.bash
 ros2 launch uv_bringup sim.launch.py
 ```
 
-仿真 Python 节点会自动使用 `workspace_auv/.venv`，其中固定了
-`numpy==1.26.4`，以匹配 ROS 2 Jazzy 的 `cv_bridge`。
+仿真 Python 节点会自动使用 `workspace_auv/.venv`。依赖文件会按 Python 版本
+选择 NumPy 1.x：Foxy/Python 3.8 使用 `<1.25`，Jazzy 使用 `1.26.4`，以避免
+`cv_bridge` 的 ABI 不匹配。
 
 任务配置已经按 mission 拓扑和 task 参数拆分：
 
@@ -206,7 +208,17 @@ SSH_KEY=~/.ssh/auv \
 
 ## 依赖
 
-- ROS 2 Jazzy
+- ROS 2 Foxy（Edge）或 ROS 2 Jazzy（开发/仿真）
 - Python 3
 - Stonefish 1.6（仅仿真，https://github.com/patrykcieslak/stonefish）
 - PyTorch + YOLOv8（仅感知）
+
+核心 ROS 镜像不会强制安装 PyTorch，因为 GPU/CUDA wheel 与机器相关；YOLO
+推理、自动标注和训练需要时执行：
+
+```bash
+INSTALL_WORKSPACE_AI=true bash scripts/setup_workspace_python.sh
+```
+
+对应依赖记录在 `requirements-ai.txt`。不安装它时，`uv_camera` 会保留相机
+和 ROS 控制功能，但 AI 检测会按代码设计自动禁用。

@@ -59,6 +59,96 @@ RAW_STREAMS = {
 }
 
 
+def _path_is_under(path: Path, directory: Path) -> bool:
+    """Python 3.8-compatible equivalent of Path.is_relative_to()."""
+    try:
+        path.relative_to(directory)
+        return True
+    except ValueError:
+        return False
+
+
+def _mcap_storage_available() -> bool:
+    """Return whether the active ROS installation exposes the MCAP plugin."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        get_package_share_directory('rosbag2_storage_mcap')
+        return True
+    except (ImportError, LookupError, OSError):
+        return False
+
+
+def _select_bag_storage(requested: str) -> str:
+    requested = str(requested or 'auto').strip().lower()
+    if requested not in ('auto', 'sqlite3', 'mcap'):
+        raise ValueError(
+            f'unsupported bag storage {requested!r}; '
+            'use auto, sqlite3, or mcap')
+    if requested == 'auto':
+        return 'mcap' if _mcap_storage_available() else 'sqlite3'
+    if requested == 'mcap' and not _mcap_storage_available():
+        raise RuntimeError(
+            'MCAP storage was requested, but rosbag2_storage_mcap is not '
+            'installed in the active ROS environment')
+    return requested
+
+
+def _rosbag_record_help() -> str:
+    """Read ros2 bag record capabilities from the active ROS distribution."""
+    try:
+        result = subprocess.run(
+            ['ros2', 'bag', 'record', '--help'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        return f'{result.stdout}\n{result.stderr}'
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def _discover_ros_topics(topic_regex: str) -> list[str]:
+    """Discover filtered topic names for Foxy's older rosbag CLI.
+
+    Foxy has no --regex or --exclude-topic-types options, so the recorder
+    passes an explicit topic list instead.  This keeps image messages out of
+    the bag without requiring a newer rosbag2 command line.
+    """
+    try:
+        result = subprocess.run(
+            ['ros2', 'topic', 'list', '-t'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    try:
+        matcher = re.compile(topic_regex)
+    except re.error:
+        return []
+
+    topics = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if (not line.startswith('/') or ' [' not in line or
+                not line.endswith(']')):
+            continue
+        topic, type_list = line.rsplit(' [', 1)
+        topic_types = [item.strip() for item in type_list[:-1].split(',')]
+        if not matcher.search(topic):
+            continue
+        if any(topic_type in IMAGE_TOPIC_TYPES for topic_type in topic_types):
+            continue
+        topics.append(topic)
+    return sorted(set(topics))
+
+
 def _bool_value(value: str | bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -124,7 +214,7 @@ class SegmentSyncer(threading.Thread):
             if not directory.is_dir():
                 continue
             changed_directories: set[Path] = set()
-            files = {p for p in self._known if p.is_relative_to(directory)}
+            files = {p for p in self._known if _path_is_under(p, directory)}
             if discover:
                 files.update(
                     p for p in directory.rglob('*')
@@ -312,6 +402,9 @@ class Recorder:
     def __init__(self, paths: SessionPaths, args):
         self.paths = paths
         self.args = args
+        self.bag_storage = _select_bag_storage(
+            getattr(args, 'bag_storage', 'auto'))
+        self._bag_record_help = _rosbag_record_help()
         self.stop_event = threading.Event()
         self.heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop, daemon=True, name='uv-log-heartbeat')
@@ -411,25 +504,37 @@ class Recorder:
 
     def _bag_command(self, part: int):
         output = self.paths.bag / f'part_{part:03d}'
-        # ros2 bag's --max-bag-duration parser accepts integer seconds only.
-        # Keep the launch argument flexible, but round fractional values up
-        # so the requested maximum duration is never shortened.
-        bag_duration = max(1, math.ceil(float(self.args.bag_duration)))
         command = [
             'ros2', 'bag', 'record',
-            '--storage', 'mcap',
+            '--storage', self.bag_storage,
             '--output', str(output),
-            '--regex', self._bag_topic_regex(),
-            '--max-bag-duration', str(bag_duration),
             # Direct writes reduce the amount of data left only in rosbag's
             # memory cache when the machine becomes unresponsive.
             '--max-cache-size', '0',
-            '--disable-keyboard-controls',
-            # Video is archived outside rosbag.  Keep this type-level guard in
-            # place even when a custom topic regex is supplied.
-            '--exclude-topic-types', *IMAGE_TOPIC_TYPES,
         ]
-        if _bool_value(self.args.use_sim_time):
+        capabilities = self._bag_record_help
+        if '--regex' in capabilities:
+            command += ['--regex', self._bag_topic_regex()]
+        else:
+            topics = _discover_ros_topics(self._bag_topic_regex())
+            if topics:
+                command += topics
+            else:
+                print(
+                    'uv_log: no matching ROS topics found for Foxy bag '
+                    'record; the supervised recorder will retry',
+                    flush=True)
+        if '--max-bag-duration' in capabilities:
+            # ros2 bag's parser accepts integer seconds only. Round fractional
+            # values up so the requested maximum duration is never shortened.
+            bag_duration = max(1, math.ceil(float(self.args.bag_duration)))
+            command += ['--max-bag-duration', str(bag_duration)]
+        if '--disable-keyboard-controls' in capabilities:
+            command.append('--disable-keyboard-controls')
+        if '--exclude-topic-types' in capabilities:
+            command += ['--exclude-topic-types', *IMAGE_TOPIC_TYPES]
+        if (_bool_value(self.args.use_sim_time) and
+                '--use-sim-time' in capabilities):
             command.append('--use-sim-time')
         return command
 
@@ -501,15 +606,17 @@ class Recorder:
             # TS and rosbag need an external syncer.
             ([*self.video_directories] if self.args.video_format == 'ts' else [])
             + [self.paths.bag],
-            patterns=('*.ts', '*.mcap', 'metadata.yaml'),
+            patterns=('*.ts', '*.mcap', '*.db3', 'metadata.yaml'),
         )
         self.syncer.start()
         for child in self.children:
             child.start()
         update_manifest(
             self.paths.root,
-            bag={'directory': 'bag', 'storage': 'mcap',
-                 'segment_seconds': float(self.args.bag_duration)},
+            bag={'directory': 'bag', 'storage': self.bag_storage,
+                 'segment_seconds': float(self.args.bag_duration),
+                 'segmenting_supported': '--max-bag-duration' in
+                 self._bag_record_help},
             recorder={
                 'pid': os.getpid(),
                 'topic_regex': self._bag_topic_regex(),
@@ -519,6 +626,9 @@ class Recorder:
                 'record_image_topics_requested': _bool_value(
                     getattr(self.args, 'record_image_topics', False)),
                 'bag_segment_seconds': float(self.args.bag_duration),
+                'bag_segmenting_supported': '--max-bag-duration' in
+                self._bag_record_help,
+                'bag_storage': self.bag_storage,
                 'video_segment_seconds': float(self.args.segment_duration),
                 'video_mode': self.args.video_mode,
                 'video_format': self.args.video_format,
@@ -569,6 +679,11 @@ def _parse_args():
                         help='false records ROS/logs only, without reconnecting video workers')
     parser.add_argument('--segment-duration', type=float, default=2.0)
     parser.add_argument('--bag-duration', type=float, default=10.0)
+    parser.add_argument(
+        '--bag-storage', choices=('auto', 'sqlite3', 'mcap'), default='auto',
+        help=(
+            'ROS bag storage backend. auto selects MCAP when the plugin is '
+            'installed, otherwise sqlite3 for ROS 2 Foxy compatibility'))
     parser.add_argument(
         '--video-format', choices=('jpeg', 'ts'), default='jpeg',
         help=(

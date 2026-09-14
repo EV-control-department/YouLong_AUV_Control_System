@@ -1,3 +1,5 @@
-# ROS 2 Jazzy's cv_bridge in this workspace is built against the NumPy 1.x ABI.
-# Keep this pinned until cv_bridge is rebuilt for NumPy 2.x.
-numpy==1.26.4
+# Keep NumPy on the 1.x ABI used by cv_bridge in both supported ROS releases.
+# ROS 2 Foxy runs on Python 3.8, where NumPy 1.24 is the last compatible line.
+numpy<1.25; python_version < "3.9"
+# ROS 2 Jazzy runs on newer Python versions and uses the known-good 1.26 ABI.
+numpy==1.26.4; python_version >= "3.9"

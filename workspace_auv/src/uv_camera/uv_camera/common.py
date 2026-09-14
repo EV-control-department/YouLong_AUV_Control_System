@@ -48,7 +48,7 @@ STREAM_ANNOTATED = True
 
 SIM_MODE = False
 SAVE_DATASET = False
-DATASET_DIR = ''
+DATASET_DIR = '/workspace/records/datasets'
 DEFAULT_MODEL_FILENAME = 'robotcup20260901.pt'
 
 
