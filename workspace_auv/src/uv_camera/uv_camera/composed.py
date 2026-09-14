@@ -63,6 +63,7 @@ class CameraAiNode(Node):
         self._preview_enabled = params['enable_gortc']
         self._stream_annotated = (
             params['stream_annotated'] and self._preview_enabled)
+        self._stream_pose_overlay = params['stream_pose_overlay']
         self._mjpeg_port = params['mjpeg_port']
         self._stream_lock = threading.Lock()
         self._stream_clients = {}
@@ -112,6 +113,7 @@ class CameraAiNode(Node):
             dataset_submit_timeout_s=params['dataset_submit_timeout_s'],
             dataset_writer_workers=params['dataset_writer_workers'],
             dataset_webp_method=params['dataset_webp_method'],
+            dataset_fsync_each_file=params['dataset_fsync_each_file'],
             inference_threads=params['inference_threads'],
             gate_feature_mode=params['gate_feature_mode'],
             confidence=params['confidence'])
@@ -167,6 +169,7 @@ class CameraAiNode(Node):
         self.declare_parameter('dataset_submit_timeout_sec', 1.0)
         self.declare_parameter('dataset_writer_workers', 4)
         self.declare_parameter('dataset_webp_method', 0)
+        self.declare_parameter('dataset_fsync_each_file', False)
         self.declare_parameter('camera_startup_timeout_sec', 5.0)
         self.declare_parameter('inference_threads', 2)
         self.declare_parameter('confidence', 0.8)
@@ -176,6 +179,7 @@ class CameraAiNode(Node):
         self.declare_parameter('gortc_http_port', GORTC_HTTP_PORT)
         self.declare_parameter('mjpeg_port', VISION_MJPEG_PORT)
         self.declare_parameter('stream_annotated', STREAM_ANNOTATED)
+        self.declare_parameter('stream_pose_overlay', False)
         self.declare_parameter('annotated_max_width', 0)
         self.declare_parameter('enable_front_camera', True)
         self.declare_parameter('enable_down_camera', True)
@@ -214,6 +218,8 @@ class CameraAiNode(Node):
                 1, min(8, int(g('dataset_writer_workers').value))),
             'dataset_webp_method': max(
                 0, min(6, int(g('dataset_webp_method').value))),
+            'dataset_fsync_each_file': _as_bool(
+                g('dataset_fsync_each_file').value),
             'camera_startup_timeout_s': max(
                 1.0, float(g('camera_startup_timeout_sec').value)),
             'inference_threads': max(1, int(g('inference_threads').value)),
@@ -222,6 +228,8 @@ class CameraAiNode(Node):
             'enable_gortc': _as_bool(g('enable_gortc').value),
             'gortc_port': g('gortc_http_port').value,
             'stream_annotated': _as_bool(g('stream_annotated').value),
+            'stream_pose_overlay': _as_bool(
+                g('stream_pose_overlay').value),
             'annotated_max_width': max(0, int(g('annotated_max_width').value)),
             'mjpeg_port': g('mjpeg_port').value,
             'enable_front': g('enable_front_camera').value,
@@ -360,7 +368,8 @@ class CameraAiNode(Node):
     def update_raw_preview(self, camera, frame, stamp=None):
         if not self.stream_requested(camera):
             return
-        frame = self._draw_pose_overlay(frame)
+        if self._stream_pose_overlay:
+            frame = self._draw_pose_overlay(frame)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
             return
@@ -377,7 +386,8 @@ class CameraAiNode(Node):
         if width and frame.shape[1] > width:
             height = max(1, round(frame.shape[0] * width / frame.shape[1]))
             frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
-        frame = self._draw_pose_overlay(frame)
+        if self._stream_pose_overlay:
+            frame = self._draw_pose_overlay(frame)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
             return

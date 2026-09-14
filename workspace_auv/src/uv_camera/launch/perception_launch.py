@@ -20,12 +20,14 @@ def generate_launch_description():
     dataset_submit_timeout_sec = LaunchConfiguration("dataset_submit_timeout_sec")
     dataset_writer_workers = LaunchConfiguration("dataset_writer_workers")
     dataset_webp_method = LaunchConfiguration("dataset_webp_method")
+    dataset_fsync_each_file = LaunchConfiguration("dataset_fsync_each_file")
     camera_startup_timeout_sec = LaunchConfiguration("camera_startup_timeout_sec")
     inference_threads = LaunchConfiguration("inference_threads")
     confidence = LaunchConfiguration("confidence")
     gate_feature_mode = LaunchConfiguration("gate_feature_mode")
     enable_gortc = LaunchConfiguration("enable_gortc")
     stream_annotated = LaunchConfiguration("stream_annotated")
+    stream_pose_overlay = LaunchConfiguration("stream_pose_overlay")
     mjpeg_port = LaunchConfiguration("mjpeg_port")
     annotated_max_width = LaunchConfiguration("annotated_max_width")
     save_dataset = LaunchConfiguration("save_dataset")
@@ -55,12 +57,14 @@ def generate_launch_description():
             "dataset_submit_timeout_sec": dataset_submit_timeout_sec,
             "dataset_writer_workers": dataset_writer_workers,
             "dataset_webp_method": dataset_webp_method,
+            "dataset_fsync_each_file": dataset_fsync_each_file,
             "camera_startup_timeout_sec": camera_startup_timeout_sec,
             "inference_threads": inference_threads,
             "confidence": confidence,
             "gate_feature_mode": gate_feature_mode,
             "enable_gortc": enable_gortc,
             "stream_annotated": stream_annotated,
+            "stream_pose_overlay": stream_pose_overlay,
             "mjpeg_port": mjpeg_port,
             "annotated_max_width": annotated_max_width,
             "save_dataset": save_dataset,
@@ -113,12 +117,14 @@ def generate_launch_description():
         DeclareLaunchArgument("dataset_submit_timeout_sec", default_value="1.0"),
         DeclareLaunchArgument("dataset_writer_workers", default_value="4"),
         DeclareLaunchArgument("dataset_webp_method", default_value="0"),
+        DeclareLaunchArgument("dataset_fsync_each_file", default_value="false"),
         DeclareLaunchArgument("camera_startup_timeout_sec", default_value="5.0"),
         DeclareLaunchArgument("inference_threads", default_value="2"),
         DeclareLaunchArgument("confidence", default_value="0.8"),
         DeclareLaunchArgument("gate_feature_mode", default_value="auto"),
         DeclareLaunchArgument("enable_gortc", default_value="true"),
         DeclareLaunchArgument("stream_annotated", default_value="true"),
+        DeclareLaunchArgument("stream_pose_overlay", default_value="false"),
         DeclareLaunchArgument("mjpeg_port", default_value="8090"),
         DeclareLaunchArgument("annotated_max_width", default_value="0"),
         DeclareLaunchArgument("save_dataset", default_value="false"),

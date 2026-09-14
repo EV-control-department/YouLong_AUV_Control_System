@@ -62,6 +62,7 @@ class Ai:
         dataset_submit_timeout_s=1.0,
         dataset_writer_workers=4,
         dataset_webp_method=0,
+        dataset_fsync_each_file=False,
         inference_threads=2,
         gate_feature_mode='auto',
         confidence=CONFIDENCE,
@@ -119,7 +120,8 @@ class Ai:
                 debug_period_s=self._dataset_debug_period_s,
                 submit_timeout_s=self._dataset_submit_timeout_s,
                 writer_workers=dataset_writer_workers,
-                webp_method=dataset_webp_method)
+                webp_method=dataset_webp_method,
+                fsync_each_file=dataset_fsync_each_file)
             node.get_logger().info(
                 f'Lossless YOLO dataset recording enabled: '
                 f'{self._dataset_recorder.session_dir} '

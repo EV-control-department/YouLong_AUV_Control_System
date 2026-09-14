@@ -44,17 +44,22 @@ RUN apt-get update \
 
 # Ubuntu 20.04 ships Pillow 7, while uv_camera requires Pillow >= 9.  The
 # same image also needs PySide6 for the uv_log player and visualization tools.
-# The lower bound still resolves to a Python 3.8-compatible release on Foxy,
-# while Jazzy can resolve a newer wheel for its newer interpreter.
+# PySide6 6.5 dropped Python 3.8 support, so Foxy must use the last compatible
+# 6.2.x release while Jazzy can use the newer series.
 # Keep this in a separate layer so changing the Python dependency does not
 # invalidate the Stonefish build above.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-pip \
+    && if [ "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.8" ]; then \
+           PYSIDE6_SPEC="PySide6>=6.2,<6.3"; \
+       else \
+           PYSIDE6_SPEC="PySide6>=6.5,<7"; \
+       fi \
     && python3 -m pip install --no-cache-dir --upgrade \
         --ignore-installed \
         --target="/usr/local/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/dist-packages" \
         'Pillow>=9.0,<11' \
-        'PySide6>=6.5,<7' \
+        "${PYSIDE6_SPEC}" \
     && PYTHONPATH="/usr/local/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/dist-packages" \
        python3 -c 'import PIL; assert int(PIL.__version__.split(".")[0]) >= 9, PIL.__version__; import PySide6; print(PySide6.__version__)' \
     && rm -rf /var/lib/apt/lists/*
@@ -85,6 +90,13 @@ RUN /bin/bash -lc 'set -eo pipefail && \
         --parallel-workers 1 \
         --cmake-force-configure && \
     rm -rf /opt/youlong/src /opt/youlong/build'
+
+# The GUI renders Chinese labels and needs a CJK-capable font at runtime.
+# Keep this after the native build layers so font changes do not trigger
+# another Stonefish or ROS workspace rebuild.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
 
 ARG HOST_UID=1000
 ARG HOST_GID=1000

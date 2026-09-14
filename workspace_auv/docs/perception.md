@@ -86,6 +86,7 @@ go2rtc 视频流（默认端口 `1984`）：
 | `mjpeg_port` | `int` | `8090` | vision 本地 MJPEG 端口 |
 | `gortc_http_port` | `int` | `1984` | go2rtc HTTP/WebRTC 端口 |
 | `stream_annotated` | `bool` | `true` | 是否通过 go2rtc 转发带检测框的视频 |
+| `stream_pose_overlay` | `bool` | `false` | 是否在 raw/annotated 推流现有位置（右下角）叠加机器人 POS；需要显式设为 `true` |
 | `enable_ai` | `bool` | `false` | 是否加载/运行 YOLO；关闭时仍可单独录制传感器图像 |
 | `save_dataset` | `bool` | `false` | 显式设为 `true` 后开始录制；录制默认使用 WebP 无损格式和诊断日志 |
 | `dataset_fps` | `float` | `5.0` | 数据集采集频率，按相机计；独立于 YOLO 推理频率 |
@@ -95,11 +96,14 @@ go2rtc 视频流（默认端口 `1984`）：
 | `dataset_submit_timeout_sec` | `float` | `1.0` | 写盘队列持续满超过该时间后，录制标记为 `failed` 并停止接收新帧 |
 | `dataset_writer_workers` | `int` | `4` | 并行无损编码/写盘线程数，通常 4 比单线程快；过大可能与相机争用 CPU/磁盘 |
 | `dataset_webp_method` | `int` | `0` | WebP 无损编码速度档位，`0` 最快、文件略大；仍然是像素级无损 |
+| `dataset_fsync_each_file` | `bool` | `false` | 是否每张图片都强制同步到存储设备；`false` 更快，`true` 断电保护更强但可能严重降低帧率 |
 | `camera_startup_timeout_sec` | `float` | `5.0` | 两个启用的 V4L2 摄像头都必须在该时间内打开并读到有效首帧，否则不开始录制 |
 
 实车 V4L2 模式会先打开并检查所有启用的摄像头，再启动采集线程；任一摄像头打不开或读不到有效首帧，节点会报错并拒绝开始录制。运行中持续读帧失败也会将当前数据集的 `status.json` 标记为 `failed`。
 
 写盘线程遇到磁盘满、权限、编码或 I/O 错误时，同样会报错并标记数据集失败；已经安全写入的图片和清单会保留，未写入的队列帧会丢弃。修复磁盘空间/权限/设备后需要重新启动录制，不能把该会话当作完整数据集使用。
+
+`dataset_fsync_each_file=false` 只改变断电时的落盘保证，不改变图像编码的无损性质；正常停止时会刷新文件。若设备必须具备每张图片的断电级持久性，可设为 `true`，但嵌入式存储通常无法同时维持高帧率。
 
 ### 图像拆分
 
@@ -296,6 +300,9 @@ ros2 launch uv_bringup sim.launch.py enable_ai:=false
 
 # 开启图像转发 (调试用)
 ros2 run uv_camera uv_camera --ros-args -p stream_annotated:=false
+
+# 显式打开推流左下角 POS 叠加
+ros2 launch uv_camera perception_launch.py stream_pose_overlay:=true
 ```
 
 ---

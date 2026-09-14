@@ -4,11 +4,12 @@ The recorder deliberately stores decoded BGR frames as PNG.  PNG is lossless
 with respect to the BGR array handed to the detector; it does not attempt to
 reconstruct the original camera MJPG bitstream.
 
-Each process creates a new session directory.  A frame is first written to a
-temporary PNG, fsynced, atomically renamed into ``images/<channel>``, and only
-then appended to the fsynced JSONL manifest.  Therefore a power loss can leave
-an ignored temporary file or a final PNG, but cannot leave a manifest entry
-pointing at a partially written PNG.
+Each process creates a new session directory. A frame is first written to a
+temporary image, atomically renamed into ``images/<channel>``, and only then
+appended to the JSONL manifest. The codec remains pixel-lossless. Strict
+per-frame ``fsync`` is available for power-loss durability, but is disabled by
+default because it can reduce a high-resolution recorder to roughly one frame
+per second on embedded storage.
 """
 
 import json
@@ -48,6 +49,7 @@ class DatasetRecorder:
         submit_timeout_s: float = 1.0,
         writer_workers: int = 4,
         webp_method: int = 0,
+        fsync_each_file: bool = False,
     ):
         self._logger = logger
         self._debug_enabled = bool(debug)
@@ -55,12 +57,15 @@ class DatasetRecorder:
         self._submit_timeout_s = max(0.1, float(submit_timeout_s))
         self._writer_workers = max(1, min(8, int(writer_workers)))
         self._webp_method = max(0, min(6, int(webp_method)))
+        self._fsync_each_file = bool(fsync_each_file)
         self._root_dir = Path(root_dir).expanduser()
         self._root_dir.mkdir(parents=True, exist_ok=True)
-        self._session_dir = self._make_session_dir(self._root_dir)
+        self._session_dir = self._make_session_dir(
+            self._root_dir, sync=self._fsync_each_file)
         self._images_dir = self._session_dir / 'images'
         self._images_dir.mkdir()
-        self._fsync_directory(self._session_dir)
+        if self._fsync_each_file:
+            self._fsync_directory(self._session_dir)
         self._manifest_path = self._session_dir / 'frames.jsonl'
         self._status_path = self._session_dir / 'status.json'
         self._manifest = open(self._manifest_path, 'a', encoding='utf-8')
@@ -118,7 +123,9 @@ class DatasetRecorder:
                 'png_compression': self._png_compression,
                 'webp_method': self._webp_method,
                 'writer_workers': self._writer_workers,
+                'fsync_each_file': self._fsync_each_file,
             },
+            sync=self._fsync_each_file,
         )
         self._write_status('recording')
         self._workers = [
@@ -153,14 +160,15 @@ class DatasetRecorder:
         return self._image_format
 
     @staticmethod
-    def _make_session_dir(root_dir: Path) -> Path:
+    def _make_session_dir(root_dir: Path, sync: bool = True) -> Path:
         base = time.strftime('session_%Y%m%d_%H%M%S') + f'_{os.getpid()}'
         candidate = root_dir / base
         suffix = 1
         while True:
             try:
                 candidate.mkdir()
-                DatasetRecorder._fsync_directory(root_dir)
+                if sync:
+                    DatasetRecorder._fsync_directory(root_dir)
                 return candidate
             except FileExistsError:
                 candidate = root_dir / f'{base}_{suffix}'
@@ -175,23 +183,34 @@ class DatasetRecorder:
             os.close(fd)
 
     @staticmethod
-    def _write_bytes_fsync(path: Path, data: bytes) -> None:
+    def _write_bytes(path: Path, data: bytes, sync: bool = False) -> None:
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
         try:
             view = memoryview(data)
             while view:
                 written = os.write(fd, view)
                 view = view[written:]
-            os.fsync(fd)
+            if sync:
+                os.fsync(fd)
         finally:
             os.close(fd)
 
-    def _write_json_atomic(self, path: Path, value: Dict[str, Any]) -> None:
+    @staticmethod
+    def _write_bytes_fsync(path: Path, data: bytes) -> None:
+        DatasetRecorder._write_bytes(path, data, sync=True)
+
+    def _write_json_atomic(
+        self,
+        path: Path,
+        value: Dict[str, Any],
+        sync: bool = True,
+    ) -> None:
         data = (json.dumps(value, ensure_ascii=False, sort_keys=True) + '\n').encode('utf-8')
         tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
-        self._write_bytes_fsync(tmp, data)
+        self._write_bytes(tmp, data, sync=sync)
         os.replace(str(tmp), str(path))
-        self._fsync_directory(path.parent)
+        if sync:
+            self._fsync_directory(path.parent)
 
     def _write_status(self, state: str) -> None:
         with self._status_lock:
@@ -206,7 +225,8 @@ class DatasetRecorder:
                     'queue_depth': self._queue.qsize(),
                     'error': self._failure_reason or '',
                 }
-            self._write_json_atomic(self._status_path, payload)
+            self._write_json_atomic(
+                self._status_path, payload, sync=self._fsync_each_file)
 
     def _log_error(self, message: str) -> None:
         if self._logger is None:
@@ -335,8 +355,10 @@ class DatasetRecorder:
         write_started = time.monotonic()
         channel_dir = self._images_dir / channel
         with self._channel_dir_lock:
+            channel_exists = channel_dir.exists()
             channel_dir.mkdir(parents=True, exist_ok=True)
-            self._fsync_directory(self._images_dir)
+            if self._fsync_each_file and not channel_exists:
+                self._fsync_directory(self._images_dir)
         if self._image_format == 'webp_lossless':
             from PIL import Image
             output = io.BytesIO()
@@ -358,9 +380,10 @@ class DatasetRecorder:
         filename = f'{sequence:012d}.{extension}'
         final_path = channel_dir / filename
         tmp_path = channel_dir / f'.{filename}.{os.getpid()}.tmp.png'
-        self._write_bytes_fsync(tmp_path, data)
+        self._write_bytes(tmp_path, data, sync=self._fsync_each_file)
         os.replace(str(tmp_path), str(final_path))
-        self._fsync_directory(channel_dir)
+        if self._fsync_each_file:
+            self._fsync_directory(channel_dir)
 
         metadata = {
             'sequence': sequence,
@@ -383,7 +406,8 @@ class DatasetRecorder:
         with self._manifest_lock:
             self._manifest.write(line)
             self._manifest.flush()
-            os.fsync(self._manifest.fileno())
+            if self._fsync_each_file:
+                os.fsync(self._manifest.fileno())
         with self._state_lock:
             self._written += 1
             if self._debug_enabled:
@@ -512,8 +536,10 @@ class DatasetRecorder:
             self._log_error(f'could not write final dataset status: {status_error}')
         finally:
             try:
-                self._manifest.flush()
-                os.fsync(self._manifest.fileno())
+                with self._manifest_lock:
+                    self._manifest.flush()
+                    if self._fsync_each_file:
+                        os.fsync(self._manifest.fileno())
             except OSError as manifest_error:
                 self._log_error(
                     f'could not flush dataset manifest during shutdown: '
