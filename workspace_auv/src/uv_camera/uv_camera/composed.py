@@ -114,7 +114,12 @@ class CameraAiNode(Node):
             confidence=params['confidence'])
         self._gate = FrameGate(self.ai.process, cameras=active,
                                max_workers=2, log_warn=self._warn)
-        self.ai.load_model(params['model_path'])
+        if params['enable_ai']:
+            self.ai.load_model(params['model_path'])
+        else:
+            self.get_logger().info(
+                'YOLO detection disabled; running sensor/preview/dataset '
+                'recording only')
 
         # uv_sensor
         self.sensor = sensor_mod.Sensor(
@@ -136,11 +141,13 @@ class CameraAiNode(Node):
                 else 'preview disabled'))
         self.get_logger().info(
             f'uv_camera started: sensor(source={params["sim_mode"] and "sim" or "v4l"})'
-            f' + ai, {preview_text}')
+            f' + {"ai" if params["enable_ai"] else "recording-only"}, '
+            f'{preview_text}')
 
     # ── params ──────────────────────────────────────────────────────────
     def _declare_params(self):
         self.declare_parameter('sim_mode', False)
+        self.declare_parameter('enable_ai', True)
         self.declare_parameter('inference_fps', 5.0)
         self.declare_parameter('dataset_fps', 5.0)
         self.declare_parameter('dataset_debug', False)
@@ -179,6 +186,7 @@ class CameraAiNode(Node):
         g = self.get_parameter
         return {
             'sim_mode': g('sim_mode').value,
+            'enable_ai': _as_bool(g('enable_ai').value),
             'inference_fps': max(0.0, float(g('inference_fps').value)),
             'dataset_fps': max(0.0, float(g('dataset_fps').value)),
             'dataset_debug': _as_bool(g('dataset_debug').value),

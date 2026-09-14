@@ -86,10 +86,11 @@ go2rtc 视频流（默认端口 `1984`）：
 | `mjpeg_port` | `int` | `8090` | vision 本地 MJPEG 端口 |
 | `gortc_http_port` | `int` | `1984` | go2rtc HTTP/WebRTC 端口 |
 | `stream_annotated` | `bool` | `true` | 是否通过 go2rtc 转发带检测框的视频 |
-| `save_dataset` | `bool` | `false` | 从传感器采样并保存 YOLO 输入格式的帧 |
+| `enable_ai` | `bool` | `false` | 是否加载/运行 YOLO；关闭时仍可单独录制传感器图像 |
+| `save_dataset` | `bool` | `false` | 显式设为 `true` 后开始录制；录制默认使用 WebP 无损格式和诊断日志 |
 | `dataset_fps` | `float` | `5.0` | 数据集采集频率，按相机计；独立于 YOLO 推理频率 |
 | `dataset_dir` | `str` | `/workspace/records/datasets` | 数据集根目录 |
-| `dataset_format` | `str` | `png` | PNG 无损；也可选 `webp_lossless`，但编码速度较慢 |
+| `dataset_format` | `str` | `webp_lossless` | WebP 无损；也可选 `png`，PNG 通常编码更快但占用空间更大 |
 | `dataset_queue_size` | `int` | `32` | 写盘队列深度，满时背压 |
 
 ### 图像拆分
@@ -262,6 +263,13 @@ PositionNode 使用 `robot_x/y/z` 和 `robot_yaw`（度）作为射线原点。
 
 ```bash
 ros2 launch uv_camera perception_launch.py
+
+# 开启录制后，默认使用 dataset_format=webp_lossless、dataset_debug=true
+ros2 launch uv_camera perception_launch.py save_dataset:=true
+
+# 只录制原始传感器图像，不加载 YOLO
+ros2 launch uv_camera perception_launch.py \
+  enable_ai:=false save_dataset:=true dataset_format:=png
 ```
 
 ### 作为仿真/实车的一部分

@@ -2,9 +2,12 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _as_bool(value):
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 def generate_launch_description():
@@ -30,6 +33,8 @@ def generate_launch_description():
     object_localizer_params = LaunchConfiguration("object_localizer_params")
 
     def _nodes(context):
+        ai_enabled = _as_bool(enable_ai.perform(context))
+        recording_enabled = _as_bool(save_dataset.perform(context))
         profile = profile_params.perform(context).strip()
         localizer_config = object_localizer_params.perform(context).strip()
 
@@ -62,37 +67,39 @@ def generate_launch_description():
         if localizer_config:
             localizer_parameters.append(localizer_config)
 
-        return [
-            Node(
+        nodes = []
+        # Recording consumes the sensor stream before the YOLO FrameGate, so
+        # it must be possible to run uv_camera without enabling detection.
+        if ai_enabled or recording_enabled:
+            nodes.append(Node(
                 package="uv_camera",
                 executable="uv_camera",
                 name="uv_camera",
                 exec_name="uv_camera",
                 output="both",
                 parameters=vision_parameters,
-                condition=IfCondition(enable_ai),
                 respawn=True,
                 respawn_delay=1.0,
-            ),
-            Node(
+            ))
+        if ai_enabled:
+            nodes.append(Node(
                 package="uv_camera",
                 executable="object_localizer",
                 name="object_localizer",
                 exec_name="object_localizer",
                 output="both",
                 parameters=localizer_parameters,
-                condition=IfCondition(enable_ai),
                 respawn=True,
                 respawn_delay=1.0,
-            ),
-        ]
+            ))
+        return nodes
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_ai", default_value="false"),
         DeclareLaunchArgument("sim_mode", default_value="false"),
         DeclareLaunchArgument("inference_fps", default_value="5.0"),
         DeclareLaunchArgument("dataset_fps", default_value="5.0"),
-        DeclareLaunchArgument("dataset_debug", default_value="false"),
+        DeclareLaunchArgument("dataset_debug", default_value="true"),
         DeclareLaunchArgument("dataset_debug_period_sec", default_value="1.0"),
         DeclareLaunchArgument("inference_threads", default_value="2"),
         DeclareLaunchArgument("confidence", default_value="0.8"),
@@ -105,7 +112,7 @@ def generate_launch_description():
         DeclareLaunchArgument("dataset_dir", default_value="/workspace/records/datasets"),
         DeclareLaunchArgument("dataset_queue_size", default_value="32"),
         DeclareLaunchArgument("dataset_png_compression", default_value="1"),
-        DeclareLaunchArgument("dataset_format", default_value="png"),
+        DeclareLaunchArgument("dataset_format", default_value="webp_lossless"),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument("object_localizer_params", default_value=""),
         OpaqueFunction(function=_nodes),
