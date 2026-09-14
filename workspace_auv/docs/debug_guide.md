@@ -142,7 +142,61 @@ ros2 run uv_control basic_motion --ros-args --log-level debug
 
 ## 仿真调试
 
-### 启动仿真
+### 完整执行 RoboCup 任务
+
+下面的命令会重新构建两个工作空间，并启动 `robotcup` 分支当前的完整任务链：Stonefish、`sim_bridge`、运动控制和 `uv_task`。当前分支的默认比赛场景包含相机传感器，因此即使关闭 AI，也必须使用 GPU 模式；`LIBGL_ALWAYS_SOFTWARE=1` 可在没有可用 NVIDIA 驱动时使用软件 OpenGL。
+
+```bash
+REPO_ROOT=/home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System
+
+source /opt/ros/humble/setup.bash
+
+# 准备工作空间 Python 运行时（首次运行或 NumPy 缺失时安装）
+if ! "$REPO_ROOT/workspace_auv/.venv/bin/python" -c 'import numpy' >/dev/null 2>&1; then
+  bash "$REPO_ROOT/scripts/setup_workspace_python.sh"
+fi
+export PATH="$REPO_ROOT/workspace_auv/.venv/bin:$PATH"
+
+# 构建 AUV 控制栈
+cd "$REPO_ROOT/workspace_auv"
+colcon build --symlink-install
+source install/setup.bash
+
+# 构建仿真栈
+cd "$REPO_ROOT/workspace_sim"
+colcon build --symlink-install
+source install/setup.bash
+
+# 启动当前 RoboCup 任务链
+cd "$REPO_ROOT"
+mkdir -p /tmp/auv_ros_log
+ROS_LOG_DIR=/tmp/auv_ros_log \
+ROS_LOCALHOST_ONLY=1 \
+LIBGL_ALWAYS_SOFTWARE=1 \
+ros2 launch uv_bringup sim.launch.py \
+  profile:=sim_dev \
+  gpu:=true \
+  gpu_backend:=system \
+  enable_ai:=false \
+  enable_nav:=false \
+  enable_task:=true \
+  enable_preview:=false \
+  scenario_desc:=guoshui_2026_cruise.scn \
+  mission_file:="$REPO_ROOT/workspace_auv/src/uv_task/config/missions/robocup_26.yaml"
+```
+
+任务启动后可在另一个终端查看任务状态：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System/workspace_auv/install/setup.bash
+source /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System/workspace_sim/install/setup.bash
+ros2 topic echo /task/status
+```
+
+按 `Ctrl+C` 会停止整套仿真和任务节点。
+
+### 快速启动仿真
 
 ```bash
 cd workspace_sim

@@ -4,14 +4,18 @@ from setuptools import setup
 
 package_name = 'uv_camera'
 
+weight_files = [
+    path for path in (
+        'weights/robotcup20260901.pt',
+        'weights/robotcup20260901.yaml',
+    ) if os.path.isfile(path)
+]
+
 data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml', 'GO2RTC.md']),
     ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
-    ('share/' + package_name + '/weights', [
-        'weights/robotcup20260901.pt',
-        'weights/robotcup20260901.yaml',
-    ]),
+    ('share/' + package_name + '/weights', weight_files),
     ('share/' + package_name + '/config', [
         'config/front.npz', 'config/down.npz',
         'config/robotcup_front.npz', 'config/robotcup_down.npz',

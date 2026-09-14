@@ -1,0 +1,2073 @@
+<?xml version='1.0' encoding='utf-8'?>
+<scenario>
+	<environment>
+		<ned latitude="31.2304" longitude="121.4737" />
+		<ocean>
+			<water density="1000.0" jerlov="0.1012" />
+			<waves height="0.0" />
+			<current type="uniform">
+				<velocity xyz="0.0 0.0 0.0" />
+			</current>
+		</ocean>
+		<atmosphere>
+			<sun azimuth="257.081" elevation="61.494" gain="4.310" />
+		</atmosphere>
+	</environment>
+	<materials>
+		<material name="Neutral" density="1000.0" restitution="0.5" />
+		<material name="Concrete" density="2400.0" restitution="0.2" />
+		<material name="PVC" density="1380.0" restitution="0.3" />
+		<material name="Plastic" density="1100.0" restitution="0.3" />
+		<material name="SeaCucumber" density="1150.0" restitution="0.25" />
+		<friction_table>
+			<friction material1="Neutral" material2="Neutral" static="0.4" dynamic="0.2" />
+			<friction material1="Neutral" material2="Concrete" static="0.3" dynamic="0.2" />
+			<friction material1="Neutral" material2="PVC" static="0.4" dynamic="0.2" />
+			<friction material1="Neutral" material2="Plastic" static="0.4" dynamic="0.2" />
+			<friction material1="Neutral" material2="SeaCucumber" static="0.4" dynamic="0.2" />
+			<friction material1="Concrete" material2="Concrete" static="0.8" dynamic="0.7" />
+			<friction material1="PVC" material2="PVC" static="0.5" dynamic="0.4" />
+			<friction material1="Plastic" material2="Plastic" static="0.5" dynamic="0.4" />
+			<friction material1="SeaCucumber" material2="SeaCucumber" static="0.5" dynamic="0.3" />
+		</friction_table>
+	</materials>
+	<looks>
+		<look name="pool_floor" gray="1.0" roughness="0.65" texture="OIP_floor_tiled.png" />
+		<look name="pool_wall" gray="1.0" roughness="0.45" texture="OIP_wall_tiled.png" />
+		<look name="floor_marking" rgb="0.12 0.12 0.12" roughness="0.45" />
+		<look name="frame" rgb="0.92 0.92 0.92" roughness="0.45" />
+		<look name="red" rgb="0.95 0.04 0.04" roughness="0.3" />
+		<look name="green" rgb="0.10 0.72 0.18" roughness="0.3" />
+		<look name="yellow" rgb="1.0 0.78 0.0" roughness="0.3" />
+		<look name="orange" rgb="1.0 0.26 0.02" roughness="0.32" />
+		<look name="black" rgb="0.015 0.015 0.015" roughness="0.45" />
+		<look name="white" rgb="0.98 0.98 0.98" roughness="0.25" />
+		<look name="purple" rgb="0.45 0.08 0.70" roughness="0.35" />
+		<look name="sea_cucumber" rgb="0.38 0.18 0.06" roughness="0.75" />
+		<look name="turtle" rgb="0.15 0.45 0.20" roughness="0.65" />
+		<look name="starfish" rgb="0.85 0.24 0.06" roughness="0.65" />
+		<look name="turntable" rgb="0.55 0.55 0.58" roughness="0.48" />
+		<look name="traffic_cone" rgb="1.0 1.0 1.0" roughness="0.32" texture="traffic_cone.png" />
+		<look name="aruco_tag" rgb="1.0 1.0 1.0" roughness="0.3" texture="aruco_4x4_id0.png" />
+	</looks>
+	<!-- NED pool bounds: south-west (-1.25,-9.0), north-east (5.0,1.25). -->
++	<!-- 13 x 20 floor mosaic; each tile is about 0.5 m x 0.5 m. -->
+	<static name="PoolBottomTile00_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile00_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.0096 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile01_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.5288 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile02_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-0.0481 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile03_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.4327 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile04_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.9135 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile05_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.3942 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile06_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile07_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.3558 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile08_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.8365 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile09_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.3173 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile10_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="3.7981 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile11_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.2788 0.9937 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_00" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -8.7438 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_01" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -8.2312 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_02" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -7.7188 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_03" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -7.2063 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_04" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -6.6937 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_05" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -6.1813 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_06" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -5.6688 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_07" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -5.1563 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_08" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -4.6438 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_09" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -4.1313 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_10" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -3.6188 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_11" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -3.1063 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_12" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -2.5938 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_13" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -2.0813 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_14" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -1.5688 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_15" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -1.0563 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_16" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -0.5438 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_17" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 -0.0313 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_18" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 0.4812 2.0200" />
+	</static>
+	<static name="PoolBottomTile12_19" type="box">
+		<dimensions xyz="0.4808 0.5125 0.04" />
+		<material name="Concrete" />
+		<look name="pool_floor" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="4.7596 0.9937 2.0200" />
+	</static>
+	<static name="PoolWallNorth" type="box">
+		<dimensions xyz="0.20 10.25 2.0" />
+		<material name="Concrete" />
+		<look name="pool_wall" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="5.10 -3.8750 1.0" />
+	</static>
+	<static name="PoolWallSouth" type="box">
+		<dimensions xyz="0.20 10.25 2.0" />
+		<material name="Concrete" />
+		<look name="pool_wall" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="-1.35 -3.8750 1.0" />
+	</static>
+	<static name="PoolWallEast" type="box">
+		<dimensions xyz="6.25 0.20 2.0" />
+		<material name="Concrete" />
+		<look name="pool_wall" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 1.35 1.0" />
+	</static>
+	<static name="PoolWallWest" type="box">
+		<dimensions xyz="6.25 0.20 2.0" />
+		<material name="Concrete" />
+		<look name="pool_wall" />
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.8750 -9.10 1.0" />
+	</static>
+	<!-- Start/end area: center (0,0), north/east dimensions 1.25 m by 1.25 m. -->
+	<static name="StartNorth" type="box">
+		<dimensions xyz="0.035 1.25 0.012" />
+		<material name="PVC" />
+		<look name="green" />
+		<world_transform xyz="0.625 0.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="StartSouth" type="box">
+		<dimensions xyz="0.035 1.25 0.012" />
+		<material name="PVC" />
+		<look name="green" />
+		<world_transform xyz="-0.625 0.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="StartEast" type="box">
+		<dimensions xyz="1.25 0.035 0.012" />
+		<material name="PVC" />
+		<look name="green" />
+		<world_transform xyz="0.0 0.625 1.992" rpy="0 0 0" />
+	</static>
+	<static name="StartWest" type="box">
+		<dimensions xyz="1.25 0.035 0.012" />
+		<material name="PVC" />
+		<look name="green" />
+		<world_transform xyz="0.0 -0.625 1.992" rpy="0 0 0" />
+	</static>
+	<!-- Breeding area: corrected center (4,0), dimensions 1.0 m by 1.0 m. -->
+	<static name="BreedingNorth" type="box">
+		<dimensions xyz="0.035 1.0 0.012" />
+		<material name="PVC" />
+		<look name="purple" />
+		<world_transform xyz="4.50 0.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="BreedingSouth" type="box">
+		<dimensions xyz="0.035 1.0 0.012" />
+		<material name="PVC" />
+		<look name="purple" />
+		<world_transform xyz="3.50 0.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="BreedingEast" type="box">
+		<dimensions xyz="1.0 0.035 0.012" />
+		<material name="PVC" />
+		<look name="purple" />
+		<world_transform xyz="4.0 0.5 1.992" rpy="0 0 0" />
+	</static>
+	<static name="BreedingWest" type="box">
+		<dimensions xyz="1.0 0.035 0.012" />
+		<material name="PVC" />
+		<look name="purple" />
+		<world_transform xyz="4.0 -0.5 1.992" rpy="0 0 0" />
+	</static>
+	<!-- Five dynamic sea cucumbers. Their rigid compound shape is intended for gripper tests. -->
+	<dynamic name="SeaCucumber00" type="compound" physics="submerged" buoyant="false">
+		<external_part name="Body" type="cylinder" physics="submerged" buoyant="false">
+			<dimensions radius="0.075" height="0.30" />
+			<origin xyz="0 0 0" rpy="1.5708 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.045" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Head" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 -0.16 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Tail" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0.16 0" rpy="0 0 0" />
+		</external_part>
+		<world_transform xyz="3.73 -0.22 2.085" rpy="0 0 0.25" />
+	</dynamic>
+	<dynamic name="SeaCucumber01" type="compound" physics="submerged" buoyant="false">
+		<external_part name="Body" type="cylinder" physics="submerged" buoyant="false">
+			<dimensions radius="0.075" height="0.30" />
+			<origin xyz="0 0 0" rpy="1.5708 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.045" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Head" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 -0.16 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Tail" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0.16 0" rpy="0 0 0" />
+		</external_part>
+		<world_transform xyz="3.88 0.20 2.085" rpy="0 0 -0.40" />
+	</dynamic>
+	<dynamic name="SeaCucumber02" type="compound" physics="submerged" buoyant="false">
+		<external_part name="Body" type="cylinder" physics="submerged" buoyant="false">
+			<dimensions radius="0.075" height="0.30" />
+			<origin xyz="0 0 0" rpy="1.5708 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.045" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Head" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 -0.16 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Tail" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0.16 0" rpy="0 0 0" />
+		</external_part>
+		<world_transform xyz="4.07 -0.24 2.085" rpy="0 0 1.05" />
+	</dynamic>
+	<dynamic name="SeaCucumber03" type="compound" physics="submerged" buoyant="false">
+		<external_part name="Body" type="cylinder" physics="submerged" buoyant="false">
+			<dimensions radius="0.075" height="0.30" />
+			<origin xyz="0 0 0" rpy="1.5708 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.045" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Head" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 -0.16 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Tail" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0.16 0" rpy="0 0 0" />
+		</external_part>
+		<world_transform xyz="4.25 0.16 2.085" rpy="0 0 -1.10" />
+	</dynamic>
+	<dynamic name="SeaCucumber04" type="compound" physics="submerged" buoyant="false">
+		<external_part name="Body" type="cylinder" physics="submerged" buoyant="false">
+			<dimensions radius="0.075" height="0.30" />
+			<origin xyz="0 0 0" rpy="1.5708 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.045" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Head" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 -0.16 0" rpy="0 0 0" />
+		</external_part>
+		<external_part name="Tail" type="sphere" physics="submerged" buoyant="false">
+			<dimensions radius="0.078" />
+			<origin xyz="0 0 0" rpy="0 0 0" />
+			<material name="SeaCucumber" />
+			<mass value="0.012" />
+			<look name="sea_cucumber" />
+			<compound_transform xyz="0 0.16 0" rpy="0 0 0" />
+		</external_part>
+		<world_transform xyz="4.17 0.36 2.085" rpy="0 0 0.72" />
+	</dynamic>
+	<!-- Simple static decoys mentioned by the rules; they are not valid sea-cucumber targets. -->
+	<static name="SeaTurtleDecoyBody" type="sphere">
+		<dimensions radius="0.14" />
+		<material name="Plastic" />
+		<look name="turtle" />
+		<world_transform xyz="4.35 0.34 2.14" rpy="0 0 0" />
+	</static>
+	<static name="SeaTurtleDecoyHead" type="sphere">
+		<dimensions radius="0.055" />
+		<material name="Plastic" />
+		<look name="turtle" />
+		<world_transform xyz="4.35 0.20 2.14" rpy="0 0 0" />
+	</static>
+	<static name="SeaTurtleDecoyFlipperA" type="box">
+		<dimensions xyz="0.18 0.035 0.035" />
+		<material name="Plastic" />
+		<look name="turtle" />
+		<world_transform xyz="4.25 0.42 2.14" rpy="0 0 -0.45" />
+	</static>
+	<static name="SeaTurtleDecoyFlipperB" type="box">
+		<dimensions xyz="0.18 0.035 0.035" />
+		<material name="Plastic" />
+		<look name="turtle" />
+		<world_transform xyz="4.45 0.42 2.14" rpy="0 0 0.45" />
+	</static>
+	<static name="SeaStarDecoyBody" type="sphere">
+		<dimensions radius="0.11" />
+		<material name="Plastic" />
+		<look name="starfish" />
+		<world_transform xyz="4.35 -0.35 2.12" rpy="0 0 0" />
+	</static>
+	<static name="SeaStarDecoyArmA" type="box">
+		<dimensions xyz="0.28 0.035 0.025" />
+		<material name="Plastic" />
+		<look name="starfish" />
+		<world_transform xyz="4.35 -0.35 2.12" rpy="0 0 0" />
+	</static>
+	<static name="SeaStarDecoyArmB" type="box">
+		<dimensions xyz="0.28 0.035 0.025" />
+		<material name="Plastic" />
+		<look name="starfish" />
+		<world_transform xyz="4.35 -0.35 2.12" rpy="0 0 1.2566" />
+	</static>
+	<static name="SeaStarDecoyArmC" type="box">
+		<dimensions xyz="0.28 0.035 0.025" />
+		<material name="Plastic" />
+		<look name="starfish" />
+		<world_transform xyz="4.35 -0.35 2.12" rpy="0 0 2.5133" />
+	</static>
+	<!-- AprilTag: center (1.5,-2), 0.30 m square, horizontal on the pool floor. -->
+	<static name="AprilTagPlate" type="box">
+		<dimensions xyz="0.30 0.30 0.012" />
+		<material name="Plastic" />
+		<look name="white" />
+		<world_transform xyz="1.50 -2.00 1.994" rpy="0 0 0" />
+	</static>
+	<static name="AprilTagCode" type="model">
+		<physical>
+			<mesh filename="aruco_marker_horizontal_uv.obj" scale="1.36" />
+			<origin rpy="0 0 0" xyz="0 0 0" />
+		</physical>
+		<material name="Plastic" />
+		<look name="aruco_tag" />
+		<world_transform xyz="1.50 -2.00 1.984" rpy="0 0 0" />
+	</static>
+	<!-- Central mapping area: center (2,-4), dimensions 2 m by 2 m. -->
+	<static name="MapGridSouthYellow" type="box">
+		<dimensions xyz="0.035 2.0 0.012" />
+		<material name="PVC" />
+		<look name="yellow" />
+		<world_transform xyz="1.0 -4.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="MapGridNorth" type="box">
+		<dimensions xyz="0.035 2.0 0.012" />
+		<material name="PVC" />
+		<look name="floor_marking" />
+		<world_transform xyz="3.0 -4.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="MapGridWest" type="box">
+		<dimensions xyz="2.0 0.035 0.012" />
+		<material name="PVC" />
+		<look name="floor_marking" />
+		<world_transform xyz="2.0 -5.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="MapGridEast" type="box">
+		<dimensions xyz="2.0 0.035 0.012" />
+		<material name="PVC" />
+		<look name="floor_marking" />
+		<world_transform xyz="2.0 -3.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="MapGridRow01" type="box">
+		<dimensions xyz="2.0 0.020 0.012" />
+		<material name="PVC" />
+		<look name="floor_marking" />
+		<world_transform xyz="2.0 -4.3333 1.992" rpy="0 0 0" />
+	</static>
+	<static name="MapGridRow02" type="box">
+		<dimensions xyz="2.0 0.020 0.012" />
+		<material name="PVC" />
+		<look name="floor_marking" />
+		<world_transform xyz="2.0 -3.6667 1.992" rpy="0 0 0" />
+	</static>
+	<static name="MapGridCol01" type="box">
+		<dimensions xyz="0.020 2.0 0.012" />
+		<material name="PVC" />
+		<look name="floor_marking" />
+		<world_transform xyz="1.6667 -4.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="MapGridCol02" type="box">
+		<dimensions xyz="0.020 2.0 0.012" />
+		<material name="PVC" />
+		<look name="floor_marking" />
+		<world_transform xyz="2.3333 -4.0 1.992" rpy="0 0 0" />
+	</static>
+	<!-- Four cones occupy unique cells in the default layout. The randomizer changes these transforms. -->
+	<static name="TrafficConeRound00" type="model">
+		<physical>
+			<mesh filename="cone.obj" scale="0.30" />
+			<origin rpy="0 0 0" xyz="0 0 0" />
+		</physical>
+		<material name="Plastic" />
+		<look name="traffic_cone" />
+		<world_transform xyz="2.0118 -4.0326 2.0000" rpy="3.1416 0.0 2.77964" />
+	</static>
+	<static name="TrafficConeRound01" type="model">
+		<physical>
+			<mesh filename="cone.obj" scale="0.30" />
+			<origin rpy="0 0 0" xyz="0 0 0" />
+		</physical>
+		<material name="Plastic" />
+		<look name="traffic_cone" />
+		<world_transform xyz="2.6818 -3.3556 2.0000" rpy="3.1416 0.0 -2.33063" />
+	</static>
+	<static name="TrafficConeSquare00" type="model">
+		<physical>
+			<mesh filename="square_cone.obj" scale="0.30" />
+			<origin rpy="0 0 0" xyz="0 0 0" />
+		</physical>
+		<material name="Plastic" />
+		<look name="traffic_cone" />
+		<world_transform xyz="1.9596 -4.6515 2.0000" rpy="3.1416 0.0 1.71652" />
+	</static>
+	<static name="TrafficConeSquare01" type="model">
+		<physical>
+			<mesh filename="square_cone.obj" scale="0.30" />
+			<origin rpy="0 0 0" xyz="0 0 0" />
+		</physical>
+		<material name="Plastic" />
+		<look name="traffic_cone" />
+		<world_transform xyz="2.0225 -3.3269 2.0000" rpy="3.1416 0.0 3.10875" />
+	</static>
+	<static name="TrafficConeRoundBand00" type="cylinder">
+		<dimensions radius="0.105" height="0.035" />
+		<material name="Plastic" />
+		<look name="black" />
+		<world_transform xyz="2.0118 -4.0326 1.9825" rpy="0.0 0.0 2.77964" />
+	</static>
+	<static name="TrafficConeRoundBand01" type="cylinder">
+		<dimensions radius="0.105" height="0.035" />
+		<material name="Plastic" />
+		<look name="black" />
+		<world_transform xyz="2.6818 -3.3556 1.9825" rpy="0.0 0.0 -2.33063" />
+	</static>
+	<static name="TrafficConeSquareBand00" type="box">
+		<dimensions xyz="0.235 0.235 0.035" />
+		<material name="Plastic" />
+		<look name="black" />
+		<world_transform xyz="1.9596 -4.6515 1.9825" rpy="0.0 0.0 1.71652" />
+	</static>
+	<static name="TrafficConeSquareBand01" type="box">
+		<dimensions xyz="0.235 0.235 0.035" />
+		<material name="Plastic" />
+		<look name="black" />
+		<world_transform xyz="2.0225 -3.3269 1.9825" rpy="0.0 0.0 3.10875" />
+	</static>
+	<!-- Collection area: assumed center (-0.50,-7.25), dimensions 1.0 m by 1.5 m because the prompt omitted its center. -->
+	<static name="CollectionNorth" type="box">
+		<dimensions xyz="0.035 1.5 0.012" />
+		<material name="PVC" />
+		<look name="red" />
+		<world_transform xyz="0.0 -7.25 1.992" rpy="0 0 0" />
+	</static>
+	<static name="CollectionSouth" type="box">
+		<dimensions xyz="0.035 1.5 0.012" />
+		<material name="PVC" />
+		<look name="red" />
+		<world_transform xyz="-1.0 -7.25 1.992" rpy="0 0 0" />
+	</static>
+	<static name="CollectionEast" type="box">
+		<dimensions xyz="1.0 0.035 0.012" />
+		<material name="PVC" />
+		<look name="red" />
+		<world_transform xyz="-0.5 -6.50 1.992" rpy="0 0 0" />
+	</static>
+	<static name="CollectionWest" type="box">
+		<dimensions xyz="1.0 0.035 0.012" />
+		<material name="PVC" />
+		<look name="red" />
+		<world_transform xyz="-0.5 -8.00 1.992" rpy="0 0 0" />
+	</static>
+	<!-- Turntable area: corrected center (4,-8), dimensions 1.0 m by 1.5 m. -->
+	<static name="TurntableNorth" type="box">
+		<dimensions xyz="0.035 1.5 0.012" />
+		<material name="PVC" />
+		<look name="white" />
+		<world_transform xyz="4.50 -8.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="TurntableSouth" type="box">
+		<dimensions xyz="0.035 1.5 0.012" />
+		<material name="PVC" />
+		<look name="white" />
+		<world_transform xyz="3.50 -8.0 1.992" rpy="0 0 0" />
+	</static>
+	<static name="TurntableEast" type="box">
+		<dimensions xyz="1.0 0.035 0.012" />
+		<material name="PVC" />
+		<look name="white" />
+		<world_transform xyz="4.0 -7.25 1.992" rpy="0 0 0" />
+	</static>
+	<static name="TurntableWest" type="box">
+		<dimensions xyz="1.0 0.035 0.012" />
+		<material name="PVC" />
+		<look name="white" />
+		<world_transform xyz="4.0 -8.75 1.992" rpy="0 0 0" />
+	</static>
+	<static name="TurntableDisk" type="cylinder">
+		<dimensions radius="0.43" height="0.025" />
+		<material name="Plastic" />
+		<look name="turntable" />
+		<world_transform xyz="4.0 -8.0 1.987" rpy="0 0 0" />
+	</static>
+	<static name="TurntableYellowTape" type="box">
+		<dimensions xyz="0.07 0.72 0.010" />
+		<material name="Plastic" />
+		<look name="yellow" />
+		<world_transform xyz="4.0 -8.0 1.968" rpy="0 0 0" />
+	</static>
+	<static name="TurntableRedCenter" type="cylinder">
+		<dimensions radius="0.075" height="0.012" />
+		<material name="Plastic" />
+		<look name="red" />
+		<world_transform xyz="4.0 -8.0 1.960" rpy="0 0 0" />
+	</static>
+	<include file="xunyun_fixed.scn">
+		<arg name="robot_name" value="XUNYUN" />
+		<arg name="robot_position" value="0.0 0.0 0.10" />
+		<arg name="robot_orientation" value="0.0 0.0 0.0" />
+	</include>
+</scenario>
