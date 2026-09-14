@@ -82,7 +82,7 @@ def generate_launch_description():
         ]
 
     return LaunchDescription([
-        DeclareLaunchArgument("enable_ai", default_value="true"),
+        DeclareLaunchArgument("enable_ai", default_value="false"),
         DeclareLaunchArgument("sim_mode", default_value="false"),
         DeclareLaunchArgument("inference_fps", default_value="5.0"),
         DeclareLaunchArgument("inference_threads", default_value="2"),
