@@ -1,0 +1,165 @@
+platform: xunyun
+source_scene: workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn
+convention: 'T_<a>_<b> maps a point from frame b into frame a; frames: b=Vehicle/base_link (body, x fwd/y stbd/z down), c=front_cam_left optical, gyro=imu_filter, dvl=dvl sensor'
+truth: derived by tools/derive_extrinsics.py; do not edit by hand
+sensors:
+  dynamics:
+    type: odometry
+    link: Vehicle
+    xyz: [0.0, 0.0, 0.0]
+    rpy_rad: [0.0, 0.0, -2.65359e-06]
+    rate_hz: 30.0
+    ros_publisher:
+      topic: /auv/odometry
+  pressure:
+    type: pressure
+    link: Vehicle
+    xyz: [-0.24, 0.175, -0.2]
+    rpy_rad: [0.0, 0.0, -2.65359e-06]
+    rate_hz: 5.0
+    ros_publisher:
+      topic: /auv/pressure
+  dvl:
+    type: dvl
+    link: Vehicle
+    xyz: [-0.375, 0.0, 0.1]
+    rpy_rad: [0.0, 0.0, 0.0]
+    rate_hz: 20.0
+    ros_publisher:
+      topic: /auv/dvl
+      altitude_topic: /auv/dvl_altitude
+    specs:
+      beam_angle: '30.0'
+      beam_positive_z: 'true'
+    beam_angle_deg: 30.0
+    alpha_deg: 60.0
+    beta_deg: [45.0, 135.0, 225.0, 315.0]
+  imu_filter:
+    type: imu
+    link: Vehicle
+    xyz: [0.0, 0.0, 0.0]
+    rpy_rad: [0.0, 0.0, -2.65359e-06]
+    rate_hz: 200.0
+    ros_publisher:
+      topic: /auv/imu
+  front_cam_left:
+    type: camera
+    link: Vehicle
+    xyz: [0.23, -0.05, 0.076]
+    rpy_rad: [1.5708, 0.0, 1.5708]
+    rate_hz: 20.0
+    ros_publisher:
+      topic: /sim/front_cam/left
+    specs:
+      resolution_x: '1280'
+      resolution_y: '960'
+      horizontal_fov: '57.19'
+  front_cam_right:
+    type: camera
+    link: Vehicle
+    xyz: [0.23, 0.05, 0.076]
+    rpy_rad: [1.5708, 0.0, 1.5708]
+    rate_hz: 20.0
+    ros_publisher:
+      topic: /sim/front_cam/right
+    specs:
+      resolution_x: '1280'
+      resolution_y: '960'
+      horizontal_fov: '57.19'
+  down_cam_left:
+    type: camera
+    link: Vehicle
+    xyz: [-0.13, -0.05, 0.0645]
+    rpy_rad: [0.0, 0.0, 1.5708]
+    rate_hz: 30.0
+    ros_publisher:
+      topic: /sim/down_cam/left
+    specs:
+      resolution_x: '1920'
+      resolution_y: '1080'
+      horizontal_fov: '87.19'
+  down_cam_right:
+    type: camera
+    link: Vehicle
+    xyz: [-0.13, 0.05, 0.0645]
+    rpy_rad: [0.0, 0.0, 1.5708]
+    rate_hz: 30.0
+    ros_publisher:
+      topic: /sim/down_cam/right
+    specs:
+      resolution_x: '1920'
+      resolution_y: '1080'
+      horizontal_fov: '87.19'
+transforms:
+  T_b_dynamics:
+    matrix:
+    - [1.0, 2.654e-06, 0.0, 0.0]
+    - [-2.654e-06, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_pressure:
+    matrix:
+    - [1.0, 2.654e-06, 0.0, -0.24]
+    - [-2.654e-06, 1.0, 0.0, 0.175]
+    - [0.0, 0.0, 1.0, -0.2]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_dvl:
+    matrix:
+    - [1.0, 0.0, 0.0, -0.375]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.1]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_imu_filter:
+    matrix:
+    - [1.0, 2.654e-06, 0.0, 0.0]
+    - [-2.654e-06, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_front_cam_left:
+    matrix:
+    - [-3.673e-06, 3.673e-06, 1.0, 0.23]
+    - [1.0, 0.0, 3.673e-06, -0.05]
+    - [0.0, 1.0, -3.673e-06, 0.076]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_front_cam_right:
+    matrix:
+    - [-3.673e-06, 3.673e-06, 1.0, 0.23]
+    - [1.0, 0.0, 3.673e-06, 0.05]
+    - [0.0, 1.0, -3.673e-06, 0.076]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_down_cam_left:
+    matrix:
+    - [-3.673e-06, -1.0, 0.0, -0.13]
+    - [1.0, -3.673e-06, 0.0, -0.05]
+    - [0.0, 0.0, 1.0, 0.0645]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_down_cam_right:
+    matrix:
+    - [-3.673e-06, -1.0, 0.0, -0.13]
+    - [1.0, -3.673e-06, 0.0, 0.05]
+    - [0.0, 0.0, 1.0, 0.0645]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_gyro_c:
+    matrix:
+    - [-6.327e-06, 3.673e-06, 1.0, 0.230000133]
+    - [1.0, 0.0, 6.327e-06, -0.04999939]
+    - [0.0, 1.0, -3.673e-06, 0.076]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_dvl_c:
+    matrix:
+    - [-3.673e-06, 3.673e-06, 1.0, 0.605]
+    - [1.0, 0.0, 3.673e-06, -0.05]
+    - [0.0, 1.0, -3.673e-06, -0.024]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_c:
+    matrix:
+    - [-3.673e-06, 3.673e-06, 1.0, 0.23]
+    - [1.0, 0.0, 3.673e-06, -0.05]
+    - [0.0, 1.0, -3.673e-06, 0.076]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_c_b:
+    matrix:
+    - [-3.673e-06, 1.0, 0.0, 0.050000845]
+    - [3.673e-06, 0.0, 1.0, -0.076000845]
+    - [1.0, 3.673e-06, -3.673e-06, -0.229999537]
+    - [0.0, 0.0, 0.0, 1.0]

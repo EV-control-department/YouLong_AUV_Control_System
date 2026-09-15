@@ -26,6 +26,12 @@ from uv_msgs.msg import DetectionArray, ObjectPosition, ObjectPositionArray, Pos
 # Each camera has its own body offset; optical_to_body is shared per pair.
 # 注意：hfov 是场景里相机的水平视场角，fx 由 width/hfov 现算；
 # 新摄像头重新标定后，实机应改读真实 K（尤其是 cx/cy 与实际分辨率）。
+#
+# N1（2026-09-15 已决）：下面的 offset z（前视 0.076、下视 0.0645）是**权威值**——
+#   本文件、line_follower.py、arrow_surfacer.py 三个模块与 docs/perception.md 都用它；
+#   仿真场景 xunyun_fixed.scn 原先写 0.276/0.2645（多算 0.2 m），已改齐到这里。
+#   offset 直接决定射线原点（见 _pose_cb / 多射线交会），改它必须同步改场景并重跑
+#   `python3 workspace_sim/tools/derive_extrinsics.py --out` + pytest。
 CAM_PARAMS = {
     'front_left': {
         'width': 1280, 'height': 960, 'hfov': 57.19,

@@ -92,13 +92,19 @@ PID_OPTIONAL_FIELDS = ('z_thrust_ff',)
 
 # Used when the external file is missing or unreadable; keeps the SIL stack
 # runnable instead of failing at startup.
+# Last-resort defaults, kept in step with the shipped config/sim_pid.yaml.
+# The file always wins when it is readable (see resolve_pid_config_path); these
+# values only appear when no file is found at all, in which case the loader logs
+# a warning.  They are a **mirror** of the last known tuning, not a second place
+# to tune: edit sim_pid.yaml, then refresh these (or leave them slightly stale --
+# only a completely missing file reaches them).
 DEFAULT_PID_PARAMS = {
     'chassis.pid.pos.x': {'kp': 800.0, 'ki': 130.0, 'kd': 200.0, 'i_limit': 1000.0},
     'chassis.pid.pos.y': {'kp': 600.0, 'ki': 120.0, 'kd': 150.0, 'i_limit': 1000.0},
     'chassis.pid.pos.z': {'kp': 600.0, 'ki': 80.0, 'kd': 800.0, 'i_limit': 6200.0,
                           'z_thrust_ff': 0.0},
-    'chassis.pid.pos.yaw': {'kp': 1.5, 'ki': 1.0, 'kd': 0.1, 'i_limit': 30.0},
-    'chassis.pid.pos.yaw_rate': {'kp': 30.0, 'ki': 20.0, 'kd': 1.0, 'i_limit': 600.0},
+    'chassis.pid.pos.yaw': {'kp': 10.0, 'ki': 1.0, 'kd': 0.0, 'i_limit': 30.0},
+    'chassis.pid.pos.yaw_rate': {'kp': 5.3, 'ki': 0.0, 'kd': 0.7, 'i_limit': 6.0},
     'chassis.pid.vel.x': {'kp': 600.0, 'ki': 50.0, 'kd': 10.0, 'i_limit': 500.0},
     'chassis.pid.vel.y': {'kp': 300.0, 'ki': 50.0, 'kd': 10.0, 'i_limit': 500.0},
     'chassis.pid.vel.z': {'kp': 300.0, 'ki': 30.0, 'kd': 50.0, 'i_limit': 500.0,
@@ -150,10 +156,16 @@ def load_pid_params(path: Optional[Path], logger=None) -> dict:
     params = {key: dict(DEFAULT_PID_PARAMS[key]) for key in PID_PARAM_PATHS}
 
     if path is None:
-        _warn("no sim_pid.yaml found; using built-in PID defaults")
+        _warn(
+            "no sim_pid.yaml found (source tree, then package share); using the "
+            "built-in PID defaults -- control gains may differ from the tuned file"
+        )
         return params
     if not path.is_file():
-        _warn(f"PID config {path} does not exist; using built-in PID defaults")
+        _warn(
+            f"PID config {path} does not exist; using the built-in PID defaults -- "
+            "control gains may differ from the tuned file"
+        )
         return params
 
     try:

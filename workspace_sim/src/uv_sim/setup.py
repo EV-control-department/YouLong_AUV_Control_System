@@ -10,6 +10,10 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', ['config/sim_pid.yaml']),
+        (
+            'share/' + package_name + '/config/extrinsics',
+            ['config/extrinsics/xunyun.yaml'],
+        ),
         ('lib/' + package_name, ['libexec/uv_sim/sim_bridge']),
     ],
     install_requires=['setuptools', 'PyYAML'],

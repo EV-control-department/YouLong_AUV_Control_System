@@ -90,7 +90,11 @@
 | B11 | **既有文档已写下「正确契约」，但代码没做到**（T1 的独立佐证） | `docs/hil_architecture.md:112` 把 `/auv/dvl` 描述为「4 波束 DVL **机体坐标系速度**」，`:245` 的 MCU 固件注释同样写 `// /auv/dvl → body_velocity`；而 §1.3 证明当前仿真发布的是旋转 45° 的 DVL 系速度 |
 | B12 | ~~**odometry twist 被二次旋转**~~ **已修（2026-09-15）** | 根因：Stonefish 的 `/auv/odometry` twist 本来就是机体系（`Odometry.cpp:59,65`：`v = R_sensor←worldᵀ · v_point`；`PublishOdometry` 把 header 设为 `world_ned`、child 设为传感器名），而文档曾写它是世界系。两处代码照错的假设又乘了一次 yaw（= `R(−ψ)`）：① `_sim_nav_odom_cb` → HIL 的 `/zit6/sim/nav`（固件契约要求 `vel_body`，`third_party/AUV_zit6_cmake/docs/protocols/与AGX.md:301-307`）；② `_odom_cb` → SIL 的 `/zit6/state/vel`（60 Hz 发布，`self.vel.x/y/z` 被 `_dvl_cb` 20 Hz 与 `_odom_cb` 30 Hz 竞争写）。**修复**：新增 `sim_bridge.body_twist_from_odometry()` 作为唯一编码处，两条回调直接取 twist 分量，删除错误的 yaw 旋转与死状态 `vel_world`。**验证**：`test_odometry_frame.py`（5 例，ψ=90° 合成消息）——改动前 **2 failed / 3 passed**（`vel['x']` 实测 −0.19999 而非 0.3，正是 `R(−90°)·(0.3,−0.2)`），改动后 **5 passed**。T5 的 `nav_sim` 只需继承该契约（`body_twist_from_odometry` 可直接复用） |
 | B14 | ~~**PID 参数多源、且服务值与生效值不一致**~~ **已修（2026-09-15）** | 原状：① `_init_full()` 内**两份硬编码**——`_pid_params` 字典（`/zit6/get_params` 返回它）与 `_Pid` 对象（真正生效）；两者漂移：`pos.z.ki` 报 30 实为 80、`vel.x.kp` 报 300 实为 600；② yaw 串级内环 `pid_yaw_rate` **既不在字典也不在服务面** → 读不到也调不了；③ `uv_hm/config/pid_params.yaml` 自称 sim_bridge 默认参数却**无人读取**（值还跟错的那份一致）；④ `uv_hm/config/pid_parameters.json` 是 MCU/AGX 的另一套参数体系（p/i/d + output_limit，8 轴），同样无人读取。**修复**：新增 `workspace_sim/src/uv_sim/config/sim_pid.yaml` 作为唯一事实源（9 通道，含 yaw_rate 与 `z_thrust_ff`），同一份数据既建服务视图又建 `_Pid` 对象；`pid_config_file` 参数可指向调参副本；删除死文件 `uv_hm/config/pid_params.yaml`。**验证**：`test_pid_config.py`（6 例）钉住"文件=服务=生效对象"三者一致，并证明换文件真的改变增益 |
-| B13 | **本会话沙箱无法跑仿真**（V2 端到端验证的执行环境限制，非代码问题） | ① 无 `/dev/dri` → GPU 版 `stonefish_simulator` 报 `X_GLXCreateContext BadValue` 退出；② 控制台版（nogpu）拒绝含相机传感器的场景（`Cameras not supported in console mode!` → 解析失败）；③ 用去相机变体跑通物理后，控制台版在本环境仍无任何 `/auv/*` 数据（发布钩子依赖实时模式，且实测未出数据）。故 T1 的端到端验证需在带 GPU/X 的桌面会话执行 |
+| B13 | **沙箱限制（2026-09-15 收窄）** | 相机图像与控制闭环**仍需 GPU/X 会话**（无 `/dev/dri` → GPU 版 `XGLXCreateContext BadValue`）；但**无相机的物理/传感器话题在 console 模式可用**：`tools/strip_vision_sensors.py` 去相机 + `<rate> 0`（实时模式）后，`/auv/{odometry,dvl,imu,pressure}` 等话题实测在线，只是没有相机图像、也没有 TF（见 B18）。故 T1 的端到端验收仍需 GPU 会话，而 `dump_tf_tree.py` 这类纯话题/变换检查不再受限 |
+| B15 | ~~**相机 offset 与场景差 0.2 m（N1）**~~ **已决（2026-09-15）** | `position.py` 的 `offset` z（0.076/0.0645）与 `line_follower.py`、`arrow_surfacer.py`、`docs/perception.md` 四处一致（4:1），场景 `xunyun_fixed.scn` 的 `0.276`/`0.2645` 只此一处——**以代码为准，改场景**（前视 `0.276→0.076`、下视 `0.2645→0.0645`）。**验证**：`derive_extrinsics.py --check` 绿、`test_frames_geometry.py` 新增两例钉住（场景 z == 权威 offset；三模块 offset 一致）、pytest 47 passed。残留下限：这组数字本身仍来自早期估算，未经实机复测；若日后量出别的值，改四处 + 场景再重跑生成器即可 |
+| B16 | **AQUA-SLAM 参考检出的外参与波束角是 blue_gx5 的（N2）** | `AQUA-SLAM/data/underwater_orbslam3_blue_gx5_{short,long}.yaml`：`alpha=[1.1780]×4`(=67.5°)、`beta=[0.7854]×4`(=45°，且是标量不是逐波束)、`Tbc=(0.4,0,0.1)`；`dvl_model/dvl.cpp:508` 另硬编码 `ALPHA=67.5°`。与 XUNYUN（α=60°、β=45/135/225/315、相机 `(0.23,−0.05,0.076)`）不符。**后果**：水平速度 +30.7%（`cos67.5/cos60=1.3066`）。**处理**：不改参考检出，改在 `extrinsics_reference.md` §5 列成 T6 逐项必改清单 |
+| B17 | **`alpha` 一词两义（N3）** | `check_dvl_frame.py` 曾用 `alpha` 表示艇的**航向**，而 AQUA-SLAM 与 `docs/frames/` 用 α 表示**波束离水平仰角**——这正是 B16 那类错误的高危来源。**已修**：统一 ψ=航向、θ=离竖直、α=离水平；脚本变量与日志改名，行为不变 |
+| B18 | **TF 从未开启，而文档曾断言它存在** | `ROS2SimulationManager.cpp` 的 TF 广播套着 `if (publishBaseLinkTransform_)`，该标志由 `ROS2ScenarioParser.cpp` 从 `<robot>` 子元素 `<ros_base_link_transform publish=...>` 读取，默认 `false`（`ROS2SimulationManager.h`）；本仓库 15 个 `.scn` **一个都没写** → 仿真**完全没有 TF**（`/tf` 实测为空，`dump_tf_tree.py` exit 1）。**T2 文档初稿误称"唯一 TF `world_ned → Vehicle/base_link`"**，并把 `ROS2SimulationManager.cpp:395` 当证据（忽略了 `if` 守卫）。**已修**：`frame_convention.md` §3 改写为"当前无 TF"+开启方式+守卫坑；`extrinsics_reference.md` 删"并广播 TF"；`dump_tf_tree.py` 改为读场景 `<robot name>` 且区分"没开 TF"与"开了没数据"；新增 2 例测试钉住（无场景声明 TF、工具从场景读名字）。**附带发现**：Canyon 场景把艇命名为 `XUNYUN`（非 `Vehicle`），工具原先硬编码 `Vehicle`，一开 TF 即误报 |
 
 ---
 
@@ -150,24 +154,36 @@
 
 ---
 
-### T2 ☐ 坐标系与外参基线
+### T2 ◐ 坐标系与外参基线
+
+> **状态（2026-09-15）**：静态部分已完成并全部可复跑（脚本 + 44 例单测）；实机外参的
+> **N1 待硬件确认**（见下），`dump_tf_tree.py` 的在线核对需 GPU/实机会话（B13）。
 
 **目标**：把「谁在哪个系、角度单位是什么、外参怎么推」固化成可核对的文件，并把 DVL 数学写成可执行校验。
 
-**交付物**
-- `docs/frames/frame_convention.md`：NED 定义、度/弧度分界表、TF 树（`world_ned → <robot>/base_link → 传感器系`，依据 `ROS2SimulationManager.cpp:395`、`ROS2Interface.cpp:162/207`）、Stonefish rpy 约定、相机光学系约定、odom 系（START 原点 / PoseInfo 语义）、`/auv/thrusters_cmd` 归一化 [−1,1]（`sim_bridge.py:539-553`）
-- `docs/frames/extrinsics_reference.md`：**仿真表**（8 个传感器的 xyz/rpy/朝向）+ **实机表** + `Tbc/T_gyro_c/T_dvl_c` 推导过程 + DVL α/β 波束几何（含 D2 的 60° 修正与误差量级）+ **每平台独立 YAML 硬规则**
-- `workspace_auv/scripts/derive_extrinsics.py`：从 `.scn` 的 `<origin>` 自动推导 `Tbc/T_gyro_c/T_dvl_c` 并打印（避免手算符号错误）
-- `workspace_auv/scripts/check_dvl_geometry.py`：数值校验（单位测试）
-  - `pinv(E(α,β))·E(α,β)·v = v`（对配置的 α/β）
-  - α 敏感度报告：给定 α 误差 Δ，水平/垂直速度的尺度偏差（把 +31% 这个结论变成可复现输出）
-  - `T_dvl_c` 与机体系的关系打印（当前应为「平移 (−0.375, 0, 0.1) + 单位旋转」）
+**已交付**
+- `docs/frames/frame_convention.md`：四套坐标系、度/弧度分界表（`.scn` rpy=rad 但 `beam_angle`=deg）、rpy = `Rz·Ry·Rx`、TF 树现状（**只有** `world_ned → Vehicle/base_link`，无传感器静态 TF）、odom 系、`type_mask` 反逻辑、相机光学系、`/auv/thrusters_cmd ∈ [−1,1]`；每条约定带**文件+符号**锚点（不用行号区间）
+- `docs/frames/extrinsics_reference.md`：仿真表（8 传感器）+ 实机表（带**验证状态列**）+ `T_b_c/T_gyro_c/T_dvl_c` 推导 + **与 AQUA-SLAM `Tbc` 的逐元素对照**（证明记号没搞反）+ θ/α/β/ψ 术语表 + α 敏感度表 + **D3 每平台独立 YAML** + **T6 移植必改清单**（N2）+ 两项 T6 前置关卡的判据
+- `workspace_sim/src/uv_sim/uv_sim/geometry.py`：几何唯一真相点（`euler_rpy_to_matrix`、`invert_rigid`、`dvl_beam_directions`、`beam_velocity_to_body`、`beam_inversion_sensitivity`、`parse_scn_sensors`）；纯 numpy，无 ROS 依赖
+- `workspace_sim/tools/derive_extrinsics.py`：从 `.scn` 推导全部外参 + `--emit/--out/--check`；`--check` **解析文档里的 fenced YAML 块并与场景对拍**（文档漂移即非 0 退出）
+- `workspace_sim/tools/check_dvl_geometry.py`：`(EᵀE)⁻¹Eᵀ(E v) = v`（实测 `1.1e-16`）、θ→α 换算、`beam_positive_z` 回归、α 敏感度表（含 67.5° 的 +30.66%）
+- `workspace_sim/tools/dump_tf_tree.py`：在线 TF 树核对（`--self-test` 无 ROS 可跑）
+- `workspace_sim/src/uv_sim/config/extrinsics/xunyun.yaml`：机器可读外参表（生成物，禁止手改），`setup.py` 已安装
+- `workspace_sim/src/uv_sim/test/test_frames_geometry.py`（19 例）：数学 + 契约（场景↔YAML↔文档三方一致）
+- `check_dvl_frame.py`：杠杆臂改为读外参 YAML（消除第二份硬编码），航向变量 `alpha`→`psi`（N3）
+
+**脚本位置修正**：原计划写 `workspace_auv/scripts/`，实际落在 `workspace_sim/tools/`——
+`derive_extrinsics.py` 要读 `workspace_sim` 里的 `.scn`，放 `workspace_auv` 会造成跨工作区反向依赖；
+`workspace_auv/scripts/` 目录此前并不存在。
 
 **两项静态校验（写进文档，作为 T6 的前置关卡）**
-1. 艇体静止 30 s：SLAM 输出的相机系速度 ≈ 0
-2. 给定已知方向运动：SLAM 首帧位移方向与 `/auv/odometry` 真值一致
+1. 艇体静止 30 s：SLAM 输出的相机系速度 ≈ 0（判据 `|v| < 3σ_dvl = 0.0045 m/s`）
+2. 给定已知方向运动：SLAM 首帧位移方向与 `/auv/odometry` 真值夹角 < 5°，尺度比 ∈ [0.95, 1.05]
 
-**验收**：两个脚本可运行且输出与文档表格一致；`frame_convention.md` 的每条约定都能追到代码/源码行号。
+**阻塞项**：N1（相机 offset z 差 0.2 m）需要实机测量才能定权威值；确认后改一处 + 重跑
+`derive_extrinsics.py --out` + `pytest` 即闭环。
+
+**验收**：`check_dvl_geometry.py` PASS、`derive_extrinsics.py --check` 退出 0、44 例单测全绿。
 **依赖**：T1（外参表要反映新安装）
 **预估**：0.5~1 人日
 
@@ -351,7 +367,11 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 | 编号 | 标准 | 归属 |
 |---|---|---|
 | A1-1..5 | 仿真传感器几何/频率/速度方向正确（含航向扫描回归），4 个场景可加载 | T1（V1 已绿；V2/V3 待桌面环境执行） |
-| A2-1 | 外参推导脚本与校验脚本输出与文档一致 | T2 |
+| A2-1 | `derive_extrinsics.py --check` 退出 0（文档块 ↔ 场景一致） | T2（已绿） |
+| A2-2 | `check_dvl_geometry.py` PASS：反演误差 < 1e-12、α=67.5° 复现 +30.7% | T2（已绿） |
+| A2-3 | 48 例单测全绿（含场景↔YAML↔文档三方契约、N1 相机 offset、TF 契约） | T2（已绿） |
+| A2-4 | `dump_tf_tree.py --self-test` 绿；在线核对在 console 模式可跑（无需 GPU） | T2（已绿） |
+| A2-5 | 文档不再断言存在 TF；开启方式与代码守卫已写明 | T2（已绿） |
 | A3-1..3 | 七篇文档齐备；契约校验通过；漂移可被发现 | T3 |
 | A4-1..4 | 分层干净；入口契约测试通过 | T4 |
 | A5-1..5 | 7 节点可执行；话题零变化；端到端动作成功；数值回归 | T5 |

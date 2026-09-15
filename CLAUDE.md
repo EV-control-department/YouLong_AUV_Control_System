@@ -306,9 +306,34 @@ IMU → sim_bridge._odom_cb (全 RPY 提取)
 
 ### Coordinate System & Conventions
 
+**权威文档（T2 起）**：`docs/frames/frame_convention.md` 是约定的唯一权威，
+`docs/frames/extrinsics_reference.md` 是数值的唯一权威（含仿真表 / 实机表 / DVL 波束几何 /
+AQUA-SLAM 对照）。下面只是速查，冲突时以那两篇为准。可执行校验：
+
+```bash
+python3 workspace_sim/tools/check_dvl_geometry.py          # 波束几何 + α 敏感度（无 ROS）
+python3 workspace_sim/tools/derive_extrinsics.py --check   # 外参表 ↔ 场景对拍
+python3 workspace_sim/tools/dump_tf_tree.py --self-test    # TF 报告逻辑（无 ROS）
+```
+
 - **NED** (North-East-Down) throughout. Yaw 0 = North, **clockwise positive**.
 - Angles stored in **degrees** internally, converted to radians for ROS messages.
+  **例外**：`.scn` 的 `<origin rpy>` 是弧度，但 `<specs beam_angle>` 是**度**。
 - `Coordinate` class (`uv_control/coordinate.py`): 6-DOF NED with 4×4 homogeneous transform matrices.
+- `<origin rpy>` 复合顺序是 `R = Rz(yaw)·Ry(pitch)·Rx(roll)`；代码里只用
+  `uv_sim.geometry.euler_rpy_to_matrix()`，别手写 `Rx·Ry·Rz`。
+- DVL 角度三个记号别混：**θ**=离竖直（场景 `beam_angle`=30°）、**α**=离水平
+  （AQUA-SLAM `mE`，=60°）、**ψ**=艇航向。α 填错是静默的水平尺度错误
+  （出厂默认 67.5° → +30.7%）。
+- TF：**仿真当前完全没有 TF**（`/tf` 为空）。广播是默认关闭的，需要场景在 `<robot>` 里写
+  `<ros_base_link_transform publish="true"/>`（`ROS2SimulationManager.cpp` 那行外面套着 `if` 守卫，
+  别把它当"TF 存在"的证据）；15 个场景都没写。外参读
+  `workspace_sim/src/uv_sim/config/extrinsics/xunyun.yaml`（由场景生成，勿手改）。
+  在线核对：`python3 workspace_sim/tools/dump_tf_tree.py`（console 模式即可，不必 GPU；
+  当前健康状态就是 exit 1 + "no TF received"）。
+- **NED 细则**（为什么 z 朝下、z-up 网格的坑）：见本节末尾。
+
+#### NED 细则与证据
 
 - **NED**：`x = North(北)`，`y = East(东)`，`z = Down(下，深度)`。**x 轴指向正北**。Stonefish 世界系本身就是这个 NED 系。
   - `z=0` 为水面，z 越大越深；**负 z 表示在水面之上（空气里）**。
@@ -353,6 +378,12 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_auv/docs/basic_motion_action.md` | BasicMotion action interface reference |
 | `workspace_auv/docs/perception.md` | Perception system architecture + data flow |
 | `workspace_auv/docs/debug_guide.md` | Debugging guide (ros2 CLI, action test, simulation) |
+| `docs/frames/frame_convention.md` | **坐标系与约定的唯一权威**（NED、单位分界、rpy 顺序、TF 树现状、DVL θ/α/ψ 术语、相机光学系） |
+| `docs/frames/extrinsics_reference.md` | **外参数值的唯一权威**（仿真表 + 实机表 + `T_b_c/T_gyro_c/T_dvl_c` 推导 + α 敏感度 + T6 必改清单）；含机器可读 fenced YAML 块 |
+| `workspace_sim/src/uv_sim/uv_sim/geometry.py` | 几何唯一真相点（rpy→R、刚体求逆、DVL 波束 `E` 与反演、`.scn` 解析）；纯 numpy 无 ROS |
+| `workspace_sim/tools/derive_extrinsics.py` | 从场景推导外参；`--emit/--out/--check`（`--check` 与文档对拍，漂移即非 0 退出） |
+| `workspace_sim/tools/check_dvl_geometry.py` | DVL 波束几何数值校验 + α 敏感度表（无 ROS 可跑） |
+| `workspace_sim/tools/dump_tf_tree.py` | 在线 TF 树核对 + `--self-test` |
 
 ## Conventions
 
@@ -361,4 +392,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- **Tests**: only `uv_sim` has them so far (25 cases: `workspace_sim/src/uv_sim/test/` — scene sensor contract, odometry frame conventions, PID-config single-source, entry-point integrity). Run with `python3 -m pytest workspace_sim/src/uv_sim/test/ -q` after sourcing both workspaces; keep it green.
+- **Tests**: only `uv_sim` has them so far (**48 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
+  contract, odometry frame conventions, PID-config single-source + fallback structure, entry-point
+  integrity, frame/beam geometry, scene↔YAML↔doc contract, camera-offset (N1) and TF (B18) contracts).
+  Run with `python3 -m pytest workspace_sim/src/uv_sim/test/ -q` after sourcing both workspaces; keep it green.
