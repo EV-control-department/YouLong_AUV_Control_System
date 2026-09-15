@@ -93,7 +93,7 @@ STREAM_ANNOTATED = True              # 通过 go2rtc 额外提供带检测框的
 
 # ROS 参数默认值。
 SIM_MODE = False                      # False=V4L2，True=ROS stitched 话题
-SAVE_DATASET = True                  # 是否保存训练数据帧
+SAVE_DATASET = False                  # 是否保存训练数据帧
 
 
 def _find_repo_root(start):

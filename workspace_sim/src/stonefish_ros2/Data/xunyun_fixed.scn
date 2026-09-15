@@ -274,13 +274,15 @@
 			<ros_publisher topic="/auv/pressure"/>
 		</sensor>
 
-        <!-- DVL 多普勒计程仪，用于发送声波测量相对水底的速度 -->
+        <!-- DVL：四波束下视，离竖直 30°，方位 45/135/225/315（DVL 斜置，与实机一致） -->
 		<sensor name="dvl" type="dvl" rate="20.0">
 			<history samples="1000"/>
 			<link name="Vehicle"/>
-            <!-- rpy="3.1416 0.0 -0.785" 决定它斜向下照射的角度及偏航对齐 -->
-			<origin rpy="3.1416 0 -0.785003" xyz="-0.375 0 0.2"/>
-			<specs beam_angle="30.0"/> <!-- 波束俯仰角 -->
+            <!-- 传感器系与机体系对齐（rpy=0）：/auv/dvl 发布的就是机体系速度；z 与实机一致 -->
+			<origin rpy="0 0 0" xyz="-0.375 0 0.1"/>
+			<!-- beam_positive_z=true：波束沿传感器 +z（NED 下即向下）。默认 false 会让波束朝上，
+			     旧配置靠 180° 翻滚补偿，代价是速度系 y/z 翻转 -->
+			<specs beam_angle="30.0" beam_positive_z="true"/> <!-- 波束与传感器 z 轴夹角 -->
             <!-- 模拟范围: x,y,z方向最大测量速度均为9.0m/s，对地测量高度0.5米到81米 -->
 			<range velocity="9.0 9.0 9.0" altitude_min="0.5" altitude_max="81.0"/>
             <!-- 对水流层（如果无法打海底，打杂质跟踪水流）的要求 -->
@@ -290,22 +292,24 @@
 			<ros_publisher topic="/auv/dvl" altitude_topic="/auv/dvl_altitude"/>
 		</sensor>
 
-        <!-- 惯性导航单元 (IMU)，含九轴数据 -->
-		<sensor name="imu_filter" type="imu" rate="20.0">
+        <!-- 惯性导航单元 (IMU)，含九轴数据；200 Hz + 噪声注入（对齐 AQUA-SLAM 的 NoiseGyro=1e-3 / NoiseAcc=1e-2） -->
+		<sensor name="imu_filter" type="imu" rate="200.0">
 			<history samples="1000"/>
 			<link name="Vehicle"/>
 			<origin rpy="0 0 -2.65359e-06" xyz="0 0 0"/>
+			<!-- σ = 噪声密度 × √rate：1e-3×√200 = 0.0141 rad/s，1e-2×√200 = 0.1414 m/s² -->
+			<noise angle="0 0 0" angular_velocity="0.0141" linear_acceleration="0.1414"/>
 			<ros_publisher topic="/auv/imu"/>
 		</sensor>
 
-		<sensor name="front_cam_left" type="camera" rate="10.0">
+		<sensor name="front_cam_left" type="camera" rate="20.0">
 			<link name="Vehicle"/>
 			<origin rpy="1.5708 0 1.5708" xyz="0.23 -0.05 0.276"/>
 			<specs resolution_x="1280" resolution_y="960" horizontal_fov="57.19"/>
 			<ros_publisher topic="/sim/front_cam/left"/>
 		</sensor>
 
-		<sensor name="front_cam_right" type="camera" rate="10.0">
+		<sensor name="front_cam_right" type="camera" rate="20.0">
 			<link name="Vehicle"/>
 			<origin rpy="1.5708 0 1.5708" xyz="0.23 0.05 0.276"/>
 			<specs resolution_x="1280" resolution_y="960" horizontal_fov="57.19"/>

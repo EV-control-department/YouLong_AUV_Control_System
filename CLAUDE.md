@@ -272,6 +272,13 @@ The `AuvState` message itself is now unused by any node; only `uv_msgs` still de
 
 Historical note: the yaw-polarity bug documented in earlier revisions (`cmd_rz = -float(self.pid_yaw_rate.step(...))`) has been **fixed** — the negation is gone (now `cmd_rz = float(...)`). Do not re-apply that fix.
 
+**Sim sensor geometry (2026-09-15, aligned with the real vehicle).** The XUNYUN DVL in `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn` is mounted flush with the body (`origin rpy="0 0 0" xyz="-0.375 0 0.1"`) with `<specs beam_angle="30.0" beam_positive_z="true"/>`, matching the real DVL (yaw=0 mount, beams offset 45°, 30° off vertical, z≈+0.1 m). Consequences worth remembering:
+- `/auv/dvl` therefore carries **body-frame** velocity. The pre-2026-09-15 scene used `rpy=(3.1416 0 -0.785)` with the default `beam_positive_z=false`, which made Stonefish publish velocity in a frame rotated 45° from the body with y/z flipped; `sim_bridge` forwards that straight into `/zit6/state/vel`, so `basic_motion`'s along-track speed became `V·cos(2α+45°)` (≈0 at α=22.5°). Regression pinned by `workspace_sim/src/uv_sim/test/test_scene_sensors.py`; end-to-end check in `workspace_sim/tools/check_dvl_frame.py`.
+- IMU is 200 Hz with injected noise (σ = density × √rate) to match AQUA-SLAM's `NoiseGyro=1e-3` / `NoiseAcc=1e-2`.
+- Headless note: the console simulator rejects any scene containing cameras and its ROS publishers only fire in real-time mode (`simulation_rate:=0`). See `workspace_sim/stonefish_notes.md` for the workaround.
+- **PID gains live in one external file**: `workspace_sim/src/uv_sim/config/sim_pid.yaml` (9 channels: `chassis.pid.pos.{x,y,z,yaw}` + the yaw-cascade inner loop `chassis.pid.pos.yaw_rate` + `chassis.pid.vel.{x,y,z,yaw}`). The same data builds both the `/zit6/get_params` view and the live `_Pid` objects, so the service can never report gains that differ from the running controllers (before 2026-09-15 they were two hardcoded copies that had drifted: `pos.z.ki` 30 vs 80, `vel.x.kp` 300 vs 600, and the yaw-rate loop was invisible to the service). Override the file at runtime with `-p pid_config_file:=/path/to/tuned.yaml`; `/zit6/update_params` changes only the running process, never the file. Control structure: position mode = x/y/z single loops + **yaw two-level cascade**; velocity mode = four single loops.
+- Build mode matters for Python edits: `colcon build` (no flag) **copies** the package into `install/`, while `colcon build --symlink-install` keeps `build/uv_sim/uv_sim -> src/uv_sim/uv_sim` live. If a source edit seems ignored, check the layout: `ls -l workspace_sim/install/uv_sim/lib/python3.12/site-packages/` (egg-link = live, a real `uv_sim/` directory = stale copy).
+
 ### 6-DOF State Feedback (migrated 2026-07-20, MCU side complete)
 
 控制栈保持 4-DOF，状态反馈升级为 6-DOF 以携带完整姿态，用于纠正 position 节点的位置估计。
@@ -302,6 +309,15 @@ IMU → sim_bridge._odom_cb (全 RPY 提取)
 - **NED** (North-East-Down) throughout. Yaw 0 = North, **clockwise positive**.
 - Angles stored in **degrees** internally, converted to radians for ROS messages.
 - `Coordinate` class (`uv_control/coordinate.py`): 6-DOF NED with 4×4 homogeneous transform matrices.
+
+- **NED**：`x = North(北)`，`y = East(东)`，`z = Down(下，深度)`。**x 轴指向正北**。Stonefish 世界系本身就是这个 NED 系。
+  - `z=0` 为水面，z 越大越深；**负 z 表示在水面之上（空气里）**。
+  - 证据 1（重力）：`SimulationManager` 中 `g=9.81` 且 `dynamicsWorld->setGravity(Vector3(0,0,g))` → 重力沿 **+Z**，即 Z 轴朝下。
+  - 证据 2（轴定义）：`NED::__nRe__()` 给出的 ECEF→NED 矩阵三行依次为 North / East / Down；`GPS.cpp` 把世界系位置 `gpsPos` 的 `x,y` 直接当 `north,east` 传给 `Ned2Geodetic(x, y, 0, ...)` → 世界系 `x=北, y=东`。
+  - 机体坐标系同理：`x=前(艏)`、`y=右舷`、`z=下`；`yaw=0`（机头朝 +x）时 x 才与正北重合。
+  - `<environment><ned latitude longitude/>` 只是 NED 原点的大地坐标，**不是**坐标系切换。
+  - 3D 软件按 z-up 导出的网格在 NED 下是**上下颠倒**的，必须给正的 z 偏移把它压到水下：`canyon.obj` 原始 `z∈[-5.73, 0.34]`，`world_transform z=+8.0` 后谷缘≈2.27 m 深、谷底≈8.34 m 深。
+  - 新写 `.scn` 时切勿按 z-up 推深度，否则会把 AUV 放到水面之上（`canyon_vision_dvl.scn` 初版就踩过这个坑）。
 
 ### Control Modes (MotionCommand.type_mask)
 
@@ -345,4 +361,4 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- No tests exist yet (infrastructure declared in `package.xml` but no test files)
+- **Tests**: only `uv_sim` has them so far (25 cases: `workspace_sim/src/uv_sim/test/` — scene sensor contract, odometry frame conventions, PID-config single-source, entry-point integrity). Run with `python3 -m pytest workspace_sim/src/uv_sim/test/ -q` after sourcing both workspaces; keep it green.

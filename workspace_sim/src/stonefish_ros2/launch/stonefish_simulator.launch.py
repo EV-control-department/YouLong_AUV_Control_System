@@ -28,12 +28,12 @@ def generate_launch_description():
 
     window_res_x_arg = DeclareLaunchArgument(
         'window_res_x',
-        default_value = '800'
+        default_value = '1600'
     )
 
     window_res_y_arg = DeclareLaunchArgument(
         'window_res_y',
-        default_value = '600'
+        default_value = '1200'
     )
 
     rendering_quality_arg = DeclareLaunchArgument(

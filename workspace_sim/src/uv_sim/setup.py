@@ -9,9 +9,10 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', ['config/sim_pid.yaml']),
         ('lib/' + package_name, ['libexec/uv_sim/sim_bridge']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'PyYAML'],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',

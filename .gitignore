@@ -57,3 +57,8 @@ workspace_auv/datasets/
 
 # Local workspace primer (not a doc)
 REASONIX.md
+
+# AQUA-SLAM reference checkout (73 MB, has its own .git).  It is read-only
+# reference material for the T6 port (docs/roadmap.md), not part of this
+# repository.  Promote it to a proper submodule if/when the port starts.
+/AQUA-SLAM/

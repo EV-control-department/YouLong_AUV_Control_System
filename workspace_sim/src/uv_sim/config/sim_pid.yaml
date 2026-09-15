@@ -1,0 +1,30 @@
+# sim_bridge PID 参数 —— SIL 的唯一事实源
+# ============================================================================
+# 改这个文件即可改 SIL 的控制增益；改完重启仿真生效（`/zit6/update_params`
+# 的运行时不落地，只影响本次进程）。
+#
+# 控制结构（位置模式 = basic_motion 唯一使用的模式）：
+#   x / y / z ：单环     位置误差(机体系) --> 力
+#   yaw       ：两级串级  角度误差 --> [pos.yaw] --> 目标角速度(±45°/s 限幅)
+#                                   --> 与陀螺实测角速度之差 --> [pos.yaw_rate] --> 力矩
+# 速度模式：四个单环    速度误差 --> 力（vel.x / vel.y / vel.z / vel.yaw）
+#
+# 字段：kp / ki / kd / i_limit，以及可选的 z_thrust_ff（恒定推力前馈，只对 z 轴有意义）
+# 单位：输出为机体力 / 力矩（`/auv/thrusters_cmd` 前的 4-DOF 力），i_limit 为积分项限幅
+#
+# 说明：加 * 的两项来自 2026-09-15 的一致性修复 —— 此前服务报告的
+#   `pos.z.ki=30`、`vel.x.kp=300` 与实际生效的 `80`、`600` 不一致，现以实际生效值为准。
+# ============================================================================
+
+chassis.pid.pos.x: {kp: 800.0, ki: 130.0, kd: 200.0, i_limit: 1000.0}
+chassis.pid.pos.y: {kp: 600.0, ki: 120.0, kd: 150.0, i_limit: 1000.0}
+chassis.pid.pos.z: {kp: 600.0, ki: 80.0, kd: 800.0, i_limit: 6200.0, z_thrust_ff: 0.0}   # * ki 由 30 更正为实际生效的 80
+chassis.pid.pos.yaw: {kp: 35.0, ki: 3.0, kd: 0.0, i_limit: 30.0}
+
+# yaw 串级的内环；此前不在参数服务里，既读不到也调不了，现已纳入
+chassis.pid.pos.yaw_rate: {kp: 12.0, ki: 0.0, kd: 0.7, i_limit: 6.0}
+
+chassis.pid.vel.x: {kp: 600.0, ki: 50.0, kd: 10.0, i_limit: 500.0}                       # * kp 由 300 更正为实际生效的 600
+chassis.pid.vel.y: {kp: 300.0, ki: 50.0, kd: 10.0, i_limit: 500.0}
+chassis.pid.vel.z: {kp: 300.0, ki: 30.0, kd: 50.0, i_limit: 500.0, z_thrust_ff: 0.0}
+chassis.pid.vel.yaw: {kp: 40.0, ki: 20.0, kd: 2.0, i_limit: 300.0}

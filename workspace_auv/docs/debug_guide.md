@@ -201,7 +201,18 @@ ros2 service call /zit6/update_params zit6_interfaces/srv/UpdateParams \
   "{paths: ['chassis.pid.pos.z'], values: ['800.0']}"
 ```
 
-**永久改参数**：编辑 `sim_bridge.py`，改 `_init_full()` 中的 `_pid_params` 字典和 `_Pid` 构造参数（两个地方都需要改）。建议运行时调参试出好值后再写死。
+**永久改参数**：编辑 `workspace_sim/src/uv_sim/config/sim_pid.yaml`（**SIL 的唯一事实源**，9 个通道 = 位置 x/y/z/yaw + yaw 串级内环 + 速度 4 环），重启仿真生效。
+该文件同时决定控制增益和 `/zit6/get_params` 的返回值——两者由同一份数据构造，不会再出现「服务报的值 ≠ 实际生效的值」。
+
+调试时可以不动包内文件，指向自己的调参副本（不必重编译）：
+
+```bash
+ros2 run uv_sim sim_bridge --ros-args -p pid_config_file:=/tmp/my_pid.yaml
+```
+
+文件支持只写要改的通道，其余沿用内置默认值；未知通道/字段/非法数字只会 WARNING，不会让节点起不来。
+`/zit6/update_params` 的运行时不写回文件（只影响本次进程），调好后请手工写进 `sim_pid.yaml`。
+启动日志会打印实际加载的文件路径，可据此确认生效来源。
 
 ### 查看 Stonefish 传感器数据
 

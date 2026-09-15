@@ -145,6 +145,13 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `hil_mode` | bool | `false` | `true`: HIL 模式（相机直通 + 转发 MCU 推力）<br>`false`: SIL 全仿真（PID + ZIT6 状态机 + 状态发布） |
+| `pid_config_file` | string | `''` | PID 增益文件路径。留空 = 自动解析（源码树 `src/uv_sim/config/sim_pid.yaml` 优先，其次包内 `share/uv_sim/config/sim_pid.yaml`）；可指向 `/tmp` 下的调参副本，无需重编译 |
+
+**PID 增益来源（2026-09-15 起）**：`workspace_sim/src/uv_sim/config/sim_pid.yaml` 是唯一事实源，9 个通道
+（`chassis.pid.pos.{x,y,z,yaw}` + yaw 串级内环 `chassis.pid.pos.yaw_rate` + `chassis.pid.vel.{x,y,z,yaw}`）。
+同一份数据既构造 `/zit6/get_params` 的返回值、也构造实际运行的 PID 对象，二者不会再漂移；
+`/zit6/update_params` 只改运行时、不写回文件。启动日志会打印实际加载路径。
+此前 `uv_hm/config/pid_params.yaml`（已删除，无人读取且数值已落后）与 `_init_full()` 内的硬编码副本均已废弃。
 
 ---
 

@@ -37,7 +37,7 @@ SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_perception` �
 │  │                                                           │    │
 │  │  发布:                                                    │    │
 │  │    /auv/odometry      (Odometry, 30Hz)                    │    │
-│  │    /auv/imu            (Imu, 20Hz)                        │    │
+│  │    /auv/imu            (Imu, 200Hz)                       │    │
 │  │    /auv/dvl            (DVL, 20Hz)                        │    │
 │  │    /auv/pressure       (FluidPressure, 5Hz)               │    │
 │  │    /sim/front_cam/left/image_color  (Image)              │    │
@@ -107,14 +107,16 @@ MCU 通过 micro-ROS 订阅以下主题，获取仿真传感器数据和控制�
 | 主题                   | 消息类型                        | 频率  | 说明                                                                                       |
 | ---------------------- | ------------------------------- | ----- | ------------------------------------------------------------------------------------------ |
 | `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 按需  | 运动设定值；`control_key` 决定 POS/VEL/FORCE 模式；`type_mask` 决定忽略哪些轴 (1=忽略) |
-| `/auv/odometry`      | `nav_msgs/Odometry`           | 30 Hz | Stonefish 真值里程计；`pose` = NED 世界坐标系位姿；`twist` = 世界坐标系线速度 + 角速度 |
-| `/auv/imu`           | `sensor_msgs/Imu`             | 20 Hz | 角速度 (用于替代真实 IMU 的 gyro 数据)                                                     |
-| `/auv/dvl`           | `stonefish_ros2/DVL`          | 20 Hz | 4 波束 DVL 机体坐标系速度                                                                  |
+| `/auv/odometry`      | `nav_msgs/Odometry`           | 30 Hz | Stonefish 真值里程计；`pose` = NED 世界坐标系位姿；`twist` = **机体系**线速度 + 角速度（`Odometry.cpp:59,65`，注意不是世界系） |
+| `/auv/imu`           | `sensor_msgs/Imu`             | 200 Hz | 角速度 + 比力（含噪声，2026-09-15 起由 20 Hz 提升）                                        |
+| `/auv/dvl`           | `stonefish_ros2/DVL`          | 20 Hz | 4 波束 DVL 机体坐标系速度（斜置 45°、离竖直 30°、z=+0.1 m，与实机一致）                    |
 | `/zit6/cmd/agxhbt`   | `std_msgs/UInt32`             | 10 Hz | 心跳 + 布防：`1` = 正常布防 (需 INS 就绪)，`3` = 强制布防 (绕过 INS)                   |
 | `/zit6/cmd/ins`      | `std_msgs/UInt8`              | 按需  | INS 控制:`1` = 启用 DVL，`2` = 禁用 DVL，`3` = 重新对准                              |
 | `/zit6/cmd/light`    | `std_msgs/UInt8`              | 按需  | LED:`1` = 红，`2` = 黄，`3` = 绿                                                     |
 
-**带宽估算**: Odometry ~200B×30 + IMU ~150B×20 + DVL ~200B×20 ≈ **14 KB/s**
+**带宽估算**: Odometry ~200B×30 + IMU ~150B×200 + DVL ~200B×20 ≈ **40 KB/s**
+（IMU 提到 200 Hz 后约 3 倍；921600 baud 链路理论上限约 92 KB/s，但 micro-ROS 每帧开销未计入，
+HIL 实测若拥塞，可在 `imu_sim` 侧对 MCU 通道降采样——见 `workspace_auv/docs/roadmap.md` T5）
 
 ### 2.3 上行通信 (MCU → ROS 2)
 

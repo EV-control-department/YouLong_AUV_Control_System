@@ -1,0 +1,429 @@
+#!/usr/bin/env python3
+"""T1 acceptance check: is ``/auv/dvl`` (and ``/zit6/state/vel``) body-frame?
+
+Run this with a live SIL stack (Stonefish + ``uv_sim`` + ``uv_basic_motion``)::
+
+    source /opt/ros/jazzy/setup.bash
+    source workspace_auv/install/setup.bash
+    source workspace_sim/install/setup.bash
+    ros2 launch uv_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
+    # other terminal
+    python3 workspace_sim/tools/check_dvl_frame.py
+
+What it does
+------------
+1.  Waits for ``/auv/odometry``, ``/auv/dvl`` and ``/zit6/state/vel``.
+2.  Static phase: the vehicle must be quiet and the DVL must agree with the
+    odometry-derived body velocity.
+3.  Sends ``START`` and then, for ``yaw`` **held at 0** (so the body-frame
+    motion direction equals the odom direction), drives 1.5 m legs at
+    ``alpha = 0/22.5/45/90 deg`` out and back.
+4.  For every valid DVL sample in each block it compares
+
+        v_expected = v_odom_body + omega x r_dvl,   r_dvl = (-0.375, 0, 0.1)
+
+    against ``/auv/dvl`` and the linear part of ``/zit6/state/vel``.
+
+Why the heading sweep matters
+-----------------------------
+The pre-T1 scene mounted the DVL with ``rpy=(pi,0,-45deg)`` and the default
+``beam_positive_z=false``, so Stonefish published the velocity rotated 45 deg
+with y/z flipped.  The along-track speed seen by ``basic_motion`` then became
+``V*cos(2*alpha + 45deg)`` -- 0.707*V at alpha=0, **0 at alpha=22.5 deg** and
+inverted at alpha=67.5 deg.  The 22.5 deg leg is therefore the sharpest
+discriminator; before the fix this script must fail, after it must pass.
+
+Exit codes: 0 pass, 1 assertion failure, 2 environment not ready.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import sys
+import threading
+import time
+from bisect import bisect_left
+
+import rclpy
+from nav_msgs.msg import Odometry
+from rclpy.action import ActionClient
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray
+
+from stonefish_ros2.msg import DVL
+from uv_msgs.action import BasicMotion
+
+# DVL acoustic centre relative to the Vehicle origin, in body coordinates.
+DVL_LEVER_ARM = (-0.375, 0.0, 0.1)
+
+HEADINGS_DEG = (0.0, 22.5, 45.0, 90.0)
+MIN_SAMPLES_PER_LEG = 5
+MIN_MOVING_SPEED = 0.05          # m/s, |v_odom|
+MAX_YAW_RATE = 0.35              # rad/s
+MAX_TILT = math.radians(15.0)    # |roll|,|pitch|
+STATIC_SPEED_LIMIT = 0.05        # m/s
+RELATIVE_TOLERANCE = 0.08
+ABSOLUTE_TOLERANCE = 0.03        # m/s
+
+
+def _quaternion_to_roll_pitch_yaw(
+    x: float, y: float, z: float, w: float
+) -> tuple[float, float, float]:
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (w * y - z * x)
+    sinp = max(-1.0, min(1.0, sinp))
+    pitch = math.asin(sinp)
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return roll, pitch, yaw
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError("median of an empty list")
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return 0.5 * (ordered[middle - 1] + ordered[middle])
+
+
+class DvlFrameCheck(Node):
+    """Collects sensor samples and drives the BasicMotion action."""
+
+    def __init__(self) -> None:
+        super().__init__("dvl_frame_check")
+        self.odom_samples: list[tuple[float, tuple, tuple, tuple]] = []
+        self.dvl_samples: list[tuple[float, tuple, float]] = []
+        self.state_vel_samples: list[tuple[float, tuple]] = []
+        self._lock = threading.Lock()
+
+        self.create_subscription(Odometry, "/auv/odometry", self._odom_cb, 20)
+        self.create_subscription(DVL, "/auv/dvl", self._dvl_cb, 20)
+        self.create_subscription(
+            Float32MultiArray, "/zit6/state/vel", self._state_vel_cb, 20
+        )
+        self.action_client = ActionClient(self, BasicMotion, "basic_motion")
+
+    # -- callbacks -----------------------------------------------------
+    def _stamp(self, header) -> float:
+        return header.stamp.sec + header.stamp.nanosec * 1e-9
+
+    def _odom_cb(self, msg: Odometry) -> None:
+        q = msg.pose.pose.orientation
+        with self._lock:
+            self.odom_samples.append((
+                self._stamp(msg.header),
+                (
+                    msg.twist.twist.linear.x,
+                    msg.twist.twist.linear.y,
+                    msg.twist.twist.linear.z,
+                ),
+                (
+                    msg.twist.twist.angular.x,
+                    msg.twist.twist.angular.y,
+                    msg.twist.twist.angular.z,
+                ),
+                (q.x, q.y, q.z, q.w),
+            ))
+
+    def _dvl_cb(self, msg: DVL) -> None:
+        with self._lock:
+            self.dvl_samples.append((
+                self._stamp(msg.header),
+                (msg.velocity.x, msg.velocity.y, msg.velocity.z),
+                msg.altitude,
+            ))
+
+    def _state_vel_cb(self, msg: Float32MultiArray) -> None:
+        if len(msg.data) < 3:
+            return
+        with self._lock:
+            self.state_vel_samples.append((
+                self.get_clock().now().nanoseconds * 1e-9,
+                (msg.data[0], msg.data[1], msg.data[2]),
+            ))
+
+    # -- sampling helpers ---------------------------------------------
+    def _snapshot(self, since: float):
+        with self._lock:
+            dvl = [sample for sample in self.dvl_samples if sample[0] >= since]
+            odom = [sample for sample in self.odom_samples if sample[0] >= since]
+            state_vel = [
+                sample for sample in self.state_vel_samples if sample[0] >= since
+            ]
+        return dvl, odom, state_vel
+
+    @staticmethod
+    def _nearest(samples: list, stamp: float):
+        if not samples:
+            return None
+        stamps = [sample[0] for sample in samples]
+        index = bisect_left(stamps, stamp)
+        candidates = []
+        if index > 0:
+            candidates.append(samples[index - 1])
+        if index < len(samples):
+            candidates.append(samples[index])
+        return min(candidates, key=lambda sample: abs(sample[0] - stamp))
+
+    # -- action helpers -----------------------------------------------
+    def send_motion(self, cmd_type: int, target: list[float], timeout: float) -> bool:
+        goal = BasicMotion.Goal()
+        goal.cmd_type = cmd_type
+        goal.target = [float(value) for value in target]
+        goal.timeout = float(timeout)
+
+        send_future = self.action_client.send_goal_async(goal)
+        deadline = time.time() + 10.0
+        while not send_future.done() and time.time() < deadline:
+            time.sleep(0.02)
+        if not send_future.done():
+            raise RuntimeError("goal was not accepted within 10 s")
+        goal_handle = send_future.result()
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().warning(f"goal rejected (cmd_type={cmd_type})")
+            return False
+
+        result_future = goal_handle.get_result_async()
+        deadline = time.time() + timeout + 15.0
+        while not result_future.done() and time.time() < deadline:
+            time.sleep(0.02)
+        if not result_future.done():
+            self.get_logger().warning(f"goal did not finish (cmd_type={cmd_type})")
+            return False
+        return bool(result_future.result().result.success)
+
+    def wait_for_topics(self, timeout: float) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                ready = bool(
+                    self.odom_samples and self.dvl_samples
+                    and self.state_vel_samples
+                )
+            if ready:
+                return True
+            time.sleep(0.1)
+        return False
+
+
+def _lever_arm_term(angular: tuple) -> tuple:
+    wx, wy, wz = angular
+    rx, ry, rz = DVL_LEVER_ARM
+    return (
+        wy * rz - wz * ry,
+        wz * rx - wx * rz,
+        wx * ry - wy * rx,
+    )
+
+
+def _vector_norm(vector: tuple) -> float:
+    return math.sqrt(sum(component * component for component in vector))
+
+
+def _evaluate_block(
+    node: DvlFrameCheck, since: float, label: str
+) -> tuple[bool, dict]:
+    dvl, odom, state_vel = node._snapshot(since)
+
+    errors_dvl: list[float] = []
+    errors_state: list[float] = []
+    ratios: list[float] = []
+    skipped = 0
+    for stamp, velocity, altitude in dvl:
+        if altitude is None or altitude < 0.0:
+            skipped += 1
+            continue
+        odom_sample = node._nearest(odom, stamp)
+        state_sample = node._nearest(state_vel, stamp)
+        if odom_sample is None or state_sample is None:
+            skipped += 1
+            continue
+        _, linear, angular, quaternion = odom_sample
+        roll, pitch, _ = _quaternion_to_roll_pitch_yaw(*quaternion)
+        if abs(roll) > MAX_TILT or abs(pitch) > MAX_TILT:
+            skipped += 1
+            continue
+        if abs(angular[2]) > MAX_YAW_RATE:
+            skipped += 1
+            continue
+        if _vector_norm(linear) < MIN_MOVING_SPEED:
+            continue
+
+        expected = tuple(
+            linear[axis] + _lever_arm_term(angular)[axis] for axis in range(3)
+        )
+        errors_dvl.append(
+            max(abs(velocity[i] - expected[i]) for i in range(3))
+        )
+        state_linear = state_sample[1]
+        errors_state.append(
+            max(abs(state_linear[i] - expected[i]) for i in range(3))
+        )
+
+        horizontal = _vector_norm((linear[0], linear[1], 0.0))
+        if horizontal > 1e-6:
+            along = (
+                velocity[0] * linear[0] + velocity[1] * linear[1]
+            ) / horizontal
+            ratios.append(along / horizontal)
+
+    if len(errors_dvl) < MIN_SAMPLES_PER_LEG:
+        return False, {
+            "label": label,
+            "samples": len(errors_dvl),
+            "skipped": skipped,
+            "error_dvl": float("nan"),
+            "error_state": float("nan"),
+            "along_ratio": float("nan"),
+            "tolerance": float("nan"),
+            "note": "insufficient moving DVL samples",
+        }
+
+    # One tolerance for the block: max(absolute floor, 8% of the typical speed)
+    speeds = [_vector_norm(sample[1]) for sample in odom]
+    reference_speed = _median(speeds) if speeds else 0.0
+    tolerance = max(ABSOLUTE_TOLERANCE, RELATIVE_TOLERANCE * reference_speed)
+
+    error_dvl = _median(errors_dvl)
+    error_state = _median(errors_state)
+    ratio = _median(ratios) if ratios else float("nan")
+    passed = error_dvl <= tolerance and error_state <= tolerance
+    return passed, {
+        "label": label,
+        "samples": len(errors_dvl),
+        "skipped": skipped,
+        "error_dvl": error_dvl,
+        "error_state": error_state,
+        "along_ratio": ratio,
+        "tolerance": tolerance,
+        "note": "",
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--static-seconds", type=float, default=30.0,
+        help="quiet observation window before driving (default 30 s)",
+    )
+    parser.add_argument(
+        "--leg-length", type=float, default=1.5,
+        help="translation of each leg in metres (default 1.5)",
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=25.0,
+        help="BasicMotion timeout per goal in seconds (default 25)",
+    )
+    args = parser.parse_args(argv)
+
+    rclpy.init()
+    node = DvlFrameCheck()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
+
+    exit_code = 1
+    try:
+        if not node.wait_for_topics(20.0):
+            node.get_logger().error(
+                "did not see /auv/odometry, /auv/dvl and /zit6/state/vel; "
+                "is the SIL stack running and sourced?"
+            )
+            return 2
+        if not node.action_client.wait_for_server(timeout_sec=15.0):
+            node.get_logger().error("basic_motion action server not available")
+            return 2
+
+        node.get_logger().info(
+            f"static phase: watching {args.static_seconds:.0f} s (vehicle quiet)"
+        )
+        static_start = node.get_clock().now().nanoseconds * 1e-9
+        time.sleep(args.static_seconds)
+        dvl, _, _ = node._snapshot(static_start)
+        valid = [
+            _vector_norm(sample[1])
+            for sample in dvl
+            if sample[2] >= 0.0
+        ]
+        quiet_speed = _median(valid) if valid else float("nan")
+        static_ok = bool(valid) and quiet_speed < STATIC_SPEED_LIMIT
+        node.get_logger().info(
+            f"static phase: {len(valid)} valid DVL samples, "
+            f"median |v| = {quiet_speed:.4f} m/s -> "
+            f"{'OK' if static_ok else 'FAIL'}"
+        )
+
+        if not node.send_motion(BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], 5.0):
+            node.get_logger().warning(
+                "START returned failure (already set?); continuing"
+            )
+        time.sleep(1.0)
+
+        results = []
+        for heading in HEADINGS_DEG:
+            radians = math.radians(heading)
+            out_x = args.leg_length * math.cos(radians)
+            out_y = args.leg_length * math.sin(radians)
+            node.get_logger().info(f"leg alpha={heading:.1f} deg (yaw held at 0)")
+            mark = node.get_clock().now().nanoseconds * 1e-9
+            node.send_motion(
+                BasicMotion.Goal.SET, [out_x, out_y, 0.0, 0.0], args.timeout
+            )
+            node.send_motion(
+                BasicMotion.Goal.SET, [0.0, 0.0, 0.0, 0.0], args.timeout
+            )
+            time.sleep(0.5)
+            results.append(
+                _evaluate_block(node, mark, f"alpha={heading:.1f}deg")
+            )
+
+        print()
+        header = (
+            f"{'block':>16} | {'samples':>7} | {'dvl err':>8} | "
+            f"{'stv err':>8} | {'along ratio':>11} | result"
+        )
+        print(header)
+        print("-" * len(header))
+        all_ok = static_ok
+        for passed, info in results:
+            all_ok = all_ok and passed
+            print(
+                f"{info['label']:>16} | {info['samples']:>7} | "
+                f"{info['error_dvl']:>8.4f} | {info['error_state']:>8.4f} | "
+                f"{info['along_ratio']:>11.3f} | "
+                f"{'PASS' if passed else 'FAIL'}"
+                + (f"  ({info['note']})" if info["note"] else "")
+            )
+        print()
+        print(
+            f"static: median |v| = {quiet_speed:.4f} m/s "
+            f"(limit {STATIC_SPEED_LIMIT}) -> {'PASS' if static_ok else 'FAIL'}"
+        )
+        print(f"overall: {'PASS' if all_ok else 'FAIL'}")
+        print(
+            "note: 'along ratio' should be ~1.0; the pre-fix scene gave "
+            "0.707 at alpha=0 and ~0 at alpha=22.5."
+        )
+        exit_code = 0 if all_ok else 1
+    except KeyboardInterrupt:
+        exit_code = 2
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

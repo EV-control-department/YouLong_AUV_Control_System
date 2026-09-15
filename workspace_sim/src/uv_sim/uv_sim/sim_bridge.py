@@ -8,9 +8,12 @@ Thruster mixer: xunyun 6-thruster geometry (direct NED body force → thrusts).
 import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
+import yaml
 from cv_bridge import CvBridge
 import rclpy
 from nav_msgs.msg import Odometry
@@ -28,6 +31,158 @@ from zit6_interfaces.srv import GetParams, UpdateParams
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def body_twist_from_odometry(msg: Odometry) -> tuple[float, float, float, float, float, float]:
+    """Return ``(u, v, w, p, q, r)`` in the **body** frame from ``/auv/odometry``.
+
+    ``nav_msgs/Odometry`` carries ``pose`` in ``header.frame_id`` (here
+    ``world_ned``) but ``twist`` in ``child_frame_id``.  Stonefish honours that
+    split by rotating the rigid-body velocity into the sensor frame before
+    filling the message (``Odometry.cpp:59,65``:
+    ``v = R_sensor<-world^T * v_point``); the odometry sensor sits at the
+    body origin with ``rpy~0``, so the twist *is* the body velocity.
+
+    Rotating it again by yaw would turn ``v_body`` into ``R(-psi) * v_body``
+    (at psi=90 deg a pure surge ``u`` becomes ``(0, -u)``), which corrupted
+    both ``/zit6/state/vel`` (SIL) and ``/zit6/sim/nav`` (HIL).  Keep this the
+    single place where the convention is encoded.
+    """
+    twist = msg.twist.twist
+    return (
+        twist.linear.x,
+        twist.linear.y,
+        twist.linear.z,
+        twist.angular.x,
+        twist.angular.y,
+        twist.angular.z,
+    )
+
+
+# ── PID gains: one external file is the single source of truth ──────────────
+# The keys are the same paths the ZIT6 parameter service speaks, so the file,
+# the service and the live controllers share one vocabulary.
+PID_PARAM_PATHS = (
+    'chassis.pid.pos.x',
+    'chassis.pid.pos.y',
+    'chassis.pid.pos.z',
+    'chassis.pid.pos.yaw',
+    'chassis.pid.pos.yaw_rate',   # inner loop of the yaw cascade
+    'chassis.pid.vel.x',
+    'chassis.pid.vel.y',
+    'chassis.pid.vel.z',
+    'chassis.pid.vel.yaw',
+)
+
+# path -> SimBridgeNode attribute holding the live _Pid instance
+PID_PARAM_ATTRIBUTES = {
+    'chassis.pid.pos.x': 'pid_x',
+    'chassis.pid.pos.y': 'pid_y',
+    'chassis.pid.pos.z': 'pid_z',
+    'chassis.pid.pos.yaw': 'pid_yaw',
+    'chassis.pid.pos.yaw_rate': 'pid_yaw_rate',
+    'chassis.pid.vel.x': 'pid_vx',
+    'chassis.pid.vel.y': 'pid_vy',
+    'chassis.pid.vel.z': 'pid_vz',
+    'chassis.pid.vel.yaw': 'pid_vyaw',
+}
+
+PID_REQUIRED_FIELDS = ('kp', 'ki', 'kd', 'i_limit')
+PID_OPTIONAL_FIELDS = ('z_thrust_ff',)
+
+# Used when the external file is missing or unreadable; keeps the SIL stack
+# runnable instead of failing at startup.
+DEFAULT_PID_PARAMS = {
+    'chassis.pid.pos.x': {'kp': 800.0, 'ki': 130.0, 'kd': 200.0, 'i_limit': 1000.0},
+    'chassis.pid.pos.y': {'kp': 600.0, 'ki': 120.0, 'kd': 150.0, 'i_limit': 1000.0},
+    'chassis.pid.pos.z': {'kp': 600.0, 'ki': 80.0, 'kd': 800.0, 'i_limit': 6200.0,
+                          'z_thrust_ff': 0.0},
+    'chassis.pid.pos.yaw': {'kp': 1.5, 'ki': 1.0, 'kd': 0.1, 'i_limit': 30.0},
+    'chassis.pid.pos.yaw_rate': {'kp': 30.0, 'ki': 20.0, 'kd': 1.0, 'i_limit': 600.0},
+    'chassis.pid.vel.x': {'kp': 600.0, 'ki': 50.0, 'kd': 10.0, 'i_limit': 500.0},
+    'chassis.pid.vel.y': {'kp': 300.0, 'ki': 50.0, 'kd': 10.0, 'i_limit': 500.0},
+    'chassis.pid.vel.z': {'kp': 300.0, 'ki': 30.0, 'kd': 50.0, 'i_limit': 500.0,
+                          'z_thrust_ff': 0.0},
+    'chassis.pid.vel.yaw': {'kp': 40.0, 'ki': 20.0, 'kd': 2.0, 'i_limit': 300.0},
+}
+
+
+def resolve_pid_config_path(explicit: str = "") -> Optional[Path]:
+    """Locate ``sim_pid.yaml``: explicit parameter > source tree > package share.
+
+    The **source tree wins** in a development checkout so that editing
+    ``src/uv_sim/config/sim_pid.yaml`` takes effect on the next node start
+    without a rebuild (the file installed under ``share/`` is a copy, not a
+    symlink).  An installed deployment without the source tree falls back to
+    the packaged copy.
+    """
+    if explicit:
+        return Path(explicit).expanduser()
+
+    source = Path(__file__).resolve().parent.parent / 'config' / 'sim_pid.yaml'
+    if source.is_file():
+        return source
+
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        installed = Path(get_package_share_directory('uv_sim')) / 'config' / 'sim_pid.yaml'
+        if installed.is_file():
+            return installed
+    except Exception:  # ament index unavailable (e.g. bare pytest run)
+        pass
+
+    return None
+
+
+def load_pid_params(path: Optional[Path], logger=None) -> dict:
+    """Load PID gains from ``path``, falling back to ``DEFAULT_PID_PARAMS``.
+
+    Every key in ``PID_PARAM_PATHS`` is always present in the result: the file
+    overrides defaults, so a partial file is valid and unknown keys are only
+    reported, never fatal.
+    """
+
+    def _warn(message: str) -> None:
+        if logger is not None:
+            logger.warning(message)
+
+    params = {key: dict(DEFAULT_PID_PARAMS[key]) for key in PID_PARAM_PATHS}
+
+    if path is None:
+        _warn("no sim_pid.yaml found; using built-in PID defaults")
+        return params
+    if not path.is_file():
+        _warn(f"PID config {path} does not exist; using built-in PID defaults")
+        return params
+
+    try:
+        raw = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+    except Exception as exc:  # malformed YAML must not take the sim down
+        _warn(f"failed to parse PID config {path}: {exc}; using built-in defaults")
+        return params
+
+    if not isinstance(raw, dict):
+        _warn(f"PID config {path} must be a mapping of path -> gains; ignoring it")
+        return params
+
+    for key, gains in raw.items():
+        if key not in params:
+            _warn(f"PID config {path}: unknown channel '{key}' ignored")
+            continue
+        if not isinstance(gains, dict):
+            _warn(f"PID config {path}: '{key}' must be a mapping; ignored")
+            continue
+        for field, value in gains.items():
+            if field not in PID_REQUIRED_FIELDS + PID_OPTIONAL_FIELDS:
+                _warn(f"PID config {path}: unknown field '{key}.{field}' ignored")
+                continue
+            try:
+                params[key][field] = float(value)
+            except (TypeError, ValueError):
+                _warn(f"PID config {path}: '{key}.{field}'={value!r} is not a number; ignored")
+
+    return params
 
 
 @dataclass
@@ -56,11 +211,19 @@ class _Pid:
 
 
 class SimBridgeNode(Node):
-    def __init__(self) -> None:
-        super().__init__("sim_bridge")
+    def __init__(self, node_name: str = "sim_bridge", **kwargs) -> None:
+        super().__init__(node_name, **kwargs)
 
         self.declare_parameter('hil_mode', False)
         self._hil_mode = self.get_parameter('hil_mode').value
+
+        # PID gains live in one external file (see load_pid_params).  The
+        # parameter lets an operator point at a tuning copy without touching
+        # the installed package; empty means "use the packaged file".
+        self.declare_parameter('pid_config_file', '')
+        self._pid_config_path = resolve_pid_config_path(
+            self.get_parameter('pid_config_file').value
+        )
 
         if self._hil_mode:
             self._init_hil()
@@ -76,7 +239,6 @@ class SimBridgeNode(Node):
 
         self.pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}     # NED deg
         self.vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}  # body, deg/s
-        self.vel_world = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
         self.thrust = [0.0] * 6
         self.target_pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
         self.target_vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
@@ -117,44 +279,31 @@ class SimBridgeNode(Node):
         self._init_camera_state()
 
         # === PID controllers ===
-        # Gains stored in dict for service access, synced to _Pid objects
-        self._pid_params = {
-            'chassis.pid.pos.x':   {'kp': 800,   'ki': 130.0, 'kd': 200.0,  'i_limit': 1000.0},
-            'chassis.pid.pos.y':   {'kp': 600.0, 'ki': 120.0, 'kd': 150.0,  'i_limit': 1000.0},
-            'chassis.pid.pos.z':   {'kp': 600.0, 'ki': 30.0,  'kd': 800.0,  'i_limit': 6200.0},
-            'chassis.pid.pos.yaw': {'kp': 1.5,   'ki': 1.0,   'kd': 0.1,    'i_limit': 30.0},
-            'chassis.pid.vel.x':   {'kp': 300.0, 'ki': 50.0,  'kd': 10.0,   'i_limit': 500.0},
-            'chassis.pid.vel.y':   {'kp': 300.0, 'ki': 50.0,  'kd': 10.0,   'i_limit': 500.0},
-            'chassis.pid.vel.z':   {'kp': 300.0, 'ki': 30.0,  'kd': 50.0,   'i_limit': 500.0},
-            'chassis.pid.vel.yaw': {'kp': 40.0,  'ki': 20.0,  'kd': 2.0,    'i_limit': 300.0},
-        }
-        # Map param paths to _Pid instances for runtime updates
-        self._pid_objects = {}  # populated after PID creation
-
-        # Position: body-frame error → body force
-        self.pid_x = _Pid(800, 130.0, 200.0, i_limit=1000.0)
-        self.pid_y = _Pid(600.0, 120.0, 150.0, i_limit=1000.0)
-        self.pid_z = _Pid(600.0, 80.0, 800.0, i_limit=6200.0, z_thrust_ff=0)
-        self.pid_yaw = _Pid(1.5, 1.0, 0.1, i_limit=30.0)
-        self.pid_yaw_rate = _Pid(30.0, 20.0, 1.0, i_limit=600.0)
-
-        # Velocity: body-frame velocity error → body force
-        self.pid_vx = _Pid(600.0, 50.0, 10.0, i_limit=500.0)
-        self.pid_vy = _Pid(300.0, 50.0, 10.0, i_limit=500.0)
-        self.pid_vz = _Pid(300.0, 30.0, 50.0, i_limit=500.0, z_thrust_ff=0)
-        self.pid_vyaw = _Pid(40.0, 20.0, 2.0, i_limit=300.0)
-
-        # Map param paths to PID objects for write-through
-        self._pid_objects = {
-            'chassis.pid.pos.x':   self.pid_x,
-            'chassis.pid.pos.y':   self.pid_y,
-            'chassis.pid.pos.z':   self.pid_z,
-            'chassis.pid.pos.yaw': self.pid_yaw,
-            'chassis.pid.vel.x':   self.pid_vx,
-            'chassis.pid.vel.y':   self.pid_vy,
-            'chassis.pid.vel.z':   self.pid_vz,
-            'chassis.pid.vel.yaw': self.pid_vyaw,
-        }
+        # One external file is the single source of truth: the same dict backs
+        # /zit6/get_params and builds the live _Pid objects, so the service can
+        # never report gains that differ from the ones actually in use.
+        #   file : <uv_sim share>/config/sim_pid.yaml
+        #   param: pid_config_file:=/path/to/other.yaml
+        # Structure: position mode = x/y/z single loops + yaw two-level cascade;
+        # velocity mode = four single loops (details in the config file header).
+        self._pid_params = load_pid_params(self._pid_config_path, self.get_logger())
+        self._pid_objects = {}
+        for path, attribute in PID_PARAM_ATTRIBUTES.items():
+            gains = self._pid_params[path]
+            pid = _Pid(
+                gains['kp'],
+                gains['ki'],
+                gains['kd'],
+                i_limit=gains['i_limit'],
+                z_thrust_ff=gains.get('z_thrust_ff', 0.0),
+            )
+            setattr(self, attribute, pid)
+            self._pid_objects[path] = pid
+        self.get_logger().info(
+            "PID gains loaded from "
+            f"{self._pid_config_path or '<built-in defaults>'} "
+            f"({len(self._pid_objects)} channels)"
+        )
 
         # === Subscriptions ===
         self.create_subscription(ZitSetpoint, "/zit6/cmd/setpoint", self._setpoint_cb, 10)
@@ -223,14 +372,12 @@ class SimBridgeNode(Node):
         self._sim_pos[4] = pitch
         self._sim_pos[5] = yaw
 
-        # World-frame linear velocity → body-frame (NED FRD)
-        vx_w = msg.twist.twist.linear.x
-        vy_w = msg.twist.twist.linear.y
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        self._sim_vel[0] = vx_w * cy + vy_w * sy    # u (surge)
-        self._sim_vel[1] = -vx_w * sy + vy_w * cy   # v (sway)
-        self._sim_vel[2] = msg.twist.twist.linear.z  # w (heave)
-        # p, q, r filled by IMU callback
+        # Twist is already body-frame (see body_twist_from_odometry);
+        # p, q, r are refreshed by the IMU callback.
+        u, v, w, _, _, _ = body_twist_from_odometry(msg)
+        self._sim_vel[0] = u  # u (surge)
+        self._sim_vel[1] = v  # v (sway)
+        self._sim_vel[2] = w  # w (heave)
 
         self._publish_sim_nav()
 
@@ -473,6 +620,8 @@ class SimBridgeNode(Node):
                         pid.ki = gains.get('ki', 0.0)
                         pid.kd = gains.get('kd', 0.0)
                         pid.i_limit = gains.get('i_limit', 0.5)
+                        if 'z_thrust_ff' in gains:
+                            pid.z_thrust_ff = gains['z_thrust_ff']
                     self.get_logger().info(f"Params: {path} → {gains}")
 
             response.success = True
@@ -643,23 +792,16 @@ class SimBridgeNode(Node):
         self.pos['ry'] = math.degrees(pitch)
         self.pos['rz'] = math.degrees(yaw)
 
-        vx_w = msg.twist.twist.linear.x
-        vy_w = msg.twist.twist.linear.y
-        self.vel_world['x'] = vx_w
-        self.vel_world['y'] = vy_w
-        self.vel_world['z'] = msg.twist.twist.linear.z
-        self.vel_world['rx'] = math.degrees(msg.twist.twist.angular.x)
-        self.vel_world['ry'] = math.degrees(msg.twist.twist.angular.y)
-        self.vel_world['rz'] = math.degrees(msg.twist.twist.angular.z)
-
-        # World → body velocity rotation (yaw-only for XY linear, direct for angular)
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        self.vel['x'] = vx_w * cy + vy_w * sy
-        self.vel['y'] = -vx_w * sy + vy_w * cy
-        self.vel['z'] = msg.twist.twist.linear.z
-        self.vel['rx'] = self.vel_world['rx']
-        self.vel['ry'] = self.vel_world['ry']
-        self.vel['rz'] = self.vel_world['rz']
+        # Twist is already body-frame -- no yaw rotation here (see
+        # body_twist_from_odometry).  The DVL callback overwrites x/y/z with its
+        # own measurement, so this path only fills the gaps between DVL samples.
+        u, v, w, p, q_rate, r = body_twist_from_odometry(msg)
+        self.vel['x'] = u
+        self.vel['y'] = v
+        self.vel['z'] = w
+        self.vel['rx'] = math.degrees(p)
+        self.vel['ry'] = math.degrees(q_rate)
+        self.vel['rz'] = math.degrees(r)
 
         self.current_pose_ready = True
 

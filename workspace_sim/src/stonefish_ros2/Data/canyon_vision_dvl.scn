@@ -14,13 +14,13 @@
               这里给 world_transform z = +8.0 把它整体压到水下：
                   谷缘(浅) ≈ 2.27 m 深，谷底(深) ≈ 8.34 m 深。
     起点    : 5.5 -9.5 6.2  —— 峡谷内最开阔的谷底上方 1.8 m 处
-              （谷底约 8.0 m 深，±2 m 内无崖壁，DVL 底距约 1.8 m）
+              （谷底约 8.0 m 深，±2 m 内无崖壁，DVL 底距约 1.9 m）
     载具    : XUNYUN AUV，由 xunyun_fixed.scn 引入
-              DVL 20 Hz      -> /auv/dvl, /auv/dvl_altitude
-              IMU 20 Hz      -> /auv/imu
+              DVL 20 Hz      -> /auv/dvl, /auv/dvl_altitude（机体系速度，斜置 45°、离竖直 30°）
+              IMU 200 Hz     -> /auv/imu
               pressure 5 Hz  -> /auv/pressure
               odometry 30 Hz -> /auv/odometry
-              前视双目 10 Hz 1280x960 -> /sim/front_cam/left|right/image_color
+              前视双目 20 Hz 1280x960 -> /sim/front_cam/left|right/image_color
               下视双目 30 Hz 1920x1080 -> /sim/down_cam/left|right/image_color
     ============================================================================
     启动方式：
