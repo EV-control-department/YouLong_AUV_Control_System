@@ -1,0 +1,61 @@
+schema_version: 1
+camera: front
+
+profiles:
+  sim:
+    capture_resolution: [2560, 960]
+    eye_resolution: [1280, 960]
+    image_topic: /auv/front_cam/stitched
+    eye_image_topics:
+      left: /sim/front_cam/left/image_color
+      right: /sim/front_cam/right/image_color
+    stereo_info_topic: /auv/front_cam/stereo_info
+    camera_info_topics:
+      left: /sim/front_cam/left/camera_info
+      right: /sim/front_cam/right/camera_info
+    device: null
+    calibration_source: sim_camera_info
+    calibration_npz: robotcup_front.npz
+    intrinsics:
+      left:
+        matrix: [[1174.086809, 0.0, 640.0], [0.0, 1174.086809, 480.0], [0.0, 0.0, 1.0]]
+        distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+      right:
+        matrix: [[1174.086809, 0.0, 640.0], [0.0, 1174.086809, 480.0], [0.0, 0.0, 1.0]]
+        distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+    extrinsics:
+      left:
+        translation: [0.19, -0.05, 0.176]
+        optical_to_body: [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+      right:
+        translation: [0.19, 0.05, 0.176]
+        optical_to_body: [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+
+  real:
+    capture_resolution: [2560, 960]
+    eye_resolution: [1280, 960]
+    image_topic: /auv/front_cam/stitched
+    eye_image_topics:
+      left: ""
+      right: ""
+    stereo_info_topic: /auv/front_cam/stereo_info
+    camera_info_topics:
+      left: ""
+      right: ""
+    device: /dev/video0
+    calibration_source: npz
+    calibration_npz: front.npz
+    intrinsics:
+      left:
+        matrix: [[1140.637671, 0.0, 590.862280], [0.0, 1140.646235, 477.087131], [0.0, 0.0, 1.0]]
+        distortion: [-0.353065, 0.135745, -0.000473, 0.001185, 0.0]
+      right:
+        matrix: [[1136.709271, 0.0, 594.942213], [0.0, 1137.248996, 466.207301], [0.0, 0.0, 1.0]]
+        distortion: [-0.358259, 0.152337, 0.000314, 0.001654, 0.0]
+    extrinsics:
+      left:
+        translation: [0.23, -0.05, 0.076]
+        optical_to_body: [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
+      right:
+        translation: [0.23, 0.05, 0.076]
+        optical_to_body: [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]

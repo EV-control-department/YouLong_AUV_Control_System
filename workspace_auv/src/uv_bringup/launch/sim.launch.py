@@ -150,6 +150,7 @@ def generate_launch_description():
     enable_nav = LaunchConfiguration("enable_nav")
     enable_task = LaunchConfiguration("enable_task")
     mission_file = LaunchConfiguration("mission_file")
+    camera_config_dir = LaunchConfiguration("camera_config_dir")
     profile = LaunchConfiguration("profile")
     sim_profile_params = profile_path(profile, "uv_sim")
     camera_profile_params = profile_path(profile, "uv_camera")
@@ -216,6 +217,8 @@ def generate_launch_description():
         "stream_annotated": LaunchConfiguration("stream_annotated"),
         "mjpeg_port": LaunchConfiguration("preview_port"),
         "annotated_max_width": LaunchConfiguration("annotated_max_width"),
+        "camera_config_profile": "sim",
+        "camera_config_dir": camera_config_dir,
         "save_dataset": record_dataset,
         "dataset_dir": dataset_dir,
         "profile_params": camera_profile_params,
@@ -234,6 +237,8 @@ def generate_launch_description():
         "enable_task": enable_task,
         "target_id": target_id,
         "profile_params": "",
+        "camera_config_profile": "sim",
+        "camera_config_dir": camera_config_dir,
         "mission_file": mission_file,
     })
 
@@ -353,6 +358,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "dataset_dir", default_value="records/datasets",
             description="Dataset output directory",
+        ),
+        DeclareLaunchArgument(
+            "camera_config_dir", default_value="",
+            description="Optional directory containing front.yaml and down.yaml",
         ),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         RegisterEventHandler(OnProcessExit(on_exit=_after_readiness)),

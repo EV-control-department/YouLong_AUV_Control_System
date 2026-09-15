@@ -3,21 +3,103 @@ mission:
   tasks:
     - name: start
       config: ../tasks/start.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "start.timeout": {}
+
     - name: return_origin
       config: ../tasks/return_origin.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "return_origin.timeout": {}
+
     - name: btravelx
       config: ../tasks/btravelx.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "btravelx.timeout": {}
+
     - name: setz
       config: ../tasks/setz.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "setz.timeout": {}
+
     - name: 26rb_hit_balls
       config: ../tasks/26rb_hit_balls.yaml
+      initial:
+        params:
+          order: [impact_ball_blue] # 使用模型映射中的 canonical class name。
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "26rb_hit_balls.timeout": {}
+
     - name: 26rb_gate_task
       config: ../tasks/26rb_gate_task.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "26rb_gate_task.timeout": {}
+
     - name: 26rb_find_collection_frame
       config: ../tasks/26rb_find_collection_frame.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "26rb_find_collection_frame.timeout": {}
+
     - name: 26rb_grab_ball
       config: ../tasks/26rb_grab_ball.yaml
+      initial:
+        params:
+          ball_color: pink_golf # 使用模型映射中的 canonical class name。
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "26rb_grab_ball.timeout": {}
     - name: 26rb_drop_ball_target_rack
       config: ../tasks/26rb_drop_ball_target_rack.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "26rb_drop_ball_target_rack.timeout": {}
+
     - name: return_origin
       config: ../tasks/return_origin.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "return_origin.timeout": {}

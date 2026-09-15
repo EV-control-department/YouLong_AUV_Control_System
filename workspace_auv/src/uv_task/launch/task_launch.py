@@ -13,16 +13,25 @@ def generate_launch_description():
     target_id = LaunchConfiguration("target_id")
     profile_params = LaunchConfiguration("profile_params")
     mission_file = LaunchConfiguration("mission_file")
+    camera_config_profile = LaunchConfiguration("camera_config_profile")
+    camera_config_dir = LaunchConfiguration("camera_config_dir")
 
     def _nodes(context):
         parameters = []
         profile = profile_params.perform(context).strip()
         if profile:
             parameters.append(profile)
-        parameters.append({
+        task_parameters = {
             "target_id": target_id,
             "mission_file": mission_file,
-        })
+        }
+        requested_camera_profile = camera_config_profile.perform(context).strip()
+        if requested_camera_profile and requested_camera_profile.lower() != "auto":
+            task_parameters["camera_config_profile"] = camera_config_profile
+        requested_camera_dir = camera_config_dir.perform(context).strip()
+        if requested_camera_dir:
+            task_parameters["camera_config_dir"] = camera_config_dir
+        parameters.append(task_parameters)
         return [Node(
             package="uv_task",
             executable="task_runner",
@@ -37,6 +46,8 @@ def generate_launch_description():
         DeclareLaunchArgument("enable_task", default_value="true"),
         DeclareLaunchArgument("target_id", default_value="yellow_golf"),
         DeclareLaunchArgument("profile_params", default_value=""),
+        DeclareLaunchArgument("camera_config_profile", default_value="auto"),
+        DeclareLaunchArgument("camera_config_dir", default_value=""),
         DeclareLaunchArgument(
             "mission_file",
             default_value=PathJoinSubstitution([

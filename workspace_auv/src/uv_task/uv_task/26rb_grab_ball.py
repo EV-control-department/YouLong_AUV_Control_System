@@ -8,24 +8,8 @@ import time
 import numpy as np
 
 from uv_msgs.action import BasicMotion
-from uv_camera.model_classes import model_class_id
-
-
-_BALL_CLASS_IDS = {
-    'blue': model_class_id('impact_ball_blue'),
-    'impact_ball_blue': model_class_id('impact_ball_blue'),
-    'blue_ball': model_class_id('impact_ball_blue'),
-    # The active down-left detector labels the red ball as class 7.
-    'red': model_class_id('pink_golf'),
-    'impact_ball_red': model_class_id('pink_golf'),
-    'red_ball': model_class_id('pink_golf'),
-    'pink': model_class_id('pink_golf'),
-    'pink_golf': model_class_id('pink_golf'),
-    'pink_ball': model_class_id('pink_golf'),
-    'yellow': model_class_id('yellow_golf'),
-    'yellow_golf': model_class_id('yellow_golf'),
-    'yellow_ball': model_class_id('yellow_golf'),
-}
+from uv_camera.model_classes import model_class_id, model_class_name
+from uv_task.task_outcome import TaskOutcome
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -44,22 +28,18 @@ class RB26GrabBallTask:
     because the final pickup alignment is relative to the camera and gripper.
     """
 
-    # These are the same down-left calibration values used by arrow_surfacer,
-    # line_follower, and object_localizer.py.
-    _IMAGE_WIDTH = 1280.0
-    _IMAGE_HEIGHT = 960.0
-    _HFOV_DEG = 87.19
-    _FX = _IMAGE_WIDTH / (2.0 * math.tan(math.radians(_HFOV_DEG) / 2.0))
-    _FY = _FX
-    _CX = _IMAGE_WIDTH / 2.0
-    _CY = _IMAGE_HEIGHT / 2.0
-
     def __init__(self, node, params: dict):
         self._node = node
         self._params = params
         self._logger = node.get_logger()
 
-        color = params.get('ball_color', params.get('color', 'red'))
+        down_left = node.camera_configs['down'].side('left')
+        self._fx = float(down_left.matrix[0, 0])
+        self._fy = float(down_left.matrix[1, 1])
+        self._cx = float(down_left.matrix[0, 2])
+        self._cy = float(down_left.matrix[1, 2])
+
+        color = params.get('ball_color', 'pink_golf')
         self._class_id = self._parse_ball_color(color)
         self._color = str(color)
         self._detection_timeout = max(
@@ -112,11 +92,16 @@ class RB26GrabBallTask:
     def _parse_ball_color(value) -> int | None:
         if isinstance(value, (int, np.integer)):
             class_id = int(value)
-            return class_id if class_id in set(_BALL_CLASS_IDS.values()) else None
-        text = str(value or '').strip().lower().replace('-', '_').replace(' ', '_')
-        if text.isdigit():
-            return RB26GrabBallTask._parse_ball_color(int(text))
-        return _BALL_CLASS_IDS.get(text)
+            name = model_class_name(class_id)
+        else:
+            text = str(value or '').strip()
+            if text.isdigit():
+                return RB26GrabBallTask._parse_ball_color(int(text))
+            class_id = model_class_id(text, required=False)
+            name = model_class_name(class_id) if class_id is not None else None
+        return class_id if name in {
+            'impact_ball_blue', 'impact_ball_red', 'pink_golf', 'yellow_golf'
+        } else None
 
     def _best_left_detection(self):
         """Return the freshest/highest-quality target in down-left."""
@@ -160,8 +145,8 @@ class RB26GrabBallTask:
         # Down-left optical axes are mapped to body (-y, +x, +z).  Therefore
         # a target to the right of image centre requires body +y motion, while
         # a target below image centre requires body -x motion.
-        du = (px - self._CX) / self._FX
-        dv = (py - self._CY) / self._FY
+        du = (px - self._cx) / self._fx
+        dv = (py - self._cy) / self._fy
         body_dx = -dv * self._projection_depth * self._servo_gain
         body_dy = du * self._projection_depth * self._servo_gain
         norm = math.hypot(body_dx, body_dy)
@@ -408,7 +393,7 @@ class RB26GrabBallTask:
         self._logger.info('26rb_grab_ball：已返回记录的伺服位置')
         return True
 
-    def execute(self) -> bool:
+    def execute(self) -> TaskOutcome:
         total_attempts = self._max_grab_retries + 1
         for attempt in range(1, total_attempts + 1):
             self._logger.info(
@@ -416,22 +401,27 @@ class RB26GrabBallTask:
                 f'在左下视野搜索 {self._color}（class_id={self._class_id}）')
             recorded_pose = self._servo_horizontally()
             if recorded_pose is None:
-                return False
+                return TaskOutcome.failed(
+                    '26rb_grab_ball.servo', '水平视觉对准失败')
             if not self._apply_gripper_offset():
-                return False
+                return TaskOutcome.failed(
+                    '26rb_grab_ball.gripper', '夹爪偏置移动失败')
             if not self._wait_pre_descent_settle():
-                return False
+                return TaskOutcome.failed(
+                    '26rb_grab_ball.gripper', '下潜前稳定等待失败')
             self._logger.info(
                 f'26rb_grab_ball：以 {self._descent_speed:.3f}m/s '
                 f'下潜 {self._descent_duration:.1f}s')
             if not self._descend():
-                return False
+                return TaskOutcome.failed(
+                    '26rb_grab_ball.descent', '下潜失败')
             if not self._return_to_recorded_pose(recorded_pose):
-                return False
+                return TaskOutcome.failed(
+                    '26rb_grab_ball.return', '返回水平伺服位置失败')
             if self._verify_ball_removed():
                 self._logger.info(
                     f'26rb_grab_ball：第 {attempt} 次抓取确认成功')
-                return True
+                return TaskOutcome.ok()
             if attempt < total_attempts:
                 self._logger.warning(
                     f'26rb_grab_ball：第 {attempt} 次抓取后仍检测到 {self._color}；'
@@ -440,5 +430,8 @@ class RB26GrabBallTask:
             self._logger.error(
                 f'26rb_grab_ball：已达到最大重新尝试次数 '
                 f'{self._max_grab_retries}，仍未确认 {self._color} 被抓走')
-            return False
-        return False
+            return TaskOutcome.failed(
+                '26rb_grab_ball.verification',
+                f'仍未确认 {self._color} 被抓走')
+        return TaskOutcome.failed(
+            '26rb_grab_ball.verification', '抓球任务未完成')

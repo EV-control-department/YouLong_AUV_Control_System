@@ -30,6 +30,7 @@ from std_msgs.msg import Float32MultiArray, Header
 
 from . import ai as ai_mod
 from . import sensor as sensor_mod
+from .camera_config import load_camera_config, profile_for_mode
 from .common import (
     DATASET_DIR,
     ENABLE_GORTC,
@@ -58,6 +59,14 @@ class CameraAiNode(Node):
         super().__init__('uv_camera')
         self._declare_params()
         params = self._read_params()
+        camera_profile = profile_for_mode(
+            params['sim_mode'], params['camera_config_profile'])
+        config_dir = params['camera_config_dir'] or None
+        camera_configs = {
+            camera: load_camera_config(camera, camera_profile, config_dir)
+            for camera in ('front', 'down')
+        }
+        self.camera_configs = camera_configs
 
         # stream caches (go2rtc preview: raw + annotated)
         self._preview_enabled = params['enable_gortc']
@@ -116,7 +125,7 @@ class CameraAiNode(Node):
             dataset_fsync_each_file=params['dataset_fsync_each_file'],
             inference_threads=params['inference_threads'],
             gate_feature_mode=params['gate_feature_mode'],
-            confidence=params['confidence'])
+            confidence=params['confidence'], camera_configs=camera_configs)
         self._gate = FrameGate(self.ai.process, cameras=active,
                                max_workers=2, log_warn=self._warn)
         if params['enable_ai']:
@@ -130,7 +139,8 @@ class CameraAiNode(Node):
         self.sensor = sensor_mod.Sensor(
             self, self._gate, params['sim_mode'],
             params['enable_front'], params['enable_down'],
-            startup_timeout_s=params['camera_startup_timeout_s'])
+            startup_timeout_s=params['camera_startup_timeout_s'],
+            camera_configs=camera_configs)
         try:
             self.sensor.start()
         except Exception as error:
@@ -183,8 +193,8 @@ class CameraAiNode(Node):
         self.declare_parameter('annotated_max_width', 0)
         self.declare_parameter('enable_front_camera', True)
         self.declare_parameter('enable_down_camera', True)
-        self.declare_parameter('front_cam_path', '/dev/video0')
-        self.declare_parameter('down_cam_path', '/dev/video2')
+        self.declare_parameter('camera_config_profile', 'auto')
+        self.declare_parameter('camera_config_dir', '')
         self.declare_parameter('line_contour_min_area', 200)
         self.declare_parameter('line_filter_process_noise', 1.0)
         self.declare_parameter('line_filter_measurement_noise', 3.0)
@@ -194,13 +204,6 @@ class CameraAiNode(Node):
         self.declare_parameter('dataset_png_compression', 1)
         self.declare_parameter('dataset_format', 'png')
         self.declare_parameter('model_path', '')
-        # calibration (defaults come from common constants)
-        from .common import (FRONT_CAMERA_MATRIX, FRONT_DIST_COEFFS,
-                             DOWN_CAMERA_MATRIX, DOWN_DIST_COEFFS)
-        self.declare_parameter('front_camera_matrix', list(FRONT_CAMERA_MATRIX))
-        self.declare_parameter('front_dist_coeffs', list(FRONT_DIST_COEFFS))
-        self.declare_parameter('down_camera_matrix', list(DOWN_CAMERA_MATRIX))
-        self.declare_parameter('down_dist_coeffs', list(DOWN_DIST_COEFFS))
 
     def _read_params(self):
         g = self.get_parameter
@@ -234,6 +237,8 @@ class CameraAiNode(Node):
             'mjpeg_port': g('mjpeg_port').value,
             'enable_front': g('enable_front_camera').value,
             'enable_down': g('enable_down_camera').value,
+            'camera_config_profile': str(g('camera_config_profile').value),
+            'camera_config_dir': str(g('camera_config_dir').value).strip(),
             'model_path': g('model_path').value,
         }
 

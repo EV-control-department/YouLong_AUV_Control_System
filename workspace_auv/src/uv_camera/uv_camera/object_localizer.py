@@ -61,6 +61,7 @@ from .model_classes import (
     model_class_id,
     physical_class_name,
 )
+from .camera_config import CameraConfigError, load_camera_config, profile_for_mode
 
 from .bbox_geometry import (
     CameraContext,
@@ -829,25 +830,9 @@ class ObjectLocalizer(Node):
                 "object_localizer has invalid calibration; positions disabled")
 
     def _declare_parameters(self):
-        self.declare_parameter("calibration_source", "npz")
-        self.declare_parameter("front_calibration_file", "")
-        self.declare_parameter("down_calibration_file", "")
-        self.declare_parameter(
-            "front_left_camera_info_topic",
-            "/sim/front_cam/left/camera_info")
-        self.declare_parameter(
-            "front_right_camera_info_topic",
-            "/sim/front_cam/right/camera_info")
-        self.declare_parameter(
-            "down_left_camera_info_topic",
-            "/sim/down_cam/left/camera_info")
-        self.declare_parameter(
-            "down_right_camera_info_topic",
-            "/sim/down_cam/right/camera_info")
-        self.declare_parameter("front_image_width", 1280)
-        self.declare_parameter("front_image_height", 960)
-        self.declare_parameter("down_image_width", 1280)
-        self.declare_parameter("down_image_height", 960)
+        self.declare_parameter("sim_mode", False)
+        self.declare_parameter("camera_config_profile", "auto")
+        self.declare_parameter("camera_config_dir", "")
 
         self.declare_parameter("stereo_sync_slop_sec", 0.04)
         self.declare_parameter("stereo_pending_timeout_sec", 0.15)
@@ -1013,50 +998,38 @@ class ObjectLocalizer(Node):
         self.declare_parameter("observation_history_size", 500)
         self.declare_parameter("class_names", list(DEFAULT_CLASS_NAMES))
 
-        self.declare_parameter(
-            "front_left_translation", [0.23, -0.05, 0.076])
-        self.declare_parameter(
-            "front_right_translation", [0.23, 0.05, 0.076])
-        self.declare_parameter(
-            "down_left_translation", [-0.13, -0.05, 0.0645])
-        self.declare_parameter(
-            "down_right_translation", [-0.13, 0.05, 0.0645])
-        self.declare_parameter(
-            "front_left_rotation", [0.0, 0.0, 1.0,
-                                    -1.0, 0.0, 0.0,
-                                    0.0, -1.0, 0.0])
-        self.declare_parameter(
-            "front_right_rotation", [0.0, 0.0, 1.0,
-                                     -1.0, 0.0, 0.0,
-                                     0.0, -1.0, 0.0])
-        self.declare_parameter(
-            "down_left_rotation", [0.0, -1.0, 0.0,
-                                   1.0, 0.0, 0.0,
-                                   0.0, 0.0, 1.0])
-        self.declare_parameter(
-            "down_right_rotation", [0.0, -1.0, 0.0,
-                                    1.0, 0.0, 0.0,
-                                    0.0, 0.0, 1.0])
-
     def _read_parameters(self):
         get = self.get_parameter
-        self.calibration_source = str(
-            get("calibration_source").value).strip().lower()
-        if self.calibration_source not in {"npz", "sim_camera_info"}:
-            raise ValueError(
-                "calibration_source must be 'npz' or 'sim_camera_info'")
-        self.front_calibration_file = str(get("front_calibration_file").value)
-        self.down_calibration_file = str(get("down_calibration_file").value)
+        requested_profile = str(get("camera_config_profile").value)
+        config_dir = str(get("camera_config_dir").value).strip() or None
+        try:
+            camera_profile = profile_for_mode(
+                bool(get("sim_mode").value), requested_profile)
+            self.camera_configs = {
+                camera: load_camera_config(camera, camera_profile, config_dir)
+                for camera in ("front", "down")
+            }
+        except (CameraConfigError, OSError) as error:
+            raise ValueError(f"invalid camera registry: {error}") from error
+
+        sources = {config.calibration_source for config in self.camera_configs.values()}
+        if len(sources) != 1:
+            raise ValueError("front/down camera profiles must use one calibration source")
+        self.calibration_source = next(iter(sources))
+        self.front_calibration_file = str(
+            self.camera_configs["front"].calibration_npz)
+        self.down_calibration_file = str(
+            self.camera_configs["down"].calibration_npz)
         self.camera_info_topics = {
-            "front_left": str(get("front_left_camera_info_topic").value),
-            "front_right": str(get("front_right_camera_info_topic").value),
-            "down_left": str(get("down_left_camera_info_topic").value),
-            "down_right": str(get("down_right_camera_info_topic").value),
+            "front_left": self.camera_configs["front"].camera_info_topics["left"],
+            "front_right": self.camera_configs["front"].camera_info_topics["right"],
+            "down_left": self.camera_configs["down"].camera_info_topics["left"],
+            "down_right": self.camera_configs["down"].camera_info_topics["right"],
         }
-        self.front_width = int(get("front_image_width").value)
-        self.front_height = int(get("front_image_height").value)
-        self.down_width = int(get("down_image_width").value)
-        self.down_height = int(get("down_image_height").value)
+        self.front_width, self.front_height = self.camera_configs[
+            "front"].eye_resolution
+        self.down_width, self.down_height = self.camera_configs[
+            "down"].eye_resolution
 
         self.stereo_sync_slop = float(get("stereo_sync_slop_sec").value)
         self.pending_timeout = float(get("stereo_pending_timeout_sec").value)
@@ -1343,18 +1316,13 @@ class ObjectLocalizer(Node):
 
         self.body_translation = {}
         self.body_rotation = {}
-        for side in ("front_left", "front_right", "down_left", "down_right"):
-            translation = _finite_vector(
-                get(f"{side}_translation").value, 3)
-            rotation = _finite_vector(
-                get(f"{side}_rotation").value, 9)
-            if translation is None or rotation is None:
-                raise ValueError(f"invalid body extrinsic for {side}")
-            rotation = rotation.reshape(3, 3)
-            if not np.allclose(rotation @ rotation.T, np.eye(3), atol=2e-3):
-                raise ValueError(f"{side}_rotation is not orthonormal")
-            self.body_translation[side] = translation
-            self.body_rotation[side] = rotation
+        for camera in ("front", "down"):
+            config = self.camera_configs[camera]
+            for side in ("left", "right"):
+                camera_side = config.side(side)
+                key = f"{camera}_{side}"
+                self.body_translation[key] = camera_side.translation.copy()
+                self.body_rotation[key] = camera_side.optical_to_body.copy()
 
         self.pose_position_covariance = np.eye(3) * self.pose_position_sigma**2
         self.pose_angle_covariance = np.eye(3) * self.pose_angle_sigma_rad**2
@@ -1451,6 +1419,27 @@ class ObjectLocalizer(Node):
             return
 
         try:
+            config = self.camera_configs[camera_pair]
+            expected_width, expected_height = config.eye_resolution
+            for side, info in (("left", left_info), ("right", right_info)):
+                if (int(info.width), int(info.height)) != (
+                        expected_width, expected_height):
+                    raise ValueError(
+                        f"{camera_pair}_{side} CameraInfo size "
+                        f"{info.width}x{info.height} differs from registry "
+                        f"{expected_width}x{expected_height}")
+                matrix = np.asarray(info.k, dtype=np.float64).reshape(3, 3)
+                distortion = np.asarray(info.d, dtype=np.float64).reshape(-1)
+                if distortion.size == 0:
+                    distortion = np.zeros(5, dtype=np.float64)
+                expected = config.side(side)
+                if not np.allclose(matrix, expected.matrix, rtol=1e-3, atol=1e-2):
+                    raise ValueError(
+                        f"{camera_pair}_{side} CameraInfo K differs from registry")
+                if not np.allclose(
+                        distortion, expected.distortion, rtol=1e-3, atol=1e-4):
+                    raise ValueError(
+                        f"{camera_pair}_{side} CameraInfo D differs from registry")
             calibration = StereoCalibration.from_camera_info(
                 camera_pair, left_info, right_info,
                 self.body_translation[left_key], self.body_rotation[left_key],

@@ -29,4 +29,13 @@ def test_mapping_contains_physical_object_and_camera_metadata():
 
 def test_detector_labels_resolve_to_the_yaml_ids():
     assert model_class_id("impact_ball_red") == CLASS_IDS["impact_ball_red"]
-    assert model_class_id("yellow-golf") == CLASS_IDS["yellow_golf"]
+    assert model_class_id("yellow_golf") == CLASS_IDS["yellow_golf"]
+
+
+def test_semantic_colour_aliases_are_not_in_the_shared_mapping():
+    import pytest
+
+    with pytest.raises(ValueError):
+        model_class_id("blue")
+    with pytest.raises(ValueError):
+        model_class_id("red")

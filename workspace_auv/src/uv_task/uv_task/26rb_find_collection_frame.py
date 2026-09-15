@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from uv_msgs.action import BasicMotion
+from uv_task.task_outcome import TaskOutcome
 
 
 class RB26FindCollectionFrameTask:
@@ -12,7 +13,7 @@ class RB26FindCollectionFrameTask:
         self._node = node
         self._params = params
 
-    def execute(self) -> bool:
+    def execute(self) -> TaskOutcome:
         node = self._node
         params = self._params
         import time
@@ -42,7 +43,9 @@ class RB26FindCollectionFrameTask:
             if not node._scan_localizer_east_to_south(params, deadline):
                 node.get_logger().error(
                     'find_collection_frame：从东向南扫描未找到目标')
-                return False
+                return TaskOutcome.failed(
+                    '26rb_find_collection_frame.search',
+                    '未找到置物台或目标架')
 
         looked = set()
         while not node.stopped and time.monotonic() < deadline:
@@ -51,7 +54,9 @@ class RB26FindCollectionFrameTask:
                 if name in looked or name not in targets:
                     continue
                 if not node._look_at_localizer_target(targets[name], params, name):
-                    return False
+                    return TaskOutcome.failed(
+                        '26rb_find_collection_frame.look',
+                        f'观察 {name} 失败')
                 confirm_deadline = min(
                     deadline,
                     time.monotonic() + max(
@@ -60,7 +65,9 @@ class RB26FindCollectionFrameTask:
                         name, params, confirm_deadline):
                     node.get_logger().error(
                         f'find_collection_frame：{name} 位置确认失败')
-                    return False
+                    return TaskOutcome.failed(
+                        '26rb_find_collection_frame.confirm',
+                        f'{name} 位置确认失败')
                 looked.add(name)
                 node.get_logger().info(
                     f'find_collection_frame：定位器已确认 {name} 位置')
@@ -70,14 +77,17 @@ class RB26FindCollectionFrameTask:
             time.sleep(0.05)
 
         if node.stopped:
-            return False
+            return TaskOutcome.failed(
+                '26rb_find_collection_frame.search', '定位任务被中止')
         targets = node._current_localizer_targets(params)
         if not all(name in targets for name in required):
             missing = [name for name in required if name not in targets]
             node.get_logger().error(
                 'find_collection_frame：等待定位器位置超时，'
                 f'缺少={missing}')
-            return False
+            return TaskOutcome.failed(
+                '26rb_find_collection_frame.timeout',
+                f'定位器位置超时，缺少={missing}')
 
         platform = targets[platform_name]
         target_z = max(0.0, float(params.get('collection_depth_m', 0.20)))
@@ -102,11 +112,12 @@ class RB26FindCollectionFrameTask:
         if not success:
             node.get_logger().error(
                 f'find_collection_frame：移动到置物台上方失败：{message}')
-            return False
+            return TaskOutcome.failed(
+                '26rb_find_collection_frame.move', message)
         node._cmd_x = float(platform['x'])
         node._cmd_y = float(platform['y'])
         node._cmd_z = target_z
         node._cmd_yaw = target_yaw
         node.get_logger().info(
             'find_collection_frame：已到达置物台上方位置')
-        return True
+        return TaskOutcome.ok()

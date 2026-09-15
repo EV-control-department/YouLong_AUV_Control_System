@@ -7,15 +7,17 @@ from types import SimpleNamespace
 import numpy as np
 
 from importlib import import_module
+from uv_camera.camera_config import load_camera_config
 
 _gate = import_module('uv_task.26rb_gate_task')
 GateTask = _gate.RB26GateTask
 GateCandidate = _gate.GateCandidate
 GateObservation = _gate.GateObservation
-_DEFAULT_K = _gate._DEFAULT_K
-_FRONT_OFFSET_LEFT = _gate._FRONT_OFFSET_LEFT
-_FRONT_OFFSET_RIGHT = _gate._FRONT_OFFSET_RIGHT
-_OPTICAL_TO_BODY = _gate._OPTICAL_TO_BODY
+_FRONT_CONFIG = load_camera_config('front', 'sim')
+_DEFAULT_K = _FRONT_CONFIG.side('left').matrix
+_FRONT_OFFSET_LEFT = _FRONT_CONFIG.side('left').translation
+_FRONT_OFFSET_RIGHT = _FRONT_CONFIG.side('right').translation
+_OPTICAL_TO_BODY = _FRONT_CONFIG.side('left').optical_to_body
 def _project(point, offset):
     camera = _OPTICAL_TO_BODY.T @ (np.asarray(point) - offset)
     return np.array([

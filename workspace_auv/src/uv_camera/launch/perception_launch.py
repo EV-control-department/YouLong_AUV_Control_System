@@ -35,6 +35,8 @@ def generate_launch_description():
     dataset_queue_size = LaunchConfiguration("dataset_queue_size")
     dataset_png_compression = LaunchConfiguration("dataset_png_compression")
     dataset_format = LaunchConfiguration("dataset_format")
+    camera_config_profile = LaunchConfiguration("camera_config_profile")
+    camera_config_dir = LaunchConfiguration("camera_config_dir")
     profile_params = LaunchConfiguration("profile_params")
     object_localizer_params = LaunchConfiguration("object_localizer_params")
 
@@ -43,6 +45,17 @@ def generate_launch_description():
         recording_enabled = _as_bool(save_dataset.perform(context))
         profile = profile_params.perform(context).strip()
         localizer_config = object_localizer_params.perform(context).strip()
+        requested_camera_profile = camera_config_profile.perform(context).strip()
+        requested_camera_dir = camera_config_dir.perform(context).strip()
+
+        # An explicit launch argument overrides a profile file.  Empty/auto
+        # values deliberately leave the profile file (or sim_mode selection)
+        # in control.
+        camera_overrides = {}
+        if requested_camera_profile and requested_camera_profile.lower() != "auto":
+            camera_overrides["camera_config_profile"] = camera_config_profile
+        if requested_camera_dir:
+            camera_overrides["camera_config_dir"] = camera_config_dir
 
         vision_parameters = []
         if profile:
@@ -73,12 +86,17 @@ def generate_launch_description():
             "dataset_png_compression": dataset_png_compression,
             "dataset_format": dataset_format,
         })
+        if camera_overrides:
+            vision_parameters.append(camera_overrides)
 
         localizer_parameters = []
         if profile:
             localizer_parameters.append(profile)
         if localizer_config:
             localizer_parameters.append(localizer_config)
+        localizer_parameters.append({"sim_mode": sim_mode})
+        if camera_overrides:
+            localizer_parameters.append(camera_overrides)
 
         nodes = []
         # Recording consumes the sensor stream before the YOLO FrameGate, so
@@ -132,6 +150,8 @@ def generate_launch_description():
         DeclareLaunchArgument("dataset_queue_size", default_value="32"),
         DeclareLaunchArgument("dataset_png_compression", default_value="1"),
         DeclareLaunchArgument("dataset_format", default_value="webp_lossless"),
+        DeclareLaunchArgument("camera_config_profile", default_value="auto"),
+        DeclareLaunchArgument("camera_config_dir", default_value=""),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument("object_localizer_params", default_value=""),
         OpaqueFunction(function=_nodes),

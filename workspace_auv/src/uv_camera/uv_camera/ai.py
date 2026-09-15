@@ -26,15 +26,12 @@ from .common import (
     CONFIDENCE,
     DATASET_DIR,
     DEFAULT_MODEL_FILENAME,
-    DOWN_CAMERA_MATRIX,
-    DOWN_DIST_COEFFS,
     ENABLE_UNDISTORT,
-    FRONT_CAMERA_MATRIX,
-    FRONT_DIST_COEFFS,
     _LineFilterState,
     image_msg_to_bgr,
     normalize_frame,
 )
+from .camera_config import CameraConfig
 from .model_classes import MODEL_MAPPING_PATH, model_class_id
 from .dataset_recorder import DatasetRecorder
 
@@ -66,6 +63,7 @@ class Ai:
         inference_threads=2,
         gate_feature_mode='auto',
         confidence=CONFIDENCE,
+        camera_configs=None,
     ):
         self.node = node                     # composed uv_camera rclpy Node
         self._update_annotated = update_annotated_fn  # node.update_annotated_stream
@@ -132,8 +130,11 @@ class Ai:
         self._model_loaded = False
         self._inference_lock = threading.Lock()
 
-        self._front_K, self._front_D = self._load_calib('front')
-        self._down_K, self._down_D = self._load_calib('down')
+        self._camera_configs = dict(camera_configs or {})
+        self._calibration = {
+            camera: self._load_calib(self._camera_configs[camera])
+            for camera in ('front', 'down')
+        }
 
         self._active_channels = set()
         for cam in self._active_cams:
@@ -157,22 +158,15 @@ class Ai:
         self._start_aruco()
 
     # ── config / model / undistort ──────────────────────────────────────
-    def _load_calib(self, prefix):
-        try:
-            k_values = self.node.get_parameter(
-                f'{prefix}_camera_matrix').get_parameter_value().double_array_value
-            d_values = self.node.get_parameter(
-                f'{prefix}_dist_coeffs').get_parameter_value().double_array_value
-            if len(k_values) != 9:
-                raise ValueError(f'camera matrix has {len(k_values)} values, expected 9')
-            if len(d_values) not in (4, 5, 8, 12, 14):
-                raise ValueError(f'distortion coefficients have {len(d_values)} values')
-            return (np.array(k_values, dtype=np.float32).reshape(3, 3),
-                    np.array(d_values, dtype=np.float32))
-        except (TypeError, ValueError) as e:
-            self.node.get_logger().error(
-                f'Invalid {prefix} calibration ({e}); undistortion disabled')
-            return None, None
+    @staticmethod
+    def _load_calib(config: CameraConfig):
+        if not isinstance(config, CameraConfig):
+            raise ValueError('Ai requires validated CameraConfig objects')
+        return {
+            side: (config.side(side).matrix.astype(np.float32),
+                   config.side(side).distortion.astype(np.float32))
+            for side in ('left', 'right')
+        }
 
     def load_model(self, model_path=''):
         try:
@@ -364,18 +358,17 @@ class Ai:
         if cv_img is None or cv_img.shape[0] < 2 or cv_img.shape[1] < 2:
             return None
 
-        K = self._front_K if camera == 'front' else self._down_K
-        D = self._front_D if camera == 'front' else self._down_D
+        calibration = self._calibration[camera]
+        left_K, left_D = calibration['left']
+        right_K, right_D = calibration['right']
         mid = cv_img.shape[1] // 2
-        distortion_active = (
-            ENABLE_UNDISTORT and K is not None and D is not None
-            and bool(np.any(np.abs(D) > 1e-12))
-        )
-        if distortion_active:
-            left_img = cv2.undistort(cv_img[:, :mid], K, D)
-            right_img = cv2.undistort(cv_img[:, mid:], K, D)
+        if ENABLE_UNDISTORT and bool(np.any(np.abs(left_D) > 1e-12)):
+            left_img = cv2.undistort(cv_img[:, :mid], left_K, left_D)
         else:
             left_img = cv_img[:, :mid]
+        if ENABLE_UNDISTORT and bool(np.any(np.abs(right_D) > 1e-12)):
+            right_img = cv2.undistort(cv_img[:, mid:], right_K, right_D)
+        else:
             right_img = cv_img[:, mid:]
         return cv_img, left_img, right_img
 

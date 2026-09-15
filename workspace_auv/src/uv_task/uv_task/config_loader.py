@@ -7,15 +7,78 @@ legacy keys consumed by the task implementations.
 
 from __future__ import annotations
 
-from copy import deepcopy
+import math
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from uv_camera.model_classes import CLASS_METADATA
+
 
 class ConfigError(ValueError):
     """Raised when a mission or task YAML file is invalid."""
+
+
+_MOTION_COMMANDS = {
+    "SET",
+    "WMOVE",
+    "BMOVE",
+    "WTRAVEL",
+    "BTRAVEL",
+}
+
+
+def _validate_pose(value: Any, *, context: str) -> dict[str, Any]:
+    """Validate and normalize a mission-level BasicMotion pose override."""
+    if not isinstance(value, dict):
+        raise ConfigError(f"{context} 必须是映射")
+    unknown = set(value) - {"command", "axes", "target"}
+    if unknown:
+        raise ConfigError(
+            f"{context} 存在未知键：{sorted(unknown)}")
+
+    command = value.get("command")
+    if not isinstance(command, str):
+        raise ConfigError(f"{context}.command 必须是字符串")
+    command = command.strip().upper()
+    if command not in _MOTION_COMMANDS:
+        raise ConfigError(
+            f"{context}.command 无效：{command!r}；"
+            f"应为 {sorted(_MOTION_COMMANDS)}")
+
+    axes = value.get("axes", "")
+    if not isinstance(axes, str):
+        raise ConfigError(f"{context}.axes 必须是字符串")
+    axes = axes.strip().lower()
+    axis_text = axes.replace("rz", "")
+    if "rz" in axes and axes.count("rz") != 1:
+        raise ConfigError(f"{context}.axes 中 rz 最多只能出现一次")
+    if any(axis not in "xyz" for axis in axis_text):
+        raise ConfigError(
+            f"{context}.axes 无效：{axes!r}；只能包含 x、y、z、rz")
+    if len(set(axis_text)) != len(axis_text):
+        raise ConfigError(f"{context}.axes 不能重复指定同一坐标轴")
+
+    target = value.get("target")
+    if not isinstance(target, list) or len(target) != 4:
+        raise ConfigError(
+            f"{context}.target 必须是包含 4 个数值的列表 [x,y,z,yaw]")
+    normalized_target = []
+    for index, item in enumerate(target):
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ConfigError(
+                f"{context}.target[{index}] 必须是数值")
+        if not math.isfinite(float(item)):
+            raise ConfigError(
+                f"{context}.target[{index}] 必须是有限数值")
+        normalized_target.append(float(item))
+
+    return {
+        "command": command,
+        "axes": axes,
+        "target": normalized_target,
+    }
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -315,17 +378,6 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]):
-    """Merge mappings recursively; scalar and list values are replaced."""
-    result = deepcopy(base)
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = deepcopy(value)
-    return result
-
-
 def _flatten_params(
     value: dict[str, Any],
     schema: dict[str, Any],
@@ -415,6 +467,28 @@ def _validate_params(task_name: str, params: dict[str, Any]) -> dict[str, Any]:
             raise ConfigError(
                 f"参数 {key!r} 的类型为 {type(value).__name__}；"
                 f"应为 {_type_name(expected)}")
+    if task_name == "26rb_hit_balls" and "order" in flattened:
+        values = flattened["order"]
+        values = values if isinstance(values, list) else [values]
+        allowed = {
+            entry["name"] for entry in CLASS_METADATA.values()
+            if str(entry.get("object", "")).startswith("impact_ball_")
+        }
+        if any(value not in allowed for value in values):
+            raise ConfigError(
+                "26rb_hit_balls.order 必须使用 robotcup20260901.yaml "
+                "中的 canonical impact-ball class name")
+    if task_name == "26rb_grab_ball" and "ball_color" in flattened:
+        allowed = {
+            entry["name"] for entry in CLASS_METADATA.values()
+            if entry.get("object") in {
+                "impact_ball_blue", "impact_ball_red", "pink_golf", "yellow_golf"
+            }
+        }
+        if flattened["ball_color"] not in allowed:
+            raise ConfigError(
+                "26rb_grab_ball.ball_color 必须使用 robotcup20260901.yaml "
+                "中的 canonical class name")
     return flattened
 
 
@@ -464,7 +538,13 @@ def load_task(path: str | Path) -> list[dict[str, Any]]:
 
 
 def load_mission(path: str | Path) -> list[dict[str, Any]]:
-    """Load and validate a mission, returning runner-compatible task dicts."""
+    """Load a mission with initial and one-hop failure overrides.
+
+    ``params`` is retained as a legacy spelling for a mission-level initial
+    parameter override.  The explicit ``initial.params`` block wins over it.
+    Failure override parameters are validated against the immediately
+    following task because that is where they are consumed.
+    """
     mission_path = Path(path).expanduser().resolve()
     data = _read_yaml(mission_path)
     unknown = set(data) - {"mission"}
@@ -483,11 +563,13 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
     if not isinstance(entries, list) or not entries:
         raise ConfigError(f"{mission_path}：mission.tasks 必须是非空列表")
 
-    tasks = []
+    entries_data = []
     for index, entry in enumerate(entries, start=1):
         if not isinstance(entry, dict):
             raise ConfigError(f"{mission_path}：第 {index} 个任务必须是映射")
-        unknown = set(entry) - {"name", "config", "params"}
+        unknown = set(entry) - {
+            "name", "config", "params", "initial", "on_failure",
+        }
         if unknown:
             raise ConfigError(
                 f"{mission_path}：第 {index} 个任务存在未知键：{sorted(unknown)}")
@@ -501,10 +583,115 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
         overrides = entry.get("params", {})
         if not isinstance(overrides, dict):
             raise ConfigError(f"{mission_path}：第 {index} 个任务的 params 必须是映射")
+
+        initial = entry.get("initial", {})
+        if not isinstance(initial, dict):
+            raise ConfigError(f"{mission_path}：第 {index} 个任务的 initial 必须是映射")
+        unknown = set(initial) - {"params", "pose"}
+        if unknown:
+            raise ConfigError(
+                f"{mission_path}：第 {index} 个任务的 initial 存在未知键："
+                f"{sorted(unknown)}")
+        initial_params = initial.get("params", {})
+        if not isinstance(initial_params, dict):
+            raise ConfigError(
+                f"{mission_path}：第 {index} 个任务的 initial.params 必须是映射")
+        initial_pose = None
+        if "pose" in initial:
+            initial_pose = _validate_pose(
+                initial["pose"],
+                context=f"{mission_path}：第 {index} 个任务的 initial.pose")
+
+        on_failure = entry.get("on_failure", {})
+        if not isinstance(on_failure, dict):
+            raise ConfigError(
+                f"{mission_path}：第 {index} 个任务的 on_failure 必须是映射")
+        failure_profiles = {}
+        for failure_code, profile in on_failure.items():
+            if not isinstance(failure_code, str) or not failure_code.strip():
+                raise ConfigError(
+                    f"{mission_path}：第 {index} 个任务的失败码必须是非空字符串")
+            if not isinstance(profile, dict):
+                raise ConfigError(
+                    f"{mission_path}：第 {index} 个任务的 on_failure"
+                    f".{failure_code} 必须是映射")
+            unknown = set(profile) - {"params", "pose"}
+            if unknown:
+                raise ConfigError(
+                    f"{mission_path}：第 {index} 个任务的 on_failure"
+                    f".{failure_code} 存在未知键：{sorted(unknown)}")
+            failure_params = profile.get("params", {})
+            if not isinstance(failure_params, dict):
+                raise ConfigError(
+                    f"{mission_path}：第 {index} 个任务的 on_failure"
+                    f".{failure_code}.params 必须是映射")
+            failure_pose = None
+            if "pose" in profile:
+                failure_pose = _validate_pose(
+                    profile["pose"],
+                    context=(
+                        f"{mission_path}：第 {index} 个任务的 on_failure"
+                        f".{failure_code}.pose"),
+                )
+            failure_profiles[failure_code.strip()] = {
+                "params": failure_params,
+                "pose": failure_pose,
+            }
+
         task_path = _resolve_task_config(mission_path, config, task_name)
-        defaults = _load_task_defaults(task_path, task_name)
-        merged = _deep_merge(defaults, overrides)
-        tasks.append({"name": task_name, "params": _validate_params(task_name, merged)})
+        defaults = _validate_params(
+            task_name, _load_task_defaults(task_path, task_name))
+        overrides = _validate_params(task_name, overrides)
+        initial_params = _validate_params(task_name, initial_params)
+        entries_data.append({
+            "index": index,
+            "name": task_name,
+            "defaults": defaults,
+            "overrides": overrides,
+            "initial_params": initial_params,
+            "initial_pose": initial_pose,
+            "on_failure": failure_profiles,
+        })
+
+    tasks = []
+    for index, item in enumerate(entries_data):
+        # Flatten each layer before merging so a canonical key such as
+        # ``search_timeout`` can override a nested task default
+        # ``search: {timeout: ...}`` without creating a duplicate key.
+        merged = dict(item["defaults"])
+        merged.update(item["overrides"])
+        merged.update(item["initial_params"])
+        task = {
+            "name": item["name"],
+            "params": _validate_params(item["name"], merged),
+        }
+        if item["initial_pose"] is not None:
+            task["initial_pose"] = item["initial_pose"]
+
+        if item["on_failure"]:
+            next_name = (
+                entries_data[index + 1]["name"]
+                if index + 1 < len(entries_data) else None)
+            normalized_profiles = {}
+            for failure_code, profile in item["on_failure"].items():
+                failure_params = profile["params"]
+                if next_name is None and (
+                        failure_params or profile["pose"] is not None):
+                    raise ConfigError(
+                        f"{mission_path}：第 {item['index']} 个任务的 on_failure"
+                        f".{failure_code} 没有下一任务可接收覆盖")
+                normalized = {}
+                if failure_params:
+                    normalized["params"] = _validate_params(
+                        next_name, failure_params)
+                elif "params" in profile:
+                    normalized["params"] = {}
+                if profile["pose"] is not None:
+                    normalized["pose"] = profile["pose"]
+                normalized_profiles[failure_code] = normalized
+            task["on_failure"] = normalized_profiles
+
+        tasks.append(task)
     return tasks
 
 

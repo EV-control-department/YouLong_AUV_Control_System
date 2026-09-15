@@ -97,19 +97,6 @@ def _load_mapping():
         raise ValueError("shared detector mapping class names must be unique")
 
     class_ids = {name: class_id for class_id, name in enumerate(labels)}
-    aliases = document.get("aliases", {})
-    if aliases is not None:
-        if not isinstance(aliases, dict):
-            raise ValueError("shared detector mapping aliases must be a YAML object")
-        for alias, target in aliases.items():
-            alias_name = _normalize_name(alias)
-            target_name = _normalize_name(target)
-            if target_name not in class_ids:
-                raise ValueError(
-                    "mapping alias {!r} targets unknown class {!r}".format(
-                        alias, target))
-            if alias_name:
-                class_ids[alias_name] = class_ids[target_name]
 
     return mapping_path, document, entries, tuple(labels), class_ids
 
@@ -119,13 +106,13 @@ MODEL_MAPPING_PATH, MODEL_MAPPING, CLASS_METADATA, DEFAULT_CLASS_NAMES, CLASS_ID
 
 
 def model_class_id(name, required: bool = True) -> Optional[int]:
-    """Return the shared detector ID for a label or configured alias."""
+    """Return the shared detector ID for an exact canonical model label."""
     if isinstance(name, bool):
         class_id = None
     elif isinstance(name, int):
         class_id = name if 0 <= name < len(DEFAULT_CLASS_NAMES) else None
     else:
-        class_id = CLASS_IDS.get(_normalize_name(name))
+        class_id = CLASS_IDS.get(str(name).strip())
 
     if class_id is None and required:
         available = ", ".join(DEFAULT_CLASS_NAMES)

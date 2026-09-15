@@ -54,6 +54,7 @@ def generate_launch_description():
     enable_nav = LaunchConfiguration("enable_nav")
     enable_task = LaunchConfiguration("enable_task")
     mission_file = LaunchConfiguration("mission_file")
+    camera_config_dir = LaunchConfiguration("camera_config_dir")
     enable_motion = LaunchConfiguration("enable_motion")
     gpu = LaunchConfiguration("gpu")
     gpu_backend = LaunchConfiguration("gpu_backend")
@@ -91,6 +92,8 @@ def generate_launch_description():
         "stream_annotated": "false",
         "mjpeg_port": "8090",
         "annotated_max_width": "0",
+        "camera_config_profile": "sim",
+        "camera_config_dir": camera_config_dir,
         "profile_params": camera_profile_params,
         "object_localizer_params": PathJoinSubstitution([
             FindPackageShare("uv_camera"), "config", "object_localizer_sim.yaml"
@@ -104,6 +107,8 @@ def generate_launch_description():
         "enable_task": enable_task,
         "target_id": LaunchConfiguration("target_id"),
         "profile_params": "",
+        "camera_config_profile": "sim",
+        "camera_config_dir": camera_config_dir,
         "mission_file": mission_file,
     })
 
@@ -143,6 +148,10 @@ def generate_launch_description():
         configure_simulator_gpu_environment(gpu, gpu_backend),
         DeclareLaunchArgument("serial_dev", default_value="/dev/ttyUSB0"),
         DeclareLaunchArgument("serial_baud", default_value="921600"),
+        DeclareLaunchArgument(
+            "camera_config_dir", default_value="",
+            description="Optional directory containing front.yaml and down.yaml",
+        ),
         DeclareLaunchArgument(
             "agent_executable", default_value=_default_agent_executable(),
             description="micro-ROS Agent executable or absolute path",

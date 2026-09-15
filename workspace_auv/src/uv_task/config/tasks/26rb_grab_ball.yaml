@@ -1,8 +1,8 @@
 task: 26rb_grab_ball
 
 params:
-  # 要抓取的球颜色。
-  ball_color: red
+  # 使用 robotcup20260901.yaml 中的 canonical detector class name。
+  ball_color: pink_golf
 
   # 下视视觉伺服。
   vision:

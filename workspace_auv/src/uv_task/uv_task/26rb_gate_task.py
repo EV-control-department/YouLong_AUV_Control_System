@@ -20,34 +20,11 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 
 from uv_msgs.action import BasicMotion
+from uv_task.task_outcome import TaskOutcome
 from uv_msgs.msg import DetectionArray
+from uv_camera.camera_config import CameraConfig
 from uv_camera.model_classes import model_class_id
 
-
-# 前视相机默认值是任务在应用可选场景覆盖参数之前使用的值。它们保留为
-# 任务参数，因此其他场景无需修改控制器即可替换这些参数。
-_IMAGE_WIDTH = 1280
-_IMAGE_HEIGHT = 960
-_FRONT_HFOV_DEG = 57.19
-_DEFAULT_FX = _IMAGE_WIDTH / (
-    2.0 * math.tan(math.radians(_FRONT_HFOV_DEG) / 2.0))
-_DEFAULT_K = np.array([
-    [_DEFAULT_FX, 0.0, _IMAGE_WIDTH / 2.0],
-    [0.0, _DEFAULT_FX, _IMAGE_HEIGHT / 2.0],
-    [0.0, 0.0, 1.0],
-], dtype=np.float64)
-
-_FRONT_OFFSET_LEFT = np.array([0.19, -0.05, 0.176], dtype=np.float64)
-_FRONT_OFFSET_RIGHT = np.array([0.19, 0.05, 0.176], dtype=np.float64)
-
-# Stonefish 前视 ColorCamera 光轴 -> XUNYUN 机体/NED 坐标轴。仿真器相机
-# 定义规定局部 +X 指向图像右侧、+Y 指向图像下方、+Z 指向前方；下面的
-# 矩阵在机体坐标系（前、右、下）中保持这些方向不变。
-_OPTICAL_TO_BODY = np.array([
-    [0.0, 0.0, 1.0],
-    [1.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0],
-], dtype=np.float64)
 
 # 锁定后允许同一门框在连续图像中的中心变化范围。超过这个范围时视为
 # 原目标丢失，不切换到另一个门框。
@@ -204,7 +181,20 @@ class RB26GateTask:
         self._locked_observation: GateObservation | None = None
         self._last_observation_reason = '尚未评估'
         self._last_observation_reason_log = 0.0
-        self._camera_k = {'left': _DEFAULT_K.copy(), 'right': _DEFAULT_K.copy()}
+        front_config = node.camera_configs['front']
+        if not isinstance(front_config, CameraConfig):
+            raise ValueError('26rb_gate_task requires a validated front camera config')
+        self._front_config = front_config
+        front_left = front_config.side('left')
+        front_right = front_config.side('right')
+        self._front_width, self._front_height = front_config.eye_resolution
+        self._camera_k = {
+            'left': front_left.matrix.copy(),
+            'right': front_right.matrix.copy(),
+        }
+        self._front_left_offset = front_left.translation.copy()
+        self._front_right_offset = front_right.translation.copy()
+        self._optical_to_body = front_left.optical_to_body.copy()
         self._subs = []
 
         qos = QoSProfile(
@@ -216,19 +206,19 @@ class RB26GateTask:
         if self._input_mode not in {'stitched', 'separate'}:
             self._input_mode = 'stitched'
         if self._input_mode == 'separate':
-            left_topic = str(params.get(
-                'left_image_topic', '/sim/front_cam/left/image_color'))
+            left_topic = front_config.eye_image_topics['left']
+            right_topic = front_config.eye_image_topics['right']
+            if not left_topic or not right_topic:
+                raise ValueError(
+                    'separate gate images require eye_image_topics in the '
+                    'front camera registry')
             self._subs.append(node.create_subscription(
                 Image, left_topic, self._left_image_cb, qos))
-            right_topic = str(params.get(
-                'right_image_topic', '/sim/front_cam/right/image_color'))
             self._subs.append(node.create_subscription(
                 Image, right_topic, self._right_image_cb, qos))
         else:
-            stitched_topic = str(params.get(
-                'stitched_image_topic', '/auv/front_cam/stitched'))
             self._subs.append(node.create_subscription(
-                Image, stitched_topic, self._stitched_image_cb, qos))
+                Image, front_config.image_topic, self._stitched_image_cb, qos))
 
         # 搜索阶段首先使用左目相机链路的检测结果作为视觉线索；锁定后
         # 还会订阅并校验右目结果。这仍然是纯相机方案：不消费
@@ -246,25 +236,14 @@ class RB26GateTask:
                 '/perception/detection/front_right')),
             self._right_detection_cb, qos))
 
-        # CameraInfo 是标定数据，不是目标定位器输出。因此任务可以使用
-        # 仿真器相机的实际内参，同时完全独立于 object_localizer.py。
+        # CameraInfo 只能作为运行时校验/更新来源，配置 YAML 仍是默认真值。
         for side in ('left', 'right'):
-            topic = str(params.get(
-                f'{side}_camera_info_topic',
-                f'/sim/front_cam/{side}/camera_info'))
+            topic = front_config.camera_info_topics.get(side, '')
+            if not topic.strip():
+                continue
             self._subs.append(node.create_subscription(
                 CameraInfo, topic,
                 lambda msg, s=side: self._camera_info_cb(s, msg), qos))
-
-        self._front_hfov_deg = float(params.get('front_hfov_deg', _FRONT_HFOV_DEG))
-        default_fx = _IMAGE_WIDTH / (
-            2.0 * math.tan(math.radians(self._front_hfov_deg) / 2.0))
-        default_k = np.array([
-            [default_fx, 0.0, _IMAGE_WIDTH / 2.0],
-            [0.0, default_fx, _IMAGE_HEIGHT / 2.0],
-            [0.0, 0.0, 1.0],
-        ], dtype=np.float64)
-        self._camera_k = {'left': default_k.copy(), 'right': default_k.copy()}
         self._min_extent = _clamp(
             float(params.get('min_gate_extent_fraction', 0.25)), 0.05, 0.95)
         self._target_extent = _clamp(
@@ -312,15 +291,6 @@ class RB26GateTask:
         self._monocular_reference_distance = max(
             self._distance_control_min_m,
             float(params.get('monocular_reference_distance_m', 1.5)))
-
-        self._front_left_offset = self._vector_param(
-            'front_left_offset', _FRONT_OFFSET_LEFT)
-        self._front_right_offset = self._vector_param(
-            'front_right_offset', _FRONT_OFFSET_RIGHT)
-        self._optical_to_body = np.asarray(
-            params.get('optical_to_body', _OPTICAL_TO_BODY), dtype=np.float64)
-        if self._optical_to_body.shape != (3, 3):
-            self._optical_to_body = _OPTICAL_TO_BODY.copy()
 
         self._gates_to_pass = max(1, int(params.get('gate_count', 4)))
         # 四个门可能分别消耗配置的搜索、对准和通过时间预算。除非调用者
@@ -467,16 +437,6 @@ class RB26GateTask:
             f'偏航 PID=({self._yaw_pid_kp:.2f}，'
             f'{self._yaw_pid_ki:.2f}，{self._yaw_pid_kd:.2f})')
 
-    def _vector_param(self, name: str, default: np.ndarray) -> np.ndarray:
-        value = self._params.get(name, default)
-        try:
-            vector = np.asarray(value, dtype=np.float64).reshape(3)
-            if np.all(np.isfinite(vector)):
-                return vector
-        except (TypeError, ValueError):
-            pass
-        return default.copy()
-
     def destroy(self):
         for subscription in self._subs:
             try:
@@ -519,8 +479,19 @@ class RB26GateTask:
 
     def _camera_info_cb(self, side: str, message: CameraInfo):
         try:
+            if (int(message.width), int(message.height)) != (
+                    self._front_width, self._front_height):
+                return
             matrix = np.asarray(message.k, dtype=np.float64).reshape(3, 3)
-            if np.all(np.isfinite(matrix)) and matrix[0, 0] > 1.0:
+            expected = self._camera_k[side]
+            distortion = np.asarray(message.d, dtype=np.float64).reshape(-1)
+            if distortion.size == 0:
+                distortion = np.zeros(5, dtype=np.float64)
+            expected_distortion = self._front_config.side(side).distortion
+            if (np.all(np.isfinite(matrix)) and matrix[0, 0] > 1.0
+                    and np.allclose(matrix, expected, rtol=1e-3, atol=1e-2)
+                    and np.allclose(
+                        distortion, expected_distortion, rtol=1e-3, atol=1e-4)):
                 with self._lock:
                     self._camera_k[side] = matrix
         except (AttributeError, TypeError, ValueError):
@@ -907,7 +878,7 @@ class RB26GateTask:
             center = self._candidate_pixel_center(candidate)
             center_delta = float(np.linalg.norm(
                 (center - reference_center)
-                / np.array([_IMAGE_WIDTH, _IMAGE_HEIGHT], dtype=np.float64)))
+                / np.array([self._front_width, self._front_height], dtype=np.float64)))
             if center_delta > _LOCK_MAX_CENTER_DELTA_FRACTION:
                 continue
             extent_delta = abs(math.log(
@@ -1023,7 +994,7 @@ class RB26GateTask:
             else:
                 right_distance = float(np.linalg.norm(
                     (right_pixel - right_reference)
-                    / np.array([_IMAGE_WIDTH, _IMAGE_HEIGHT],
+                    / np.array([self._front_width, self._front_height],
                                dtype=np.float64)))
                 if right_distance > _LOCK_MAX_CENTER_DELTA_FRACTION:
                     continue
@@ -1257,7 +1228,7 @@ class RB26GateTask:
                     height_fraction = max(
                         float(observation.left.height_px),
                         float(observation.right.height_px),
-                    ) / max(_IMAGE_HEIGHT, 1)
+                    ) / max(self._front_height, 1)
                     if height_fraction > self._search_stop_height_fraction:
                         best = observation
                         best_heading = current_yaw
@@ -1425,7 +1396,7 @@ class RB26GateTask:
         errors = self._image_center_errors(observation)
         bbox_height_fraction = max(
             float(observation.left.height_px),
-            float(observation.right.height_px)) / max(_IMAGE_HEIGHT, 1)
+            float(observation.right.height_px)) / max(self._front_height, 1)
         return (
             max(abs(errors['left_v']), abs(errors['right_v']))
             <= self._image_center_tolerance
@@ -1445,7 +1416,7 @@ class RB26GateTask:
             self._distance_control_max_m)
         bbox_height_fraction = max(
             float(observation.left.height_px),
-            float(observation.right.height_px)) / max(_IMAGE_HEIGHT, 1)
+            float(observation.right.height_px)) / max(self._front_height, 1)
         size_error = self._target_height_fraction - bbox_height_fraction
         vertical_error = errors['v'] * distance
 
@@ -1501,8 +1472,8 @@ class RB26GateTask:
             height_px=max(height_px, 1.0),
             center_z_m=float(observation.center_body[2]),
             extent_fraction=max(
-                width_px / max(_IMAGE_WIDTH, 1),
-                height_px / max(_IMAGE_HEIGHT, 1)),
+                width_px / max(self._front_width, 1),
+                height_px / max(self._front_height, 1)),
         )
         previous = getattr(self, '_filtered_gate', None)
         if previous is None:
@@ -1697,7 +1668,7 @@ class RB26GateTask:
         # 前后距离只看 bbox 高度，不再使用 max(width_fraction,
         # height_fraction) 的 extent 代理。这样门的横向姿态变化不会把
         # 宽度变化误当成距离误差。
-        height_fraction = filtered.height_px / max(_IMAGE_HEIGHT, 1)
+        height_fraction = filtered.height_px / max(self._front_height, 1)
         size_error = self._target_height_fraction - height_fraction
         forward = self._distance_velocity_gain * size_error * distance
         if forward >= 0.0:
@@ -1760,7 +1731,7 @@ class RB26GateTask:
         vertical_error = image_errors['v'] * distance
         height_fraction = max(
             float(observation.left.height_px),
-            float(observation.right.height_px)) / max(_IMAGE_HEIGHT, 1)
+            float(observation.right.height_px)) / max(self._front_height, 1)
         size_error = self._target_height_fraction - height_fraction
 
         dx = 0.0
@@ -2144,33 +2115,44 @@ class RB26GateTask:
             time.sleep(self._post_pass_pause)
         return True
 
-    def execute(self) -> bool:
+    def execute(self) -> TaskOutcome:
         """执行顺时针搜索，并通过配置数量的门框。"""
 
         deadline = time.monotonic() + self._task_timeout
         initial = True
         for index in range(1, self._gates_to_pass + 1):
-            if self._node.stopped or not rclpy_ok() or time.monotonic() >= deadline:
-                return False
+            if self._node.stopped or not rclpy_ok():
+                return TaskOutcome.failed(
+                    '26rb_gate_task.timeout', '过门任务被中止')
+            if time.monotonic() >= deadline:
+                return TaskOutcome.failed(
+                    '26rb_gate_task.timeout', '过门任务总超时')
             self._logger.info(
                 f'过门任务：正在搜索第 {index}/{self._gates_to_pass} 个门')
             selected = self._scan_headings(initial=initial)
             initial = False
             if selected is None:
-                return False
+                code = (
+                    '26rb_gate_task.timeout'
+                    if time.monotonic() >= deadline
+                    else '26rb_gate_task.search')
+                return TaskOutcome.failed(code, '过门搜索阶段失败')
             if time.monotonic() >= deadline:
-                return False
+                return TaskOutcome.failed(
+                    '26rb_gate_task.timeout', '过门任务总超时')
 
             self._logger.info(
                 f'过门任务：已选择第 {index} 个门；已完成左右目配对，'
                 f'机体坐标代理中心={selected.center_body.tolist()}，'
                 f'边界框占比={selected.extent_fraction:.3f}')
             if not self._align_and_hold(selected):
-                return False
+                return TaskOutcome.failed(
+                    '26rb_gate_task.alignment', '过门对准阶段失败')
             if not self._pass_current_gate(index):
-                return False
+                return TaskOutcome.failed(
+                    '26rb_gate_task.pass', '穿门阶段失败')
         self._logger.info(f'过门任务：已完成 {self._gates_to_pass} 个门框')
-        return True
+        return TaskOutcome.ok()
 
 
 def rclpy_ok() -> bool:

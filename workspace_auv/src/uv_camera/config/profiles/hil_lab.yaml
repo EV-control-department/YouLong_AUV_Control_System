@@ -1,6 +1,7 @@
 /uv_camera:
   ros__parameters:
     sim_mode: true
+    camera_config_profile: sim
     inference_fps: 3.0
     inference_threads: 2
     confidence: 0.8

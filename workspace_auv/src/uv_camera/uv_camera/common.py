@@ -12,30 +12,8 @@ import numpy as np
 
 
 # ── Runtime switches / constants shared by the uv_camera nodes ──────────────
-FRONT_CAMERA_DEVICE = '/dev/video0'
-DOWN_CAMERA_DEVICE = '/dev/video2'
 ENABLE_FRONT_CAMERA = True
 ENABLE_DOWN_CAMERA = True
-
-FRONT_CAMERA_RESOLUTION = (2560, 960)  # width, height
-DOWN_CAMERA_RESOLUTION = (3840, 1080)
-
-FRONT_CAPTURE_RESOLUTION = (2560, 960)
-DOWN_CAPTURE_RESOLUTION = (3840, 1080)
-
-FRONT_CAMERA_MATRIX = (
-    2158.4, 0.0, 640.0,
-    0.0, 2158.4, 480.0,
-    0.0, 0.0, 1.0,
-)
-FRONT_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
-
-DOWN_CAMERA_MATRIX = (
-    2307.6, 0.0, 640.0,
-    0.0, 2307.6, 480.0,
-    0.0, 0.0, 1.0,
-)
-DOWN_DIST_COEFFS = (0.0, 0.0, 0.0, 0.0, 0.0)
 
 CONFIDENCE = 0.8
 

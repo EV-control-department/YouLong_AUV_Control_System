@@ -26,7 +26,7 @@ def test_execute_retries_when_ball_remains_after_return():
     task._logger = _Logger()
     task._node = SimpleNamespace(stopped=False)
     task._max_grab_retries = 1
-    task._color = 'red'
+    task._color = 'pink_golf'
     task._class_id = 7
     task._descent_speed = 0.4
     task._descent_duration = 10.0
@@ -67,4 +67,3 @@ def test_execute_retries_when_ball_remains_after_return():
         'servo', 'offset', 'settle', 'descend', 'return', 'verify',
         'servo', 'offset', 'settle', 'descend', 'return', 'verify',
     ]
-

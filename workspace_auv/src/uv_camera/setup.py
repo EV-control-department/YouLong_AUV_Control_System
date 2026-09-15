@@ -24,6 +24,10 @@ data_files = [
         'config/profiles/real_default.yaml',
         'config/profiles/real_safe.yaml',
     ]),
+    ('share/' + package_name + '/config/cameras', [
+        'config/cameras/front.yaml',
+        'config/cameras/down.yaml',
+    ]),
 ]
 
 setup(

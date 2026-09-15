@@ -18,37 +18,13 @@ from rclpy.node import Node
 
 from uv_msgs.msg import DetectionArray, ObjectPosition, ObjectPositionArray, PoseInfo
 
+from .camera_config import load_camera_config, profile_for_mode
 from .model_classes import (
     DEFAULT_CLASS_NAMES,
     model_class_name,
     multi_instance_class_ids,
 )
 
-
-# Camera intrinsic + extrinsic parameters (from xunyun_fixed.scn)
-# Each camera has its own body offset; optical_to_body is shared per pair
-CAM_PARAMS = {
-    'front_left': {
-        'width': 1280, 'height': 960, 'hfov': 57.19,
-        'offset': np.array([0.23, -0.05, 0.076]),
-        'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
-    },
-    'front_right': {
-        'width': 1280, 'height': 960, 'hfov': 57.19,
-        'offset': np.array([0.23, 0.05, 0.076]),
-        'optical_to_body': np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]),
-    },
-    'down_left': {
-        'width': 1280, 'height': 960, 'hfov': 87.19,
-        'offset': np.array([-0.13, -0.05, 0.0645]),
-        'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
-    },
-    'down_right': {
-        'width': 1280, 'height': 960, 'hfov': 87.19,
-        'offset': np.array([-0.13, 0.05, 0.0645]),
-        'optical_to_body': np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
-    },
-}
 
 MIN_BASELINE = 0.1  # minimum baseline between ray origins (meters)
 MAX_DISTANCE = 50.0  # maximum object distance (meters)
@@ -86,6 +62,8 @@ class PositionNode(Node):
     def __init__(self):
         super().__init__('position')
 
+        self.declare_parameter('camera_config_profile', 'auto')
+        self.declare_parameter('camera_config_dir', '')
         self.declare_parameter('max_history', 30)
         self._max_history = self.get_parameter('max_history').get_parameter_value().integer_value
 
@@ -123,17 +101,30 @@ class PositionNode(Node):
         self._intersect_fails: int = 0
         self._debug_timer = None  # set after first detection
 
-        # Precompute focal lengths and centers per camera
+        camera_profile = profile_for_mode(
+            False, self.get_parameter('camera_config_profile').value)
+        config_dir = str(
+            self.get_parameter('camera_config_dir').value).strip() or None
+        camera_configs = {
+            camera: load_camera_config(camera, camera_profile, config_dir)
+            for camera in ('front', 'down')
+        }
+
+        # Precompute focal lengths and centers from the shared registry.
         self._cam_params = {}
-        for name, p in CAM_PARAMS.items():
-            fx = p['width'] / (2.0 * math.tan(math.radians(p['hfov']) / 2.0))
-            self._cam_params[name] = {
-                'fx': fx, 'fy': fx,  # square pixels
-                'cx': p['width'] / 2.0, 'cy': p['height'] / 2.0,
-                'width': p['width'], 'height': p['height'],
-                'offset': p['offset'],
-                'optical_to_body': p['optical_to_body'],
-            }
+        for camera, config in camera_configs.items():
+            for side in ('left', 'right'):
+                name = f'{camera}_{side}'
+                camera_side = config.side(side)
+                matrix = camera_side.matrix
+                width, height = config.eye_resolution
+                self._cam_params[name] = {
+                    'fx': float(matrix[0, 0]), 'fy': float(matrix[1, 1]),
+                    'cx': float(matrix[0, 2]), 'cy': float(matrix[1, 2]),
+                    'width': width, 'height': height,
+                    'offset': camera_side.translation.copy(),
+                    'optical_to_body': camera_side.optical_to_body.copy(),
+                }
 
         # Subscribers
         self.create_subscription(DetectionArray, '/perception/detection/front_left', self._front_left_cb, 10)

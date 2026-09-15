@@ -14,10 +14,6 @@ import cv2
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from .common import (
-    DOWN_CAMERA_DEVICE,
-    FRONT_CAMERA_DEVICE,
-    DOWN_CAPTURE_RESOLUTION,
-    FRONT_CAPTURE_RESOLUTION,
     normalize_frame,
 )
 from sensor_msgs.msg import Image
@@ -32,13 +28,18 @@ class Sensor:
     """Frame producer: chooses source, updates raw preview, feeds FrameGate."""
 
     def __init__(self, node, gate, sim_mode, enable_front, enable_down,
-                 startup_timeout_s=5.0):
+                 startup_timeout_s=5.0, camera_configs=None):
         self.node = node                 # composed uv_camera rclpy Node
         self.gate = gate                 # common.FrameGate -> ai consumer
         self._sim_mode = sim_mode
         self._enable_front = enable_front
         self._enable_down = enable_down
         self._startup_timeout_s = max(1.0, float(startup_timeout_s))
+        self._camera_configs = dict(camera_configs or {})
+        missing = [camera for camera in ('front', 'down')
+                   if camera not in self._camera_configs]
+        if missing:
+            raise ValueError(f'missing camera configs: {missing}')
 
         self._capture_stop = threading.Event()
         self._capture_threads = []
@@ -65,19 +66,23 @@ class Sensor:
         if StereoFrameInfo is not None:
             if self._enable_front:
                 self.node.create_subscription(
-                    StereoFrameInfo, '/auv/front_cam/stereo_info',
+                    StereoFrameInfo,
+                    self._camera_configs['front'].stereo_info_topic,
                     self._front_stereo_info_cb, self._image_qos)
             if self._enable_down:
                 self.node.create_subscription(
-                    StereoFrameInfo, '/auv/down_cam/stereo_info',
+                    StereoFrameInfo,
+                    self._camera_configs['down'].stereo_info_topic,
                     self._down_stereo_info_cb, self._image_qos)
         if self._enable_front:
             self.node.create_subscription(
-                Image, '/auv/front_cam/stitched', self._front_img_cb,
+                Image, self._camera_configs['front'].image_topic,
+                self._front_img_cb,
                 self._image_qos)
         if self._enable_down:
             self.node.create_subscription(
-                Image, '/auv/down_cam/stitched', self._down_img_cb,
+                Image, self._camera_configs['down'].image_topic,
+                self._down_img_cb,
                 self._image_qos)
         # Metadata and image are published back-to-back, but BEST_EFFORT ROS
         # delivery does not promise callback order.  Hold an image briefly so
@@ -90,13 +95,15 @@ class Sensor:
             'uv_sensor started (sim mode: ROS stitched topics)')
 
     def _start_v4l2(self):
-        front_path = str(self.node.get_parameter('front_cam_path').value)
-        down_path = str(self.node.get_parameter('down_cam_path').value)
         specs = []
         if self._enable_front:
-            specs.append(('front', front_path, FRONT_CAPTURE_RESOLUTION))
+            config = self._camera_configs['front']
+            specs.append(('front', config.device, config.capture_resolution))
         if self._enable_down:
-            specs.append(('down', down_path, DOWN_CAPTURE_RESOLUTION))
+            config = self._camera_configs['down']
+            specs.append(('down', config.device, config.capture_resolution))
+        if any(path is None for _, path, _ in specs):
+            raise RuntimeError('real camera profile must define device paths')
 
         # Open and probe every enabled camera before starting either capture
         # thread. This prevents a partial recording containing only one side.
@@ -149,7 +156,9 @@ class Sensor:
             for camera, path, _, frame in probed)
         self.node.get_logger().info(f'uv_sensor preflight passed: {summary}')
         self.node.get_logger().info(
-            f'uv_sensor started (real mode: front={front_path}, down={down_path})')
+            'uv_sensor started (real mode: '
+            f"front={self._camera_configs['front'].device}, "
+            f"down={self._camera_configs['down'].device})")
 
     @staticmethod
     def _open_cap(path, res):

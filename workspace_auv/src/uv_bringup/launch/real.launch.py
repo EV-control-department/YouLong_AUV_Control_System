@@ -44,6 +44,7 @@ def generate_launch_description():
     enable_nav = LaunchConfiguration("enable_nav")
     enable_task = LaunchConfiguration("enable_task")
     mission_file = LaunchConfiguration("mission_file")
+    camera_config_dir = LaunchConfiguration("camera_config_dir")
 
     hardware = _include("uv_hm", "hardware_launch.py", {
         "enable_hardware": LaunchConfiguration("enable_hardware"),
@@ -64,6 +65,8 @@ def generate_launch_description():
         "stream_annotated": "true",
         "mjpeg_port": "8090",
         "annotated_max_width": "0",
+        "camera_config_profile": "real",
+        "camera_config_dir": camera_config_dir,
         "profile_params": camera_profile_params,
         "object_localizer_params": "",
     })
@@ -75,6 +78,8 @@ def generate_launch_description():
         "enable_task": enable_task,
         "target_id": LaunchConfiguration("target_id"),
         "profile_params": "",
+        "camera_config_profile": "real",
+        "camera_config_dir": camera_config_dir,
         "mission_file": mission_file,
     })
 
@@ -98,6 +103,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("enable_hardware", default_value="true"),
         DeclareLaunchArgument("target_id", default_value="yellow_golf"),
+        DeclareLaunchArgument(
+            "camera_config_dir", default_value="",
+            description="Optional directory containing front.yaml and down.yaml",
+        ),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         validate_profile(profile, "real"),
         LogInfo(msg=["Real vehicle profile: ", profile]),

@@ -21,20 +21,8 @@ from uv_camera.model_classes import configured_class_id
 # 下视双目相机参数（与 position.py / line_follower.py 保持一致）
 # ==========================================================================
 
-_DOWN_HFOV = 87.19
-_DOWN_WIDTH = 1280
-_DOWN_HEIGHT = 960
-_DOWN_FX = _DOWN_WIDTH / (2.0 * math.tan(math.radians(_DOWN_HFOV) / 2.0))
-_DOWN_FY = _DOWN_FX
-_DOWN_CX = _DOWN_WIDTH / 2.0
-_DOWN_CY = _DOWN_HEIGHT / 2.0
 
-_DOWN_OFFSET_LEFT = np.array([-0.13, -0.05, 0.0645])
-_DOWN_OFFSET_RIGHT = np.array([-0.13, 0.05, 0.0645])
 
-_DOWN_OPTICAL_TO_BODY = np.array([[0, -1, 0],
-                                   [1, 0, 0],
-                                   [0, 0, 1]])
 
 
 # ==========================================================================
@@ -97,6 +85,16 @@ class ArrowSurfacer:
         self._params = params
         self._logger = node.get_logger()
         self._stopped = False
+        down_config = node.camera_configs['down']
+        left = down_config.side('left')
+        right = down_config.side('right')
+        self._down_fx = float(left.matrix[0, 0])
+        self._down_fy = float(left.matrix[1, 1])
+        self._down_cx = float(left.matrix[0, 2])
+        self._down_cy = float(left.matrix[1, 2])
+        self._down_offset_left = left.translation.copy()
+        self._down_offset_right = right.translation.copy()
+        self._down_optical_to_body = left.optical_to_body.copy()
 
         # 默认从统一模型元数据读取。当前 robotcup 模型没有箭头/彩色扇区
         # 类别，因此不会再误用旧模型的 0/1/2/3；旧场景可显式传入覆盖值。
@@ -215,10 +213,10 @@ class ArrowSurfacer:
                              offset: np.ndarray, R_robot: np.ndarray,
                              robot_pos: np.ndarray):
         """像素坐标 → 世界系射线 (origin, direction)。"""
-        v_cam = np.array([(px - _DOWN_CX) / _DOWN_FX,
-                          (py - _DOWN_CY) / _DOWN_FY, 1.0])
+        v_cam = np.array([(px - self._down_cx) / self._down_fx,
+                          (py - self._down_cy) / self._down_fy, 1.0])
         v_cam = v_cam / np.linalg.norm(v_cam)
-        v_body = _DOWN_OPTICAL_TO_BODY @ v_cam
+        v_body = self._down_optical_to_body @ v_cam
         v_world = R_robot @ v_body
         v_world = v_world / np.linalg.norm(v_world)
         origin = robot_pos + R_robot @ offset
@@ -238,10 +236,10 @@ class ArrowSurfacer:
 
         l_origin, l_dir = self._pixel_to_world_ray(
             left_det.pixel_x, left_det.pixel_y,
-            _DOWN_OFFSET_LEFT, R_robot, robot_pos)
+            self._down_offset_left, R_robot, robot_pos)
         r_origin, r_dir = self._pixel_to_world_ray(
             right_det.pixel_x, right_det.pixel_y,
-            _DOWN_OFFSET_RIGHT, R_robot, robot_pos)
+            self._down_offset_right, R_robot, robot_pos)
 
         pos = _ray_intersection_midpoint(l_origin, l_dir, r_origin, r_dir)
         if pos is None:

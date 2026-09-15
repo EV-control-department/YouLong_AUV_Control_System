@@ -39,10 +39,13 @@ from uv_task.config_loader import (
     default_mission_path,
     load_mission_or_task,
 )
+from uv_task.mission_policy import (
+    apply_failure_override,
+    select_failure_override,
+)
+from uv_task.task_outcome import TaskOutcome
 
 from uv_task.arrow_surfacer import (
-    _DOWN_CX, _DOWN_CY, _DOWN_FX, _DOWN_FY,
-    _DOWN_OFFSET_LEFT, _DOWN_OFFSET_RIGHT, _DOWN_OPTICAL_TO_BODY,
     _euler_to_rotation_matrix, _ray_intersection_midpoint,
 )
 from uv_task.arrow_surfacer import ArrowSurfacer
@@ -57,23 +60,9 @@ RB26FindCollectionFrameTask = import_module(
 RB26DropBeaconTask = import_module(
     'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
-from uv_camera.model_classes import model_class_id
+from uv_camera.camera_config import load_camera_config, profile_for_mode
+from uv_camera.model_classes import model_class_id, model_class_name
 
-
-_IMPACT_BALL_CLASS_IDS = {
-    'impact_ball_blue': model_class_id('impact_ball_blue'),
-    'impact_ball_red': model_class_id('impact_ball_red'),
-}
-_IMPACT_BALL_ALIASES = {
-    'blue': 'impact_ball_blue',
-    'blue_ball': 'impact_ball_blue',
-    'impact_blue': 'impact_ball_blue',
-    'impact_ball_blue': 'impact_ball_blue',
-    'red': 'impact_ball_red',
-    'red_ball': 'impact_ball_red',
-    'impact_red': 'impact_ball_red',
-    'impact_ball_red': 'impact_ball_red',
-}
 
 # object_localizer.py publishes these as canonical physical classes on
 # /perception/target_positions, while class_name can still contain the
@@ -146,6 +135,10 @@ class TaskRunnerNode(Node):
         self.running = False
         self.stopped = False
         self._active_goal_handle = None
+        self._last_motion_failure_kind = ''
+        self._last_motion_failure_message = ''
+        self._last_failure_code = ''
+        self._last_failure_message = ''
 
         # Debug mode
         self.declare_parameter('debug_mode', False)
@@ -174,9 +167,26 @@ class TaskRunnerNode(Node):
             self.target_id = 'yellow_golf'
         self.get_logger().info(f'比赛目标元数据：{self.target_id}')
 
-        # Camera parameters (used by LineFollower sub-task via get_parameter)
-        self.declare_parameter('down_image_width', 1280.0)
-        self.declare_parameter('down_image_height', 960.0)
+        self.declare_parameter('camera_config_profile', 'auto')
+        self.declare_parameter('camera_config_dir', '')
+        camera_profile = profile_for_mode(
+            False, self.get_parameter('camera_config_profile').value)
+        camera_config_dir = str(
+            self.get_parameter('camera_config_dir').value).strip() or None
+        self.camera_configs = {
+            camera: load_camera_config(camera, camera_profile, camera_config_dir)
+            for camera in ('front', 'down')
+        }
+        down = self.camera_configs['down']
+        down_left = down.side('left')
+        down_right = down.side('right')
+        self._down_fx = float(down_left.matrix[0, 0])
+        self._down_fy = float(down_left.matrix[1, 1])
+        self._down_cx = float(down_left.matrix[0, 2])
+        self._down_cy = float(down_left.matrix[1, 2])
+        self._down_offset_left = down_left.translation.copy()
+        self._down_offset_right = down_right.translation.copy()
+        self._down_optical_to_body = down_left.optical_to_body.copy()
 
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {
@@ -402,9 +412,9 @@ class TaskRunnerNode(Node):
 
         pairs = []
         for left in left_candidates:
-            left_v = (float(left.pixel_y) - _DOWN_CY) / _DOWN_FY
+            left_v = (float(left.pixel_y) - self._down_cy) / self._down_fy
             for right in right_candidates:
-                right_v = (float(right.pixel_y) - _DOWN_CY) / _DOWN_FY
+                right_v = (float(right.pixel_y) - self._down_cy) / self._down_fy
                 vertical_error = abs(left_v - right_v)
                 if vertical_error <= epipolar_tolerance:
                     pairs.append((
@@ -419,13 +429,12 @@ class TaskRunnerNode(Node):
             pairs, key=lambda item: (item[0], item[1]))
         return left, right
 
-    @staticmethod
-    def _down_visual_error(left, right):
+    def _down_visual_error(self, left, right):
         """Return normalized image-centre and epipolar errors for a pair."""
-        left_u = (float(left.pixel_x) - _DOWN_CX) / _DOWN_FX
-        right_u = (float(right.pixel_x) - _DOWN_CX) / _DOWN_FX
-        left_v = (float(left.pixel_y) - _DOWN_CY) / _DOWN_FY
-        right_v = (float(right.pixel_y) - _DOWN_CY) / _DOWN_FY
+        left_u = (float(left.pixel_x) - self._down_cx) / self._down_fx
+        right_u = (float(right.pixel_x) - self._down_cx) / self._down_fx
+        left_v = (float(left.pixel_y) - self._down_cy) / self._down_fy
+        right_v = (float(right.pixel_y) - self._down_cy) / self._down_fy
         return (
             (left_u + right_u) * 0.5,
             (left_v + right_v) * 0.5,
@@ -560,6 +569,8 @@ class TaskRunnerNode(Node):
 
         if self.stopped:
             return False
+        self._last_motion_failure_kind = 'timeout'
+        self._last_motion_failure_message = '下视视觉伺服超时'
         self.get_logger().error(
             '26rb_drop_ball_target_rack：下视视觉伺服超时，未打开指示灯')
         return False
@@ -573,13 +584,13 @@ class TaskRunnerNode(Node):
         R = _euler_to_rotation_matrix(roll, pitch, yaw)
         rp = np.array([rx, ry, rz])
         def _ray(px, py, off):
-            vc = np.array([(px - _DOWN_CX) / _DOWN_FX, (py - _DOWN_CY) / _DOWN_FY, 1.0])
+            vc = np.array([(px - self._down_cx) / self._down_fx, (py - self._down_cy) / self._down_fy, 1.0])
             vc /= np.linalg.norm(vc)
-            vb = _DOWN_OPTICAL_TO_BODY @ vc
+            vb = self._down_optical_to_body @ vc
             vw = R @ vb; vw /= np.linalg.norm(vw)
             return rp + R @ off, vw
-        lo, ld_ray = _ray(ld.pixel_x, ld.pixel_y, _DOWN_OFFSET_LEFT)
-        ro, rd_ray = _ray(rd.pixel_x, rd.pixel_y, _DOWN_OFFSET_RIGHT)
+        lo, ld_ray = _ray(ld.pixel_x, ld.pixel_y, self._down_offset_left)
+        ro, rd_ray = _ray(rd.pixel_x, rd.pixel_y, self._down_offset_right)
         pos = _ray_intersection_midpoint(lo, ld_ray, ro, rd_ray)
         return (float(pos[0]), float(pos[1]), float(pos[2])) if pos is not None else None
 
@@ -661,18 +672,111 @@ class TaskRunnerNode(Node):
     # Task execution
     # ========================================================================
 
+    @staticmethod
+    def _pose_axis_selected(axes: str, axis: str) -> bool:
+        text = str(axes or '').strip().lower()
+        if not text:
+            return True
+        if axis == 'rz':
+            return 'rz' in text
+        return axis in text.replace('rz', '')
+
+    def _update_command_tracker_from_pose(self, pose: dict):
+        """Update the local command pose after an initial pose override."""
+        command = str(pose['command']).upper()
+        x, y, z, yaw = (float(value) for value in pose['target'])
+        axes = pose.get('axes', '')
+
+        if command in {'SET', 'WMOVE', 'WTRAVEL'}:
+            if self._pose_axis_selected(axes, 'x'):
+                self._cmd_x = x
+            if self._pose_axis_selected(axes, 'y'):
+                self._cmd_y = y
+            if self._pose_axis_selected(axes, 'z'):
+                self._cmd_z = z
+            if self._pose_axis_selected(axes, 'rz'):
+                self._cmd_yaw = yaw
+            return
+
+        # BMOVE/BTRAVEL targets are body-frame offsets.  BTRAVEL ignores yaw;
+        # BMOVE applies all four values because its action endpoint does too.
+        heading = math.radians(self._cmd_yaw)
+        self._cmd_x += math.cos(heading) * x - math.sin(heading) * y
+        self._cmd_y += math.sin(heading) * x + math.cos(heading) * y
+        self._cmd_z += z
+        if command == 'BMOVE':
+            self._cmd_yaw = self._wrap_yaw_degrees(self._cmd_yaw + yaw)
+
+    def _execute_initial_pose(self, task_name: str, pose: dict) -> TaskOutcome:
+        """Execute a mission-level initial/failure-transferred pose."""
+        if task_name == 'start':
+            self.get_logger().info(
+                'start：跳过初始位姿，先由 START 建立 odom 原点')
+            return TaskOutcome.ok()
+
+        command_types = {
+            'SET': BasicMotion.Goal.SET,
+            'WMOVE': BasicMotion.Goal.WMOVE,
+            'BMOVE': BasicMotion.Goal.BMOVE,
+            'WTRAVEL': BasicMotion.Goal.WTRAVEL,
+            'BTRAVEL': BasicMotion.Goal.BTRAVEL,
+        }
+        command = str(pose['command']).upper()
+        axes = str(pose.get('axes', ''))
+        target = list(pose['target'])
+        self.get_logger().info(
+            f'{task_name}：执行初始位姿 {command}，axes={axes or "all"}，'
+            f'target={[round(float(value), 3) for value in target]}')
+        try:
+            success, message = self._send_action_goal(
+                command_types[command],
+                target,
+                axes,
+                task_context=self._format_motion_context(
+                    f'{task_name}初始位姿'))
+        except Exception as exc:
+            return TaskOutcome.failed(
+                f'{task_name}.exception', str(exc))
+        if not success:
+            code = (
+                f'{task_name}.timeout'
+                if self._last_motion_failure_kind == 'timeout'
+                else f'{task_name}.motion')
+            return TaskOutcome.failed(code, message)
+
+        self._update_command_tracker_from_pose(pose)
+        return TaskOutcome.ok()
+
+    def _select_failure_override(self, task: dict, failure_code: str):
+        return select_failure_override(task, failure_code)
+
+    def _fallback_failure_outcome(
+            self, task_name: str, stage: str = 'motion', message: str = ''):
+        if self._last_motion_failure_kind == 'timeout':
+            code = f'{task_name}.timeout'
+        else:
+            code = f'{task_name}.{stage}'
+        return TaskOutcome.failed(code, message or self._last_motion_failure_message)
+
     def run_task_list(self):
         """Execute all tasks sequentially."""
         self.running = True
         self.stopped = False
         self.current_index = 0
+        self._last_failure_code = ''
+        self._last_failure_message = ''
+        pending_failure_override = None
         total = len(self.tasks)
         self.get_logger().info(f'=== 任务列表开始执行（共 {total} 个任务）===')
 
         while self.current_index < total and not self.stopped:
             task = self.tasks[self.current_index]
             name = task.get('name', 'unknown')
-            params = task.get('params', {})
+            params, initial_pose = apply_failure_override(
+                task.get('params', {}),
+                task.get('initial_pose'),
+                pending_failure_override,
+            )
             self._current_task_name = str(name)
             self._current_task_step = self.current_index + 1
 
@@ -682,13 +786,45 @@ class TaskRunnerNode(Node):
                 f'{self._cmd_z:.2f}, {self._cmd_yaw:.1f}°)')
 
             try:
-                success = self._execute_task(name, params)
-                if not success:
+                outcome = self._execute_task(
+                    name, params, initial_pose=initial_pose)
+                if not outcome:
+                    self._last_failure_code = outcome.failure_code
+                    self._last_failure_message = outcome.message
                     self.get_logger().warn(
-                        f'[{self.current_index + 1}/{total}] {name} 执行失败')
+                        f'[{self.current_index + 1}/{total}] {name} 执行失败：'
+                        f'code={outcome.failure_code}，{outcome.message}')
+                    pending_failure_override = None
+                    if self.current_index + 1 < total:
+                        pending_failure_override = self._select_failure_override(
+                            task, outcome.failure_code)
+                        if pending_failure_override is not None:
+                            outcome = outcome.with_transfer(
+                                pending_failure_override)
+                            self.get_logger().warn(
+                                f'{name}：失败覆盖 {outcome.failure_code} '
+                                '将传递给下一任务')
+                else:
+                    pending_failure_override = None
             except Exception as e:
+                outcome = TaskOutcome.failed(
+                    f'{name}.exception', str(e))
+                self._last_failure_code = outcome.failure_code
+                self._last_failure_message = outcome.message
+                pending_failure_override = None
                 self.get_logger().error(
-                    f'[{self.current_index + 1}/{total}] {name} 发生异常：{e}')
+                    f'[{self.current_index + 1}/{total}] {name} 发生异常：'
+                    f'code={outcome.failure_code}，{outcome.message}')
+
+                if self.current_index + 1 < total:
+                    pending_failure_override = self._select_failure_override(
+                        task, outcome.failure_code)
+                    if pending_failure_override is not None:
+                        outcome = outcome.with_transfer(
+                            pending_failure_override)
+                        self.get_logger().warn(
+                            f'{name}：异常覆盖 {outcome.failure_code} '
+                            '将传递给下一任务')
 
             self.current_index += 1
 
@@ -700,14 +836,37 @@ class TaskRunnerNode(Node):
         else:
             self.get_logger().info(f'=== 任务列表执行完成（{total}/{total}）===')
 
-    def _execute_task(self, name: str, params: dict) -> bool:
-        """Execute a single task by name."""
+    def _execute_task(
+            self, name: str, params: dict,
+            initial_pose: dict | None = None) -> TaskOutcome:
+        """Execute one task and normalize its result to ``TaskOutcome``."""
+        self._last_motion_failure_kind = ''
+        self._last_motion_failure_message = ''
+
+        if initial_pose is not None:
+            outcome = self._execute_initial_pose(name, initial_pose)
+            if not outcome:
+                return outcome
+
         handler = self.task_map.get(name)
         if handler is None:
             self.get_logger().warn(f'未知任务：{name}')
-            return False
+            return TaskOutcome.failed(f'{name}.motion', '未知任务')
 
-        return handler(params)
+        try:
+            raw_outcome = handler(params)
+        except Exception as exc:
+            return TaskOutcome.failed(f'{name}.exception', str(exc))
+
+        if isinstance(raw_outcome, TaskOutcome):
+            if raw_outcome.success:
+                return raw_outcome
+            if raw_outcome.failure_code:
+                return raw_outcome
+            return self._fallback_failure_outcome(name)
+        if raw_outcome:
+            return TaskOutcome.ok()
+        return self._fallback_failure_outcome(name)
 
     # ========================================================================
     # Action helper
@@ -756,6 +915,8 @@ class TaskRunnerNode(Node):
         """
         type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL', 6: 'START'}
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
+        self._last_motion_failure_kind = ''
+        self._last_motion_failure_message = ''
         task_context = (str(task_context).strip() or self._format_motion_context(
             self._default_motion_purpose(cmd_type, axes)))
 
@@ -772,6 +933,8 @@ class TaskRunnerNode(Node):
 
         if not self._action_client.wait_for_server(timeout_sec=2.0):
             self.get_logger().error('动作服务器不可用')
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = '动作服务器不可用'
             return False, '动作服务器不可用'
 
         goal = BasicMotion.Goal()
@@ -787,9 +950,13 @@ class TaskRunnerNode(Node):
         if not rclpy.ok() or self.stopped:
             if not quiet:
                 self.get_logger().warn(f'动作目标被中断（stopped={self.stopped}）')
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = '已停止'
             return False, '已停止'
         if not send_future.done():
             self.get_logger().error('发送动作目标超时')
+            self._last_motion_failure_kind = 'timeout'
+            self._last_motion_failure_message = '发送动作目标超时'
             return False, '发送动作目标超时'
 
         goal_handle = send_future.result()
@@ -797,6 +964,8 @@ class TaskRunnerNode(Node):
         if not goal_handle.accepted:
             self._active_goal_handle = None
             self.get_logger().error('动作目标被服务器拒绝')
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = '动作目标被服务器拒绝'
             return False, '动作目标被服务器拒绝'
 
         if not quiet:
@@ -809,9 +978,13 @@ class TaskRunnerNode(Node):
         if not rclpy.ok() or self.stopped:
             if not quiet:
                 self.get_logger().warn(f'动作结果等待被中断（stopped={self.stopped}）')
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = '已停止'
             return False, '已停止'
         if not result_future.done():
             self.get_logger().error('等待动作结果超时')
+            self._last_motion_failure_kind = 'timeout'
+            self._last_motion_failure_message = '等待动作结果超时'
             return False, '等待动作结果超时'
 
         result = result_future.result().result
@@ -820,6 +993,11 @@ class TaskRunnerNode(Node):
             self.get_logger().error(
                 f'{type_name} 执行失败：{result.message}，'
                 f'目标=[{t_str}]')
+            message = str(result.message)
+            self._last_motion_failure_kind = (
+                'timeout' if '超时' in message.lower()
+                or 'timeout' in message.lower() else 'motion')
+            self._last_motion_failure_message = message
         elif not quiet:
             self.get_logger().info('动作执行结果：成功')
         return result.success, result.message
@@ -1301,27 +1479,22 @@ class TaskRunnerNode(Node):
 
     @staticmethod
     def _normalize_impact_ball_name(value):
-        """将撞球名称或 class_id 统一成定位器的物理类别名。"""
+        """Accept only canonical impact-ball names from the model registry."""
         if isinstance(value, (int, np.integer)):
             class_id = int(value)
-            for name, known_id in _IMPACT_BALL_CLASS_IDS.items():
-                if class_id == known_id:
-                    return name
-            return None
-        text = str(value).strip().lower()
-        if text.isdigit():
-            return TaskRunnerNode._normalize_impact_ball_name(int(text))
-        return _IMPACT_BALL_ALIASES.get(text)
+            name = model_class_name(class_id)
+        else:
+            text = str(value).strip()
+            if text.isdigit():
+                name = model_class_name(int(text))
+            else:
+                class_id = model_class_id(text, required=False)
+                name = model_class_name(class_id) if class_id is not None else None
+        return name if name in {'impact_ball_blue', 'impact_ball_red'} else None
 
     def _impact_ball_order(self, params: dict) -> list[str]:
-        """Read the requested ball order; default is blue then red."""
-        values = params.get('order')
-        if values is None:
-            values = params.get('ball_classes')
-        if values is None:
-            values = params.get('ball_class_ids')
-        if values is None:
-            values = ['impact_ball_blue', 'impact_ball_red']
+        """Read the requested canonical detector class-name order."""
+        values = params.get('order', ['impact_ball_blue', 'impact_ball_red'])
         if isinstance(values, (str, int, np.integer)):
             values = [values]
 
@@ -1332,8 +1505,8 @@ class TaskRunnerNode(Node):
                 result.append(name)
         if not result:
             self.get_logger().error(
-                'hit_balls：撞球顺序中没有有效目标；请使用 blue/red，'
-                '或使用 robotcup20260901.yaml 中的有效 class_id')
+                'hit_balls：撞球顺序中没有有效目标；请使用 '
+                'robotcup20260901.yaml 中的 canonical class name 或 class_id')
         return result
 
     def _best_impact_ball_target(self, name: str, params: dict):
@@ -1343,7 +1516,7 @@ class TaskRunnerNode(Node):
         marks them stale.  The estimate can still be valuable for the task;
         freshness is not a task-level validity condition.
         """
-        class_id = _IMPACT_BALL_CLASS_IDS[name]
+        class_id = model_class_id(name)
         min_confidence = float(params.get('min_confidence', 0.05))
         min_observations = int(params.get('min_observations', 1))
         with self._perception_lock:
@@ -1687,7 +1860,7 @@ class TaskRunnerNode(Node):
         pose = self._latest_robot_pose()
         return [pose[0], pose[1], pose[2], pose[5]]
 
-    def _task_pass_gates(self, p: dict) -> bool:
+    def _task_pass_gates(self, p: dict) -> TaskOutcome:
         """仅用前视相机图像搜索、对准并连续通过多个门。"""
         gate_task = RB26GateTask(self, p)
         try:
@@ -1695,7 +1868,7 @@ class TaskRunnerNode(Node):
         finally:
             gate_task.destroy()
 
-    def _task_hit_balls(self, p: dict) -> bool:
+    def _task_hit_balls(self, p: dict) -> TaskOutcome:
         """执行 26rb 撞球任务模块。"""
         task = RB26HitBallsTask(self, p)
         return task.execute()
@@ -1908,12 +2081,12 @@ class TaskRunnerNode(Node):
                     return True
         return any_found
 
-    def _task_find_collection_frame(self, p: dict) -> bool:
+    def _task_find_collection_frame(self, p: dict) -> TaskOutcome:
         """执行 26rb 置物台/台框定位任务模块。"""
         task = RB26FindCollectionFrameTask(self, p)
         return task.execute()
 
-    def _task_drop_ball_target_rack(self, p: dict) -> bool:
+    def _task_drop_ball_target_rack(self, p: dict) -> TaskOutcome:
         """粗定位到目标架上方，下视视觉伺服对正后亮灯代替丢球。
 
         ``find_collection_frame`` has already confirmed the localizer targets
@@ -1927,7 +2100,8 @@ class TaskRunnerNode(Node):
         if target_name is None:
             self.get_logger().error(
                 '26rb_drop_ball_target_rack：目标名称无效')
-            return False
+            return TaskOutcome.failed(
+                '26rb_drop_ball_target_rack.target', '目标名称无效')
 
         target_timeout = max(1.0, float(p.get('target_timeout',
                                               p.get('timeout', 120.0))))
@@ -1947,9 +2121,13 @@ class TaskRunnerNode(Node):
             time.sleep(0.05)
 
         if self.stopped or target is None:
+            code = (
+                '26rb_drop_ball_target_rack.timeout'
+                if time.monotonic() >= deadline
+                else '26rb_drop_ball_target_rack.target')
             self.get_logger().error(
                 f'26rb_drop_ball_target_rack：等待 {target_name} 超时')
-            return False
+            return TaskOutcome.failed(code, f'等待 {target_name} 超时')
 
         target_z = max(0.0, float(p.get('above_z_m', 0.20)))
         pose = self._latest_robot_pose()
@@ -1973,7 +2151,8 @@ class TaskRunnerNode(Node):
         if not success:
             self.get_logger().error(
                 f'26rb_drop_ball_target_rack：移动失败：{message}')
-            return False
+            return self._fallback_failure_outcome(
+                '26rb_drop_ball_target_rack', 'move', message)
         self._cmd_x = float(target['x'])
         self._cmd_y = float(target['y'])
         self._cmd_z = target_z
@@ -1982,7 +2161,8 @@ class TaskRunnerNode(Node):
         # 世界坐标只负责把目标送入下视相机视场，最终位置不再由
         # target_positions 的世界坐标闭环决定。
         if not self._down_visual_servo_target_rack(p, target_z):
-            return False
+            return self._fallback_failure_outcome(
+                '26rb_drop_ball_target_rack', 'visual_servo')
 
         light_value = p.get('light_color', p.get('light', 'yellow'))
         if isinstance(light_value, str):
@@ -2000,22 +2180,23 @@ class TaskRunnerNode(Node):
                                self.LIGHT_GREEN, self.LIGHT_RED):
             light_value = self.LIGHT_YELLOW
 
-        self.set_light(light_value, f'{target_name} 中心')
         hold_seconds = max(0.0, float(p.get('light_hold_seconds', 1.0)))
         try:
+            self.set_light(light_value, f'{target_name} 中心')
             if hold_seconds > 0.0:
                 end = time.monotonic() + hold_seconds
                 while not self.stopped and time.monotonic() < end:
                     time.sleep(min(0.05, end - time.monotonic()))
             if self.stopped:
-                return False
+                return TaskOutcome.failed(
+                    '26rb_drop_ball_target_rack.light', '任务被中止')
             self.get_logger().info(
                 f'26rb_drop_ball_target_rack：{target_name} 中心亮灯完成')
-            return True
+            return TaskOutcome.ok()
         finally:
             self.light_off()
 
-    def _task_grab_ball(self, p: dict) -> bool:
+    def _task_grab_ball(self, p: dict) -> TaskOutcome:
         """使用左下视相机完成单个指定颜色球的抓取动作。"""
         grab_task = RB26GrabBallTask(self, p)
         return grab_task.execute()
@@ -2183,11 +2364,13 @@ class TaskRunnerNode(Node):
         self._debug_timeout = float(timeout) if timeout > 0 else -1.0
 
         try:
-            success = self._execute_task(name, params)
-            if success:
+            outcome = self._execute_task(name, params)
+            if outcome:
                 self.get_logger().info(f'调试执行 {name}：成功')
             else:
-                self.get_logger().warn(f'调试执行 {name}：失败')
+                self.get_logger().warn(
+                    f'调试执行 {name}：失败，code={outcome.failure_code}，'
+                    f'{outcome.message}')
         except Exception as e:
             self.get_logger().error(f'调试执行 {name}：发生异常：{e}')
         finally:
@@ -2219,7 +2402,9 @@ class TaskRunnerNode(Node):
             msg.total_tasks = len(self.tasks)
             if self.current_index < len(self.tasks):
                 msg.current_task_name = self.tasks[self.current_index].get('name', '')
-            msg.error_message = ''
+            msg.error_message = (
+                f'{self._last_failure_code}: {self._last_failure_message}'
+                if self._last_failure_code else '')
         elif self.stopped:
             msg.status = TaskStatus.STATUS_PAUSED
         else:

@@ -1,8 +1,8 @@
 task: 26rb_hit_balls
 
 params:
-  # 球颜色处理顺序；例如 [red, blue]。
-  order: [blue]
+  # 使用 robotcup20260901.yaml 中的 canonical detector class name。
+  order: [impact_ball_blue]
   # 是否主动旋转搜索并更新目标球定位。
   active_localization: true
 
