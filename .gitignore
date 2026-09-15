@@ -9,6 +9,9 @@ workspace_sim/build/
 workspace_sim/install/
 workspace_sim/log/
 
+# Pre-research documents
+pre-research/
+
 # Python
 __pycache__/
 *.py[cod]
