@@ -1,0 +1,153 @@
+<?xml version="1.0"?>
+<!--
+    canyon_vision_dvl.scn
+    ============================================================================
+    水下「视觉 + DVL」融合建图 demo 场景
+    ============================================================================
+    !! 坐标系：Stonefish 世界系是 NED（x=北, y=东, z=向下），z 是"深度"。
+       z=0 为水面，z 越大越深；负 z 表示在水面之上（空气里）。
+       本文件所有 z 均为深度。参考 SimulationManager: g=9.81,
+       dynamicsWorld->setGravity(Vector3(0,0,g)) → 重力沿 +Z。
+    ============================================================================
+    世界    : 30 m x 30 m 起伏峡谷地形 canyon.obj（贴图 canyon.png，4096x4096）
+              canyon.obj 原始 z ∈ [-5.73, 0.34]（按 z-up 建模），
+              这里给 world_transform z = +8.0 把它整体压到水下：
+                  谷缘(浅) ≈ 2.27 m 深，谷底(深) ≈ 8.34 m 深。
+    起点    : 5.5 -9.5 6.2  —— 峡谷内最开阔的谷底上方 1.8 m 处
+              （谷底约 8.0 m 深，±2 m 内无崖壁，DVL 底距约 1.8 m）
+    载具    : XUNYUN AUV，由 xunyun_fixed.scn 引入
+              DVL 20 Hz      -> /auv/dvl, /auv/dvl_altitude
+              IMU 20 Hz      -> /auv/imu
+              pressure 5 Hz  -> /auv/pressure
+              odometry 30 Hz -> /auv/odometry
+              前视双目 10 Hz 1280x960 -> /sim/front_cam/left|right/image_color
+              下视双目 30 Hz 1920x1080 -> /sim/down_cam/left|right/image_color
+    ============================================================================
+    启动方式：
+      ros2 launch uv_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
+    ============================================================================
+-->
+<scenario>
+	<environment>
+		<!-- ned 只是 NED 原点的大地坐标，不是坐标系切换 -->
+		<ned latitude="40.0" longitude="3.0"/>
+
+		<ocean>
+			<!-- 较清澈的水体，保证相机图像有足够对比度做视觉里程计 -->
+			<water density="1000.0" jerlov="0.20"/>
+			<waves height="0.0"/>
+			<current type="uniform">
+				<velocity xyz="0.0 0.0 0.0"/>
+			</current>
+		</ocean>
+
+		<atmosphere>
+			<sun azimuth="120.0" elevation="55.0"/>
+		</atmosphere>
+	</environment>
+
+	<materials>
+		<material name="Neutral" density="1000.0" restitution="0.5"/>
+		<material name="Rock" density="3000.0" restitution="0.8"/>
+		<material name="Fiberglass" density="1500.0" restitution="0.3"/>
+		<material name="Aluminium" density="2710.0" restitution="0.7"/>
+		<friction_table>
+			<friction material1="Neutral" material2="Neutral" static="0.5" dynamic="0.2"/>
+			<friction material1="Neutral" material2="Rock" static="0.2" dynamic="0.1"/>
+			<friction material1="Neutral" material2="Fiberglass" static="0.5" dynamic="0.2"/>
+			<friction material1="Neutral" material2="Aluminium" static="0.5" dynamic="0.2"/>
+			<friction material1="Rock" material2="Rock" static="0.9" dynamic="0.7"/>
+			<friction material1="Rock" material2="Fiberglass" static="0.6" dynamic="0.4"/>
+			<friction material1="Rock" material2="Aluminium" static="0.6" dynamic="0.3"/>
+			<friction material1="Fiberglass" material2="Fiberglass" static="0.5" dynamic="0.2"/>
+			<friction material1="Fiberglass" material2="Aluminium" static="0.5" dynamic="0.2"/>
+			<friction material1="Aluminium" material2="Aluminium" static="0.8" dynamic="0.5"/>
+		</friction_table>
+	</materials>
+
+	<looks>
+		<look name="yellow" rgb="1.0 0.9 0.0" roughness="0.3"/>
+		<look name="gray" gray="0.3" roughness="0.4" metalness="0.5"/>
+		<look name="manipulator" rgb="0.6 0.6 0.6" roughness="0.5" metalness="0.4"/>
+		<look name="seabed" rgb="0.7 0.7 0.5" roughness="0.9"/>
+		<look name="propeller" gray="1.0" roughness="0.3" texture="propeller_tex.png"/>
+		<look name="duct" gray="0.1" roughness="0.4" metalness="0.5"/>
+		<look name="dark" rgb="0.2 0.15 0.1" roughness="0.6" metalness="0.8"/>
+		<look name="pipe" rgb="1.0 0.2 0.0" roughness="0.2" metalness="0.3"/>
+
+		<!-- 峡谷地形：直接使用 mesh 自带 UV + canyon.png 贴图 -->
+		<look name="canyon" rgb="0.75 0.72 0.62" roughness="0.95" texture="canyon.png"/>
+
+		<!-- 地标立柱配色（用于视觉回环 / 目标识别） -->
+		<look name="lm_red" rgb="0.90 0.10 0.10" roughness="0.4"/>
+		<look name="lm_green" rgb="0.10 0.80 0.15" roughness="0.4"/>
+		<look name="lm_orange" rgb="1.00 0.45 0.00" roughness="0.4"/>
+		<look name="lm_blue" rgb="0.10 0.35 0.95" roughness="0.4"/>
+		<look name="lm_magenta" rgb="0.85 0.10 0.80" roughness="0.4"/>
+	</looks>
+
+	<!-- ======================== 峡谷地形 ========================
+	     z=+8.0 把源于 3D 软件的 z-up 模型整体压到水下（谷缘 2.27 m 深）。 -->
+	<static name="Canyon" type="model">
+		<material name="Rock"/>
+		<look name="canyon"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.0 0.0 8.0"/>
+		<physical>
+			<mesh filename="canyon.obj" scale="1.0"/>
+			<origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+		</physical>
+	</static>
+
+	<!-- 安全底：z=+12 在谷底(8.34 m)之下，防止游出 30x30 范围后无限下坠 -->
+	<static name="SafetyBottom" type="plane">
+		<material name="Rock"/>
+		<look name="seabed"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="0.0 0.0 12.0"/>
+	</static>
+
+	<!-- ============= 地标立柱（可选，便于视觉回环/目标识别） =============
+	     NED 下"向上"是 -z：柱心 z = 谷底深度 - 0.9，柱高 2.0，
+	     即从谷底(约 8 m 深)向上竖立约 1.1~1.4 m。若不需要可整体删除本段。 -->
+	<static name="LandmarkRed" type="cylinder">
+		<material name="Rock"/>
+		<look name="lm_red"/>
+		<dimensions radius="0.10" height="2.0"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="6.5 -5.0 7.10"/>
+	</static>
+
+	<static name="LandmarkGreen" type="cylinder">
+		<material name="Rock"/>
+		<look name="lm_green"/>
+		<dimensions radius="0.10" height="2.0"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="2.5 -9.5 7.10"/>
+	</static>
+
+	<static name="LandmarkOrange" type="cylinder">
+		<material name="Rock"/>
+		<look name="lm_orange"/>
+		<dimensions radius="0.10" height="2.0"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="9.0 0.5 7.10"/>
+	</static>
+
+	<static name="LandmarkBlue" type="cylinder">
+		<material name="Rock"/>
+		<look name="lm_blue"/>
+		<dimensions radius="0.10" height="2.0"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="1.0 7.5 7.09"/>
+	</static>
+
+	<static name="LandmarkMagenta" type="cylinder">
+		<material name="Rock"/>
+		<look name="lm_magenta"/>
+		<dimensions radius="0.10" height="2.0"/>
+		<world_transform rpy="0.0 0.0 0.0" xyz="-6.5 -11.5 7.14"/>
+	</static>
+
+	<!-- ======================== AUV 载具 ========================
+	     robot_position = "x y z"，z 为深度。6.2 m 深，谷底约 8.0 m。 -->
+	<include file="xunyun_fixed.scn">
+		<arg name="robot_name" value="XUNYUN"/>
+		<arg name="robot_position" value="5.5 -9.5 6.2"/>
+		<arg name="robot_orientation" value="0.0 0.0 0.0"/>
+	</include>
+</scenario>
