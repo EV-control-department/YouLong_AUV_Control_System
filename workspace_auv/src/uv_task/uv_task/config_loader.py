@@ -190,7 +190,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "verification_absence_hold_seconds": float,
         "max_grab_retries": int,
     },
-    "light_target_rack_return_origin": {
+    "26rb_drop_ball_target_rack": {
         "frame_name": str,
         "light_color": str,
         "above_z_m": float,
@@ -221,7 +221,6 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "down_visual_servo_period": float,
         "down_visual_command_timeout": float,
         "light_hold_seconds": float,
-        "return_timeout": float,
     },
 }
 
@@ -278,7 +277,7 @@ PARAMETER_ALIASES = {
         "verification.absence_hold_seconds": "verification_absence_hold_seconds",
         "verification.max_retries": "max_grab_retries",
     },
-    "light_target_rack_return_origin": {
+    "26rb_drop_ball_target_rack": {
         "target.timeout": "target_timeout",
         "servo.timeout": "horizontal_servo_timeout",
         "servo.stable_seconds": "horizontal_servo_stable_seconds",

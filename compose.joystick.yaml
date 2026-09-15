@@ -1,0 +1,14 @@
+services:
+  auv:
+    # Mount the directory instead of a fixed js0 node. This keeps the mount
+    # valid when the joystick is plugged in after the container starts.
+    volumes:
+      - type: bind
+        source: /dev/input
+        target: /dev/input
+        read_only: true
+
+    # Linux input devices use major number 13. Allow dynamically-created
+    # event/js nodes to be opened through the directory mount.
+    device_cgroup_rules:
+      - "c 13:* rwm"

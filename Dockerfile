@@ -91,11 +91,13 @@ RUN /bin/bash -lc 'set -eo pipefail && \
         --cmake-force-configure && \
     rm -rf /opt/youlong/src /opt/youlong/build'
 
-# The GUI renders Chinese labels and needs a CJK-capable font at runtime.
-# Keep this after the native build layers so font changes do not trigger
-# another Stonefish or ROS workspace rebuild.
+# The GUI renders Chinese labels and uses pygame for gamepad input.
+# Keep these runtime packages after the native build layers so dependency
+# changes do not trigger another Stonefish or ROS workspace rebuild.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends fonts-noto-cjk \
+    && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk \
+        python3-pygame \
     && rm -rf /var/lib/apt/lists/*
 
 ARG HOST_UID=1000

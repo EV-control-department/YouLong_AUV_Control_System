@@ -17,5 +17,7 @@ mission:
       config: ../tasks/26rb_find_collection_frame.yaml
     - name: 26rb_grab_ball
       config: ../tasks/26rb_grab_ball.yaml
-    - name: light_target_rack_return_origin
-      config: ../tasks/26rb_light_target_rack_return_origin.yaml
+    - name: 26rb_drop_ball_target_rack
+      config: ../tasks/26rb_drop_ball_target_rack.yaml
+    - name: return_origin
+      config: ../tasks/return_origin.yaml

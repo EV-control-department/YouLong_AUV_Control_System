@@ -227,10 +227,7 @@ class TaskRunnerNode(Node):
             'find_platform_and_rack': self._task_find_collection_frame,
             'find_rack_and_platform': self._task_find_collection_frame,
             '26rb_find_collection_frame': self._task_find_collection_frame,
-            'light_target_rack_return_origin':
-                self._task_light_target_rack_return_origin,
-            'light_frame_return': self._task_light_target_rack_return_origin,
-            'visit_frame_light': self._task_light_target_rack_return_origin,
+            '26rb_drop_ball_target_rack': self._task_drop_ball_target_rack,
             'grab_ball': self._task_grab_ball,
             'grab_balls': self._task_grab_ball,
             '26rb_grab_ball': self._task_grab_ball,
@@ -480,7 +477,7 @@ class TaskRunnerNode(Node):
         stable_since = None
         last_log = float('-inf')
         self.get_logger().info(
-            'light_target_rack_return_origin：开始下视双目视觉伺服；'
+            '26rb_drop_ball_target_rack：开始下视双目视觉伺服；'
             f'class_id={_TARGET_RACK_DOWN_CLASS_ID}，'
             f'像素容差={pixel_tolerance:.3f}，'
             f'极线容差={epipolar_tolerance:.3f}，'
@@ -497,7 +494,7 @@ class TaskRunnerNode(Node):
                 stable_since = None
                 if now - last_log >= 1.0:
                     self.get_logger().warning(
-                        'light_target_rack_return_origin：等待下视双目目标；'
+                        '26rb_drop_ball_target_rack：等待下视双目目标；'
                         '必须同时看到 target_rack_down 且左右目满足极线一致性')
                     last_log = now
                 time.sleep(min(period, max(0.0, deadline - now)))
@@ -513,7 +510,7 @@ class TaskRunnerNode(Node):
             if now - last_log >= 1.0:
                 state = '已居中，等待稳定' if centered else '修正中'
                 self.get_logger().info(
-                    f'light_target_rack_return_origin：下视视觉伺服{state}；'
+                    f'26rb_drop_ball_target_rack：下视视觉伺服{state}；'
                     f'归一化误差=(du={du:+.4f},dv={dv:+.4f})，'
                     f'极线误差={epipolar_error:.4f}')
                 last_log = now
@@ -523,7 +520,7 @@ class TaskRunnerNode(Node):
                     stable_since = now
                 elif now - stable_since >= stable_seconds:
                     self.get_logger().info(
-                        'light_target_rack_return_origin：下视视觉伺服已连续稳定，'
+                        '26rb_drop_ball_target_rack：下视视觉伺服已连续稳定，'
                         '允许打开指示灯')
                     return True
             else:
@@ -551,7 +548,7 @@ class TaskRunnerNode(Node):
                         'target_rack下视视觉伺服'))
                 if not success:
                     self.get_logger().error(
-                        'light_target_rack_return_origin：下视视觉伺服移动失败：'
+                        '26rb_drop_ball_target_rack：下视视觉伺服移动失败：'
                         f'{message}')
                     return False
                 self._cmd_x = target[0]
@@ -564,7 +561,7 @@ class TaskRunnerNode(Node):
         if self.stopped:
             return False
         self.get_logger().error(
-            'light_target_rack_return_origin：下视视觉伺服超时，未打开指示灯')
+            '26rb_drop_ball_target_rack：下视视觉伺服超时，未打开指示灯')
         return False
 
     def _triangulate(self, class_id: int):
@@ -1916,22 +1913,20 @@ class TaskRunnerNode(Node):
         task = RB26FindCollectionFrameTask(self, p)
         return task.execute()
 
-    def _task_light_target_rack_return_origin(self, p: dict) -> bool:
-        """粗定位到目标架上方，下视视觉伺服对正后闪灯并返回。
+    def _task_drop_ball_target_rack(self, p: dict) -> bool:
+        """粗定位到目标架上方，下视视觉伺服对正后亮灯代替丢球。
 
         ``find_collection_frame`` has already confirmed the localizer targets
         before this task is normally called.  Its world position is used only
         for the initial coarse move.  The final alignment is closed on the
         ``target_rack_down`` detections from both down cameras, so the light
         command is issued only after the rack is visually centred and stable.
-        The final return is the actual task chain origin, not the pose at task
-        entry.
         """
         target_name = self._normalize_localizer_target_name(
             p.get('frame_name', p.get('target_name', 'target_rack')))
         if target_name is None:
             self.get_logger().error(
-                'light_target_rack_return_origin：目标名称无效')
+                '26rb_drop_ball_target_rack：目标名称无效')
             return False
 
         target_timeout = max(1.0, float(p.get('target_timeout',
@@ -1946,14 +1941,14 @@ class TaskRunnerNode(Node):
             now = time.monotonic()
             if now - last_wait_log >= 1.0:
                 self.get_logger().info(
-                    f'light_target_rack_return_origin：等待定位器提供 '
+                    f'26rb_drop_ball_target_rack：等待定位器提供 '
                     f'{target_name} 的位置')
                 last_wait_log = now
             time.sleep(0.05)
 
         if self.stopped or target is None:
             self.get_logger().error(
-                f'light_target_rack_return_origin：等待 {target_name} 超时')
+                f'26rb_drop_ball_target_rack：等待 {target_name} 超时')
             return False
 
         target_z = max(0.0, float(p.get('above_z_m', 0.20)))
@@ -1965,7 +1960,7 @@ class TaskRunnerNode(Node):
             target_yaw = self._wrap_yaw_degrees(math.degrees(math.atan2(dy, dx)))
 
         self.get_logger().info(
-            f'light_target_rack_return_origin：移动到 {target_name} 中心上方 '
+            f'26rb_drop_ball_target_rack：移动到 {target_name} 中心上方 '
             f'({target["x"]:.2f}, {target["y"]:.2f}, {target_z:.2f})，'
             f'偏航角={target_yaw:.1f}°')
         success, message = self._send_action_goal(
@@ -1977,7 +1972,7 @@ class TaskRunnerNode(Node):
                 f'移动到{target_name}正上方'))
         if not success:
             self.get_logger().error(
-                f'light_target_rack_return_origin：移动失败：{message}')
+                f'26rb_drop_ball_target_rack：移动失败：{message}')
             return False
         self._cmd_x = float(target['x'])
         self._cmd_y = float(target['y'])
@@ -2014,24 +2009,8 @@ class TaskRunnerNode(Node):
                     time.sleep(min(0.05, end - time.monotonic()))
             if self.stopped:
                 return False
-
             self.get_logger().info(
-                'light_target_rack_return_origin：返回任务链原点 '
-                '（0.00, 0.00, 0.00, 0.0°）')
-            success, message = self._send_action_goal(
-                BasicMotion.Goal.SET,
-                [0.0, 0.0, 0.0, 0.0],
-                'xyzrz',
-                timeout=max(1.0, float(p.get('return_timeout', 120.0))),
-                task_context=self._format_motion_context(
-                    f'从{target_name}返回任务链原点'))
-            if not success:
-                self.get_logger().error(
-                    f'light_target_rack_return_origin：返回失败：{message}')
-                return False
-            self._cmd_x = self._cmd_y = self._cmd_z = self._cmd_yaw = 0.0
-            self.get_logger().info(
-                'light_target_rack_return_origin：已返回任务链原点')
+                f'26rb_drop_ball_target_rack：{target_name} 中心亮灯完成')
             return True
         finally:
             self.light_off()

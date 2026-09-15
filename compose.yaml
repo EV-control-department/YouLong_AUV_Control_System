@@ -30,6 +30,12 @@ services:
     tty: true
     shm_size: "64m"
 
+    # Joystick access is optional. scripts/compose_up.sh automatically adds
+    # compose.joystick.yaml when the host exposes /dev/input, so js0 may be
+    # plugged in after the container starts.
+    group_add:
+      - "${INPUT_GID:-995}"
+
     # Equivalent to `docker run --gpus all` for Compose v2.26.
     deploy:
       resources:

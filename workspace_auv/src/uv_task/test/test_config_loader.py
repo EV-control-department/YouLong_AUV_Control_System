@@ -23,7 +23,8 @@ EXPECTED_TASKS = [
     "26rb_gate_task",
     "26rb_find_collection_frame",
     "26rb_grab_ball",
-    "light_target_rack_return_origin",
+    "26rb_drop_ball_target_rack",
+    "return_origin",
 ]
 
 
@@ -46,6 +47,7 @@ def test_default_mission_preserves_order_and_values():
         "collection_frame", "target_rack"]
     assert tasks[7]["params"]["ball_color"] == "red"
     assert tasks[8]["params"]["light_color"] == "yellow"
+    assert "return_timeout" not in tasks[8]["params"]
     assert tasks[8]["params"]["down_visual_servo_timeout"] == 30.0
     assert tasks[8]["params"]["down_visual_servo_stable_seconds"] == 1.0
     assert tasks[8]["params"]["down_detection_timeout"] == 0.8
@@ -55,6 +57,10 @@ def test_default_mission_preserves_order_and_values():
     assert tasks[8]["params"]["down_projection_depth_m"] == 0.8
     assert tasks[8]["params"]["down_visual_servo_gain"] == 0.8
     assert tasks[8]["params"]["down_visual_servo_max_step_m"] == 0.08
+    assert tasks[9]["params"] == {
+        "state_settle_time": 0.3,
+        "timeout": 30.0,
+    }
 
 
 def test_standalone_task_file_loads_as_one_task():
@@ -116,7 +122,7 @@ params:
 def test_down_visual_servo_parameters_are_overridable(tmp_path):
     task_file = tmp_path / "rack.yaml"
     task_file.write_text(
-        """task: light_target_rack_return_origin
+        """task: 26rb_drop_ball_target_rack
 params:
   target:
     frame_name: target_rack
@@ -139,7 +145,7 @@ params:
         """mission:
   name: test
   tasks:
-    - name: light_target_rack_return_origin
+    - name: 26rb_drop_ball_target_rack
       config: rack.yaml
       params:
         visual_servo:
