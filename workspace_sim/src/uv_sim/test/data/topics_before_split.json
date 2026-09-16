@@ -1,0 +1,347 @@
+{
+  "generated_by": "python3 -c 'importlib load scripts/check_docs_contract.py; collect_source_facts().topics' -- captured BEFORE the T5 split (single uv_sim/sim_bridge.py)",
+  "note": "Topic/type/direction inventory at AST level.  File ownership is deliberately excluded: T5 moves owners without changing any topic, so only the (topic, direction, type) triple is compared.  test_node_split.py recomputes the same set from the current tree and asserts no removals or type changes and that the only additions are the /sim/sensor/* namespace.",
+  "endpoint_count": 68,
+  "endpoints": [
+    {
+      "topic": "/auv/down_cam/left",
+      "direction": "发布",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/auv/down_cam/right",
+      "direction": "发布",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/auv/down_cam/stitched",
+      "direction": "发布",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/auv/down_cam/stitched",
+      "direction": "订阅",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/auv/dvl",
+      "direction": "订阅",
+      "type": "stonefish_ros2.msg.DVL"
+    },
+    {
+      "topic": "/auv/front_cam/left",
+      "direction": "发布",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/auv/front_cam/right",
+      "direction": "发布",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/auv/front_cam/stitched",
+      "direction": "发布",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/auv/front_cam/stitched",
+      "direction": "订阅",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/auv/imu",
+      "direction": "订阅",
+      "type": "sensor_msgs.msg.Imu"
+    },
+    {
+      "topic": "/auv/odometry",
+      "direction": "订阅",
+      "type": "nav_msgs.msg.Odometry"
+    },
+    {
+      "topic": "/auv/pressure",
+      "direction": "订阅",
+      "type": "sensor_msgs.msg.FluidPressure"
+    },
+    {
+      "topic": "/auv/thrusters_cmd",
+      "direction": "发布",
+      "type": "std_msgs.msg.Float64MultiArray"
+    },
+    {
+      "topic": "/basic_motion/pose_info",
+      "direction": "发布",
+      "type": "uv_msgs.msg.PoseInfo"
+    },
+    {
+      "topic": "/basic_motion/pose_info",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.PoseInfo"
+    },
+    {
+      "topic": "/nav/navigate_to",
+      "direction": "服务",
+      "type": "uv_msgs.srv.RunTask"
+    },
+    {
+      "topic": "/nav/path",
+      "direction": "发布",
+      "type": "uv_msgs.msg.WaypointPath"
+    },
+    {
+      "topic": "/perception/aruco/ids",
+      "direction": "发布",
+      "type": "std_msgs.msg.Int32MultiArray"
+    },
+    {
+      "topic": "/perception/aruco/ids",
+      "direction": "订阅",
+      "type": "std_msgs.msg.Int32MultiArray"
+    },
+    {
+      "topic": "/perception/detection/down_left",
+      "direction": "发布",
+      "type": "uv_msgs.msg.DetectionArray"
+    },
+    {
+      "topic": "/perception/detection/down_left",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.DetectionArray"
+    },
+    {
+      "topic": "/perception/detection/down_right",
+      "direction": "发布",
+      "type": "uv_msgs.msg.DetectionArray"
+    },
+    {
+      "topic": "/perception/detection/down_right",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.DetectionArray"
+    },
+    {
+      "topic": "/perception/detection/front_left",
+      "direction": "发布",
+      "type": "uv_msgs.msg.DetectionArray"
+    },
+    {
+      "topic": "/perception/detection/front_left",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.DetectionArray"
+    },
+    {
+      "topic": "/perception/detection/front_right",
+      "direction": "发布",
+      "type": "uv_msgs.msg.DetectionArray"
+    },
+    {
+      "topic": "/perception/detection/front_right",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.DetectionArray"
+    },
+    {
+      "topic": "/perception/line/down_left",
+      "direction": "发布",
+      "type": "uv_msgs.msg.LineState"
+    },
+    {
+      "topic": "/perception/line/down_left",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.LineState"
+    },
+    {
+      "topic": "/perception/line/down_right",
+      "direction": "发布",
+      "type": "uv_msgs.msg.LineState"
+    },
+    {
+      "topic": "/perception/line/down_right",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.LineState"
+    },
+    {
+      "topic": "/perception/line/front_left",
+      "direction": "发布",
+      "type": "uv_msgs.msg.LineState"
+    },
+    {
+      "topic": "/perception/line/front_left",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.LineState"
+    },
+    {
+      "topic": "/perception/line/front_right",
+      "direction": "发布",
+      "type": "uv_msgs.msg.LineState"
+    },
+    {
+      "topic": "/perception/line/front_right",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.LineState"
+    },
+    {
+      "topic": "/perception/objects",
+      "direction": "发布",
+      "type": "uv_msgs.msg.ObjectPositionArray"
+    },
+    {
+      "topic": "/perception/objects",
+      "direction": "订阅",
+      "type": "uv_msgs.msg.ObjectPositionArray"
+    },
+    {
+      "topic": "/sim/down_cam/left/image_color",
+      "direction": "订阅",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/sim/down_cam/right/image_color",
+      "direction": "订阅",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/sim/front_cam/left/image_color",
+      "direction": "订阅",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/sim/front_cam/right/image_color",
+      "direction": "订阅",
+      "type": "sensor_msgs.msg.Image"
+    },
+    {
+      "topic": "/task/exec",
+      "direction": "服务",
+      "type": "uv_msgs.srv.ExecTask"
+    },
+    {
+      "topic": "/task/run",
+      "direction": "服务",
+      "type": "uv_msgs.srv.RunTask"
+    },
+    {
+      "topic": "/task/status",
+      "direction": "发布",
+      "type": "uv_msgs.msg.TaskStatus"
+    },
+    {
+      "topic": "/task/stop",
+      "direction": "服务",
+      "type": "std_srvs.srv.Trigger"
+    },
+    {
+      "topic": "/zit6/cmd/agxhbt",
+      "direction": "发布",
+      "type": "std_msgs.msg.UInt32"
+    },
+    {
+      "topic": "/zit6/cmd/agxhbt",
+      "direction": "订阅",
+      "type": "std_msgs.msg.UInt32"
+    },
+    {
+      "topic": "/zit6/cmd/ins",
+      "direction": "订阅",
+      "type": "std_msgs.msg.UInt8"
+    },
+    {
+      "topic": "/zit6/cmd/light",
+      "direction": "发布",
+      "type": "std_msgs.msg.UInt8"
+    },
+    {
+      "topic": "/zit6/cmd/light",
+      "direction": "订阅",
+      "type": "std_msgs.msg.UInt8"
+    },
+    {
+      "topic": "/zit6/cmd/pushrod",
+      "direction": "发布",
+      "type": "zit6_interfaces.msg.ZitPushrod"
+    },
+    {
+      "topic": "/zit6/cmd/servo",
+      "direction": "发布",
+      "type": "std_msgs.msg.Float32"
+    },
+    {
+      "topic": "/zit6/cmd/servo",
+      "direction": "订阅",
+      "type": "std_msgs.msg.Float32"
+    },
+    {
+      "topic": "/zit6/cmd/setpoint",
+      "direction": "发布",
+      "type": "zit6_interfaces.msg.ZitSetpoint"
+    },
+    {
+      "topic": "/zit6/cmd/setpoint",
+      "direction": "订阅",
+      "type": "zit6_interfaces.msg.ZitSetpoint"
+    },
+    {
+      "topic": "/zit6/get_params",
+      "direction": "服务",
+      "type": "zit6_interfaces.srv.GetParams"
+    },
+    {
+      "topic": "/zit6/sim/nav",
+      "direction": "发布",
+      "type": "std_msgs.msg.Float32MultiArray"
+    },
+    {
+      "topic": "/zit6/state/pos",
+      "direction": "发布",
+      "type": "std_msgs.msg.Float32MultiArray"
+    },
+    {
+      "topic": "/zit6/state/pos",
+      "direction": "订阅",
+      "type": "std_msgs.msg.Float32MultiArray"
+    },
+    {
+      "topic": "/zit6/state/status",
+      "direction": "发布",
+      "type": "zit6_interfaces.msg.ZitStatus"
+    },
+    {
+      "topic": "/zit6/state/status",
+      "direction": "订阅",
+      "type": "zit6_interfaces.msg.ZitStatus"
+    },
+    {
+      "topic": "/zit6/state/thr",
+      "direction": "发布",
+      "type": "std_msgs.msg.Float32MultiArray"
+    },
+    {
+      "topic": "/zit6/state/thr",
+      "direction": "订阅",
+      "type": "std_msgs.msg.Float32MultiArray"
+    },
+    {
+      "topic": "/zit6/state/vel",
+      "direction": "发布",
+      "type": "std_msgs.msg.Float32MultiArray"
+    },
+    {
+      "topic": "/zit6/state/vel",
+      "direction": "订阅",
+      "type": "std_msgs.msg.Float32MultiArray"
+    },
+    {
+      "topic": "/zit6/state/zithbt",
+      "direction": "发布",
+      "type": "std_msgs.msg.UInt32"
+    },
+    {
+      "topic": "/zit6/state/zithbt",
+      "direction": "订阅",
+      "type": "std_msgs.msg.UInt32"
+    },
+    {
+      "topic": "/zit6/update_params",
+      "direction": "服务",
+      "type": "zit6_interfaces.srv.UpdateParams"
+    }
+  ]
+}
