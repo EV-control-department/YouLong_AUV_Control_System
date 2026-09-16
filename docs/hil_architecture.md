@@ -266,31 +266,36 @@ MCU 固件应通过编译宏区分数据源，使 HIL 与实机共用同一份�
 
 ```bash
 cd sim_ws && source install/setup.bash
-ros2 launch uv_bringup sim_bringup.py
+ros2 launch uv_sim_bringup sim_bringup.py
 ```
 
 ### HIL 模式
 
 ```bash
 cd sim_ws && source install/setup.bash
-ros2 launch uv_bringup hil_bringup.py serial_dev:=/dev/ttyUSB0
+ros2 launch uv_sim_bringup hil_bringup.py serial_dev:=/dev/ttyUSB0
 ```
 
 Launch 参数:
 
 | 参数            | 默认值                    | 说明               |
 | --------------- | ------------------------- | ------------------ |
-| `serial_dev`  | `/dev/ttyUSB0`          | MCU 串口设备路径   |
+| `serial_dev`  | `/dev/ttyUSB0`          | MCU 串口设备路径（转发给 `uv_hm/hm_launch.py`） |
 | `serial_baud` | `921600`                | 串口波特率         |
+| `enable_agent` | `true`                 | 启动 micro-ROS agent |
 | `enable_ai`   | `false`                 | 启用感知节点       |
 | `enable_nav`  | `false`                 | 启用导航节点       |
 | `enable_task` | `false`                 | 启用任务执行器     |
 | `enable_motion` | `false`               | 启用 basic_motion  |
-| `scenario`    | `underwater_xunyun.scn` | ⚠️ 仅用于日志打印，仿真器实际加载的场景名硬编码在 launch 文件内 |
+| `scenario_desc` | `underwater_xunyun.scn` | 场景文件名（在 `Data/` 内；**T4 起真正生效**） |
+| `headless`    | `false`                 | `true` = console 引擎（无渲染、无相机图像） |
+| `simulation_rate` | `100.0`             | 物理步进率；console 模式需给 `0`（实时）才会发 ROS 话题 |
 
-> ⚠️ HIL 默认全部为 `false`（launch 只拉起 MCU 链路与相机），需要显式 `enable_ai:=true` 等开启上层节点。
-> 另外 `hil_bringup.py` 与 `sim_core.py` 的 `scenario` 参数**没有被传进仿真器的 `arguments`**，改它不会换场景；
-> `hil_bringup.py` 也没有 `gpu` 参数，固定使用 GPU 版 `stonefish_simulator`（无图形环境需自行加 `xvfb-run`）。
+> ⚠️ HIL 默认上层节点为 `false`（launch 只拉起 MCU 链路与相机），需要显式 `enable_ai:=true` 等开启。
+> T4 修正（**静态核查通过，运行时未验证**）：`scenario_desc` 以前声明了却没传进仿真器
+> `arguments`（改它不换场景），现在会真正传下去；`headless`/`simulation_rate` 取代了原先写死的
+> GPU 版与 `100.0`；micro-ROS agent 与 `hw_manager` 统一由 `uv_hm/hm_launch.py` 提供
+> （因此 HIL 会起 `hw_manager`——真 MCU 需要 `/zit6/cmd/agxhbt` 心跳才会解锁）。
 
 ---
 

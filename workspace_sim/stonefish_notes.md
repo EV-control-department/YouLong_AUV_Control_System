@@ -52,16 +52,21 @@ stonefish_simulator_nogpu <simulation_data> <scenario.scn> <rate>
 
 ### 本仓库的启动入口
 
-- `ros2 launch uv_bringup sim_bringup.py`：仿真全栈（sim_bridge + control + perception + 可选 nav/task）。
-- `ros2 launch uv_bringup sim_core.py`：只有 sim_bridge 的极简仿真。
-- `ros2 launch uv_bringup hil_bringup.py`：HIL，sim_bridge 只透传相机、PID 交给实机 MCU。
+仿真入口都在 `workspace_sim` 的 **`uv_sim_bringup`** 包（`workspace_auv` 自 T4 起不含任何
+仿真依赖，只留 `uv_bringup real_bringup.py`）：
 
-这三个 launch 都把 `simulation_data` 解析为
-`install/stonefish_ros2/share/stonefish_ros2/../../../..` 再拼 `src/stonefish_ros2/Data`，
-即**直接指向源码目录**（见 `uv_bringup/launch/sim_bringup.py:39-44`）。
+- `ros2 launch uv_sim_bringup sim_bringup.py`：仿真全栈（引擎 + sim_bridge + control + perception + 可选 nav/task）。
+- `ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false`：只有引擎 + sim_bridge（等价于已删除的 `sim_core.py`）。
+- `ros2 launch uv_sim_bringup hil_bringup.py`：HIL ⏸，sim_bridge 只透传相机、PID 交给实机 MCU。
+- `ros2 launch uv_sim_bringup sim_bringup.py headless:=true simulation_rate:=100.0`：**无头物理仿真**
+  （console 版引擎，无相机图像）；相机传感器需先用 `tools/strip_vision_sensors.py` 去掉。
 
-> ⚠️ `docs/node_parameters.md` 说 `stonefish_simulator` 的 `gpu` 参数当前未使用，
-> 且 launch 里写死了 GPU 版——这与代码一致。
+`Data/` 目录的解析由 `uv_sim_bringup/uv_sim_bringup/stonefish_common.py:resolve_simulation_data()`
+统一负责（T4 收敛了三份重复代码）：依次尝试 `$STONEFISH_DATA_DIR`、
+`install/stonefish_ros2/share/stonefish_ros2/Data`、以及
+`install/stonefish_ros2/share/stonefish_ros2/../../../..` 再拼 `src/stonefish_ros2/Data`
+——即**直接指向源码目录**（引擎的 CMakeLists 不安装 `Data/`）。都找不到时打印警告，
+场景名写错时会列出 `Data/` 里可选的 `.scn`。
 
 ---
 
@@ -369,11 +374,21 @@ GUI 里按显示模式切换会看到凸包/物理网格，容易误判成「模
      `Cameras not supported in console mode!` 然后解析失败。用
      `tools/strip_vision_sensors.py` 生成去相机的临时场景副本即可跑物理
      （DVL/IMU/odometry/pressure 都不需要渲染）。
-  2. `simulation_rate` 用固定步长（默认 100）时 ROS 发布钩子
-     （`SimulationApp::StepSimulation` → `SimulationStepCompleted`）不会被调用；
-     传 `simulation_rate:=0`（实时模式）才会走发布路径
-     （`ConsoleSimulationApp::RunSimulation` 里的
-     `setCallSimulationStepCompleted(timeStep_==0)`）。
+  2. **`simulation_rate` 必须给正数**（默认 `100.0` 即可）。⚠️ **2026-09-16 更正**：本节此前写
+     「传 `0` 走实时模式才会发布 ROS 话题」，**实测相反**——`rate=0` 时仿真线程不再推进物理，
+     **一条 ROS 消息都不发**。根因：`SimulationManager` 用
+     `ssus = (uint64_t)(1000000.0/stepsPerSecond)`（`Library/src/core/SimulationManager.cpp:582`），
+     `rate=0` 是浮点除零→转 `uint64` 属未定义行为，于是 `AdvanceSimulation()` 里的
+     `if(deltaTime < ssus) SimulationClockSleep(ssus - deltaTime)` 几乎永不返回。
+     旧结论把两件事混为一谈：`setCallSimulationStepCompleted(timeStep_==0)` 里的 `timeStep_`
+     是 **App 的固定步长**，本构建里从未被赋值（`setSimulationRate()` 无人调用）恒为 0，
+     与命令行 `rate` 无关；命令行 `rate` 只进 `stepsPerSecond`→`ssus`。
+
+     实测（`canyon_headless.scn`，`headless:=true`，默认 `simulation_rate:=100.0`）：
+     `/auv/odometry` **30.0 Hz**、`/auv/imu` **100.2 Hz**、`/zit6/state/pos` **30.1 Hz**、
+     `/zit6/state/vel` **60.1 Hz**；同一条命令改成 `simulation_rate:=0.0` 则全部为 0（话题存在但无数据）。
+     注意 IMU 场景里写的是 200 Hz，实测只有 ~100 Hz——**发布速率受物理步长（100 Hz）上限约束**；
+     要让 IMU 真跑 200 Hz 需要 `simulation_rate:=200.0`（T6 移植 AQUA-SLAM 时要注意这一点）。
 
 ---
 
@@ -583,7 +598,7 @@ ros2 launch stonefish_ros2 stonefish_simulator_nogpu.launch.py \
 
 # 完整仿真
 cd workspace_auv && source install/setup.bash
-ros2 launch uv_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
+ros2 launch uv_sim_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
 
 # 看真值位姿/深度
 ros2 topic echo /auv/odometry

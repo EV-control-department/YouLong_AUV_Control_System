@@ -44,7 +44,7 @@ float32 distance_remaining   # 到目标的 3D 欧氏距离
 | Yaw 0°     | 北（N）                                          |
 | Yaw 正方向  | **顺时针**                                 |
 | 角度单位    | **度**（°），内部使用，ROS 消息层也使用度 |
-| odom 原点   | START 时 AUV 的位置，START 后所有坐标为相对值    |
+| odom 原点   | START 时 AUV 的位置，START 后 `x`/`y`/`yaw` 为相对值；**`z` 例外：原点 z 固定为 0 ⇒ odom z = 绝对深度（水面 0）** |
 | 机体系 body | body-x = 机头方向，body-y = 右侧                 |
 
 ---
@@ -64,10 +64,14 @@ goal.cmd_type = BasicMotion.Goal.START
 START 的行为：
 
 - 记录当前 map 位姿为 odom 原点
-- odom (0,0,0,0) = AUV 在 START 时刻的位置和朝向
+- odom (0,0,0,0) = AUV 在 START 时刻的位置和朝向（**z 除外**：`start()` 里 `_origin.z` 被写死为
+  `0.0`，所以 odom z 等于 map z，即**绝对深度**；`SET(x,y,3,0)` = 下潜到 3 m 而不是「比开始时深 3 m」）
 - 例：AUV 朝东（map 90° 方向）→ START → odom 0° = 朝东
   - 之后 `SET(5, 0, 0, 0)` 表示向东走 5m
-- 重复发送 START 是无操作（log 提示已设置）
+- **重复发送 START 不是无操作**：`start()` 会覆盖原点（源码里先打
+  `odom origin already set, updating to current map pose`，随后更新 x/y/z/yaw）
+- 证据/实测：`uv_control/basic_motion.py:start()`；2026-09-16 console SIL 实测
+  `SET(0.5, 0.0, 3.0, 0.0)` 从水面到 map z≈3.12（见 `devlog/2026-09-16_status.md`）
 
 ---
 

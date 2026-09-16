@@ -6,7 +6,7 @@ Run this with a live SIL stack (Stonefish + ``uv_sim`` + ``uv_basic_motion``)::
     source /opt/ros/jazzy/setup.bash
     source workspace_auv/install/setup.bash
     source workspace_sim/install/setup.bash
-    ros2 launch uv_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
+    ros2 launch uv_sim_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
     # other terminal
     python3 workspace_sim/tools/check_dvl_frame.py
 
@@ -417,12 +417,17 @@ def _check_dvl_frame(node, args, lever_arm, extrinsics_path) -> int:
     for heading in HEADINGS_DEG:
         radians = math.radians(heading)
         node.get_logger().info(f"leg psi={heading:.1f} deg (yaw held at 0)")
+        # Timestamp taken BEFORE the goal: a block is the set of samples with
+        # stamp >= mark, so it has to cover the leg itself.  Taking the mark
+        # after send_motion() returned (as this did until 2026-09-16) selected
+        # only the quiet interval that FOLLOWS the leg, which is why every block
+        # reported "insufficient moving DVL samples" and could never pass.
+        mark = node.get_clock().now().nanoseconds * 1e-9
         out_ok = node.send_motion(
             BasicMotion.Goal.BMOVE,
             [args.leg_length, 0.0, 0.0, math.degrees(radians)],
             args.timeout,
         )
-        mark = node.get_clock().now().nanoseconds * 1e-9
         time.sleep(0.5)
         results.append(_evaluate_block(node, mark, f"psi={heading:.1f}deg", lever_arm))
         if not out_ok:

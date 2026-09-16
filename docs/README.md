@@ -15,6 +15,7 @@
 | 新人 / AI agent 接手 | 本文件 → `roadmap.md`（要做什么）→ `architecture/system_architecture.md`（长什么样）→ `interfaces/topic_contract.md`（怎么通信） |
 | 改控制逻辑 | `frames/frame_convention.md`（坐标系与单位）→ `node_parameters.md`（参数）→ `workspace_auv/docs/basic_motion_action.md`（动作语义） |
 | 改仿真 | `workspace_sim/stonefish_notes.md`（引擎行为与坑）→ `frames/extrinsics_reference.md`（外参）→ `architecture/node_dependency.md`（启动顺序） |
+| 动 launch / 入口 | `interfaces/launch_entries.md`（入口清单与编排规则）→ `node_parameters.md`（参数） |
 | 查一个话题/类型 | `interfaces/topic_contract.md`（唯一权威） |
 
 ## 文档地图
@@ -29,7 +30,7 @@
 | `frames/frame_convention.md` | 坐标系、单位、rpy 顺序、TF 现状、θ/α/ψ 术语 | ✅ 权威 |
 | `frames/extrinsics_reference.md` | 外参数值（仿真表 / 实机表 / 推导 / T6 必改清单） | ✅ 权威 |
 | `interfaces/service_action_contract.md` | 服务与动作的字段语义 | ⏳ 待建（T3b） |
-| `interfaces/launch_entries.md` | 启动入口清单与新旧映射 | ⏳ 待建（T4 后） |
+| `interfaces/launch_entries.md` | **启动入口清单与新旧映射**（T4 起，含编排规则） | ✅ 权威 |
 
 ### 架构
 

@@ -2,18 +2,29 @@
 """T3a: check that the documentation still matches the source code.
 
 Runs with the Python standard library only -- **no ROS, no colcon, no running
-stack** -- so it works in a bare sandbox and in CI.  It compares four kinds of
-fact, each with the code as the source of truth:
+stack** -- so it works in a bare sandbox and in CI.  It compares each kind of
+fact against the code as the source of truth:
 
-===========  ==============================================  ==========================
-kind         code side                                       doc side
-===========  ==============================================  ==========================
-parameters   ``declare_parameter`` / ``DeclareLaunchArgument`` ``docs/node_parameters.md``
-nodes        ``setup.py`` ``console_scripts``                 ``docs/node_parameters.md``
-topics       ``create_publisher`` / ``create_subscription`` /  ``docs/interfaces/topic_contract.md``
-             ``create_service`` + ``.scn`` ``<ros_publisher>``
-dependencies ``package.xml`` + real imports + launch refs     ``docs/architecture/node_dependency.md``
-===========  ==============================================  ==========================
+==============  ==============================================  ==========================
+kind            code side                                       other side
+==============  ==============================================  ==========================
+parameters      ``declare_parameter``                           ``docs/node_parameters.md``
+launch-args     ``DeclareLaunchArgument``                       ``docs/node_parameters.md``
+nodes           ``setup.py`` ``console_scripts``                ``docs/node_parameters.md``
+topics          ``create_publisher`` / ``create_subscription`` / ``docs/interfaces/topic_contract.md``
+                ``create_service`` + ``.scn`` ``<ros_publisher>``
+dependencies    ``package.xml`` + real imports + launch refs     ``docs/architecture/node_dependency.md``
+readme          ``docs/**/*.md``                                 ``docs/README.md``
+--------------  ----------------------------------------------  --------------------------
+launch-targets  launch ``Node(package=, executable=)``           ``setup.py`` / ``CMakeLists.txt``
+launch-refs     ``ros2 launch <pkg> <file>`` written in a doc    ``*/launch/*.py``
+==============  ==============================================  ==========================
+
+The last two rows are code-internal consistency checks rather than doc-versus-code
+ones: they are what keeps the two long-standing launch defects from coming back --
+a launch file that runs an executable no package defines (B2: ``uv_hm/sim_bridge``,
+``minimal_control``), and documentation that still tells the reader to run an entry
+point which has been moved or deleted (B6).
 
 Usage::
 
@@ -24,7 +35,8 @@ Usage::
 Design notes
 ------------
 * **No line numbers anywhere.**  Evidence is ``file:create_publisher`` style; line
-  numbers drift and would make the check noisy (learned in T2).
+  numbers drift and would make the check noisy (learned in T2).  A problem quotes
+  the offending snippet instead, which is enough to grep for.
 * **Documentation is the parsed artifact, code is the truth.**  There is no golden
   JSON to keep in sync; the inventory written by ``--update`` is a review artifact.
 * **Known gaps must be declared, not silently tolerated.**  A missing dependency
@@ -77,11 +89,36 @@ IGNORED_IMPORTS = {
 #: in node_parameters.md's "待补清单".
 UNCHECKED_LAUNCH_FILES = {"stonefish_simulator.launch.py", "stonefish_simulator_nogpu.launch.py"}
 
+#: The orchestration helper module and the argument helper it exports.  The system
+#: presets write ``arg('name', 'default', 'text')`` rather than the raw
+#: ``DeclareLaunchArgument(...)``; both spellings declare a launch argument, so the
+#: checker has to see through the wrapper.  The import is verified so that an
+#: unrelated ``arg()`` elsewhere cannot be mistaken for a declaration.
+LAUNCH_COMMON_MODULE = "uv_bringup.launch_common"
+LAUNCH_ARG_HELPERS = {"arg"}
+
 #: ``/perception/detection/{cam}`` f-strings in task_runner/line_follower are expanded
 #: with all four channels; the contract lists only the pairs those modules subscribe to.
 TEMPLATE_CHANNELS = {
     "{ch}": CHANNELS,
     "{cam}": ("front_left", "front_right", "down_left", "down_right"),
+}
+
+#: Placeholder for a launch target that is computed instead of written literally.
+DYNAMIC = "<dynamic>"
+
+#: ``ros2 launch <package> <file>.py`` as written in a document.  Everything after
+#: the file name (``scenario_desc:=...``) is ignored, which is what we want: the
+#: arguments are checked elsewhere.
+LAUNCH_REF_RE = re.compile(r"ros2\s+launch\s+([A-Za-z_]\w*)\s+([\w.\-]+\.py)")
+
+#: Directory names whose markdown is history or third-party material and is
+#: therefore never rewritten to match the current entry points.  ``devlog/`` is
+#: the important one: a log records what was true on its date, so rewriting it
+#: would falsify the record.
+LAUNCH_REF_SKIP_DIRS = {
+    "devlog", "pre-research", "third_party", "AQUA-SLAM", "build", "install",
+    ".claude", "__pycache__",
 }
 
 
@@ -116,6 +153,9 @@ class SourceFacts:
     launch_refs: dict[str, set[str]] = field(default_factory=dict)   # launch file -> referenced packages
     scene_topics: dict[str, str] = field(default_factory=dict)       # topic -> declaring scene
     code_endpoints: dict[tuple[str, str], set[tuple[str, str]]] = field(default_factory=dict)
+    launch_targets: dict[str, list[tuple[str, str]]] = field(default_factory=dict)  # launch -> [(pkg, exe)]
+    launch_files: dict[str, set[str]] = field(default_factory=dict)  # package -> {launch file names}
+    package_executables: dict[str, set[str]] = field(default_factory=dict)  # package -> runnable names
 
 
 # --------------------------------------------------------------------------- #
@@ -164,6 +204,12 @@ def parse_tables(text: str) -> list[tuple[str, list[dict[str, str]]]]:
 
     ``rows`` are dicts keyed by the table's own header cell text (backticks
     stripped), so a column can be addressed by name instead of by index.
+
+    Fenced code blocks are skipped entirely.  A ```bash block may contain a shell
+    comment starting with ``#`` (read as a heading, which silently re-attributed
+    every following table to a bogus section) and a ``|`` pipeline (read as a
+    table row); both made the checker misclassify launch-argument tables as node
+    parameters on the first run after the T4 documentation rewrite.
     """
     tables: list[tuple[str, list[dict[str, str]]]] = []
     heading = ""
@@ -171,6 +217,7 @@ def parse_tables(text: str) -> list[tuple[str, list[dict[str, str]]]]:
     header: list[str] | None = None
     rows: list[dict[str, str]] = []
     in_table = False
+    in_fence = False
 
     def flush() -> None:
         nonlocal rows, header, in_table
@@ -179,6 +226,12 @@ def parse_tables(text: str) -> list[tuple[str, list[dict[str, str]]]]:
         rows, header, in_table = [], None, False
 
     for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            flush()
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
         if line.startswith("#"):
             flush()
             level = len(line) - len(line.lstrip("#"))
@@ -388,6 +441,34 @@ def _package_of(path: Path) -> str:
     return path.parent.name
 
 
+def _kwarg_string(node: ast.Call, name: str) -> str:
+    """Constant string value of keyword ``name``; :data:`DYNAMIC` when computed.
+
+    Returning a placeholder rather than ``None`` keeps a computed target visible
+    in the inventory instead of silently dropping it from the check.
+    """
+    for kw in node.keywords:
+        if kw.arg == name and isinstance(kw.value, ast.Constant):
+            if isinstance(kw.value.value, str):
+                return kw.value.value
+    return DYNAMIC
+
+
+_CMAKE_EXECUTABLE = re.compile(r"add_executable\s*\(\s*([A-Za-z_][\w.]*)")
+
+
+def _cmake_executables(package_dir: Path) -> set[str]:
+    """Runnable names a CMake package defines (the C++ nodes)."""
+    cmakelists = package_dir / "CMakeLists.txt"
+    if not cmakelists.is_file():
+        return set()
+    try:
+        text = cmakelists.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):  # pragma: no cover - unreadable file
+        return set()
+    return set(_CMAKE_EXECUTABLE.findall(text))
+
+
 def collect_source_facts() -> SourceFacts:
     facts = SourceFacts()
     ws_packages = {
@@ -422,9 +503,12 @@ def collect_source_facts() -> SourceFacts:
                 elif isinstance(node, ast.ImportFrom) and node.module:
                     mods = [node.module]
                 for mod in mods:
-                    top = _top_level(mod)
-                    if top in ws_packages:
-                        facts.package_imports.setdefault(pkg, set()).add(top)
+                    # Record *every* top-level import, workspace package or not:
+                    # filtering here to workspace packages made the third-party
+                    # branch of check_dependencies dead code, so the registered
+                    # cv2/numpy/ultralytics gaps were documented but never
+                    # enforced (found while rewriting these docs in T4).
+                    facts.package_imports.setdefault(pkg, set()).add(_top_level(mod))
 
                 if not isinstance(node, ast.Call):
                     continue
@@ -449,13 +533,18 @@ def collect_source_facts() -> SourceFacts:
                         "decl": rel(path),
                     }
 
-                if fn == "DeclareLaunchArgument" and len(node.args) >= 1:
+                declares_argument = fn == "DeclareLaunchArgument"
+                if not declares_argument and fn in LAUNCH_ARG_HELPERS:
+                    declares_argument = imports.get(fn, "").startswith(LAUNCH_COMMON_MODULE)
+                if declares_argument and len(node.args) >= 1:
                     if path.name in UNCHECKED_LAUNCH_FILES:
                         continue
                     name_node = node.args[0]
                     if not isinstance(name_node, ast.Constant):
                         continue
                     default = "<none>"
+                    if fn in LAUNCH_ARG_HELPERS and len(node.args) >= 2:
+                        default = _constant_value(node.args[1])
                     for kw in node.keywords:
                         if kw.arg == "default_value":
                             default = _constant_value(kw.value)
@@ -463,6 +552,25 @@ def collect_source_facts() -> SourceFacts:
                         "default": default,
                         "file": rel(path),
                     }
+
+                if fn == "Node":
+                    # What a launch file actually runs.  This is the fact behind
+                    # B2: `uv_hm/launch/hm_launch.py` asked for uv_hm/sim_bridge
+                    # and `control_launch.py` for `minimal_control`, neither of
+                    # which exists, and nothing noticed because a launch file is
+                    # only evaluated when someone runs it.
+                    facts.launch_targets.setdefault(rel(path), []).append(
+                        (_kwarg_string(node, "package"), _kwarg_string(node, "executable"))
+                    )
+
+                if fn == "get_package_share_directory" and node.args:
+                    first = node.args[0]
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                        if first.value in ws_packages:
+                            # A package referenced only through this helper is as
+                            # real a dependency as an import (that is how D1 hid
+                            # in uv_bringup's launch files before T4).
+                            facts.package_imports.setdefault(pkg, set()).add(first.value)
 
                 if fn in ("create_publisher", "create_subscription", "create_service") and len(node.args) >= 2:
                     kind = {
@@ -479,10 +587,30 @@ def collect_source_facts() -> SourceFacts:
 
     facts.code_endpoints = collect_code_endpoints()
 
-    # package='...' references in every launch file (dependency check)
+    # Package references in every launch file (dependency check).  Parsed with
+    # the AST rather than a `package='...'` regex, because since T4 a preset
+    # usually references other packages through the `include('pkg', 'file.py')`
+    # helper instead of declaring a node itself -- a regex would have missed
+    # exactly the references that matter most.
     for launch in launch_files:
-        text = launch.read_text(encoding="utf-8")
-        refs = set(re.findall(r"package\s*=\s*['\"]([A-Za-z_][\w]*)['\"]", text))
+        facts.launch_files.setdefault(_package_of(launch), set()).add(launch.name)
+        try:
+            tree = ast.parse(launch.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        refs: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = getattr(node.func, "attr", None) or getattr(node.func, "id", None) or ""
+            if fn == "Node":
+                package = _kwarg_string(node, "package")
+                if package != DYNAMIC:
+                    refs.add(package)
+            elif fn == "include" and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    refs.add(first.value)
         if refs:
             facts.launch_refs[rel(launch)] = refs
 
@@ -539,6 +667,17 @@ def collect_source_facts() -> SourceFacts:
                 if tag in ("depend", "exec_depend", "build_depend") and element.text:
                     declared.add(element.text.strip())
             facts.package_deps[package_xml.parent.name] = declared
+
+    # Everything a package can actually run: Python console_scripts plus the C++
+    # targets (a launch file may legitimately start either).
+    for name, entry in facts.entries.items():
+        facts.package_executables.setdefault(entry["package"], set()).add(name)
+    for root in SOURCE_ROOTS:
+        for package_xml in sorted(root.glob("*/package.xml")):
+            package = package_xml.parent.name
+            facts.package_executables.setdefault(package, set()).update(
+                _cmake_executables(package_xml.parent)
+            )
 
     return facts
 
@@ -662,6 +801,69 @@ def check_nodes(facts: SourceFacts) -> list[Problem]:
                 f"entry but is missing from {rel(DOC_NODE_PARAMS)}",
             )
         )
+    return problems
+
+
+def check_launch_targets(facts: SourceFacts) -> list[Problem]:
+    """Every executable a launch file runs must exist in the package it names.
+
+    This is the check that would have caught B2 on the day it was written:
+    ``uv_hm/launch/hm_launch.py`` ran ``package='uv_hm', executable='sim_bridge'``
+    and ``uv_control/launch/control_launch.py`` ran ``minimal_control``; neither
+    package defines either name, and ``ros2 launch`` only fails once someone runs
+    it.  Python entries come from ``setup.py``, C++ ones from ``add_executable``.
+    """
+    problems: list[Problem] = []
+    for launch, targets in sorted(facts.launch_targets.items()):
+        for package, executable in targets:
+            if package == DYNAMIC or executable == DYNAMIC:
+                continue  # computed at launch time; nothing to compare against
+            if package not in facts.package_executables:
+                continue  # third party: the dependency check owns that problem
+            available = facts.package_executables[package]
+            if executable not in available:
+                problems.append(
+                    Problem(
+                        "launch-targets",
+                        f"{launch} runs {package}/{executable} but that package "
+                        f"defines no such executable "
+                        f"(available: {', '.join(sorted(available)) or 'none'})",
+                    )
+                )
+    return problems
+
+
+def check_launch_refs(facts: SourceFacts) -> list[Problem]:
+    """``ros2 launch <package> <file>.py`` in a document must still resolve.
+
+    T4 moved the simulation entry points out of ``uv_bringup``; without this
+    check, a dozen documents (and the agents' memory files) would keep telling
+    the reader to run files that no longer exist.  ``devlog/`` is exempt on
+    purpose -- a log records what was true on its date.
+    """
+    problems: list[Problem] = []
+    for path in sorted(REPO_ROOT.rglob("*.md")):
+        if LAUNCH_REF_SKIP_DIRS & set(path.relative_to(REPO_ROOT).parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):  # pragma: no cover - unreadable file
+            continue
+        for _lineno, line in enumerate(text.splitlines(), 1):
+            for package, filename in LAUNCH_REF_RE.findall(line):
+                if package not in facts.package_deps:
+                    continue  # not a workspace package: outside our control
+                shipped = facts.launch_files.get(package, set())
+                if filename not in shipped:
+                    problems.append(
+                        Problem(
+                            "launch-refs",
+                            f"{rel(path)} documents `ros2 launch {package} "
+                            f"{filename}` but that entry point does not exist "
+                            f"({package} ships: "
+                            f"{', '.join(sorted(shipped)) or 'no launch files'})",
+                        )
+                    )
     return problems
 
 
@@ -826,15 +1028,21 @@ def check_dependencies(facts: SourceFacts) -> list[Problem]:
         return [Problem("dependencies", f"missing {rel(DOC_NODE_DEPENDENCY)}")]
 
     for launch, refs in sorted(facts.launch_refs.items()):
-        declared = facts.package_deps.get("uv_bringup", set())
-        for package in sorted(refs - declared):
-            if f"uv_bringup->{package}" in exemptions:
+        # Attribute the reference to the package that OWNS the launch file.  This
+        # used to be hardcoded to "uv_bringup" for every launch file, which both
+        # hid gaps in the simulation presets and manufactured phantom ones for
+        # stonefish_ros2's own launch files (masked by the D1 exemption row).
+        subject = _package_of(REPO_ROOT / launch)
+        declared = facts.package_deps.get(subject, set())
+        for package in sorted(refs - declared - {subject}):
+            if f"{subject}->{package}" in exemptions:
                 continue
             problems.append(
                 Problem(
                     "dependencies",
-                    f"{launch} references package {package!r} but uv_bringup/package.xml "
-                    "does not declare it (register it in node_dependency.md section 2 to exempt)",
+                    f"{launch} (package {subject}) references package {package!r} "
+                    f"but {subject}/package.xml does not declare it "
+                    "(register it in node_dependency.md section 2 to exempt)",
                 )
             )
 
@@ -857,7 +1065,9 @@ def check_dependencies(facts: SourceFacts) -> list[Problem]:
         declared = facts.package_deps.get(package, set())
         for module in sorted(imports - declared - {package}):
             if module in facts.package_deps or module in IGNORED_IMPORTS:
-                continue
+                continue  # workspace package (previous loop) or ament/launch glue
+            if module in sys.stdlib_module_names or module.startswith("_"):
+                continue  # os/sys/json/... are not manifest dependencies
             if f"{package}->{module}" in exemptions:
                 continue
             if importlib.util.find_spec(module) is None:
@@ -872,12 +1082,28 @@ def check_dependencies(facts: SourceFacts) -> list[Problem]:
     return problems
 
 
+def _carries_known_marker(cell: str) -> bool:
+    """True only when the cell *is* the exemption marker, not merely mentions it.
+
+    A substring test made the exemption table self-defeating: prose like
+    "note this row no longer carries the 已知 marker" (written on the T4 row that
+    fixed D1) exempted the very gap it was announcing as fixed.  The marker must
+    now start the cell, optionally behind markdown emphasis, and may be followed
+    by a parenthetical -- ``**已知**（补 `<exec_depend>` 即可）`` still counts.
+    """
+    text = cell.strip()
+    while text[:1] in ("*", "`", " "):
+        text = text[1:]
+    return text.startswith("已知")
+
+
 def _dependency_exemptions() -> set[str]:
     """Read ``package->dependency`` pairs from the registered gaps in the doc.
 
     The dependency chapter keeps a table of known manifest gaps; a row is exempt
-    from failing the check only when it carries the ``已知`` marker, so recording
-    a gap is an explicit act rather than a silent tolerance.
+    from failing the check only when its ``豁免``/``状态`` cell carries the
+    ``已知`` marker, so recording a gap is an explicit act rather than a silent
+    tolerance.
     """
     if not DOC_NODE_DEPENDENCY.is_file():
         return set()
@@ -885,7 +1111,10 @@ def _dependency_exemptions() -> set[str]:
     workspace = set(collect_package_names())
     for _heading, rows in parse_tables(DOC_NODE_DEPENDENCY.read_text(encoding="utf-8")):
         for row in rows:
-            if "已知" not in (row.get("豁免", "") + row.get("状态", "")):
+            if not any(
+                _carries_known_marker(row.get(column, ""))
+                for column in ("豁免", "状态")
+            ):
                 continue
             blob = " ".join(row.values())
             backticked = re.findall(r"`([^`]+)`", blob)
@@ -895,6 +1124,12 @@ def _dependency_exemptions() -> set[str]:
             subject = packages[0]
             for module in re.findall(r"import\s+([\w.]+)", blob):
                 exemptions.add(f"{subject}->{module.split('.')[0]}")
+            for token in backticked:
+                # Modules are usually written as `cv2` / `numpy` inside a gap row
+                # rather than as "import cv2"; without this the registered
+                # third-party gaps never matched the reported module name.
+                if re.fullmatch(r"[a-z_][\w]*", token) and token not in workspace:
+                    exemptions.add(f"{subject}->{token}")
             for other in packages[1:]:
                 # `uv_bringup` … `uv_sim` style: subject package references other
                 exemptions.add(f"{subject}->{other}")
@@ -936,6 +1171,8 @@ CHECKS = {
     "parameters": check_parameters,
     "launch-args": check_launch_arguments,
     "nodes": check_nodes,
+    "launch-targets": check_launch_targets,
+    "launch-refs": check_launch_refs,
     "topics": check_topics,
     "dependencies": check_dependencies,
     "readme": check_readme,
@@ -959,6 +1196,11 @@ def build_inventory(facts: SourceFacts) -> dict:
         ],
         "scene_topics": facts.scene_topics,
         "package_deps": {k: sorted(v) for k, v in sorted(facts.package_deps.items())},
+        "launch_targets": {
+            k: [{"package": p, "executable": e} for p, e in v]
+            for k, v in sorted(facts.launch_targets.items())
+        },
+        "package_executables": {k: sorted(v) for k, v in sorted(facts.package_executables.items())},
     }
 
 

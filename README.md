@@ -49,7 +49,7 @@ ros2 launch uv_bringup real_bringup.py
 # 仿真栈（需要先 source workspace_auv）
 cd workspace_sim
 colcon build && source install/setup.bash
-ros2 launch uv_bringup sim_bringup.py
+ros2 launch uv_sim_bringup sim_bringup.py
 ```
 
 ## 一键部署到 AUV 电脑

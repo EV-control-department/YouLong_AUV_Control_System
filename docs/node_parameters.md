@@ -20,7 +20,7 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 
 | # | 缺口 | 何时补 |
 |---|---|---|
-| 1 | **launch 入口表**：`sim_bringup`/`sim_core`/`hil_bringup` 位于 `workspace_auv` 却直接引用仿真包（违反分层，B1），T4 会重排；包级 launch `uv_control/launch/control_launch.py`、`uv_hm/launch/hm_launch.py` 当前引用**不存在的入口**（B2） | T4 |
+| 1 | ~~**launch 入口表 / 分层**：`sim_*`/`hil_*` 位于 `workspace_auv` 却引用仿真包（B1）；包级 launch 引用不存在的入口（B2）~~ | ✅ **T4 已完成**：仿真预设迁到 `workspace_sim/uv_sim_bringup`，`workspace_auv` 只留 `real_bringup.py`；入口清单与新旧映射见 `interfaces/launch_entries.md` |
 | 2 | **`sim_bridge` 参数与话题归属**：T5 将把它拆成 7 个节点，§sim_bridge 每一行都会变 | T5 |
 | 3 | **话题频率 / QoS 列**：需实时快照（`ros2 topic info -v` / `hz`）；本沙箱仅 console 模式可用且无相机（B13） | T3b |
 | 4 | ~~话题表去重~~ | ✅ T3a 已完成：话题行收敛到 `docs/interfaces/topic_contract.md`，本文件与 `hil_architecture.md` 改为链接 |
@@ -48,21 +48,25 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 注意 `uv_sim` 只存在于 `workspace_sim/src/`，不在 `workspace_auv/src/` 中。
 
 > ✅ 已与各包 `setup.py` 的 `console_scripts` 核对：Python 入口 **7 个**（上面除两个仿真器外的 7 行）。
-> `uv_bringup` 自身没有 entry point，只有 launch 文件；**谁启动谁**属 launch 层，见待补清单 #1。
+> `uv_bringup` 与 `uv_sim_bringup` 自身没有 entry point，只有 launch 文件；
+> **谁启动谁**属 launch 层，入口清单见 `interfaces/launch_entries.md`。
 
-### 包级 launch 现状 ⏳（B2 的具体化）
+### 包级 launch 现状 ✅（T4 重排后）
 
-| launch 文件 | 引用的入口 | 入口是否存在 | 状态 |
-|---|---|---|---|
-| `uv_hm/launch/hm_launch.py` | `uv_hm/sim_bridge` + `hw_manager` | ❌ `sim_bridge` 不在 `uv_hm`（在 `uv_sim`/workspace_sim） | **失效**，等 T4 重排 |
-| `uv_control/launch/control_launch.py` | `minimal_control` + `basic_motion` | ❌ `minimal_control` 无此入口 | **失效**，等 T4 重排 |
-| `uv_nav/launch/nav_launch.py` | `navigator` | ✅ | 可用 |
-| `uv_perception/launch/perception_launch.py` | `vision` + `position` | ✅ | 可用（无图像发布参数，视频走 go2rtc） |
-| `uv_task/launch/task_launch.py` | `task_runner` | ✅ | 可用 |
-| `uv_bringup/launch/{sim,real,hil}_bringup.py`、`sim_core.py` | 多个 | ✅ | 可用，但 `sim_*`/`hil_*` 位于 `workspace_auv` 却引用仿真包（违反分层，B1），T4 拆分 |
+| launch 文件 | 引用的入口 | 状态 |
+|---|---|---|
+| `uv_hm/launch/hm_launch.py` | `hw_manager` + micro-ROS agent | ✅ T4 修复（原先引用不存在的 `uv_hm/sim_bridge`，B2） |
+| `uv_control/launch/control_launch.py` | `basic_motion` | ✅ T4 修复（原先引用不存在的 `minimal_control`，B2） |
+| `uv_perception/launch/perception_launch.py` | `vision` + `position` | ✅ 可用（T4 新增 `sim_mode` 参数） |
+| `uv_sim/launch/bridge_launch.py` | `sim_bridge` | ✅ T4 新增（`hil_mode` / `pid_config_file`） |
+| `uv_nav/launch/nav_launch.py` | `navigator` | ✅ 可用 |
+| `uv_task/launch/task_launch.py` | `task_runner` | ✅ 可用 |
 
-> 上面 `uv_bringup` 的 4 个文件就是待补清单 #1 说的"T4 会重排"的对象；
-> 本表只记录**现状**，迁移后的入口映射表在 T4 落地时补。
+> 规则（T4 起）：**节点定义归各包，系统预设只做编排**。各包 launch 只声明自己的节点与
+> 节点级选项；`uv_bringup/real_bringup.py`（实机）与 `uv_sim_bringup/{sim,hil}_bringup.py`
+> （仿真）只 include 它们，并用 `condition` 决定起不起。因此 `enable_*` 门控**只存在于预设**，
+> 包级 launch 里没有同名开关。这条由 `scripts/check_docs_contract.py` 的 `launch-targets`
+> 检查强制：launch 里出现的 `executable` 必须在对应包 `setup.py`/`CMakeLists.txt` 里存在。
 
 ---
 
@@ -74,8 +78,9 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 |---|---|---|---|
 | `sim_mode` | bool | `false` | `true`: 订阅 `/auv/*/stitched` ROS 话题<br>`false`: 使用 V4L2 设备直接采集 |
 
-> `sim_bringup.py` / `hil_bringup.py` 在启动 vision 时传 `sim_mode: True`；
-> `real_bringup.py` 传 `sim_mode: False`。直接 `ros2 run` 时默认 `false`。
+> `uv_sim_bringup` 的 `sim_bringup.py` / `hil_bringup.py` 在启动 vision 时传 `sim_mode: True`
+> （经 `uv_perception` 的 `perception_launch.py`）；`real_bringup.py` 传 `sim_mode: False`。
+> 直接 `ros2 run` 时默认 `false`。
 
 ### 相机使能与设备
 
@@ -231,37 +236,20 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 
 ---
 
-## 启动文件 Launch Arguments ⏳
+## 启动文件 Launch Arguments ✅（T4 重排后）
 
-### sim_bringup.py
+> 入口的分工与新旧映射见 `docs/interfaces/launch_entries.md`。本节只列**参数**。
+> 规则：`enable_*` 门控只在**系统预设**里（`real_bringup` / `sim_bringup` / `hil_bringup`）；
+> 包级 launch 只声明自己的节点级选项，不带同名开关。
+
+### real_bringup.py（包 `uv_bringup`，实机唯一入口）
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enable_ai` | `true` | 启用 vision + position |
+| `enable_agent` | `true` | 启动 micro-ROS agent（转发给 `hm_launch.py`） |
+| `enable_motion` | `true` | 启用 `basic_motion` |
+| `enable_ai` | `true` | 启用 vision + position（以 `sim_mode:=false` 启动） |
 | `enable_nav` | `false` | 启用 navigator |
-| `enable_task` | `false` | 启用 task_runner |
-| `scenario_desc` | `wuurc_murc_2026_auv.scn` | Stonefish 场景文件 |
-
-**用法：**
-```bash
-ros2 launch uv_bringup sim_bringup.py enable_ai:=true
-```
-
-### sim_core.py
-
-只启动 Stonefish + sim_bridge，不带任何上层节点。
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `scenario` | `underwater_xunyun.scn` | ⚠️ 仅用于日志打印，仿真器实际加载的场景名硬编码在文件内 |
-| `gpu` | `true` | ⚠️ **当前未被使用**，仿真器固定使用 GPU 版 `stonefish_simulator` |
-
-### real_bringup.py
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `enable_ai` | `true` | 启用 vision + position |
-| `enable_nav` | **`false`** | 启用 navigator（2026-09-16 更正：文档此前写 `true`，源码 `default_value='false'`） |
 | `enable_task` | `false` | 启用 task_runner |
 
 **用法：**
@@ -277,31 +265,103 @@ ros2 launch uv_bringup real_bringup.py
 > ⚠️ `real_bringup` 的 `enable_nav` 默认 `false`，因此实机默认**不**启动导航；
 > 需要导航时显式 `enable_nav:=true`，且必须同时有 `basic_motion` 在跑（位姿源）。
 
-### hil_bringup.py
+### hm_launch.py（包 `uv_hm`）
+
+`hw_manager` + micro-ROS agent（真 MCU 的串口链路；agent 是 transport，`hw_manager`
+负责 `/zit6/cmd/agxhbt` 心跳）。REAL 与 HIL 都 include 它。
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enable_ai` | `false` | 启用 vision + position |
-| `enable_nav` | `false` | 启用 navigator |
-| `enable_task` | `false` | 启用 task_runner |
-| `enable_motion` | `false` | 启用 basic_motion |
-| `scenario` | `underwater_xunyun.scn` | ⚠️ 仅用于日志打印，仿真器实际加载的场景名硬编码在文件内 |
+| `enable_agent` | `true` | 启动 micro-ROS agent |
+| `agent_bin` | 自动探测 | agent 可执行文件路径；优先 `~/micro_ros_agent_ws/install/...`，其次 `$PATH` |
 | `serial_dev` | `/dev/ttyUSB0` | MCU 串口设备 |
 | `serial_baud` | `921600` | 串口波特率 |
 
 **用法：**
 ```bash
-ros2 launch uv_bringup hil_bringup.py enable_ai:=true
+ros2 launch uv_hm hm_launch.py enable_agent:=false     # 只跑 hw_manager
 ```
 
-### perception_launch.py
+### control_launch.py（包 `uv_control`）
 
-该启动文件不再提供图像发布参数；视频通过 go2rtc 查看。
+声明 `basic_motion`，**无 launch 参数**（起不起由预设的 `enable_motion` 决定）。
+
+### perception_launch.py（包 `uv_perception`）
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `sim_mode` | `false` | `true`: 订阅 Stonefish 相机话题 `/auv/*_cam/stitched`；`false`: V4L2 直采（下发给 vision 节点） |
 
 **用法：**
 ```bash
 ros2 launch uv_perception perception_launch.py
 ```
+
+### bridge_launch.py（包 `uv_sim`，仿真侧）
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `hil_mode` | `false` | `true`: 只转发相机 + 透传推力（真 MCU 负责 PID）；`false`: 仿真 MCU |
+| `pid_config_file` | 空 | 空 = 用包内 `config/sim_pid.yaml` |
+
+**用法：**
+```bash
+ros2 launch uv_sim bridge_launch.py hil_mode:=true
+```
+
+### sim_bringup.py（包 `uv_sim_bringup`，SIL）
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `scenario_desc` | `wuurc_murc_2026_auv.scn` | Stonefish 场景文件名（在 `Data/` 内，可给绝对路径） |
+| `headless` | `false` | `true` = console 仿真器 `stonefish_simulator_nogpu`（无渲染窗口、**无相机图像**） |
+| `simulation_rate` | `100.0` | 物理步进率（固定步长）；**必须为正**——`0` 会让仿真循环停住且不发任何话题（2026-09-16 实测更正，见 `stonefish_notes.md`） |
+| `window_res_x` | `2560` | 窗口宽（仅 GPU 模式） |
+| `window_res_y` | `1440` | 窗口高（仅 GPU 模式） |
+| `rendering_quality` | `high` | `low`/`medium`/`high`（仅 GPU 模式） |
+| `enable_mcu` | `true` | 启用 `sim_bridge`（仿真 MCU） |
+| `enable_motion` | `true` | 启用 `basic_motion` |
+| `enable_ai` | `true` | 启用 vision + position（`sim_mode:=true`） |
+| `enable_nav` | `false` | 启用 navigator |
+| `enable_task` | `false` | 启用 task_runner |
+
+**用法：**
+```bash
+ros2 launch uv_sim_bringup sim_bringup.py enable_ai:=true
+# 等价于旧 sim_core.py（只有引擎 + 仿真 MCU）：
+ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false
+# 无图形环境（console 物理仿真）：
+ros2 launch uv_sim_bringup sim_bringup.py headless:=true simulation_rate:=100.0
+```
+
+### hil_bringup.py（包 `uv_sim_bringup`）⏸
+
+HIL：Stonefish + **真 MCU**。当前阶段 SIL 优先，**运行时验收暂缓**（静态核查通过）。
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `scenario_desc` | `underwater_xunyun.scn` | Stonefish 场景文件名 |
+| `headless` | `false` | 同 `sim_bringup.py`（console 模式无相机 ⇒ 相机转发链路不可用） |
+| `simulation_rate` | `100.0` | 物理步进率（固定步长，必须为正） |
+| `window_res_x` | `2560` | 窗口宽（仅 GPU 模式） |
+| `window_res_y` | `1440` | 窗口高（仅 GPU 模式） |
+| `rendering_quality` | `high` | 渲染质量（仅 GPU 模式） |
+| `enable_mcu` | `true` | 启用 `sim_bridge`（以 `hil_mode:=true`） |
+| `enable_motion` | `false` | 启用 `basic_motion` |
+| `enable_ai` | `false` | 启用 vision + position |
+| `enable_nav` | `false` | 启用 navigator |
+| `enable_task` | `false` | 启用 task_runner |
+| `enable_agent` | `true` | 启动 micro-ROS agent（转发给 `hm_launch.py`） |
+| `serial_dev` | `/dev/ttyUSB0` | MCU 串口设备 |
+| `serial_baud` | `921600` | 串口波特率 |
+
+**用法：**
+```bash
+ros2 launch uv_sim_bringup hil_bringup.py enable_ai:=true
+```
+
+> ⚠️ T4 变化（**未做运行时验证**）：agent 与 `hw_manager` 现在来自 `uv_hm/hm_launch.py`，
+> 因此 HIL 会起 `hw_manager`。这是有意的——真 MCU 需要心跳才会解锁——但证据只到静态核查。
 
 ---
 

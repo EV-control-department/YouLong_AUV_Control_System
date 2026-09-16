@@ -17,10 +17,12 @@
         │                    │                    │               │
         └────────────────────┴─────────┬──────────┴───────────────┘
                                        ▼
-                                  uv_bringup  ──(launch 里引用，但 manifest 未声明)──▶ uv_sim, stonefish_ros2
+                                  uv_bringup（实机预设，只 include 各包 launch）
                                        │
-   uv_perception ──▶ uv_msgs           │
+   uv_perception ──▶ uv_msgs           │        （uv_bringup 不引用任何仿真包：I6）
                                        ▼
+   uv_sim_bringup ──▶ uv_bringup, uv_sim, uv_control, uv_hm, uv_nav, uv_perception,
+   （仿真预设）        uv_task, stonefish_ros2
    uv_sim ──▶ stonefish_ros2, zit6_interfaces
    stonefish_ros2 ──▶（tf2, pcl, image_transport, …）
 ```
@@ -36,6 +38,7 @@
 | `uv_task` | `rclpy`, `std_msgs`, `uv_msgs`, `zit6_interfaces` | workspace_auv |
 | `uv_bringup` | `uv_hm`, `uv_control`, `uv_perception`, `uv_nav`, `uv_task`, `ros2launch` | workspace_auv |
 | `uv_sim` | `rclpy`, `sensor_msgs`, `nav_msgs`, `std_msgs`, `cv_bridge`, `stonefish_ros2`, `zit6_interfaces` | workspace_sim |
+| `uv_sim_bringup` | `uv_bringup`, `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_sim`, `stonefish_ros2`, `ros2launch` | workspace_sim |
 | `stonefish_ros2` | `rclcpp`, `std_srvs`, `geometry_msgs`, `nav_msgs`, `visualization_msgs`, `sensor_msgs`, `pcl`, `pcl_conversions`, `image_transport`, `tf2`, `tf2_ros`, `ros2launch` | workspace_sim |
 
 **构建顺序由 colcon 按依赖自动推导**：`uv_msgs`/`zit6_interfaces`（ament_cmake）先构建，
@@ -45,18 +48,18 @@
 
 | # | 缺口 | 影响 | 豁免 |
 |---|---|---|---|
-| D1 | `uv_bringup` 的 launch 引用 `stonefish_ros2` 与 `uv_sim`（实测 `package='uv_sim'`/`'stonefish_ros2'`），但 `package.xml` **未声明** | `rosdep`/按包安装时不会拉取这两个包；装到干净机器上 `ros2 launch uv_bringup sim_bringup.py` 会找不到仿真侧 | **已知**（T4 重排 `uv_bringup` 时一并修） |
+| ~~D1~~ | ~~`uv_bringup` 的 launch 引用 `stonefish_ros2` 与 `uv_sim`，但 `package.xml` 未声明~~ | — | ✅ **T4 已修**：仿真预设迁到 `uv_sim_bringup`，并在其 `package.xml` 里声明了全部引用；`uv_bringup` 现在不引用任何仿真包（`launch-targets` + `launch-refs` 检查把关）。**注意此行已无「已知」标记**：若缺口复发，校验会直接失败 |
 | D2 | `uv_perception` 代码 import `cv2`、`numpy`、`ultralytics`，`package.xml` 只声明了 `cv_bridge` | 缺 `python3-opencv`/`python3-numpy`/`ultralytics`；`rosdep install` 装不全 | **已知**（补 `<exec_depend>` 即可） |
-| D3 | `uv_sim` 代码 import `yaml`、`cv2`（经 `cv_bridge` 间接），`package.xml` 未声明 PyYAML | 同 D2；`setup.py` 的 `install_requires` 里有 `PyYAML`，但那是 pip 层，`rosdep` 不读 | **已知**（补 `<exec_depend>`） |
+| D3 | `uv_sim` 代码 import `yaml`、`cv2`（经 `cv_bridge` 间接）、`numpy`，`package.xml` 均未声明 | 同 D2；`setup.py` 的 `install_requires` 里有 `PyYAML`，但那是 pip 层，`rosdep` 不读 | **已知**（补 `<exec_depend>`） |
 | D4 | `uv_task` 代码 import `numpy`、`cv2`，未声明 | 同 D2 | **已知**（补 `<exec_depend>`） |
 
-> 这些是**登记**，不是本轮修复项：T4 重排 bringup 时一并处理 D1，D2–D4 随各包
-> `package.xml` 的 `<exec_depend>` 补齐即可。`check_docs_contract.py --check` 会把这些
-> 报成"launch 引用未声明"，**当前预期是 FAIL 的已知项**（见 §5 的豁免机制）。
+> D2–D4 是**登记**，不是本轮修复项：随各包 `package.xml` 的 `<exec_depend>` 补齐即可。
+> `check_docs_contract.py --check` 会把这些报成"未声明的依赖"，**只有带「已知」标记的行才豁免**
+> （见 §5 的豁免机制），所以 D1 修掉之后就没有豁免行了。
 
 ## 3. SIL 启动顺序与就绪判据
 
-`sim_bringup.py` **不做分阶段延迟**（实测无 `TimerAction`），所有节点同时起，
+`sim_bringup.py`（包 `uv_sim_bringup`）**不做分阶段延迟**（实测无 `TimerAction`），所有节点同时起，
 各自靠"等数据"自然对齐：
 
 | 顺序 | 节点 | 依赖谁 | 就绪判据（代码事实） |
@@ -68,7 +71,7 @@
 | 5 | `position`（`enable_ai`） | `/perception/detection/*` + `/basic_motion/pose_info` | **两者都有**才会产出 `/perception/objects`；缺位姿时静默不出结果 |
 | 6 | `navigator`（`enable_nav`） | `/basic_motion/pose_info` | `navigate_to` 在收到第一个位姿前**拒绝**并提示 `no pose yet on /basic_motion/pose_info` |
 | 7 | `task_runner`（`enable_task`） | BasicMotion action server | `main()` 里等 action server 最多 15 s；随后按 `debug_mode` 决定是否自动跑 `config/tasks.json`（**非 debug 模式启动即跑**） |
-| — | `hw_manager` ⏸ | 真实 MCU（`/zit6/state/zithbt`） | SIL 不启动（`sim_bringup` 不含它）；HIL/REAL 里心跳超时进 `DEGRADED` |
+| — | `hw_manager` ⏸ | 真实 MCU（`/zit6/state/zithbt`） | SIL 不启动（`sim_bringup` 不含它）；HIL/REAL 经 `uv_hm/hm_launch.py` 启动，心跳超时进 `DEGRADED` |
 
 **`basic_motion` 是单点**：它是唯一动作入口，也是唯一的 `PoseInfo` 发布者。
 它没起来 ⇒ `position`/`navigator`/`task_runner` 全部拿不到位姿。
@@ -87,8 +90,9 @@
 
 ## 5. 校验机制与豁免
 
-`scripts/check_docs_contract.py --check` 会做四类比对，其中"launch 引用 vs manifest 声明"
-就是把 §2 的 D1–D4 变成可发现项。**已知缺口不应让校验永远红**，因此约定：
+`scripts/check_docs_contract.py --check` 会做八类比对（参数/launch 参数/节点/话题/依赖/README
++ 两类 launch 一致性），其中"launch 引用 vs manifest 声明"就是把 §2 的 D1–D4 变成可发现项。
+**已知缺口不应让校验永远红**，因此约定：
 
 - 缺口写在**本文件 §2 的表格**里，表格带 `豁免` 列（值为 `已知` 即跳过失败）；
 - 新增缺口必须先登记再豁免，否则 `--check` 失败；

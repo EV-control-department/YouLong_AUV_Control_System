@@ -17,8 +17,8 @@
 | 图像从哪来 | Stonefish 渲染 → `sim_bridge` 拼接 | 同 SIL（相机直通） | 4 路 USB 摄像头（V4L2，MJPEG） |
 | `vision` 的 `sim_mode` | `true`（订阅 `/auv/*_cam/stitched`） | `true` | `false`（V4L2 采集） |
 | 位姿源 | `/basic_motion/pose_info` | 同 SIL | 同 SIL |
-| 启动入口 | `uv_bringup/sim_bringup.py`、`sim_core.py` | `uv_bringup/hil_bringup.py` | `uv_bringup/real_bringup.py` |
-| 依赖 GPU | 是（渲染）；纯物理可用 `_nogpu` | 是 | 否 |
+| 启动入口 | `uv_sim_bringup/sim_bringup.py`（节点来自 `uv_sim/bridge_launch.py` 等） | `uv_sim_bringup/hil_bringup.py` | `uv_bringup/real_bringup.py` |
+| 依赖 GPU | 是（渲染）；纯物理用 `sim_bringup.py headless:=true simulation_rate:=100.0`（**无相机图像**） | 是（相机转发需要渲染） | 否 |
 | 依赖真实硬件 | 否 | STM32 + 串口 | 全套 |
 
 ## 2. 所有权矩阵（谁拥有哪个话题）
@@ -69,7 +69,8 @@ SIL 与 REAL 共享**同一套上层**：`basic_motion` → `/zit6/cmd/setpoint`
 
 - MCU 固件（`third_party/AUV_zit6_cmake`）与 micro-ROS 链路
 - `hw_manager` 的心跳/看门狗行为（依赖真实 MCU）
-- `hil_bringup.py`、`real_bringup.py` 的端到端验证
+- `hil_bringup.py`、`real_bringup.py` 的端到端验证（T4 后 HIL 的节点集合有变化：
+  agent 与 `hw_manager` 现在来自 `uv_hm/hm_launch.py`，**只做静态核查**）
 - 实机外参的**实测**复测（`docs/frames/extrinsics_reference.md` §2 的"未验证"行列）
 - 串口带宽/降采样策略（`imu_sim` 相关，T5 再议）
 

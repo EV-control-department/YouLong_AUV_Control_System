@@ -34,8 +34,8 @@ def generate_launch_description():
             'Use the console simulator: no rendering window, and no camera images '
             '(the console engine rejects camera sensors)'),
         arg('simulation_rate', '100.0',
-            'Physics rate; 0 means real time, which the console simulator needs '
-            'before it publishes any ROS topic'),
+            'Physics rate in steps/s (fixed step). Keep it positive: 0 stops the '
+            'simulation loop and nothing is published (see stonefish_notes.md)'),
         arg('window_res_x', '2560', 'Simulator window width (GPU mode only)'),
         arg('window_res_y', '1440', 'Simulator window height (GPU mode only)'),
         arg('rendering_quality', 'high',

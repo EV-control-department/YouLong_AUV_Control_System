@@ -84,18 +84,23 @@
                                      /basic_motion/pose_info         navigator / task_runner
 ```
 
-## 4. 两条入口（当前都可用，但 plan 里要拆分）
+## 4. 入口：实机 / 仿真各一个（T4 起分层干净）
 
-| 入口 | 位置 | 说明 |
+| 入口 | 所在工作区 | 说明 |
 |---|---|---|
-| `ros2 launch uv_bringup sim_bringup.py` | `workspace_auv` | 完整 SIL：仿真器 + sim_bridge + 控制/感知/（可选）nav/task |
-| `ros2 launch uv_bringup sim_core.py` | `workspace_auv` | 极简：仿真器 + sim_bridge |
+| `ros2 launch uv_bringup real_bringup.py` | `workspace_auv` | **唯一实机入口**：`uv_hm`（agent + hw_manager）+ 控制/感知/（可选）nav/task |
+| `ros2 launch uv_sim_bringup sim_bringup.py` | `workspace_sim` | 完整 SIL：Stonefish + `sim_bridge` + 控制/感知/（可选）nav/task |
+| `ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false` | `workspace_sim` | 等价于已删除的 `sim_core`：只有引擎 + 仿真 MCU |
+| `ros2 launch uv_sim_bringup hil_bringup.py` | `workspace_sim` | HIL ⏸：Stonefish + 真 MCU |
 
-⚠️ **这两个文件位于 `workspace_auv` 却直接引用 `uv_sim`/`stonefish_ros2`**（违反"workspace_auv
-不依赖仿真"的分层，登记为 B1），T4 会把它们迁到仿真侧的 bringup 包。
-`uv_bringup/package.xml` **没有**声明 `<exec_depend>uv_sim</exec_depend>` /
-`<exec_depend>stonefish_ros2</exec_depend>`（已实测），因此依赖关系在 manifest 层也是缺的——
-`check_docs_contract.py` 的依赖检查会报出来。
+规则：**节点定义归各包，系统预设只做编排**。预设文件里没有 `Node(...)`，只有 include +
+条件；每个包（`uv_control`/`uv_perception`/`uv_nav`/`uv_task`/`uv_hm`/`uv_sim`）各有一个
+`launch/` 文件声明自己的节点，Stonefish 直接复用引擎自带的 launch。
+
+因此 `workspace_auv` **不含任何仿真依赖**（不变式 I6）：干净环境只 source `/opt/ros/jazzy`
+与 `workspace_auv/install` 即可 `launch real_bringup.py`；入口清单与新旧映射见
+`docs/interfaces/launch_entries.md`。这两条都由 `check_docs_contract.py` 的
+`launch-targets` / `launch-refs` 检查与 `test_launch_contract.py` 强制。
 
 ## 5. 不在本文件维护的内容
 

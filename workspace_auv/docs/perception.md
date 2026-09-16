@@ -334,10 +334,10 @@ ros2 launch uv_perception perception_launch.py
 
 ```bash
 # 仿真 (默认 enable_ai:=true)
-ros2 launch uv_bringup sim_bringup.py
+ros2 launch uv_sim_bringup sim_bringup.py
 
 # 关闭感知
-ros2 launch uv_bringup sim_bringup.py enable_ai:=false
+ros2 launch uv_sim_bringup sim_bringup.py enable_ai:=false
 
 # 开启图像转发 (调试用)
 ros2 run uv_perception vision --ros-args -p stream_annotated:=false

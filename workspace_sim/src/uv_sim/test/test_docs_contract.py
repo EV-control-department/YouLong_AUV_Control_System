@@ -85,14 +85,18 @@ def test_launch_argument_is_not_treated_as_a_node_parameter(checker) -> None:
 
     Regression: the first run of the checker reported every ``enable_ai`` /
     ``scenario`` as an undeclared ROS parameter.
+
+    The two probes must each be unambiguous: ``enable_mcu`` is a launch argument
+    only, ``heartbeat_rate`` a node parameter only.  (``hil_mode`` would not do:
+    since T4 it is legitimately both -- ``sim_bridge`` declares it and
+    ``bridge_launch.py`` exposes it as a launch argument.)
     """
     documented_params = checker.doc_parameters(checker.DOC_NODE_PARAMS)
     documented_launch = checker.doc_launch_arguments(checker.DOC_NODE_PARAMS)
-    assert "enable_ai" in documented_launch
-    assert "enable_ai" not in documented_params
-    assert "hil_mode" in documented_params
-    assert "hil_mode" not in documented_launch
-    assert "enable_ai" not in {p["default"] for p in []} or True
+    assert "enable_mcu" in documented_launch
+    assert "enable_mcu" not in documented_params
+    assert "heartbeat_rate" in documented_params
+    assert "heartbeat_rate" not in documented_launch
 
 
 def test_removed_node_is_reported(checker, tmp_path: Path, monkeypatch) -> None:
@@ -145,16 +149,63 @@ def test_wrong_evidence_file_is_reported(checker, tmp_path: Path, monkeypatch) -
 
 
 def test_missing_dependency_exemption_is_reported(checker, tmp_path: Path, monkeypatch) -> None:
-    """Without the 已知 marker a launch reference outside package.xml fails."""
+    """An unregistered gap fails; the same gap with the 已知 marker is exempt.
+
+    Uses synthetic facts instead of a gap that happens to exist in the repository
+    today: T4 fixed the only real one (D1, ``uv_bringup`` referencing ``uv_sim``),
+    and a test that depends on a live defect disappears the moment it is fixed.
+    Both directions are asserted here, so the exemption mechanism stays covered.
+    """
+    gap = {
+        "workspace_auv/src/uv_bringup/launch/real_bringup.py": {"uv_sim"},
+    }
+    facts = checker.SourceFacts()
+    facts.package_deps = {"uv_bringup": set()}
+    facts.launch_refs = gap
+
+    problems = checker.check_dependencies(facts)
+    assert any("uv_sim" in str(p) for p in problems), problems
+
     doc = _copy_doc(
         checker,
         "DOC_NODE_DEPENDENCY",
         tmp_path,
-        lambda text: text.replace("**已知**（T4 重排 `uv_bringup` 时一并修）", "计划中"),
+        lambda text: text + (
+            "\n| # | 缺口 | 影响 | 豁免 |\n"
+            "|---|---|---|---|\n"
+            "| G-test | `uv_bringup` 的 launch 引用 `uv_sim` | 演示用 | **已知** |\n"
+        ),
     )
     monkeypatch.setattr(checker, "DOC_NODE_DEPENDENCY", doc)
-    problems = checker.check_dependencies(checker.collect_source_facts())
-    assert any("uv_bringup" in str(p) for p in problems), problems
+    assert checker.check_dependencies(facts) == []
+
+
+def test_undeclared_third_party_import_is_reported(checker, tmp_path: Path, monkeypatch) -> None:
+    """``import cv2`` without a manifest entry must be reported.
+
+    T4 fix: the collector used to record only *workspace* imports, which made
+    this whole branch unreachable -- the registered cv2/numpy/ultralytics gaps
+    were documented but never enforced.
+    """
+    doc = _copy_doc(checker, "DOC_NODE_DEPENDENCY", tmp_path, lambda text: "")
+    monkeypatch.setattr(checker, "DOC_NODE_DEPENDENCY", doc)
+
+    facts = checker.SourceFacts()
+    facts.package_deps = {"uv_perception": set()}
+    facts.package_imports = {"uv_perception": {"cv2"}}
+    problems = checker.check_dependencies(facts)
+    assert any("cv2" in str(p) for p in problems), problems
+
+
+def test_stdlib_imports_are_not_dependencies(checker, tmp_path: Path, monkeypatch) -> None:
+    """``os``/``json`` are not manifest dependencies and must stay silent."""
+    doc = _copy_doc(checker, "DOC_NODE_DEPENDENCY", tmp_path, lambda text: "")
+    monkeypatch.setattr(checker, "DOC_NODE_DEPENDENCY", doc)
+
+    facts = checker.SourceFacts()
+    facts.package_deps = {"uv_control": set()}
+    facts.package_imports = {"uv_control": {"os", "json", "threading", "sys"}}
+    assert checker.check_dependencies(facts) == []
 
 
 def test_unlisted_doc_is_reported(checker, tmp_path: Path, monkeypatch) -> None:

@@ -8,7 +8,7 @@ tools: [read, edit, search, execute]
 >
 > 场景文件实际位于 `workspace_sim/src/stonefish_ros2/Data/`（不是 `src/stonefish_ros2/Data`）；
 > `scripts/env.sh` 与 `sim_launch.py` 在本仓库中不存在，当前入口是
-> `ros2 launch uv_bringup sim_bringup.py`（或 `sim_core.py`）。
+> `ros2 launch uv_sim_bringup sim_bringup.py`（或 `sim_core.py`）。
 > NED 约定与 `.scn` 结构部分仍然有效。
 >
 > **权威来源**：`CLAUDE.md`、`docs/node_parameters.md`。

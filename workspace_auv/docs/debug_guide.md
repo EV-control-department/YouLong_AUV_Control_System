@@ -147,13 +147,13 @@ ros2 run uv_control basic_motion --ros-args --log-level debug
 ```bash
 cd workspace_sim
 source install/setup.bash
-ros2 launch uv_bringup sim_bringup.py
+ros2 launch uv_sim_bringup sim_bringup.py
 ```
 
 按需启用/禁用组件：
 
 ```bash
-ros2 launch uv_bringup sim_bringup.py enable_ai:=false enable_nav:=true enable_task:=true
+ros2 launch uv_sim_bringup sim_bringup.py enable_ai:=false enable_nav:=true enable_task:=true
 ```
 
 - `enable_ai:=false` — 关闭视觉
@@ -358,7 +358,7 @@ HIL 模式下 micro-ROS agent 连接 STM32 MCU：
 
 ```bash
 # HIL 启动
-ros2 launch uv_bringup hil_bringup.py serial_dev:=/dev/ttyUSB0 serial_baud:=921600
+ros2 launch uv_sim_bringup hil_bringup.py serial_dev:=/dev/ttyUSB0 serial_baud:=921600
 
 # 检查 micro-ROS agent 是否收到数据（agent log 有 -v 4 的详细输出）
 ```
@@ -406,14 +406,25 @@ ros2 node list | grep basic_motion
 
 ### 仿真启动后黑屏
 
-Stonefish 在无 GPU 的环境（SSH、WSL）会挂。确保：
+Stonefish 在无 GPU 的环境（SSH、WSL）会挂。三种办法：
 
-1. 使用 NO GPU 模式（`sim_bringup.py` 已设为 `quality: high`，但无 GPU 时需降级）
-2. 或者用 VNC 连接桌面环境
+1. **无头物理仿真**（T4 起是一条正式参数路径，不需要 `xvfb-run`）：
+   ```bash
+   ros2 launch uv_sim_bringup sim_bringup.py headless:=true simulation_rate:=100.0
+   ```
+   用的是 console 引擎 `stonefish_simulator_nogpu`；注意它**不支持相机传感器**，
+   带相机的场景要先 `python3 workspace_sim/tools/strip_vision_sensors.py` 生成去相机副本，
+   而且 `simulation_rate` 必须给 `0`（实时）才会发 ROS 话题。相机图像在这条路径上不可用。
+2. 降渲染质量：`rendering_quality:=low`（仍需图形环境）
+3. 或者用 VNC 连接桌面环境
 
 ### 机器人收到定深指令后转圈
 
-**已知 bug**：sim_bridge.py 第 616 行 yaw 极性反转。定位方法：
+**历史 bug（2026-09-15 已修）**：`sim_bridge` 里 yaw 速率内环曾多一个负号
+（`cmd_rz = -float(self.pid_yaw_rate.step(...))`），导致定深时原地转圈。
+现在的代码是 `cmd_rz = float(self.pid_yaw_rate.step(...))`——**不要再把负号加回去**。
+
+若仍出现转圈，先看 setpoint 的 yaw 分量是否为正：
 
 ```bash
 # 看 setpoint 的值，yaw 分量是否正？
@@ -434,6 +445,6 @@ ros2 topic echo /zit6/cmd/setpoint
 | 调服务 | `ros2 service call /task/stop std_srvs/srv/Trigger` |
 | 列参数 | `ros2 param list /node_name` |
 | 看日志 | 终端输出（所有节点 `output='screen'`） |
-| 关视觉 | `ros2 launch uv_bringup sim_bringup.py enable_ai:=false` |
-| 开任务 | `ros2 launch uv_bringup sim_bringup.py enable_task:=true` |
+| 关视觉 | `ros2 launch uv_sim_bringup sim_bringup.py enable_ai:=false` |
+| 开任务 | `ros2 launch uv_sim_bringup sim_bringup.py enable_task:=true` |
 | 停止任务 | `ros2 service call /task/stop std_srvs/srv/Trigger` |

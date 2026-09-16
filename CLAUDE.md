@@ -46,8 +46,13 @@ cd workspace_sim
 colcon build                          # builds stonefish_ros2 only
 source install/setup.bash             # also sources workspace_auv underlay
 
-ros2 launch uv_bringup sim_bringup.py   # full simulation stack
+ros2 launch uv_sim_bringup sim_bringup.py   # full simulation stack
 ```
+
+**入口分层（T4 起）**：`workspace_auv` 只有一个实机入口 `uv_bringup real_bringup.py`，
+**不含任何仿真依赖**；仿真/HIL 入口在 `workspace_sim` 的新包 `uv_sim_bringup`。
+原则是「**节点定义归各包，系统预设只做编排**」：预设文件里没有 `Node(...)`，只有 include +
+条件，所以增删节点不用改 bringup。入口清单与新旧映射见 `docs/interfaces/launch_entries.md`。
 
 Note: `workspace_sim` uses colcon overlay — source `workspace_auv/install/setup.bash` first, then `workspace_sim/install/setup.bash`.
 
@@ -89,7 +94,10 @@ float32 distance_remaining   # 3D 欧氏距离
 
 #### 坐标系约定
 
-- **odom 系**：以 START 时 AUV 位置为原点 (0,0,0)，初始朝向为 yaw=0°
+- **odom 系**：`x`/`y`/`yaw` 以 START 时的 AUV 位姿为原点，**但 `z` 不是**——`basic_motion.start()`
+  把原点 z 硬编码为 `0.0`，所以 **odom z == map z == 绝对深度，水面为 0**
+  （`SET(x,y,3,0)` 是「下潜到 3 m」，不是「比开始时深 3 m」）。2026-09-16 console SIL 实测确认
+  （`SET(0.5,0,3.0,0)` → map z≈3.12）。此前本节写「以 START 时位置为原点 (0,0,0)」，对 z 不成立
 - **yaw 单位**：度（°），NED 系顺时针为正
 - **NED 轴**：x=北(N), y=东(E), z=下(D, 正数更深)
 
@@ -115,7 +123,9 @@ goal.cmd_type = BasicMotion.Goal.START
 - 记录当前 map 位姿为 odom 原点，之后所有坐标相对此原点
 - odom 0° = AUV 初始朝向（yaw 也做偏移）
 - 例：AUV 朝东 (map 90°) → START → odom 0° = 东，`SET(5,0,0,0)` 向东走 5m
-- 只发一次，重复发送是无操作（log 提示已设置）
+- **重复发送 START 不是无操作**：`start()` 每次都重写原点（先打
+  `odom origin already set, updating to current map pose`，再把当前 map 位姿记为原点）。
+  2026-09-16 实测确认（见 `devlog/2026-09-16_status.md` 的 L2 一节）；此前文档写「无操作」是错的
 
 #### SET 命令
 
@@ -275,7 +285,7 @@ Historical note: the yaw-polarity bug documented in earlier revisions (`cmd_rz =
 **Sim sensor geometry (2026-09-15, aligned with the real vehicle).** The XUNYUN DVL in `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn` is mounted flush with the body (`origin rpy="0 0 0" xyz="-0.375 0 0.1"`) with `<specs beam_angle="30.0" beam_positive_z="true"/>`, matching the real DVL (yaw=0 mount, beams offset 45°, 30° off vertical, z≈+0.1 m). Consequences worth remembering:
 - `/auv/dvl` therefore carries **body-frame** velocity. The pre-2026-09-15 scene used `rpy=(3.1416 0 -0.785)` with the default `beam_positive_z=false`, which made Stonefish publish velocity in a frame rotated 45° from the body with y/z flipped; `sim_bridge` forwards that straight into `/zit6/state/vel`, so `basic_motion`'s along-track speed became `V·cos(2α+45°)` (≈0 at α=22.5°). Regression pinned by `workspace_sim/src/uv_sim/test/test_scene_sensors.py`; end-to-end check in `workspace_sim/tools/check_dvl_frame.py`.
 - IMU is 200 Hz with injected noise (σ = density × √rate) to match AQUA-SLAM's `NoiseGyro=1e-3` / `NoiseAcc=1e-2`.
-- Headless note: the console simulator rejects any scene containing cameras and its ROS publishers only fire in real-time mode (`simulation_rate:=0`). See `workspace_sim/stonefish_notes.md` for the workaround.
+- Headless note: the console simulator rejects any scene containing cameras, and `simulation_rate` must stay **positive** (0 stops the simulation loop and publishes nothing). Since T4 this is a first-class parameter path — `ros2 launch uv_sim_bringup sim_bringup.py headless:=true` — see `workspace_sim/stonefish_notes.md` and `docs/interfaces/launch_entries.md`.
 - **PID gains live in one external file**: `workspace_sim/src/uv_sim/config/sim_pid.yaml` (9 channels: `chassis.pid.pos.{x,y,z,yaw}` + the yaw-cascade inner loop `chassis.pid.pos.yaw_rate` + `chassis.pid.vel.{x,y,z,yaw}`). The same data builds both the `/zit6/get_params` view and the live `_Pid` objects, so the service can never report gains that differ from the running controllers (before 2026-09-15 they were two hardcoded copies that had drifted: `pos.z.ki` 30 vs 80, `vel.x.kp` 300 vs 600, and the yaw-rate loop was invisible to the service). Override the file at runtime with `-p pid_config_file:=/path/to/tuned.yaml`; `/zit6/update_params` changes only the running process, never the file. Control structure: position mode = x/y/z single loops + **yaw two-level cascade**; velocity mode = four single loops.
 - Build mode matters for Python edits: `colcon build` (no flag) **copies** the package into `install/`, while `colcon build --symlink-install` keeps `build/uv_sim/uv_sim -> src/uv_sim/uv_sim` live. If a source edit seems ignored, check the layout: `ls -l workspace_sim/install/uv_sim/lib/python3.12/site-packages/` (egg-link = live, a real `uv_sim/` directory = stale copy).
 
@@ -312,7 +322,7 @@ IMU → sim_bridge._odom_cb (全 RPY 提取)
 改接口/参数必须同一次改动里改对应文档，由源码级校验强制（不需要跑栈）：
 
 ```bash
-python3 scripts/check_docs_contract.py --check     # 参数/节点/话题/依赖/README 五类对拍
+python3 scripts/check_docs_contract.py --check     # 参数/launch 参数/节点/话题/依赖/README + 两类 launch 一致性（共 8 类）
 ```
 
 **权威文档（T2 起）**：`docs/frames/frame_convention.md` 是约定的唯一权威，
@@ -370,7 +380,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 
 ## Package Types
 
-- **ament_python**: `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_bringup`
+- **ament_python**: `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_bringup`, `uv_sim`, `uv_sim_bringup`
 - **ament_cmake**: `uv_msgs`, `zit6_interfaces`, `stonefish_ros2` (define custom `.msg`/`.srv` files)
 
 ## Key Files
@@ -395,8 +405,11 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_sim/tools/dump_tf_tree.py` | 在线 TF 树核对 + `--self-test` |
 | `docs/README.md` | **文档索引 + 维护规则**（标记含义、禁止复制事实、跨文档待补清单） |
 | `docs/interfaces/topic_contract.md` | **话题/消息类型唯一事实源**（SIL/HIL/服务动作/栈外 GUI/缺口登记，每行带代码证据） |
+| `docs/interfaces/launch_entries.md` | **启动入口清单 + 新旧映射 + 编排规则**（T4 起；改 launch 先看这里） |
+| `workspace_auv/src/uv_bringup/uv_bringup/launch_common.py` | 编排助手 `arg()` / `include(when=…)`：预设文件只 include，不声明节点 |
+| `workspace_sim/src/uv_sim_bringup/uv_sim_bringup/stonefish_common.py` | Stonefish 侧助手：`Data/` 目录解析、场景名检查、引擎 include（GPU/console 分支） |
 | `docs/architecture/{system_architecture,sim_real_boundary,node_dependency}.md` | 分层与节点、SIL/HIL/REAL 边界、包依赖与启动顺序（含依赖缺口登记） |
-| `scripts/check_docs_contract.py` | **源码级文档契约校验**（参数/节点/话题/依赖/README 五类对拍，无需跑栈）；`--update` 生成库存 |
+| `scripts/check_docs_contract.py` | **源码级文档契约校验**（参数/launch 参数/节点/话题/依赖/README + launch 目标与文档入口一致性，共 8 类；无需跑栈）；`--update` 生成库存 |
 
 ## Conventions
 
@@ -405,7 +418,8 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- **Tests**: only `uv_sim` has them so far (**60 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
+- **Tests**: only `uv_sim` has them so far (**72 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
   contract, odometry frame conventions, PID-config single-source + fallback structure, entry-point
-  integrity, frame/beam geometry, scene↔YAML↔doc contract, camera-offset (N1), TF (B18) and documentation-contract (T3a) checks).
+  integrity, frame/beam geometry, scene↔YAML↔doc contract, camera-offset (N1), TF (B18),
+  documentation-contract (T3a) and launch-contract / layering (T4) checks).
   Run with `python3 -m pytest workspace_sim/src/uv_sim/test/ -q` after sourcing both workspaces; keep it green.

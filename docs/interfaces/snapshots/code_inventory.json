@@ -136,41 +136,77 @@
     }
   },
   "launch_arguments": {
+    "enable_agent": {
+      "default": "'true'",
+      "file": "workspace_sim/src/uv_sim_bringup/launch/hil_bringup.py"
+    },
+    "enable_motion": {
+      "default": "'true'",
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
+    },
     "enable_ai": {
       "default": "'true'",
-      "file": "workspace_auv/src/uv_bringup/launch/sim_bringup.py"
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
     },
     "enable_nav": {
       "default": "'false'",
-      "file": "workspace_auv/src/uv_bringup/launch/sim_bringup.py"
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
     },
     "enable_task": {
       "default": "'false'",
-      "file": "workspace_auv/src/uv_bringup/launch/sim_bringup.py"
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
     },
-    "enable_motion": {
-      "default": "'false'",
-      "file": "workspace_auv/src/uv_bringup/launch/hil_bringup.py"
-    },
-    "scenario": {
-      "default": "'underwater_xunyun.scn'",
-      "file": "workspace_auv/src/uv_bringup/launch/sim_core.py"
+    "agent_bin": {
+      "default": "_agent_binary()",
+      "file": "workspace_auv/src/uv_hm/launch/hm_launch.py"
     },
     "serial_dev": {
       "default": "'/dev/ttyUSB0'",
-      "file": "workspace_auv/src/uv_bringup/launch/hil_bringup.py"
+      "file": "workspace_sim/src/uv_sim_bringup/launch/hil_bringup.py"
     },
     "serial_baud": {
       "default": "'921600'",
-      "file": "workspace_auv/src/uv_bringup/launch/hil_bringup.py"
+      "file": "workspace_sim/src/uv_sim_bringup/launch/hil_bringup.py"
+    },
+    "sim_mode": {
+      "default": "'false'",
+      "file": "workspace_auv/src/uv_perception/launch/perception_launch.py"
+    },
+    "hil_mode": {
+      "default": "'false'",
+      "file": "workspace_sim/src/uv_sim/launch/bridge_launch.py"
+    },
+    "pid_config_file": {
+      "default": "''",
+      "file": "workspace_sim/src/uv_sim/launch/bridge_launch.py"
     },
     "scenario_desc": {
       "default": "'wuurc_murc_2026_auv.scn'",
-      "file": "workspace_auv/src/uv_bringup/launch/sim_bringup.py"
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
     },
-    "gpu": {
+    "headless": {
+      "default": "'false'",
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
+    },
+    "simulation_rate": {
+      "default": "'100.0'",
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
+    },
+    "window_res_x": {
+      "default": "'2560'",
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
+    },
+    "window_res_y": {
+      "default": "'1440'",
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
+    },
+    "rendering_quality": {
+      "default": "'high'",
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
+    },
+    "enable_mcu": {
       "default": "'true'",
-      "file": "workspace_auv/src/uv_bringup/launch/sim_core.py"
+      "file": "workspace_sim/src/uv_sim_bringup/launch/sim_bringup.py"
     }
   },
   "entries": {
@@ -362,10 +398,29 @@
     },
     {
       "topic": "/perception/detection/down_left",
+      "kind": "发布",
+      "type": "uv_msgs.msg.DetectionArray",
+      "files": [
+        "workspace_auv/src/uv_perception/uv_perception/vision.py"
+      ]
+    },
+    {
+      "topic": "/perception/detection/down_left",
       "kind": "订阅",
       "type": "uv_msgs.msg.DetectionArray",
       "files": [
-        "workspace_auv/src/uv_perception/uv_perception/position.py"
+        "workspace_auv/src/uv_perception/uv_perception/position.py",
+        "workspace_auv/src/uv_task/uv_task/arrow_surfacer.py",
+        "workspace_auv/src/uv_task/uv_task/line_follower.py",
+        "workspace_auv/src/uv_task/uv_task/task_runner.py"
+      ]
+    },
+    {
+      "topic": "/perception/detection/down_right",
+      "kind": "发布",
+      "type": "uv_msgs.msg.DetectionArray",
+      "files": [
+        "workspace_auv/src/uv_perception/uv_perception/vision.py"
       ]
     },
     {
@@ -373,7 +428,18 @@
       "kind": "订阅",
       "type": "uv_msgs.msg.DetectionArray",
       "files": [
-        "workspace_auv/src/uv_perception/uv_perception/position.py"
+        "workspace_auv/src/uv_perception/uv_perception/position.py",
+        "workspace_auv/src/uv_task/uv_task/arrow_surfacer.py",
+        "workspace_auv/src/uv_task/uv_task/line_follower.py",
+        "workspace_auv/src/uv_task/uv_task/task_runner.py"
+      ]
+    },
+    {
+      "topic": "/perception/detection/front_left",
+      "kind": "发布",
+      "type": "uv_msgs.msg.DetectionArray",
+      "files": [
+        "workspace_auv/src/uv_perception/uv_perception/vision.py"
       ]
     },
     {
@@ -381,7 +447,18 @@
       "kind": "订阅",
       "type": "uv_msgs.msg.DetectionArray",
       "files": [
-        "workspace_auv/src/uv_perception/uv_perception/position.py"
+        "workspace_auv/src/uv_perception/uv_perception/position.py",
+        "workspace_auv/src/uv_task/uv_task/arrow_surfacer.py",
+        "workspace_auv/src/uv_task/uv_task/line_follower.py",
+        "workspace_auv/src/uv_task/uv_task/task_runner.py"
+      ]
+    },
+    {
+      "topic": "/perception/detection/front_right",
+      "kind": "发布",
+      "type": "uv_msgs.msg.DetectionArray",
+      "files": [
+        "workspace_auv/src/uv_perception/uv_perception/vision.py"
       ]
     },
     {
@@ -389,7 +466,74 @@
       "kind": "订阅",
       "type": "uv_msgs.msg.DetectionArray",
       "files": [
-        "workspace_auv/src/uv_perception/uv_perception/position.py"
+        "workspace_auv/src/uv_perception/uv_perception/position.py",
+        "workspace_auv/src/uv_task/uv_task/arrow_surfacer.py",
+        "workspace_auv/src/uv_task/uv_task/line_follower.py",
+        "workspace_auv/src/uv_task/uv_task/task_runner.py"
+      ]
+    },
+    {
+      "topic": "/perception/line/down_left",
+      "kind": "发布",
+      "type": "uv_msgs.msg.LineState",
+      "files": [
+        "workspace_auv/src/uv_perception/uv_perception/vision.py"
+      ]
+    },
+    {
+      "topic": "/perception/line/down_left",
+      "kind": "订阅",
+      "type": "uv_msgs.msg.LineState",
+      "files": [
+        "workspace_auv/src/uv_task/uv_task/line_follower.py"
+      ]
+    },
+    {
+      "topic": "/perception/line/down_right",
+      "kind": "发布",
+      "type": "uv_msgs.msg.LineState",
+      "files": [
+        "workspace_auv/src/uv_perception/uv_perception/vision.py"
+      ]
+    },
+    {
+      "topic": "/perception/line/down_right",
+      "kind": "订阅",
+      "type": "uv_msgs.msg.LineState",
+      "files": [
+        "workspace_auv/src/uv_task/uv_task/line_follower.py"
+      ]
+    },
+    {
+      "topic": "/perception/line/front_left",
+      "kind": "发布",
+      "type": "uv_msgs.msg.LineState",
+      "files": [
+        "workspace_auv/src/uv_perception/uv_perception/vision.py"
+      ]
+    },
+    {
+      "topic": "/perception/line/front_left",
+      "kind": "订阅",
+      "type": "uv_msgs.msg.LineState",
+      "files": [
+        "workspace_auv/src/uv_task/uv_task/line_follower.py"
+      ]
+    },
+    {
+      "topic": "/perception/line/front_right",
+      "kind": "发布",
+      "type": "uv_msgs.msg.LineState",
+      "files": [
+        "workspace_auv/src/uv_perception/uv_perception/vision.py"
+      ]
+    },
+    {
+      "topic": "/perception/line/front_right",
+      "kind": "订阅",
+      "type": "uv_msgs.msg.LineState",
+      "files": [
+        "workspace_auv/src/uv_task/uv_task/line_follower.py"
       ]
     },
     {
@@ -659,40 +803,6 @@
       "files": [
         "workspace_sim/src/uv_sim/uv_sim/sim_bridge.py"
       ]
-    },
-    {
-      "topic": "<dynamic:/perception/detection/>",
-      "kind": "发布",
-      "type": "uv_msgs.msg.DetectionArray",
-      "files": [
-        "workspace_auv/src/uv_perception/uv_perception/vision.py"
-      ]
-    },
-    {
-      "topic": "<dynamic:/perception/detection/>",
-      "kind": "订阅",
-      "type": "uv_msgs.msg.DetectionArray",
-      "files": [
-        "workspace_auv/src/uv_task/uv_task/arrow_surfacer.py",
-        "workspace_auv/src/uv_task/uv_task/line_follower.py",
-        "workspace_auv/src/uv_task/uv_task/task_runner.py"
-      ]
-    },
-    {
-      "topic": "<dynamic:/perception/line/>",
-      "kind": "发布",
-      "type": "uv_msgs.msg.LineState",
-      "files": [
-        "workspace_auv/src/uv_perception/uv_perception/vision.py"
-      ]
-    },
-    {
-      "topic": "<dynamic:/perception/line/>",
-      "kind": "订阅",
-      "type": "uv_msgs.msg.LineState",
-      "files": [
-        "workspace_auv/src/uv_task/uv_task/line_follower.py"
-      ]
     }
   ],
   "scene_topics": {
@@ -757,6 +867,7 @@
     "uv_nav": [
       "rclpy",
       "std_msgs",
+      "std_srvs",
       "uv_msgs"
     ],
     "uv_perception": [
@@ -776,9 +887,21 @@
       "stonefish_ros2",
       "zit6_interfaces"
     ],
+    "uv_sim_bringup": [
+      "ros2launch",
+      "stonefish_ros2",
+      "uv_bringup",
+      "uv_control",
+      "uv_hm",
+      "uv_nav",
+      "uv_perception",
+      "uv_sim",
+      "uv_task"
+    ],
     "uv_task": [
       "rclpy",
       "std_msgs",
+      "std_srvs",
       "uv_msgs",
       "zit6_interfaces"
     ],
@@ -786,5 +909,124 @@
       "rosidl_default_generators",
       "rosidl_default_runtime"
     ]
+  },
+  "launch_targets": {
+    "workspace_auv/src/uv_control/launch/control_launch.py": [
+      {
+        "package": "uv_control",
+        "executable": "basic_motion"
+      },
+      {
+        "package": "uv_control",
+        "executable": "basic_motion"
+      }
+    ],
+    "workspace_auv/src/uv_hm/launch/hm_launch.py": [
+      {
+        "package": "uv_hm",
+        "executable": "hw_manager"
+      },
+      {
+        "package": "uv_hm",
+        "executable": "hw_manager"
+      }
+    ],
+    "workspace_auv/src/uv_nav/launch/nav_launch.py": [
+      {
+        "package": "uv_nav",
+        "executable": "navigator"
+      },
+      {
+        "package": "uv_nav",
+        "executable": "navigator"
+      }
+    ],
+    "workspace_auv/src/uv_perception/launch/perception_launch.py": [
+      {
+        "package": "uv_perception",
+        "executable": "vision"
+      },
+      {
+        "package": "uv_perception",
+        "executable": "position"
+      },
+      {
+        "package": "uv_perception",
+        "executable": "vision"
+      },
+      {
+        "package": "uv_perception",
+        "executable": "position"
+      }
+    ],
+    "workspace_auv/src/uv_task/launch/task_launch.py": [
+      {
+        "package": "uv_task",
+        "executable": "task_runner"
+      },
+      {
+        "package": "uv_task",
+        "executable": "task_runner"
+      }
+    ],
+    "workspace_sim/src/stonefish_ros2/launch/stonefish_simulator.launch.py": [
+      {
+        "package": "stonefish_ros2",
+        "executable": "stonefish_simulator"
+      },
+      {
+        "package": "stonefish_ros2",
+        "executable": "stonefish_simulator"
+      }
+    ],
+    "workspace_sim/src/stonefish_ros2/launch/stonefish_simulator_nogpu.launch.py": [
+      {
+        "package": "stonefish_ros2",
+        "executable": "stonefish_simulator_nogpu"
+      },
+      {
+        "package": "stonefish_ros2",
+        "executable": "stonefish_simulator_nogpu"
+      }
+    ],
+    "workspace_sim/src/uv_sim/launch/bridge_launch.py": [
+      {
+        "package": "uv_sim",
+        "executable": "sim_bridge"
+      },
+      {
+        "package": "uv_sim",
+        "executable": "sim_bridge"
+      }
+    ]
+  },
+  "package_executables": {
+    "stonefish_ros2": [
+      "stonefish_simulator",
+      "stonefish_simulator_nogpu"
+    ],
+    "uv_bringup": [],
+    "uv_control": [
+      "basic_motion"
+    ],
+    "uv_hm": [
+      "hw_manager"
+    ],
+    "uv_msgs": [],
+    "uv_nav": [
+      "navigator"
+    ],
+    "uv_perception": [
+      "position",
+      "vision"
+    ],
+    "uv_sim": [
+      "sim_bridge"
+    ],
+    "uv_sim_bringup": [],
+    "uv_task": [
+      "task_runner"
+    ],
+    "zit6_interfaces": []
   }
 }

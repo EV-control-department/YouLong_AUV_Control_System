@@ -85,10 +85,10 @@ source ~/YouLong_AUV_Control_System/install/setup.bash
 
 ```bash
 # 完整仿真（所有节点）
-ros2 launch uv_bringup sim_bringup.py
+ros2 launch uv_sim_bringup sim_bringup.py
 
 # 仅启动硬件层 + 控制层
-ros2 launch uv_bringup sim_bringup.py enable_ai:=false
+ros2 launch uv_sim_bringup sim_bringup.py enable_ai:=false
 
 # 手动启动单个节点
 ros2 run uv_hm sim_bridge

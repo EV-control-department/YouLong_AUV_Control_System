@@ -90,7 +90,7 @@
 | B11 | **既有文档已写下「正确契约」，但代码没做到**（T1 的独立佐证） | `docs/hil_architecture.md:112` 把 `/auv/dvl` 描述为「4 波束 DVL **机体坐标系速度**」，`:245` 的 MCU 固件注释同样写 `// /auv/dvl → body_velocity`；而 §1.3 证明当前仿真发布的是旋转 45° 的 DVL 系速度 |
 | B12 | ~~**odometry twist 被二次旋转**~~ **已修（2026-09-15）** | 根因：Stonefish 的 `/auv/odometry` twist 本来就是机体系（`Odometry.cpp:59,65`：`v = R_sensor←worldᵀ · v_point`；`PublishOdometry` 把 header 设为 `world_ned`、child 设为传感器名），而文档曾写它是世界系。两处代码照错的假设又乘了一次 yaw（= `R(−ψ)`）：① `_sim_nav_odom_cb` → HIL 的 `/zit6/sim/nav`（固件契约要求 `vel_body`，`third_party/AUV_zit6_cmake/docs/protocols/与AGX.md:301-307`）；② `_odom_cb` → SIL 的 `/zit6/state/vel`（60 Hz 发布，`self.vel.x/y/z` 被 `_dvl_cb` 20 Hz 与 `_odom_cb` 30 Hz 竞争写）。**修复**：新增 `sim_bridge.body_twist_from_odometry()` 作为唯一编码处，两条回调直接取 twist 分量，删除错误的 yaw 旋转与死状态 `vel_world`。**验证**：`test_odometry_frame.py`（5 例，ψ=90° 合成消息）——改动前 **2 failed / 3 passed**（`vel['x']` 实测 −0.19999 而非 0.3，正是 `R(−90°)·(0.3,−0.2)`），改动后 **5 passed**。T5 的 `nav_sim` 只需继承该契约（`body_twist_from_odometry` 可直接复用） |
 | B14 | ~~**PID 参数多源、且服务值与生效值不一致**~~ **已修（2026-09-15）** | 原状：① `_init_full()` 内**两份硬编码**——`_pid_params` 字典（`/zit6/get_params` 返回它）与 `_Pid` 对象（真正生效）；两者漂移：`pos.z.ki` 报 30 实为 80、`vel.x.kp` 报 300 实为 600；② yaw 串级内环 `pid_yaw_rate` **既不在字典也不在服务面** → 读不到也调不了；③ `uv_hm/config/pid_params.yaml` 自称 sim_bridge 默认参数却**无人读取**（值还跟错的那份一致）；④ `uv_hm/config/pid_parameters.json` 是 MCU/AGX 的另一套参数体系（p/i/d + output_limit，8 轴），同样无人读取。**修复**：新增 `workspace_sim/src/uv_sim/config/sim_pid.yaml` 作为唯一事实源（9 通道，含 yaw_rate 与 `z_thrust_ff`），同一份数据既建服务视图又建 `_Pid` 对象；`pid_config_file` 参数可指向调参副本；删除死文件 `uv_hm/config/pid_params.yaml`。**验证**：`test_pid_config.py`（6 例）钉住"文件=服务=生效对象"三者一致，并证明换文件真的改变增益 |
-| B13 | **沙箱限制（2026-09-15 收窄）** | 相机图像与控制闭环**仍需 GPU/X 会话**（无 `/dev/dri` → GPU 版 `XGLXCreateContext BadValue`）；但**无相机的物理/传感器话题在 console 模式可用**：`tools/strip_vision_sensors.py` 去相机 + `<rate> 0`（实时模式）后，`/auv/{odometry,dvl,imu,pressure}` 等话题实测在线，只是没有相机图像、也没有 TF（见 B18）。故 T1 的端到端验收仍需 GPU 会话，而 `dump_tf_tree.py` 这类纯话题/变换检查不再受限 |
+| B13 | **沙箱限制（2026-09-16 重写）** | **相机图像**仍需 GPU/X 会话（无 `/dev/dri` → GPU 版 `XGLXCreateContext BadValue`）。但"必须有 GPU 才能验证控制闭环"**是错的**：`strip_vision_sensors.py` 去相机 + **正的** `simulation_rate`（默认 100；`0` 会让仿真停住、一条话题都不发）后，console 模式实测 `/auv/odometry` 30.0 Hz、`/auv/imu` 100.2 Hz、`/zit6/state/{pos,vel}` 30/60 Hz；BasicMotion `START`+`SET(0.5,0,3.0,0)` 端到端到位（x/y/z 误差 ≤0.05 m）；`check_dvl_frame.py` 静态段与四段航向均采到有效样本。旧结论两处错误：①「`<rate> 0`（实时模式）」写反（根因见 `stonefish_notes.md` §7）；②「话题实测在线」当时只看到话题列表、并无数据流。**仍受限**：无相机图像 ⇒ `vision`/`position` 链路、GPU 渲染路径与 TF（B18）未验证 |
 | B15 | ~~**相机 offset 与场景差 0.2 m（N1）**~~ **已决（2026-09-15）** | `position.py` 的 `offset` z（0.076/0.0645）与 `line_follower.py`、`arrow_surfacer.py`、`docs/perception.md` 四处一致（4:1），场景 `xunyun_fixed.scn` 的 `0.276`/`0.2645` 只此一处——**以代码为准，改场景**（前视 `0.276→0.076`、下视 `0.2645→0.0645`）。**验证**：`derive_extrinsics.py --check` 绿、`test_frames_geometry.py` 新增两例钉住（场景 z == 权威 offset；三模块 offset 一致）、pytest 47 passed。残留下限：这组数字本身仍来自早期估算，未经实机复测；若日后量出别的值，改四处 + 场景再重跑生成器即可 |
 | B16 | **AQUA-SLAM 参考检出的外参与波束角是 blue_gx5 的（N2）** | `AQUA-SLAM/data/underwater_orbslam3_blue_gx5_{short,long}.yaml`：`alpha=[1.1780]×4`(=67.5°)、`beta=[0.7854]×4`(=45°，且是标量不是逐波束)、`Tbc=(0.4,0,0.1)`；`dvl_model/dvl.cpp:508` 另硬编码 `ALPHA=67.5°`。与 XUNYUN（α=60°、β=45/135/225/315、相机 `(0.23,−0.05,0.076)`）不符。**后果**：水平速度 +30.7%（`cos67.5/cos60=1.3066`）。**处理**：不改参考检出，改在 `extrinsics_reference.md` §5 列成 T6 逐项必改清单 |
 | B17 | **`alpha` 一词两义（N3）** | `check_dvl_frame.py` 曾用 `alpha` 表示艇的**航向**，而 AQUA-SLAM 与 `docs/frames/` 用 α 表示**波束离水平仰角**——这正是 B16 那类错误的高危来源。**已修**：统一 ψ=航向、θ=离竖直、α=离水平；脚本变量与日志改名，行为不变 |
@@ -184,12 +184,25 @@
 `derive_extrinsics.py --out` + `pytest` 即闭环。
 
 **验收**：`check_dvl_geometry.py` PASS、`derive_extrinsics.py --check` 退出 0、44 例单测全绿。
+
+> **T1 端到端（console 模式）实测 2026-09-16**（`headless:=true` + `canyon_headless.scn`，
+> 见 devlog 同名日志）：
+>
+> - 静态段 PASS：79 个有效 DVL 样本，中值 |v| = 0.021 m/s（限 0.05）
+> - 四段航向：`dvl err` 0.0021~0.0030 m/s、`along ratio` **1.006 / 1.018 / 0.951 / 0.959**
+>   —— **DVL 机体帧正确性成立**（修复前 22.5° 那段约为 0，这正是 T1 的判别点）
+> - 整体仍 `exit 1`：psi=45° 段的 `stv err` = **0.0324** > 容差 0.0300（差 2.4 mm/s）。
+>   这是 `/zit6/state/vel` **双写者混叠**（`_dvl_cb` 20 Hz 与 `_odom_cb` 30 Hz 写同一个 `vel` 字典，
+>   B12/B14 时代就存在）造成的，不是 DVL 帧错误 —— 留待 T5 的 `nav_sim` 拆分解决
+> - **工具 bug 已修**：`check_dvl_frame.py` 原来在 `send_motion()` *之后*取时间戳，
+>   于是每个 block 只覆盖运动结束后的静止窗口，永远采不到动样本（该脚本从未在活栈上跑过，
+>   因为此前沙箱跑不了仿真）。修好后四段都有 90~245 个样本
 **依赖**：T1（外参表要反映新安装）
 **预估**：0.5~1 人日
 
 ---
 
-### T3 ◐ 文档体系（接口即契约）— **T3a 已完成，T3b 待 T4/T5**
+### T3 ◐ 文档体系（接口即契约）— **T3a 已完成；T3b 待 T5（launch 入口表已随 T4 交付）**
 
 > **拆分（2026-09-16）**：T3 的接口契约里，一部分不随 T4/T5 变化、现在就能冻结并机检，
 > 另一部分必须等 launch 与 `sim_bridge` 结构定下来。故拆成：
@@ -198,8 +211,8 @@
 >   `tools/check_docs_contract.py`（**源码级**对拍：`declare_parameter` / `console_scripts` /
 >   `package.xml` 依赖，无需跑栈，绕开 B13 的 GPU 限制）、`docs/architecture/` 三篇、
 >   话题表去重
-> - **T3b（待 T4/T5 后）**：launch 入口表、话题频率/QoS 列、实时快照入库、
->   `node_parameters.md` 按新结构改写
+> - **T3b（待 T5 后）**：话题频率/QoS 列、实时快照入库、服务/动作字段语义；
+>   ~~launch 入口表~~ 与 ~~`node_parameters.md` 按新结构改写~~ 已随 **T4** 一起交付
 >
 > **T3a 已完成（2026-09-16）**：
 >
@@ -235,7 +248,7 @@
 docs/
 ├── README.md                       # 索引 + 维护规则（改接口必须同 PR 改文档）
 ├── roadmap.md                      # 本文档
-├── node_parameters.md              # 既有（T4/T5 后改写）
+├── node_parameters.md              # 既有（T4 已按新结构改写；T5 后需再改 sim_bridge 段）
 ├── hil_architecture.md             # 既有（话题表收敛进 topic_contract.md）
 ├── auv-architecture.{html,json,png}# 既有（archify 生成物）
 ├── architecture/
@@ -267,7 +280,40 @@ docs/
 
 ---
 
-### T4 ☐ bringup 彻底分离（实机 / 仿真）
+### T4 ☑ bringup 彻底分离（实机 / 仿真）— **已完成（2026-09-16）**
+
+> **T4 已完成**。开工前用户确认了两点：新包名用 `uv_sim_bringup`（放 `workspace_sim/src/`）；
+> 除 A4 四条静态验收外，额外在 console 模式做 L1（起栈 + 话题对拍）与 L2（控制闭环基线）冒烟。
+>
+> | 交付物 | 状态 |
+> |---|---|
+> | 新包 `workspace_sim/src/uv_sim_bringup`（`sim_bringup.py` + `hil_bringup.py` + `stonefish_common.py`） | ✅ |
+> | `workspace_auv` 只留 `real_bringup.py`；删除 `sim_bringup/sim_core/hil_bringup` | ✅ |
+> | `uv_bringup/uv_bringup/launch_common.py`（`arg()` / `include(when=…)`） | ✅ |
+> | 包级 launch 修复：`hm_launch.py`（B2）、`control_launch.py`（B2）、`perception_launch.py`（+`sim_mode`）、新增 `uv_sim/launch/bridge_launch.py` | ✅ |
+> | `docs/interfaces/launch_entries.md`（入口清单 + 新旧映射 + 编排规则） | ✅ |
+> | 校验扩展：`launch-targets` + `launch-refs` 两类新检查（共 8 类）；修掉依赖检查的 3 个 bug | ✅ |
+> | `test_launch_contract.py`（10 例，含 5 类故意漂移的反向验证） | ✅ |
+> | B6 文档扫尾：14 个文件里的旧入口引用 + `node_parameters.md` launch 章节改写 + D1 结项 | ✅ |
+>
+> **与本节原计划的 3 处偏差**（均有理由，见 `launch_entries.md` §3）：
+> 1. `enable_*` 门控**留在预设**（`include` 的 `condition`），包级 launch 不重复声明同名开关
+>    —— 起不起只能有一个作者；
+> 2. micro-ROS agent 归 `uv_hm/hm_launch.py`，HIL 也 include 它 ⇒ **HIL 会起 `hw_manager`**
+>    （真 MCU 需要 `/zit6/cmd/agxhbt` 心跳才会解锁）。⏸ 只做静态核查；
+> 3. `sim_core` 的两个**声明了却不生效**的参数（`scenario`/`gpu`）没有保留：`scenario` 统一成
+>    `scenario_desc` 并真正生效，`gpu` 由语义正确的 `headless` 取代（选 `stonefish_simulator_nogpu`）。
+>
+> **A4-2 判据细化**：原写"`grep -r "uv_sim\|stonefish" workspace_auv/src` 无命中（除文档性说明）"，
+> 但 `uv_sim_bringup` 这个名字本身含 `uv_sim`，注释里提它属于正常说明。改为**代码级**判据（可机检）：
+>
+> ```bash
+> grep -rnE "package=['\"](uv_sim|stonefish_ros2|uv_sim_bringup)['\"]|import (uv_sim|stonefish)|get_package_share_directory\(['\"](uv_sim|stonefish_ros2)" workspace_auv/src
+> # 期望：0 命中（等价断言在 test_launch_contract.py，用 AST 判 import / package= / include()）
+> ```
+>
+> **附带发现（顺手修掉）**：`workspace_auv/docs/debug_guide.md` 仍在讲 yaw 极性 bug「已知」，
+> 而代码 2026-09-15 已修（且该 bug 说明带过时行号）；`uv_nav`/`uv_task` 用了 `std_srvs` 却没声明。
 
 **目标**：`workspace_auv` 只留实机入口且不含任何仿真依赖；仿真入口归 `workspace_sim`。原则：**节点定义归各包，系统预设只做编排**（借 robotcup 架构）。
 
@@ -275,20 +321,20 @@ docs/
 |---|---|---|---|
 | workspace_auv | `uv_bringup` | `real_bringup.py` | 唯一实机系统入口（sim-free） |
 | workspace_sim | `uv_sim_bringup`（新建） | `sim_bringup.py` | 仿真系统入口（SIL） |
-| workspace_sim | `uv_sim_bringup` | `hil_bringup.py` | HIL（Stonefish + 真 MCU） |
+| workspace_sim | `uv_sim_bringup` | `hil_bringup.py` | HIL（Stonefish + 真 MCU）⏸ |
 
 **改动点**
-- 修 B2：`uv_hm/launch/hm_launch.py`（删失效 `sim_bridge`，改为 `hw_manager` + micro-ROS agent `ExecuteProcess`，参数 `agent_bin/serial_dev/serial_baud`，默认值取自现 `hil_bringup.py:88-95`）；`uv_control/launch/control_launch.py`（删 `minimal_control`，加 `enable_motion`）
-- 参数化 `uv_perception/launch/perception_launch.py`（`enable_ai`、`sim_mode`）、`uv_nav/launch/nav_launch.py`（`enable_nav`）、`uv_task/launch/task_launch.py`（`enable_task`）
-- 新建共享助手 `uv_bringup/uv_bringup/launch_common.py`（参数声明/包含助手/分层校验）
+- 修 B2：`uv_hm/launch/hm_launch.py`（删失效 `sim_bridge`，改为 `hw_manager` + micro-ROS agent `ExecuteProcess`，参数 `agent_bin/serial_dev/serial_baud`，默认值取自原 `hil_bringup.py`）；`uv_control/launch/control_launch.py`（删 `minimal_control`）
+- 参数化 `uv_perception/launch/perception_launch.py`（`sim_mode`）；`uv_nav`/`uv_task` 的 launch 已正确，不动
+- 新建共享助手 `uv_bringup/uv_bringup/launch_common.py`（参数声明 / 包含助手）
 - 删除 `workspace_auv/src/uv_bringup/launch/{sim_bringup.py,sim_core.py,hil_bringup.py}`；`sim_core` 的能力由 `enable_motion:=false enable_ai:=false` 取代
-- `uv_bringup/setup.py` 的 `data_files` 是**显式列表**，必须同步增删；`uv_sim_bringup/setup.py` 新建并登记两个入口
+- `uv_bringup/setup.py` 与 `uv_sim_bringup/setup.py` 的 `data_files` 是**显式列表**，必须同步增删
 - 同步更新 B6 清单中的记忆/agent 文档
 
 **验收**
 - A4-1 干净 shell 仅 source `/opt/ros/jazzy` + `workspace_auv/install`（**不** source workspace_sim）时 `ros2 launch uv_bringup real_bringup.py --show-args` 成功
-- A4-2 `grep -r "uv_sim\|stonefish" workspace_auv/src` 无命中（除文档性说明）
-- A4-3 `test_launch_contract.py`：所有入口引用的 executable 必须在对应 `setup.py` 存在（防 B2 复发）
+- A4-2 `workspace_auv/src` 内**无代码级**仿真引用（见上面的 grep，0 命中；散文提及不算）
+- A4-3 `test_launch_contract.py` + `check_docs_contract.py --only launch-targets`：所有入口引用的 executable 必须在对应 `setup.py`/`CMakeLists.txt` 存在（防 B2 复发）
 - A4-4 HIL 参数表静态核查通过（运行时验证待实机）
 
 **依赖**：T3 的 `launch_entries.md` 草稿
@@ -397,7 +443,7 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 
 | 编号 | 标准 | 归属 |
 |---|---|---|
-| A1-1..5 | 仿真传感器几何/频率/速度方向正确（含航向扫描回归），4 个场景可加载 | T1（V1 已绿；V2/V3 待桌面环境执行） |
+| A1-1..5 | 仿真传感器几何/频率/速度方向正确（含航向扫描回归），4 个场景可加载 | T1（V1 已绿；**V2/V3 已于 2026-09-16 在 console 模式执行**：DVL 帧成立（ratio≈1.0），仅 psi=45° 的 `state/vel` 混叠差 2.4 mm/s → 归 T5） |
 | A2-1 | `derive_extrinsics.py --check` 退出 0（文档块 ↔ 场景一致） | T2（已绿） |
 | A2-2 | `check_dvl_geometry.py` PASS：反演误差 < 1e-12、α=67.5° 复现 +30.7% | T2（已绿） |
 | A2-3 | 48 例单测全绿（含场景↔YAML↔文档三方契约、N1 相机 offset、TF 契约） | T2（已绿） |
@@ -407,8 +453,8 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 | A3-2 | `scripts/check_docs_contract.py --check` 退出 0（参数/节点/话题/依赖/README 五类） | T3a（已绿） |
 | A3-3 | 故意改错必须失败——6 类漂移 + 端到端注入各验证一次 | T3a（已绿） |
 | A3-4 | 话题表无重复事实源（`hil_architecture.md`/`node_parameters.md` 已改为链接） | T3a（已绿） |
-| A3-5 | 服务/动作字段语义、launch 入口表、频率/QoS 列 | T3b（待 T4/T5） |
-| A4-1..4 | 分层干净；入口契约测试通过 | T4 |
+| A3-5 | 服务/动作字段语义、~~launch 入口表~~（T4 已交付）、频率/QoS 列 | T3b（待 T5） |
+| A4-1..4 | 分层干净；入口契约测试通过 | T4（✅ 已绿，见 T4 节） |
 | A5-1..5 | 7 节点可执行；话题零变化；端到端动作成功；数值回归 | T5 |
 | S1..S5 | AQUA-SLAM 构建/稳定性/精度/DVL 消融/一键评估 | T6 |
 
