@@ -3,14 +3,38 @@
 > 本文件是各节点 ROS 参数与 launch 参数的汇总入口。**参数真值以源码 `declare_parameter` 为准**，
 > 修改参数后若与本文件冲突，请同步本文件。
 >
-> 最后核对：2026-09-13（对照 `vision.py` / `position.py` / `sim_bridge.py` / `hw_manager.py` / `task_runner.py`）
+> 最后核对：**2026-09-16**（T3a：逐条对照 `declare_parameter` 与 `DeclareLaunchArgument` 源码）
+
+## 阅读须知：本文件的完整性状态
+
+T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge` 拆分的内容留待回填。
+各节标题后的标记含义：
+
+| 标记 | 含义 |
+|---|---|
+| ✅ | 已与代码逐条核对，当前准确 |
+| ⏳ | **已知不完整或即将失效**，等 T4/T5 落地后回填（见 `roadmap.md`） |
+| 🔗 | 事实源已迁移到别处，本节只留链接 |
+
+**待补清单（T3a 已知缺口，别当成"已完成"）**
+
+| # | 缺口 | 何时补 |
+|---|---|---|
+| 1 | **launch 入口表**：`sim_bringup`/`sim_core`/`hil_bringup` 位于 `workspace_auv` 却直接引用仿真包（违反分层，B1），T4 会重排；包级 launch `uv_control/launch/control_launch.py`、`uv_hm/launch/hm_launch.py` 当前引用**不存在的入口**（B2） | T4 |
+| 2 | **`sim_bridge` 参数与话题归属**：T5 将把它拆成 7 个节点，§sim_bridge 每一行都会变 | T5 |
+| 3 | **话题频率 / QoS 列**：需实时快照（`ros2 topic info -v` / `hz`）；本沙箱仅 console 模式可用且无相机（B13） | T3b |
+| 4 | **话题表去重**：`hil_architecture.md` §2.2/2.3 与本文件话题参考仍有重复，将收敛到 `docs/interfaces/topic_contract.md` | T3b |
+| 5 | `docs/README.md` 索引与 `tools/check_docs_contract.py`（参数/入口/依赖三方对拍） | T3a 后续 |
+
+> **维护规则（T3a 起）**：改任何 ROS 参数默认值或 launch 参数，**必须同一次改动里更新本文件**；
+> 本轮新增的 `pid_config_file` 就属此类。校验工具落地后由 `check_docs_contract.py` 强制。
 
 ## 所有可执行节点
 
 | 可执行文件 | 包 | 所在工作区 | 源码 | 说明 |
 |---|---|---|---|---|
 | `stonefish_simulator` | `stonefish_ros2` | workspace_sim | C++ | GPU 渲染仿真器（需 X Display / `xvfb-run`） |
-| `stonefish_simulator_nogpu` | `stonefish_ros2` | workspace_sim | C++ | 无头模式仿真器 |
+| `stonefish_simulator_nogpu` | `stonefish_ros2` | workspace_sim | C++ | 无头模式仿真器（**拒绝含相机的场景**，见 `workspace_sim/stonefish_notes.md`） |
 | `sim_bridge` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/sim_bridge.py` | 仿真硬件桥接（SIL 跑 PID；HIL 仅转发） |
 | `hw_manager` | `uv_hm` | workspace_auv | `uv_hm/hw_manager.py` | 实车硬件管理（心跳 + 状态监控） |
 | `basic_motion` | `uv_control` | workspace_auv | `uv_control/basic_motion.py` | 运动控制 Action Server |
@@ -21,9 +45,26 @@
 
 注意 `uv_sim` 只存在于 `workspace_sim/src/`，不在 `workspace_auv/src/` 中。
 
+> ✅ 已与各包 `setup.py` 的 `console_scripts` 核对：Python 入口 **7 个**（上面除两个仿真器外的 7 行）。
+> `uv_bringup` 自身没有 entry point，只有 launch 文件；**谁启动谁**属 launch 层，见待补清单 #1。
+
+### 包级 launch 现状 ⏳（B2 的具体化）
+
+| launch 文件 | 引用的入口 | 入口是否存在 | 状态 |
+|---|---|---|---|
+| `uv_hm/launch/hm_launch.py` | `uv_hm/sim_bridge` + `hw_manager` | ❌ `sim_bridge` 不在 `uv_hm`（在 `uv_sim`/workspace_sim） | **失效**，等 T4 重排 |
+| `uv_control/launch/control_launch.py` | `minimal_control` + `basic_motion` | ❌ `minimal_control` 无此入口 | **失效**，等 T4 重排 |
+| `uv_nav/launch/nav_launch.py` | `navigator` | ✅ | 可用 |
+| `uv_perception/launch/perception_launch.py` | `vision` + `position` | ✅ | 可用（无图像发布参数，视频走 go2rtc） |
+| `uv_task/launch/task_launch.py` | `task_runner` | ✅ | 可用 |
+| `uv_bringup/launch/{sim,real,hil}_bringup.py`、`sim_core.py` | 多个 | ✅ | 可用，但 `sim_*`/`hil_*` 位于 `workspace_auv` 却引用仿真包（违反分层，B1），T4 拆分 |
+
+> 上面 `uv_bringup` 的 4 个文件就是待补清单 #1 说的"T4 会重排"的对象；
+> 本表只记录**现状**，迁移后的入口映射表在 T4 落地时补。
+
 ---
 
-## vision 节点参数
+## vision 节点参数 ✅
 
 ### 运行模式
 
@@ -66,7 +107,7 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `model_path` | str | `""` | YOLO 模型 .pt 文件路径。为空时自动查找默认路径 |
-| `save_dataset` | bool | `true` | 是否保存采集的图像 |
+| `save_dataset` | bool | **`false`** | 是否保存采集的图像（2026-09-16 更正：常量 `SAVE_DATASET` 已改为 `False`，避免误抓数据集） |
 | `dataset_dir` | str | `<仓库根>/datasets` | 数据集落盘目录，支持 `~` 展开。空字符串按默认值处理 |
 
 > **默认位置与解析方式**：默认写到**仓库根下的 `datasets/`**，该目录已加入 `.gitignore`。
@@ -128,7 +169,7 @@
 
 ---
 
-## position 节点参数
+## position 节点参数 ✅
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -140,12 +181,16 @@
 
 ---
 
-## sim_bridge 节点参数
+## sim_bridge 节点参数 ⏳
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `hil_mode` | bool | `false` | `true`: HIL 模式（相机直通 + 转发 MCU 推力）<br>`false`: SIL 全仿真（PID + ZIT6 状态机 + 状态发布） |
 | `pid_config_file` | string | `''` | PID 增益文件路径。留空 = 自动解析（源码树 `src/uv_sim/config/sim_pid.yaml` 优先，其次包内 `share/uv_sim/config/sim_pid.yaml`）；可指向 `/tmp` 下的调参副本，无需重编译 |
+
+> ⏳ **本节将在 T5 重写**：`sim_bridge` 会被拆成 `odom_sim` / `imu_sim` / `dvl_sim` /
+> `pressure_sim` / `nav_sim` / `mcu_sim` / `camera_relay` 七个节点，参数与话题归属随之变化。
+> 当前内容已与代码核对，可放心使用到 T5 落地为止。
 
 **PID 增益来源（2026-09-15 起）**：`workspace_sim/src/uv_sim/config/sim_pid.yaml` 是唯一事实源，9 个通道
 （`chassis.pid.pos.{x,y,z,yaw}` + yaw 串级内环 `chassis.pid.pos.yaw_rate` + `chassis.pid.vel.{x,y,z,yaw}`）。
@@ -155,7 +200,7 @@
 
 ---
 
-## hw_manager 节点参数
+## hw_manager 节点参数 ✅
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -167,7 +212,7 @@
 
 ---
 
-## task_runner 节点参数
+## task_runner 节点参数 ✅
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -178,13 +223,13 @@
 
 ---
 
-## 无参数节点
+## 无参数节点 ✅
 
 `basic_motion`、`navigator` 不声明任何 ROS 参数。
 
 ---
 
-## 启动文件 Launch Arguments
+## 启动文件 Launch Arguments ⏳
 
 ### sim_bringup.py
 
@@ -214,7 +259,7 @@ ros2 launch uv_bringup sim_bringup.py enable_ai:=true
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `enable_ai` | `true` | 启用 vision + position |
-| `enable_nav` | `true` | 启用 navigator |
+| `enable_nav` | **`false`** | 启用 navigator（2026-09-16 更正：文档此前写 `true`，源码 `default_value='false'`） |
 | `enable_task` | `false` | 启用 task_runner |
 
 **用法：**
@@ -222,7 +267,13 @@ ros2 launch uv_bringup sim_bringup.py enable_ai:=true
 ros2 launch uv_bringup real_bringup.py
 ```
 
-> 注意：`navigator` 订阅的 `/auv/state` 目前无任何发布者，实机默认打开 `enable_nav` 会得到一个拿不到位姿的导航节点。
+> ✅ 关于 navigator 的位姿源（2026-09-13 已迁移，此前文档描述过时）：
+> `navigator` 现在订阅 `/basic_motion/pose_info`（`uv_msgs/PoseInfo`），**不再**使用
+> `/auv/state`（该话题已无任何发布者，`AuvState` 消息也只剩定义）。`navigator` 在收到
+> 第一个位姿前会拒绝规划并打印提示。
+>
+> ⚠️ `real_bringup` 的 `enable_nav` 默认 `false`，因此实机默认**不**启动导航；
+> 需要导航时显式 `enable_nav:=true`，且必须同时有 `basic_motion` 在跑（位姿源）。
 
 ### hil_bringup.py
 
@@ -252,49 +303,95 @@ ros2 launch uv_perception perception_launch.py
 
 ---
 
-## 话题参考
+## 话题参考 ⏳
 
-### vision 发布话题
+### vision ✅
 
-| 话题 | 类型 | 说明 |
-|---|---|---|
-| `/perception/detection/front_left` | `DetectionArray` | 前视左检测结果 |
-| `/perception/detection/front_right` | `DetectionArray` | 前视右检测结果 |
-| `/perception/detection/down_left` | `DetectionArray` | 下视左检测结果 |
-| `/perception/detection/down_right` | `DetectionArray` | 下视右检测结果 |
+| 方向 | 话题 | 类型 | 说明 |
+|---|---|---|---|
+| 发布 | `/perception/detection/{front_left,front_right,down_left,down_right}` | `DetectionArray` | 4 通道检测结果 |
+| 发布 | `/perception/line/{front_left,down_left,…}` | `LineState` | **巡线状态（此前文档漏记）** |
+| 发布 | `/perception/aruco/ids` | `Int32MultiArray` | ArUco 标记 ID |
+| 订阅 | `/auv/{front,down}_cam/stitched` | `sensor_msgs/Image` | **仅 `sim_mode:=true`** 时订阅（实机走 V4L2，不订阅） |
 
-vision 不发布图像 DDS 话题；请通过 go2rtc 的 `front`、`down`、
-`front_annotated`、`down_annotated` 流查看视频。
+> ⚠️ 此前文档写「vision 不发布图像 DDS 话题」——对**实机**成立（视频走 go2rtc），
+> 但 `sim_mode` 下 vision 是**订阅**方，图像由 `sim_bridge` 发布（见下）。
+> go2rtc 流：`front` / `down`（原始拼接）、`front_annotated` / `down_annotated`（YOLO 带框）。
 
-go2rtc 视频流：
+### position ✅
 
-| 流名称 | 说明 |
-|---|---|
-| `front` / `down` | 前视/下视原始拼接视频 |
-| `front_annotated` / `down_annotated` | 前视/下视 YOLO 识别后带框拼接视频 |
+| 方向 | 话题 | 类型 | 说明 |
+|---|---|---|---|
+| 订阅 | `/perception/detection/{front_left,front_right,down_left,down_right}` | `DetectionArray` | 4 通道检测 |
+| 订阅 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 位姿源（含 roll/pitch） |
+| 发布 | `/perception/objects` | `ObjectPositionArray` | 3D 物体世界坐标（含 `instance_id`） |
 
-### position 发布话题
+### basic_motion ✅
 
-| 话题 | 类型 | 说明 |
-|---|---|---|
-| `/perception/objects` | `ObjectPositionArray` | 3D 物体世界坐标（含 `instance_id`） |
+| 方向 | 名称 | 类型 | 说明 |
+|---|---|---|---|
+| 动作 | `/basic_motion` | `uv_msgs/action/BasicMotion` | 唯一运动入口（START/SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL） |
+| 发布 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 机器人位姿 30 Hz（含 roll/pitch，**无 frame 字段**） |
+| 订阅 | `/zit6/state/{pos,vel}` | `Float32MultiArray[6]` | 里程计状态反馈 |
+| 订阅 | `/zit6/state/status` | `zit6_interfaces/ZitStatus` | MCU 状态 |
+| 发布 | `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 发往 MCU / sim_bridge 的设定值 |
 
-### basic_motion 接口
+### navigator ✅
 
-| 名称 | 类型 | 说明 |
-|---|---|---|
-| `/basic_motion` | `uv_msgs/action/BasicMotion` | 运动 Action Server |
-| `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 机器人位姿（30Hz，含 roll/pitch） |
-| `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 发往 MCU / sim_bridge 的运动设定值 |
+| 方向 | 名称 | 类型 | 说明 |
+|---|---|---|---|
+| 订阅 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | **位姿源**（2026-09-13 已从 `/auv/state` 迁移） |
+| 订阅 | `/perception/objects` | `ObjectPositionArray` | 障碍 / 目标 |
+| 发布 | `/nav/path` | `nav_msgs/Path` | 规划出的航点路径 |
+| 服务 | `/nav/navigate_to` | `uv_msgs/srv/RunTask` | 请求运行任务（已核对：`create_service(RunTask, '/nav/navigate_to', …)`） |
 
-### sim_bridge / MCU 状态话题
+### hw_manager ✅（实机 / HIL）
 
-| 话题 | 类型 | 说明 |
-|---|---|---|
-| `/zit6/state/pos` | `Float32MultiArray[6]` | `[x, y, z, roll_rad, pitch_rad, yaw_rad]` |
-| `/zit6/state/vel` | `Float32MultiArray[6]` | `[vx, vy, vz, vroll, vpitch, vyaw]`（机体系） |
-| `/zit6/state/thr` | `Float32MultiArray[6]` | `[Fx, Fy, Fz, Mx, My, Mz]` |
-| `/zit6/state/status` | `zit6_interfaces/ZitStatus` | MCU 状态汇总 |
-| `/zit6/state/zithbt` | `std_msgs/UInt32` | MCU 心跳序列号 |
+| 方向 | 话题 | 类型 | 说明 |
+|---|---|---|---|
+| 发布 | `/zit6/cmd/agxhbt` | `std_msgs/UInt32` | 心跳（`heartbeat_rate` Hz，携带 `arm_mode`） |
+| 订阅 | `/zit6/state/status` | `zit6_interfaces/ZitStatus` | MCU 状态汇总 |
+| 订阅 | `/zit6/state/zithbt` | `std_msgs/UInt32` | MCU 心跳序列号（看门狗） |
+| 订阅 | `/zit6/state/thr` | `Float32MultiArray[6]` | 推力饱和监控（4 元素来源会让监控静默失效） |
 
-> `/auv/state`（`uv_msgs/AuvState`）当前**没有任何发布者**，`navigator` 仍订阅它，待迁移。
+### task_runner ✅
+
+| 方向 | 名称 | 类型 | 说明 |
+|---|---|---|---|
+| 订阅 | `/perception/objects` | `ObjectPositionArray` | 目标位置 |
+| 订阅 | `/perception/detection/{cam}` | `DetectionArray` | 任务内联检测 |
+| 订阅 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 位姿 |
+| 订阅 | `/zit6/state/status` | `zit6_interfaces/ZitStatus` | MCU 状态 |
+| 发布 | `/task/status` | `uv_msgs/TaskStatus` | 任务进度（1 Hz） |
+| 发布 | `/zit6/cmd/{light,servo,pushrod}` | `UInt8` / `Float32` / `ZitPushrod` | 执行机构 |
+| 服务 | `/task/run`、`/task/stop`、`/task/exec` | `uv_msgs/srv/RunTask` / `std_srvs/Trigger` / `uv_msgs/srv/ExecTask` | 任务控制 |
+
+### sim_bridge / MCU 状态话题 ⏳
+
+**SIL 模式**（`hil_mode:=false`，PID 在 sim_bridge 内）：
+
+| 方向 | 话题 | 类型 | 说明 |
+|---|---|---|---|
+| 订阅 | `/auv/{odometry,imu,dvl,pressure}` | Stonefish 传感器消息 | 仿真传感器输入 |
+| 订阅 | `/zit6/cmd/{setpoint,servo,light,agxhbt,ins}` | 见各消息 | 来自控制栈 / 心跳 |
+| 发布 | `/zit6/state/{pos,vel,thr,status,zithbt}` | `Float32MultiArray[6]` / `ZitStatus` / `UInt32` | MCU 状态仿真 |
+| 发布 | `/auv/thrusters_cmd` | `Float64MultiArray` | 6 推进器归一化设定点 [−1, 1] |
+| 发布 | `/auv/{front,down}_cam/{left,right,stitched}` | `sensor_msgs/Image` | 拼接后的双目图像（供 vision `sim_mode`） |
+| 服务 | `/zit6/{get_params,update_params}` | `GetParams` / `UpdateParams` | PID 参数读写（只改运行时，**不写回文件**） |
+
+**HIL 模式**（`hil_mode:=true`，PID 交给实机 MCU）：
+
+| 方向 | 话题 | 类型 | 说明 |
+|---|---|---|---|
+| 发布 | `/zit6/sim/nav` | `Float32MultiArray` | 仿真位姿 → MCU（`vel` 为**机体系**速度） |
+| 订阅 | `/zit6/state/thr` | `Float32MultiArray[6]` | 转发 MCU 推力到 `/auv/thrusters_cmd` |
+| 发布 | 相机图像（同上） | `sensor_msgs/Image` | |
+
+> **已确认的缺口（登记在案，T3b 收敛进 `docs/interfaces/topic_contract.md`）**
+>
+> | 缺口 | 现状 |
+> |---|---|
+> | `/perception/annotated/{cam}` | **有订阅者（GUI `visualization/auv_visualizer.py`）但全局无发布者**（B5） |
+> | `/auv/state`（`uv_msgs/AuvState`） | **无发布者、也无订阅者**（navigator 已迁到 `PoseInfo`）；消息本身只剩定义 |
+> | `/auv/dvl_altitude` | 由 Stonefish DVL 传感器发布，**无人订阅** |
+> | `/sim/{front,down}_cam/*` | 仿真相机原始话题，由 `sim_bridge` 订阅后合成 `/auv/*_cam/*` |

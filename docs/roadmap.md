@@ -189,7 +189,23 @@
 
 ---
 
-### T3 ☐ 文档体系（接口即契约）
+### T3 ◐ 文档体系（接口即契约）
+
+> **拆分（2026-09-16）**：T3 的接口契约里，一部分不随 T4/T5 变化、现在就能冻结并机检，
+> 另一部分必须等 launch 与 `sim_bridge` 结构定下来。故拆成：
+>
+> - **T3a（进行中）**：`node_parameters.md` 逐条核对（✅ 已完成）、`docs/README.md` 索引、
+>   `tools/check_docs_contract.py`（**源码级**对拍：`declare_parameter` / `console_scripts` /
+>   `package.xml` 依赖，无需跑栈，绕开 B13 的 GPU 限制）、`docs/architecture/` 三篇、
+>   话题表去重
+> - **T3b（待 T4/T5 后）**：launch 入口表、话题频率/QoS 列、实时快照入库、
+>   `node_parameters.md` 按新结构改写
+>
+> **T3a 已完成**：`docs/node_parameters.md` —— 逐条对照源码核出 3 处错误
+> （`save_dataset` 默认值、`real_bringup` 的 `enable_nav`、navigator 位姿源描述过时）、
+> 补记遗漏的 `/perception/line/*`，重写话题参考为「节点 → 话题」（含 SIL/HIL 两套），
+> 并新增「完整性状态 + 待补清单」与「包级 launch 现状（B2 具体化）」两节。
+> 尚未做：README 索引与 `check_docs_contract.py`。
 
 **目标**：在**仓库根 `docs/`**（既有权威文档所在处）建立唯一文档根，并让「文档 ↔ 代码」的漂移可被自动发现。
 
