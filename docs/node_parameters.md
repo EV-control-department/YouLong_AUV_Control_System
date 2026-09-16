@@ -291,10 +291,15 @@ ros2 launch uv_hm hm_launch.py enable_agent:=false     # 只跑 hw_manager
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `sim_mode` | `false` | `true`: 订阅 Stonefish 相机话题 `/auv/*_cam/stitched`；`false`: V4L2 直采（下发给 vision 节点） |
+| `model_path` | 空 | YOLO `.pt` 权重；空 = 依次找 `~/YouLong_AUV_Control_System/workspace_auv/src/datas/` 与仓库内两处。**找不到时只打一条 warn、检测静默为空**（GPU 验收前务必确认） |
+| `enable_gortc` | `true` | 启动 go2rtc 视频转发；无桌面/无 go2rtc 的验收跑建议 `false` |
 
 **用法：**
 ```bash
 ros2 launch uv_perception perception_launch.py
+
+# 仿真 GPU 验收（单入口；enable_ai 默认 true）：
+ros2 launch uv_sim_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
 ```
 
 ### bridge_launch.py（包 `uv_sim`，仿真侧）

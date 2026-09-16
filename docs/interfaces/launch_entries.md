@@ -20,7 +20,7 @@
 | `uv_sim_bringup/launch/hil_bringup.py` | workspace_sim | HIL ⏸ | 同 SIL，但 `sim_bridge` 以 `hil_mode:=true` 运行，并 include `uv_hm` | 同 SIL + `enable_agent`、`serial_dev`、`serial_baud` |
 | `uv_hm/launch/hm_launch.py` | workspace_auv | REAL / HIL | `hw_manager` + micro-ROS agent | `enable_agent`、`agent_bin`、`serial_dev`、`serial_baud` |
 | `uv_control/launch/control_launch.py` | workspace_auv | 全部 | `basic_motion` | — |
-| `uv_perception/launch/perception_launch.py` | workspace_auv | 全部 | `vision` + `position` | `sim_mode` |
+| `uv_perception/launch/perception_launch.py` | workspace_auv | 全部 | `vision` + `position` | `sim_mode`、`model_path`、`enable_gortc` |
 | `uv_nav/launch/nav_launch.py` | workspace_auv | 全部 | `navigator` | — |
 | `uv_task/launch/task_launch.py` | workspace_auv | 全部 | `task_runner` | — |
 | `uv_sim/launch/bridge_launch.py` | workspace_sim | SIL / HIL | `sim_bridge` | `hil_mode`、`pid_config_file` |
