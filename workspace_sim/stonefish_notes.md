@@ -373,6 +373,11 @@ GUI 里按显示模式切换会看到凸包/物理网格，容易误判成「模
   1. 控制台版**不支持相机传感器**：任何带 `<sensor type="camera">` 的场景都会
      `Cameras not supported in console mode!` 然后解析失败。用
      `tools/strip_vision_sensors.py` 生成去相机的临时场景副本即可跑物理
+     **场景是两层的**：`xunyun_fixed.scn` 是**载具**（艇体/推进器/传感器，相机就在这里），
+     `canyon_vision_dvl.scn` 之类的**世界**场景通过 `<include file="xunyun_fixed.scn">` 引用它。
+     所以改相机集合要生成**两个**文件：载具变体 + 引用该变体的世界变体（`--retarget`）。
+     命名约定 `<scene>_<variant>.scn`（`*_headless` / `*_down_only` / `*_one_cam`），已在
+     `.gitignore` 里；**原场景永不修改**。
      （DVL/IMU/odometry/pressure 都不需要渲染）。
      该工具 2026-09-16 起还有 `--keep-camera SUBSTRING`（例：`--keep-camera down_cam`
      = 只留下视一对、丢掉前视一对），**用来判别 GPU 出图慢的瓶颈**：若保留的那对速率近似翻倍，
