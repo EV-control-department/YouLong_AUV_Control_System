@@ -95,6 +95,7 @@
 | B16 | **AQUA-SLAM 参考检出的外参与波束角是 blue_gx5 的（N2）** | `AQUA-SLAM/data/underwater_orbslam3_blue_gx5_{short,long}.yaml`：`alpha=[1.1780]×4`(=67.5°)、`beta=[0.7854]×4`(=45°，且是标量不是逐波束)、`Tbc=(0.4,0,0.1)`；`dvl_model/dvl.cpp:508` 另硬编码 `ALPHA=67.5°`。与 XUNYUN（α=60°、β=45/135/225/315、相机 `(0.23,−0.05,0.076)`）不符。**后果**：水平速度 +30.7%（`cos67.5/cos60=1.3066`）。**处理**：不改参考检出，改在 `extrinsics_reference.md` §5 列成 T6 逐项必改清单 |
 | B17 | **`alpha` 一词两义（N3）** | `check_dvl_frame.py` 曾用 `alpha` 表示艇的**航向**，而 AQUA-SLAM 与 `docs/frames/` 用 α 表示**波束离水平仰角**——这正是 B16 那类错误的高危来源。**已修**：统一 ψ=航向、θ=离竖直、α=离水平；脚本变量与日志改名，行为不变 |
 | B18 | **TF 从未开启，而文档曾断言它存在** | `ROS2SimulationManager.cpp` 的 TF 广播套着 `if (publishBaseLinkTransform_)`，该标志由 `ROS2ScenarioParser.cpp` 从 `<robot>` 子元素 `<ros_base_link_transform publish=...>` 读取，默认 `false`（`ROS2SimulationManager.h`）；本仓库 15 个 `.scn` **一个都没写** → 仿真**完全没有 TF**（`/tf` 实测为空，`dump_tf_tree.py` exit 1）。**T2 文档初稿误称"唯一 TF `world_ned → Vehicle/base_link`"**，并把 `ROS2SimulationManager.cpp:395` 当证据（忽略了 `if` 守卫）。**已修**：`frame_convention.md` §3 改写为"当前无 TF"+开启方式+守卫坑；`extrinsics_reference.md` 删"并广播 TF"；`dump_tf_tree.py` 改为读场景 `<robot name>` 且区分"没开 TF"与"开了没数据"；新增 2 例测试钉住（无场景声明 TF、工具从场景读名字）。**附带发现**：Canyon 场景把艇命名为 `XUNYUN`（非 `Vehicle`），工具原先硬编码 `Vehicle`，一开 TF 即误报 |
+| B19 | **`/zit6/state/vel` 有两个写者，且两者物理含义不同（T1 验收卡在这一条上）** | `sim_bridge._odom_cb` 写的是**机体系原点处**的 odometry twist（30 Hz），`_dvl_cb` 写的是**DVL 位置处**的速度（20 Hz，= 原点速度 + `ω×r_dvl`，`r_dvl=(-0.375,0,0.1)`）——两者在**有角速度时相差 `0.375·\|ω_z\|`**。实测：原地 90° 回转时 `dvl.y − odom.y = +0.037` 而 `ω_z=−0.099`，`−0.375·ω_z = +0.037`（三位小数吻合）；按 `MAX_YAW_RATE=0.35` 折算最大可差 **0.13 m/s**，正是 `check_dvl_frame.py` 里 `stv err` 报的 0.033~0.150。**归属 T5**：`dvl_sim` 给「DVL 位置处速度」（含杆臂），`nav_sim` 给「原点处速度」（单一定义），两个话题分开；在此之前 `error_state` 会继续 FAIL，**不要去放宽阈值**（工具里已写明）。同轮还修掉该脚本的 `along ratio` 度量 bug：它把 DVL 速度投影到**未做杆臂修正**的 `linear` 上，于是转得越快的腿比值越偏（psi=90° 实测 1.117），改为投影到 `expected` |
 
 ---
 
@@ -359,6 +360,14 @@ docs/
 **`/zit6/state/*` 单一发布者规则**（写入 `sim_real_boundary.md`）
 - SIL：`nav_sim` 拥有 `pos/vel`；`mcu_sim` 拥有 `status/thr/zithbt`
 - HIL/REAL：物理 MCU 拥有全部 `/zit6/state/*`；`nav_sim` 以 `publish_state:=false` 运行，仅提供 `/zit6/sim/nav`
+
+**B19 是本任务的硬需求之一**（2026-09-16 定性）：`/zit6/state/vel` 现在被 `_odom_cb`（原点 twist）与
+`_dvl_cb`（DVL 处速度，含 `ω×r_dvl` 杆臂）**同时写**，两者在有角速度时相差 `0.375·|ω_z|`（最大 0.13 m/s），
+这就是 T1 的 `check_dvl_frame.py` 里 `stv err` 一直 FAIL 的原因。拆分时必须：
+- `dvl_sim` 发布**DVL 位置处**的速度（含杆臂）与其波束/有效性；
+- `nav_sim` 发布**原点处**的 `pos/vel`（单一写者，不再被 DVL 回调覆盖）；
+- 两者语义写进 `topic_contract.md`，并让 `check_dvl_frame.py` 分别对拍（`error_dvl` 对 DVL 话题、
+  `error_state` 对原点话题，各自用各自参考量）。
 
 **共享模块**：`thrust_mixer.py`、`pid_controller.py`（已有）、`coordinate_convention.py`（新增；表达「当前场景已 NED 对齐 ⇒ 恒等映射」，**不照搬 robotcup 的巡航场景旋转**）
 

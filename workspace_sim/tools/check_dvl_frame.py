@@ -40,6 +40,17 @@ The DVL lever arm is read from
 ``tools/derive_extrinsics.py`` from the scene) so the scene and this check
 cannot drift apart; ``--extrinsics`` overrides the path.
 
+Known limitation (2026-09-16, registered as B19 in ``docs/roadmap.md``)
+---------------------------------------------------------------------
+``error_state`` compares against ``/zit6/state/vel``, which **has two writers with
+different physical meanings**: ``sim_bridge._odom_cb`` stores the odometry twist
+(body frame *at the origin*) and ``_dvl_cb`` stores the DVL velocity (body frame
+*at the DVL*, i.e. origin + ``omega x r``).  While the vehicle rotates the two
+differ by ``0.375 * |omega_z|`` (up to ~0.13 m/s), so ``error_state`` legitimately
+fails even though the DVL itself is correct -- ``error_dvl`` stays at 2-3 mm/s.
+Do not relax this threshold: it is measuring a real defect that T5 fixes by giving
+the topic a single definition (``nav_sim`` / ``dvl_sim``).
+
 Exit codes: 0 pass, 1 assertion failure, 2 environment not ready.
 """
 
@@ -334,10 +345,17 @@ def _evaluate_block(
             max(abs(state_linear[i] - expected[i]) for i in range(3))
         )
 
-        horizontal = _vector_norm((linear[0], linear[1], 0.0))
+        # The along-track ratio must project the DVL velocity onto the DVL's own
+        # expected direction, i.e. onto ``expected`` (origin twist + omega x r),
+        # NOT onto the raw odometry twist.  Until 2026-09-16 it used ``linear``,
+        # which mixes frames: while the vehicle rotates, ``dvl.y`` carries
+        # ``-0.375 * omega_z`` (0.375 m lever arm) that the origin twist does not,
+        # so a rotating leg reported a ratio far from 1 (measured 1.117 at
+        # psi=90 deg with omega_z ~ 0.15 rad/s) even though the DVL was correct.
+        horizontal = _vector_norm((expected[0], expected[1], 0.0))
         if horizontal > 1e-6:
             along = (
-                velocity[0] * linear[0] + velocity[1] * linear[1]
+                velocity[0] * expected[0] + velocity[1] * expected[1]
             ) / horizontal
             ratios.append(along / horizontal)
 
