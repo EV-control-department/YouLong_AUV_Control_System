@@ -10,6 +10,7 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', ['config/sim_pid.yaml']),
+        ('share/' + package_name + '/launch', ['launch/bridge_launch.py']),
         (
             'share/' + package_name + '/config/extrinsics',
             ['config/extrinsics/xunyun.yaml'],

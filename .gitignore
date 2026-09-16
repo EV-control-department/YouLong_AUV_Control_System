@@ -45,6 +45,10 @@ venv/
 # Logs
 *.log
 
+# Local ROS home, used when $HOME is not writable (sandboxed/CI runs):
+#   export ROS_HOME=$PWD/.ros_tmp ROS_LOG_DIR=$PWD/.ros_tmp/log
+/.ros_tmp/
+
 # Dataset capture output (vision node; see docs/node_parameters.md).
 # Default lives outside the repo at ~/.ros/auv_dataset — these entries cover
 # the -p dataset_dir:=<repo>/datasets override so multi-GB captures never

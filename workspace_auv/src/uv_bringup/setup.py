@@ -9,11 +9,11 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        # Explicit list -- keep in sync when adding an entry point.  The
+        # simulation presets (sim_bringup / hil_bringup) moved to workspace_sim's
+        # uv_sim_bringup package so this file stays free of simulation deps.
         ('share/' + package_name + '/launch', [
-            'launch/sim_bringup.py',
             'launch/real_bringup.py',
-            'launch/sim_core.py',
-            'launch/hil_bringup.py',
         ]),
     ],
     install_requires=['setuptools'],
