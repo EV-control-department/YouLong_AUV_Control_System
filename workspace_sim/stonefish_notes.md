@@ -378,6 +378,7 @@ GUI 里按显示模式切换会看到凸包/物理网格，容易误判成「模
      = 只留下视一对、丢掉前视一对），**用来判别 GPU 出图慢的瓶颈**：若保留的那对速率近似翻倍，
      说明成本 ∝ 相机数 × 分辨率（每帧一次 FBO 渲染 + `glMapBuffer` 阻塞回读），
      而**与 `rendering_quality` 关系不大**（用户实测降画质帮助有限）。
+     ⚠️ 量图像频率时注意：Stonefish 的相机话题是 `create_publisher<Image>(topic, 10)`（**RELIABLE, depth 10**），单帧 6 MB 量级；用 `ros2 topic hz` 或 best-effort/depth1 的 Python 订阅者会**严重低估**（实测 1.93 Hz，而由同一批回调驱动的 `/auv/down_cam/stitched` 却是 19 Hz ⇒ 单眼实际约 9.5 Hz）。交叉验证口径：`/auv/{front,down}_cam/{left,right}`（sim_bridge 从回调里转发）、`ros2 topic bw` ÷ 帧大小、写者侧计数。
   2. **`simulation_rate` 必须给正数**（默认 `100.0` 即可）。⚠️ **2026-09-16 更正**：本节此前写
      「传 `0` 走实时模式才会发布 ROS 话题」，**实测相反**——`rate=0` 时仿真线程不再推进物理，
      **一条 ROS 消息都不发**。根因：`SimulationManager` 用
