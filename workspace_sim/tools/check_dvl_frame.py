@@ -374,6 +374,96 @@ def _evaluate_block(
     }
 
 
+def _check_dvl_frame(node, args, lever_arm, extrinsics_path) -> int:
+    """Run the static phase and the heading sweep; return the process exit code."""
+    if not node.wait_for_topics(20.0):
+        node.get_logger().error(
+            "did not see /auv/odometry, /auv/dvl and /zit6/state/vel; "
+            "is the SIL stack running and sourced?"
+        )
+        return 2
+    if not node.action_client.wait_for_server(timeout_sec=15.0):
+        node.get_logger().error("basic_motion action server not available")
+        return 2
+
+    node.get_logger().info(
+        f"static phase: watching {args.static_seconds:.0f} s (vehicle quiet); "
+        f"DVL lever arm {tuple(round(v, 6) for v in lever_arm)} m "
+        f"(from {extrinsics_path.name})"
+    )
+    static_start = node.get_clock().now().nanoseconds * 1e-9
+    time.sleep(args.static_seconds)
+    dvl, _, _ = node._snapshot(static_start)
+    valid = [
+        _vector_norm(sample[1])
+        for sample in dvl
+        if sample[2] >= 0.0
+    ]
+    quiet_speed = _median(valid) if valid else float("nan")
+    static_ok = bool(valid) and quiet_speed < STATIC_SPEED_LIMIT
+    node.get_logger().info(
+        f"static phase: {len(valid)} valid DVL samples, "
+        f"median |v| = {quiet_speed:.4f} m/s -> "
+        f"{'OK' if static_ok else 'FAIL'}"
+    )
+
+    if not node.send_motion(BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], 5.0):
+        node.get_logger().warning(
+            "START returned failure (already set?); continuing"
+        )
+    time.sleep(1.0)
+
+    results = []
+    for heading in HEADINGS_DEG:
+        radians = math.radians(heading)
+        node.get_logger().info(f"leg psi={heading:.1f} deg (yaw held at 0)")
+        out_ok = node.send_motion(
+            BasicMotion.Goal.BMOVE,
+            [args.leg_length, 0.0, 0.0, math.degrees(radians)],
+            args.timeout,
+        )
+        mark = node.get_clock().now().nanoseconds * 1e-9
+        time.sleep(0.5)
+        results.append(_evaluate_block(node, mark, f"psi={heading:.1f}deg", lever_arm))
+        if not out_ok:
+            node.get_logger().warning(f"psi={heading:.1f}: forward leg did not complete")
+        node.send_motion(
+            BasicMotion.Goal.BMOVE,
+            [-args.leg_length, 0.0, 0.0, math.degrees(radians)],
+            args.timeout,
+        )
+        time.sleep(0.5)
+
+    print()
+    header = (
+        f"{'block':>16} | {'samples':>7} | {'dvl err':>8} | "
+        f"{'stv err':>8} | {'along ratio':>11} | result"
+    )
+    print(header)
+    print("-" * len(header))
+    all_ok = static_ok
+    for passed, info in results:
+        all_ok = all_ok and passed
+        print(
+            f"{info['label']:>16} | {info['samples']:>7} | "
+            f"{info['error_dvl']:>8.4f} | {info['error_state']:>8.4f} | "
+            f"{info['along_ratio']:>11.3f} | "
+            f"{'PASS' if passed else 'FAIL'}"
+            + (f"  ({info['note']})" if info["note"] else "")
+        )
+    print()
+    print(
+        f"static: median |v| = {quiet_speed:.4f} m/s "
+        f"(limit {STATIC_SPEED_LIMIT}) -> {'PASS' if static_ok else 'FAIL'}"
+    )
+    print(f"overall: {'PASS' if all_ok else 'FAIL'}")
+    print(
+        "note: 'along ratio' should be ~1.0; the pre-fix scene gave "
+        "0.707 at psi=0 and ~0 at psi=22.5."
+    )
+    return 0 if all_ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -405,95 +495,22 @@ def main(argv: list[str] | None = None) -> int:
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    exit_code = 1
     try:
-        if not node.wait_for_topics(20.0):
-            node.get_logger().error(
-                "did not see /auv/odometry, /auv/dvl and /zit6/state/vel; "
-                "is the SIL stack running and sourced?"
-            )
-            return 2
-        if not node.action_client.wait_for_server(timeout_sec=15.0):
-            node.get_logger().error("basic_motion action server not available")
-            return 2
-
-        node.get_logger().info(
-            f"static phase: watching {args.static_seconds:.0f} s (vehicle quiet); "
-            f"DVL lever arm {tuple(round(v, 6) for v in lever_arm)} m "
-            f"(from {extrinsics_path.name})"
-        )
-        static_start = node.get_clock().now().nanoseconds * 1e-9
-        time.sleep(args.static_seconds)
-        dvl, _, _ = node._snapshot(static_start)
-        valid = [
-            _vector_norm(sample[1])
-            for sample in dvl
-            if sample[2] >= 0.0
-        ]
-        quiet_speed = _median(valid) if valid else float("nan")
-        static_ok = bool(valid) and quiet_speed < STATIC_SPEED_LIMIT
-        node.get_logger().info(
-            f"static phase: {len(valid)} valid DVL samples, "
-            f"median |v| = {quiet_speed:.4f} m/s -> "
-            f"{'OK' if static_ok else 'FAIL'}"
-        )
-
-        if not node.send_motion(BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], 5.0):
-            node.get_logger().warning(
-                "START returned failure (already set?); continuing"
-            )
-        time.sleep(1.0)
-
-        results = []
-        for heading in HEADINGS_DEG:
-            radians = math.radians(heading)
-            out_x = args.leg_length * math.cos(radians)
-            out_y = args.leg_length * math.sin(radians)
-            node.get_logger().info(f"leg psi={heading:.1f} deg (yaw held at 0)")
-            mark = node.get_clock().now().nanoseconds * 1e-9
-            node.send_motion(
-                BasicMotion.Goal.SET, [out_x, out_y, 0.0, 0.0], args.timeout
-            )
-            node.send_motion(
-                BasicMotion.Goal.SET, [0.0, 0.0, 0.0, 0.0], args.timeout
-            )
-            time.sleep(0.5)
-            results.append(
-                _evaluate_block(node, mark, f"psi={heading:.1f}deg", lever_arm)
-            )
-
-        print()
-        header = (
-            f"{'block':>16} | {'samples':>7} | {'dvl err':>8} | "
-            f"{'stv err':>8} | {'along ratio':>11} | result"
-        )
-        print(header)
-        print("-" * len(header))
-        all_ok = static_ok
-        for passed, info in results:
-            all_ok = all_ok and passed
-            print(
-                f"{info['label']:>16} | {info['samples']:>7} | "
-                f"{info['error_dvl']:>8.4f} | {info['error_state']:>8.4f} | "
-                f"{info['along_ratio']:>11.3f} | "
-                f"{'PASS' if passed else 'FAIL'}"
-                + (f"  ({info['note']})" if info["note"] else "")
-            )
-        print()
-        print(
-            f"static: median |v| = {quiet_speed:.4f} m/s "
-            f"(limit {STATIC_SPEED_LIMIT}) -> {'PASS' if static_ok else 'FAIL'}"
-        )
-        print(f"overall: {'PASS' if all_ok else 'FAIL'}")
-        print(
-            "note: 'along ratio' should be ~1.0; the pre-fix scene gave "
-            "0.707 at psi=0 and ~0 at psi=22.5."
-        )
-        exit_code = 0 if all_ok else 1
+        exit_code = _check_dvl_frame(node, args, lever_arm, extrinsics_path)
     except KeyboardInterrupt:
         exit_code = 2
     finally:
-        executor.shutdown()
+        # Teardown order matters: the executor is spinning in another thread, and
+        # calling shutdown()/destroy_node() while it runs aborts the process
+        # ("terminate called without an active exception", exit 134) -- which is
+        # what the "no topics" path used to do through an early ``return``.
+        try:
+            executor.remove_node(node)
+        except Exception:  # executor may already be stopped
+            pass
+        executor.shutdown(timeout_sec=1.0)
+        if spin_thread.is_alive():
+            spin_thread.join(timeout=5.0)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
