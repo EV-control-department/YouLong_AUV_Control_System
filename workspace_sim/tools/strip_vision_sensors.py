@@ -31,25 +31,42 @@ from pathlib import Path
 SENSOR_OPEN = re.compile(r"<sensor\b")
 SENSOR_CLOSE = re.compile(r"</sensor>")
 CAMERA_TYPE = re.compile(r'type\s*=\s*"camera"')
+SENSOR_NAME = re.compile(r'name\s*=\s*"([^"]+)"')
 
 
-def strip_camera_sensors(text: str) -> tuple[str, int]:
-    """Remove every ``<sensor ... type="camera" ...>`` block verbatim."""
-    kept: list[str] = []
+def strip_camera_sensors(
+    text: str, keep: str = ""
+) -> tuple[str, int, int]:
+    """Remove ``<sensor ... type="camera" ...>`` blocks verbatim.
+
+    ``keep`` is a substring of the camera sensor name to *retain* (e.g.
+    ``"down_cam"``): the console simulator rejects any camera, but the GPU one is
+    limited by how many cameras it must render per frame, so being able to drop
+    one pair is the way to tell "rendering is the bottleneck" from "something
+    else is" (2026-09-16).  Returns ``(text, removed, kept)``.
+    """
+    out: list[str] = []
     skipping = False
-    removed = 0
+    removed = kept = 0
     for line in text.splitlines(keepends=True):
         if skipping:
             if SENSOR_CLOSE.search(line):
                 skipping = False
             continue
         if SENSOR_OPEN.search(line) and CAMERA_TYPE.search(line):
+            name = SENSOR_NAME.search(line)
+            if keep and name and keep in name.group(1):
+                kept += 1
+                out.append(line)
+                if not SENSOR_CLOSE.search(line):
+                    skipping = True
+                continue
             removed += 1
             if not SENSOR_CLOSE.search(line):
                 skipping = True
             continue
-        kept.append(line)
-    return "".join(kept), removed
+        out.append(line)
+    return "".join(out), removed, kept
 
 
 def retarget_includes(text: str, replacements: dict[str, str]) -> str:
@@ -69,6 +86,15 @@ def main(argv: list[str] | None = None) -> int:
         metavar="OLD=NEW",
         help="rewrite <include file=\"OLD\"> to NEW (repeatable)",
     )
+    parser.add_argument(
+        "--keep-camera",
+        default="",
+        metavar="SUBSTRING",
+        help=(
+            "keep camera sensors whose name contains SUBSTRING (e.g. down_cam) "
+            "and drop the others; default drops all of them"
+        ),
+    )
     args = parser.parse_args(argv)
 
     replacements: dict[str, str] = {}
@@ -79,15 +105,16 @@ def main(argv: list[str] | None = None) -> int:
         replacements[old] = new
 
     text = args.source.read_text(encoding="utf-8")
-    stripped, removed = strip_camera_sensors(text)
+    stripped, removed, kept = strip_camera_sensors(text, args.keep_camera)
     stripped = retarget_includes(stripped, replacements)
     args.destination.write_text(stripped, encoding="utf-8")
 
     print(
         f"{args.source} -> {args.destination}: removed {removed} camera sensor(s)"
+        + (f", kept {kept}" if kept else "")
         + (f", retargeted {len(replacements)} include(s)" if replacements else "")
     )
-    if removed == 0 and not replacements:
+    if removed == 0 and not replacements and not kept:
         print("warning: nothing was stripped or retargeted", file=sys.stderr)
     return 0
 

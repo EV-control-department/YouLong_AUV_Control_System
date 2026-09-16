@@ -374,6 +374,10 @@ GUI 里按显示模式切换会看到凸包/物理网格，容易误判成「模
      `Cameras not supported in console mode!` 然后解析失败。用
      `tools/strip_vision_sensors.py` 生成去相机的临时场景副本即可跑物理
      （DVL/IMU/odometry/pressure 都不需要渲染）。
+     该工具 2026-09-16 起还有 `--keep-camera SUBSTRING`（例：`--keep-camera down_cam`
+     = 只留下视一对、丢掉前视一对），**用来判别 GPU 出图慢的瓶颈**：若保留的那对速率近似翻倍，
+     说明成本 ∝ 相机数 × 分辨率（每帧一次 FBO 渲染 + `glMapBuffer` 阻塞回读），
+     而**与 `rendering_quality` 关系不大**（用户实测降画质帮助有限）。
   2. **`simulation_rate` 必须给正数**（默认 `100.0` 即可）。⚠️ **2026-09-16 更正**：本节此前写
      「传 `0` 走实时模式才会发布 ROS 话题」，**实测相反**——`rate=0` 时仿真线程不再推进物理，
      **一条 ROS 消息都不发**。根因：`SimulationManager` 用
