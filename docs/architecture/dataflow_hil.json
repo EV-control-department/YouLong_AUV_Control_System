@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "HIL 信息路线（硬件在环 · 当前暂停验收）",
+    "output": "docs/architecture/dataflow_hil.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1180,
+      760
+    ],
+    "views": [
+      {
+        "id": "inject",
+        "label": "导航注入",
+        "focus": [
+          "stonefish",
+          "relays",
+          "nav_sim",
+          "mcu"
+        ],
+        "note": "仿真世界 → nav_sim → /zit6/sim/nav → 固件的 SITL 队列"
+      },
+      {
+        "id": "feedback",
+        "label": "推力回灌",
+        "focus": [
+          "mcu",
+          "mcu_sim",
+          "stonefish"
+        ],
+        "note": "MCU 算出的 4-DOF 力 → mcu_sim 归一化混控 → 回灌 Stonefish"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "Stonefish"
+    },
+    {
+      "label": "转发层 uv_sim"
+    },
+    {
+      "label": "导航注入"
+    },
+    {
+      "label": "真 MCU ⏸"
+    },
+    {
+      "label": "回灌 / 上位机"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "stonefish",
+      "type": "external",
+      "label": "Stonefish",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "relays",
+      "type": "backend",
+      "label": "转发层 ×2",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "nav_sim",
+      "type": "backend",
+      "label": "nav_sim",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "mcu",
+      "type": "backend",
+      "label": "STM32 ⏸",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "mcu_sim",
+      "type": "backend",
+      "label": "mcu_sim 混控",
+      "stage": 4,
+      "row": 0
+    },
+    {
+      "id": "stack",
+      "type": "backend",
+      "label": "上位机栈",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "stonefish",
+      "to": "relays",
+      "label": "/auv/*",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "relays",
+      "to": "nav_sim",
+      "label": "/sim/sensor",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "nav_sim",
+      "to": "mcu",
+      "label": "sim/nav",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "mcu",
+      "to": "mcu_sim",
+      "label": "/zit6/thr",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "mcu_sim",
+      "to": "stonefish",
+      "label": "推力回灌",
+      "variant": "emphasis",
+      "route": "bottom-channel",
+      "channelY": 700
+    },
+    {
+      "from": "mcu",
+      "to": "stack",
+      "label": "state/*",
+      "route": "vertical-channel"
+    },
+    {
+      "from": "stack",
+      "to": "mcu",
+      "label": "cmd/*",
+      "route": "top-channel"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两个角色换了",
+      "items": [
+        "真 STM32 算 PID / 混控 / INS / ARM（⏸ 暂不验收）",
+        "mcu_sim 只做归一化混控与推力回灌",
+        "上位机栈代码与 SIL 完全一样"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "导航注入契约",
+      "items": [
+        "/zit6/sim/nav = Float32MultiArray（≥12）",
+        "[x,y,z,roll,pitch,yaw, vx,vy,vz,p,q,r] = pos_world + vel_body",
+        "固件 onSimNav → sitl_nav_queue（与AGX.md §5）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "谁拥有 state 话题（I2）",
+      "items": [
+        "真 MCU 发布 /zit6/state/{pos,vel,thr,status,zithbt}",
+        "nav_sim 在 HIL 不发布 state（publish_state:=false）",
+        "nav_sim 只发 sim/nav（publish_sim_nav:=true）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "与 SIL 相同的部分",
+      "items": [
+        "转发层：odom/imu → /sim/sensor/*",
+        "camera_relay → /auv/*_cam/* → vision/position",
+        "/basic_motion/pose_info 仍是上层唯一位姿源"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "未验证",
+      "items": [
+        "HIL 全链路没有真硬件运行证据",
+        "微控制器模式是否消费注入队列取决于固件状态",
+        "本页只反映代码与固件文档，不代表已验证"
+      ]
+    }
+  ]
+}

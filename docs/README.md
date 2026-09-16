@@ -41,6 +41,8 @@
 | `architecture/node_dependency.md` | 包依赖图、**依赖缺口登记**、启动顺序与就绪判据、失效影响面 |
 | `hil_architecture.md` | ⏸ HIL 设计与 micro-ROS 链路（暂不参与验收） |
 | `auv-architecture.html` / `.json` | archify 生成的架构图（生成物，不手改） |
+| `architecture/dataflow_sil.html` / `.json` | **SIL 信息路线图**（交互式；`.json` 是可编辑的源，改完要重新 deliver） |
+| `architecture/dataflow_hil.html` / `.json` | **HIL 信息路线图**（⏸ 未验证，仅供理解角色分工） |
 
 ### 计划与日志
 

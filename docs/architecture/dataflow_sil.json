@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "SIL 信息路线（软件在环）",
+    "output": "docs/architecture/dataflow_sil.html",
+    "quality_profile": "showcase",
+    "viewBox": [1180, 760],
+    "views": [
+      { "id": "control-loop", "label": "控制闭环", "focus": ["basic_motion", "mcu_sim", "stonefish", "relays"], "note": "目标 → PID/混控 → 推力回灌 → 物理 → 真值再上来" },
+      { "id": "telemetry", "label": "遥测与位姿", "focus": ["relays", "nav_sim", "basic_motion", "upper"], "note": "nav_sim 组装 MCU 遥测契约，basic_motion 再发 PoseInfo" }
+    ]
+  },
+  "stages": [
+    { "label": "Stonefish" },
+    { "label": "转发层 uv_sim" },
+    { "label": "导航解 / MCU" },
+    { "label": "上位机栈" },
+    { "label": "上层" }
+  ],
+  "nodes": [
+    { "id": "stonefish", "type": "external", "label": "Stonefish", "stage": 0, "row": 0 },
+    { "id": "relays", "type": "backend", "label": "转发层 ×4", "stage": 1, "row": 0 },
+    { "id": "nav_sim", "type": "backend", "label": "nav_sim", "stage": 2, "row": 0 },
+    { "id": "mcu_sim", "type": "backend", "label": "mcu_sim", "stage": 2, "row": 2 },
+    { "id": "basic_motion", "type": "backend", "label": "basic_motion", "stage": 3, "row": 0 },
+    { "id": "upper", "type": "backend", "label": "上层节点", "stage": 4, "row": 0 }
+  ],
+  "flows": [
+    { "from": "stonefish", "to": "relays", "label": "/auv/*", "variant": "emphasis", "route": "straight" },
+    { "from": "relays", "to": "nav_sim", "label": "/sim/sensor", "variant": "emphasis", "route": "straight" },
+    { "from": "relays", "to": "mcu_sim", "label": "控制反馈", "route": "vertical-channel" },
+    { "from": "nav_sim", "to": "basic_motion", "label": "/zit6/state", "variant": "emphasis", "route": "straight" },
+    { "from": "basic_motion", "to": "upper", "label": "PoseInfo 30Hz", "route": "straight" },
+    { "from": "basic_motion", "to": "mcu_sim", "label": "/zit6/cmd/*", "variant": "emphasis", "route": "vertical-channel" },
+    { "from": "mcu_sim", "to": "stonefish", "label": "推力回灌", "variant": "emphasis", "route": "bottom-channel" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "谁扮演 MCU", "items": ["SIL 由 mcu_sim（软件）算 PID 与混控", "HIL 由真 STM32 算，mcu_sim 只做受力回灌", "上位机栈代码在两种模式下完全一样"] },
+    { "dot": "emerald", "title": "话题归属（不变式 I2）", "items": ["/zit6/state/{pos,vel} ← nav_sim（30 / 60 Hz）", "/zit6/state/{status,thr,zithbt} ← mcu_sim", "每个 state 话题任一模式只有一个发布者"] },
+    { "dot": "amber", "title": "本轮定下的语义（B19）", "items": ["state/vel = 车体原点处速度（不含杆臂）", "DVL 处速度与四波束只走 /sim/sensor/dvl", "SIL 控制反馈用真值 odometry + IMU"] },
+    { "dot": "violet", "title": "转发层（uv_sim）", "items": ["odom_sim / imu_sim / dvl_sim / pressure_sim → /sim/sensor/*", "camera_relay → /auv/*_cam/{left,right,stitched}", "/sim/sensor/dvl 用 uv_msgs/Dvl（含四波束）"] },
+    { "dot": "slate", "title": "SIL 不启动 / 尚未实现", "items": ["hw_manager：SIL 不起（心跳看门狗属 REAL/HIL）", "/zit6/sim/nav：SIL 无发布者（HIL 才注入）", "AQUA-SLAM（T6）将消费 /sim/sensor/*"] }
+  ]
+}
