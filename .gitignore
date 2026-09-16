@@ -49,6 +49,12 @@ venv/
 #   export ROS_HOME=$PWD/.ros_tmp ROS_LOG_DIR=$PWD/.ros_tmp/log
 /.ros_tmp/
 
+# Generated debug scene variants (workspace_sim/tools/strip_vision_sensors.py):
+# headless copies for the console simulator, and partial-camera copies used to
+# find the GPU rendering bottleneck.  Never commit these -- regenerate instead.
+workspace_sim/src/stonefish_ros2/Data/*_headless.scn
+workspace_sim/src/stonefish_ros2/Data/*_down_only.scn
+
 # Dataset capture output (vision node; see docs/node_parameters.md).
 # Default lives outside the repo at ~/.ros/auv_dataset — these entries cover
 # the -p dataset_dir:=<repo>/datasets override so multi-GB captures never

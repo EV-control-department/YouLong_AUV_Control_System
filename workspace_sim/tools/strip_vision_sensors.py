@@ -44,14 +44,26 @@ def strip_camera_sensors(
     limited by how many cameras it must render per frame, so being able to drop
     one pair is the way to tell "rendering is the bottleneck" from "something
     else is" (2026-09-16).  Returns ``(text, removed, kept)``.
+
+    Block handling has **two** states, not one: ``dropping`` skips a removed
+    block's body, ``keeping`` copies a retained block's body.  Using a single
+    "skipping" flag for both (the first version of ``--keep-camera``) emitted the
+    opening ``<sensor ...>`` line and then dropped its whole body, which made the
+    scene unparseable ("Parsing of scenario file ... failed") while a naive
+    ``grep -c type="camera"`` still reported the right number of cameras.
     """
     out: list[str] = []
-    skipping = False
+    dropping = keeping = False
     removed = kept = 0
     for line in text.splitlines(keepends=True):
-        if skipping:
+        if dropping:
             if SENSOR_CLOSE.search(line):
-                skipping = False
+                dropping = False
+            continue
+        if keeping:
+            out.append(line)
+            if SENSOR_CLOSE.search(line):
+                keeping = False
             continue
         if SENSOR_OPEN.search(line) and CAMERA_TYPE.search(line):
             name = SENSOR_NAME.search(line)
@@ -59,11 +71,11 @@ def strip_camera_sensors(
                 kept += 1
                 out.append(line)
                 if not SENSOR_CLOSE.search(line):
-                    skipping = True
+                    keeping = True
                 continue
             removed += 1
             if not SENSOR_CLOSE.search(line):
-                skipping = True
+                dropping = True
             continue
         out.append(line)
     return "".join(out), removed, kept
