@@ -189,7 +189,7 @@
 
 ---
 
-### T3 ◐ 文档体系（接口即契约）
+### T3 ◐ 文档体系（接口即契约）— **T3a 已完成，T3b 待 T4/T5**
 
 > **拆分（2026-09-16）**：T3 的接口契约里，一部分不随 T4/T5 变化、现在就能冻结并机检，
 > 另一部分必须等 launch 与 `sim_bridge` 结构定下来。故拆成：
@@ -201,7 +201,22 @@
 > - **T3b（待 T4/T5 后）**：launch 入口表、话题频率/QoS 列、实时快照入库、
 >   `node_parameters.md` 按新结构改写
 >
-> **T3a 已完成**：`docs/node_parameters.md` —— 逐条对照源码核出 3 处错误
+> **T3a 已完成（2026-09-16）**：
+>
+> | 交付物 | 状态 |
+> |---|---|
+> | `docs/node_parameters.md` 逐条核对（3 处错误 + 1 处遗漏 + 状态标记 + 待补清单） | ✅ |
+> | `docs/interfaces/topic_contract.md`（**话题唯一事实源**：SIL/HIL/服务动作/栈外 GUI/缺口登记） | ✅ |
+> | `docs/architecture/{system_architecture,sim_real_boundary,node_dependency}.md` | ✅ |
+> | `docs/README.md`（索引 + 维护规则 + 标记含义 + 跨文档待补清单） | ✅ |
+> | `scripts/check_docs_contract.py`（**源码级**四类对拍，无需跑栈） | ✅ |
+> | `workspace_sim/src/uv_sim/test/test_docs_contract.py`（12 例，含 6 类故意漂移的反向验证） | ✅ |
+> | 去重：`hil_architecture.md` §2.2/2.3 与 `node_parameters.md` 话题节 → 链接 | ✅ |
+>
+> **脚本位置修正**：原计划写 `tools/`，实际落在仓库根 `scripts/`（该目录已存在，`deploy.sh` 同处）。
+> **SIL 优先**：用户 2026-09-16 决定当前只做软件在环，HIL/实机内容一律标 ⏸ 保留但不验收。
+>
+> 历史记录（T3a 第一项）：`docs/node_parameters.md` —— 逐条对照源码核出 3 处错误
 > （`save_dataset` 默认值、`real_bringup` 的 `enable_nav`、navigator 位姿源描述过时）、
 > 补记遗漏的 `/perception/line/*`，重写话题参考为「节点 → 话题」（含 SIL/HIL 两套），
 > 并新增「完整性状态 + 待补清单」与「包级 launch 现状（B2 具体化）」两节。
@@ -243,8 +258,8 @@ docs/
 - `launch_entries.md`：含**新旧入口映射表**（real 保留；sim 迁移到仿真侧；hil 归仿真侧；`sim_core` 参数化取代）
 
 **工具**（放仓库根 `tools/`，与 `docs/` 同级）
-- `tools/dump_interfaces.sh`：源码抽取 + 实时快照（`ros2 topic/service/action list -t`、`node list`、`node info`）
-- `tools/check_docs_contract.py`：文档表格 vs 快照比对，漂移即非零退出；`--update` 显式刷新
+- `scripts/dump_interfaces.sh`（T3b）：源码抽取 + 实时快照（`ros2 topic/service/action list -t`、`node list`、`node info`）
+- `scripts/check_docs_contract.py`（✅ T3a 已交付）：**源码级**四类对拍（参数/节点/话题/依赖）＋README 覆盖检查，漂移即非零退出；`--update` 生成 `docs/interfaces/snapshots/code_inventory.json`
 
 **验收**：A3-1 目录中列出的 **README + 8 篇契约文档**齐备且含规定清单；A3-2 契约校验通过；A3-3 故意改错一个类型必须失败（自测）；A3-4 话题表无重复事实源（`hil_architecture.md`/`node_parameters.md` 改为链接）。
 **依赖**：T1、T4、T5 完成后的接口才稳定（可先写仿真基线快照，再回填；T3-0 可立即做）
@@ -388,7 +403,11 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 | A2-3 | 48 例单测全绿（含场景↔YAML↔文档三方契约、N1 相机 offset、TF 契约） | T2（已绿） |
 | A2-4 | `dump_tf_tree.py --self-test` 绿；在线核对在 console 模式可跑（无需 GPU） | T2（已绿） |
 | A2-5 | 文档不再断言存在 TF；开启方式与代码守卫已写明 | T2（已绿） |
-| A3-1..3 | 七篇文档齐备；契约校验通过；漂移可被发现 | T3 |
+| A3-1 | README + 契约文档齐备（`frames`×2、`architecture`×3、`topic_contract`、`node_parameters`） | T3a（已绿） |
+| A3-2 | `scripts/check_docs_contract.py --check` 退出 0（参数/节点/话题/依赖/README 五类） | T3a（已绿） |
+| A3-3 | 故意改错必须失败——6 类漂移 + 端到端注入各验证一次 | T3a（已绿） |
+| A3-4 | 话题表无重复事实源（`hil_architecture.md`/`node_parameters.md` 已改为链接） | T3a（已绿） |
+| A3-5 | 服务/动作字段语义、launch 入口表、频率/QoS 列 | T3b（待 T4/T5） |
 | A4-1..4 | 分层干净；入口契约测试通过 | T4 |
 | A5-1..5 | 7 节点可执行；话题零变化；端到端动作成功；数值回归 | T5 |
 | S1..S5 | AQUA-SLAM 构建/稳定性/精度/DVL 消融/一键评估 | T6 |

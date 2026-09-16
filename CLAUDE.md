@@ -306,6 +306,15 @@ IMU → sim_bridge._odom_cb (全 RPY 提取)
 
 ### Coordinate System & Conventions
 
+**文档体系（T3a 起）**：`docs/README.md` 是索引与维护规则。事实源各自唯一：
+话题/类型 → `docs/interfaces/topic_contract.md`；参数 → `docs/node_parameters.md`；
+外参数值 → `docs/frames/extrinsics_reference.md`；坐标系约定 → `docs/frames/frame_convention.md`。
+改接口/参数必须同一次改动里改对应文档，由源码级校验强制（不需要跑栈）：
+
+```bash
+python3 scripts/check_docs_contract.py --check     # 参数/节点/话题/依赖/README 五类对拍
+```
+
 **权威文档（T2 起）**：`docs/frames/frame_convention.md` 是约定的唯一权威，
 `docs/frames/extrinsics_reference.md` 是数值的唯一权威（含仿真表 / 实机表 / DVL 波束几何 /
 AQUA-SLAM 对照）。下面只是速查，冲突时以那两篇为准。可执行校验：
@@ -384,6 +393,10 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_sim/tools/derive_extrinsics.py` | 从场景推导外参；`--emit/--out/--check`（`--check` 与文档对拍，漂移即非 0 退出） |
 | `workspace_sim/tools/check_dvl_geometry.py` | DVL 波束几何数值校验 + α 敏感度表（无 ROS 可跑） |
 | `workspace_sim/tools/dump_tf_tree.py` | 在线 TF 树核对 + `--self-test` |
+| `docs/README.md` | **文档索引 + 维护规则**（标记含义、禁止复制事实、跨文档待补清单） |
+| `docs/interfaces/topic_contract.md` | **话题/消息类型唯一事实源**（SIL/HIL/服务动作/栈外 GUI/缺口登记，每行带代码证据） |
+| `docs/architecture/{system_architecture,sim_real_boundary,node_dependency}.md` | 分层与节点、SIL/HIL/REAL 边界、包依赖与启动顺序（含依赖缺口登记） |
+| `scripts/check_docs_contract.py` | **源码级文档契约校验**（参数/节点/话题/依赖/README 五类对拍，无需跑栈）；`--update` 生成库存 |
 
 ## Conventions
 
@@ -392,7 +405,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- **Tests**: only `uv_sim` has them so far (**48 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
+- **Tests**: only `uv_sim` has them so far (**60 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
   contract, odometry frame conventions, PID-config single-source + fallback structure, entry-point
-  integrity, frame/beam geometry, scene↔YAML↔doc contract, camera-offset (N1) and TF (B18) contracts).
+  integrity, frame/beam geometry, scene↔YAML↔doc contract, camera-offset (N1), TF (B18) and documentation-contract (T3a) checks).
   Run with `python3 -m pytest workspace_sim/src/uv_sim/test/ -q` after sourcing both workspaces; keep it green.

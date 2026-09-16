@@ -23,11 +23,13 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 | 1 | **launch 入口表**：`sim_bringup`/`sim_core`/`hil_bringup` 位于 `workspace_auv` 却直接引用仿真包（违反分层，B1），T4 会重排；包级 launch `uv_control/launch/control_launch.py`、`uv_hm/launch/hm_launch.py` 当前引用**不存在的入口**（B2） | T4 |
 | 2 | **`sim_bridge` 参数与话题归属**：T5 将把它拆成 7 个节点，§sim_bridge 每一行都会变 | T5 |
 | 3 | **话题频率 / QoS 列**：需实时快照（`ros2 topic info -v` / `hz`）；本沙箱仅 console 模式可用且无相机（B13） | T3b |
-| 4 | **话题表去重**：`hil_architecture.md` §2.2/2.3 与本文件话题参考仍有重复，将收敛到 `docs/interfaces/topic_contract.md` | T3b |
-| 5 | `docs/README.md` 索引与 `tools/check_docs_contract.py`（参数/入口/依赖三方对拍） | T3a 后续 |
+| 4 | ~~话题表去重~~ | ✅ T3a 已完成：话题行收敛到 `docs/interfaces/topic_contract.md`，本文件与 `hil_architecture.md` 改为链接 |
+| 5 | 本文件里仍是 **C++ 仿真器与 HIL 相关**的条目（`hil_bringup` 段）——当前阶段 SIL 优先，按其原文保留但**不参与验收** | 待 HIL 重新纳入（T7） |
+| 7 | **引擎自带 launch 参数未收录**：`stonefish_simulator.launch.py` 有 6 个（`simulation_data`、`scenario_desc`、`simulation_rate`、`window_res_x`、`window_res_y`、`rendering_quality`），`stonefish_simulator_nogpu.launch.py` 有 3 个（前三个）。校验工具已显式跳过这两个文件（`UNCHECKED_LAUNCH_FILES`） | 待补（引擎文档，非 SIL 栈） |
 
 > **维护规则（T3a 起）**：改任何 ROS 参数默认值或 launch 参数，**必须同一次改动里更新本文件**；
-> 本轮新增的 `pid_config_file` 就属此类。校验工具落地后由 `check_docs_contract.py` 强制。
+> 改话题名/消息类型，必须更新 `docs/interfaces/topic_contract.md`。
+> 两者都已由 `python3 scripts/check_docs_contract.py --check` 强制（源代码级校验，无需跑栈）。
 
 ## 所有可执行节点
 
@@ -303,95 +305,22 @@ ros2 launch uv_perception perception_launch.py
 
 ---
 
-## 话题参考 ⏳
+## 话题参考 🔗
 
-### vision ✅
+**话题/消息类型的权威已迁至 `docs/interfaces/topic_contract.md`**（2026-09-16 T3a 建立，
+逐行带代码/场景证据，`scripts/check_docs_contract.py --check` 可校验）。
 
-| 方向 | 话题 | 类型 | 说明 |
-|---|---|---|---|
-| 发布 | `/perception/detection/{front_left,front_right,down_left,down_right}` | `DetectionArray` | 4 通道检测结果 |
-| 发布 | `/perception/line/{front_left,down_left,…}` | `LineState` | **巡线状态（此前文档漏记）** |
-| 发布 | `/perception/aruco/ids` | `Int32MultiArray` | ArUco 标记 ID |
-| 订阅 | `/auv/{front,down}_cam/stitched` | `sensor_msgs/Image` | **仅 `sim_mode:=true`** 时订阅（实机走 V4L2，不订阅） |
+契约文件按用途分节：
 
-> ⚠️ 此前文档写「vision 不发布图像 DDS 话题」——对**实机**成立（视频走 go2rtc），
-> 但 `sim_mode` 下 vision 是**订阅**方，图像由 `sim_bridge` 发布（见下）。
-> go2rtc 流：`front` / `down`（原始拼接）、`front_annotated` / `down_annotated`（YOLO 带框）。
+| 节 | 内容 |
+|---|---|
+| §1–§2 | SIL 仿真传感器与相机链路 |
+| §3–§4 | 控制与执行机构、状态反馈（MCU 契约） |
+| §5–§6 | 位姿与感知、任务与导航 |
+| §7 / §7.5 | 服务与动作、栈外 GUI 消费者 |
+| §8 | HIL 专属（⏸ 当前暂缓） |
+| §9 | **缺口登记**（有订阅无发布等已知问题） |
 
-### position ✅
-
-| 方向 | 话题 | 类型 | 说明 |
-|---|---|---|---|
-| 订阅 | `/perception/detection/{front_left,front_right,down_left,down_right}` | `DetectionArray` | 4 通道检测 |
-| 订阅 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 位姿源（含 roll/pitch） |
-| 发布 | `/perception/objects` | `ObjectPositionArray` | 3D 物体世界坐标（含 `instance_id`） |
-
-### basic_motion ✅
-
-| 方向 | 名称 | 类型 | 说明 |
-|---|---|---|---|
-| 动作 | `/basic_motion` | `uv_msgs/action/BasicMotion` | 唯一运动入口（START/SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL） |
-| 发布 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 机器人位姿 30 Hz（含 roll/pitch，**无 frame 字段**） |
-| 订阅 | `/zit6/state/{pos,vel}` | `Float32MultiArray[6]` | 里程计状态反馈 |
-| 订阅 | `/zit6/state/status` | `zit6_interfaces/ZitStatus` | MCU 状态 |
-| 发布 | `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 发往 MCU / sim_bridge 的设定值 |
-
-### navigator ✅
-
-| 方向 | 名称 | 类型 | 说明 |
-|---|---|---|---|
-| 订阅 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | **位姿源**（2026-09-13 已从 `/auv/state` 迁移） |
-| 订阅 | `/perception/objects` | `ObjectPositionArray` | 障碍 / 目标 |
-| 发布 | `/nav/path` | `nav_msgs/Path` | 规划出的航点路径 |
-| 服务 | `/nav/navigate_to` | `uv_msgs/srv/RunTask` | 请求运行任务（已核对：`create_service(RunTask, '/nav/navigate_to', …)`） |
-
-### hw_manager ✅（实机 / HIL）
-
-| 方向 | 话题 | 类型 | 说明 |
-|---|---|---|---|
-| 发布 | `/zit6/cmd/agxhbt` | `std_msgs/UInt32` | 心跳（`heartbeat_rate` Hz，携带 `arm_mode`） |
-| 订阅 | `/zit6/state/status` | `zit6_interfaces/ZitStatus` | MCU 状态汇总 |
-| 订阅 | `/zit6/state/zithbt` | `std_msgs/UInt32` | MCU 心跳序列号（看门狗） |
-| 订阅 | `/zit6/state/thr` | `Float32MultiArray[6]` | 推力饱和监控（4 元素来源会让监控静默失效） |
-
-### task_runner ✅
-
-| 方向 | 名称 | 类型 | 说明 |
-|---|---|---|---|
-| 订阅 | `/perception/objects` | `ObjectPositionArray` | 目标位置 |
-| 订阅 | `/perception/detection/{cam}` | `DetectionArray` | 任务内联检测 |
-| 订阅 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 位姿 |
-| 订阅 | `/zit6/state/status` | `zit6_interfaces/ZitStatus` | MCU 状态 |
-| 发布 | `/task/status` | `uv_msgs/TaskStatus` | 任务进度（1 Hz） |
-| 发布 | `/zit6/cmd/{light,servo,pushrod}` | `UInt8` / `Float32` / `ZitPushrod` | 执行机构 |
-| 服务 | `/task/run`、`/task/stop`、`/task/exec` | `uv_msgs/srv/RunTask` / `std_srvs/Trigger` / `uv_msgs/srv/ExecTask` | 任务控制 |
-
-### sim_bridge / MCU 状态话题 ⏳
-
-**SIL 模式**（`hil_mode:=false`，PID 在 sim_bridge 内）：
-
-| 方向 | 话题 | 类型 | 说明 |
-|---|---|---|---|
-| 订阅 | `/auv/{odometry,imu,dvl,pressure}` | Stonefish 传感器消息 | 仿真传感器输入 |
-| 订阅 | `/zit6/cmd/{setpoint,servo,light,agxhbt,ins}` | 见各消息 | 来自控制栈 / 心跳 |
-| 发布 | `/zit6/state/{pos,vel,thr,status,zithbt}` | `Float32MultiArray[6]` / `ZitStatus` / `UInt32` | MCU 状态仿真 |
-| 发布 | `/auv/thrusters_cmd` | `Float64MultiArray` | 6 推进器归一化设定点 [−1, 1] |
-| 发布 | `/auv/{front,down}_cam/{left,right,stitched}` | `sensor_msgs/Image` | 拼接后的双目图像（供 vision `sim_mode`） |
-| 服务 | `/zit6/{get_params,update_params}` | `GetParams` / `UpdateParams` | PID 参数读写（只改运行时，**不写回文件**） |
-
-**HIL 模式**（`hil_mode:=true`，PID 交给实机 MCU）：
-
-| 方向 | 话题 | 类型 | 说明 |
-|---|---|---|---|
-| 发布 | `/zit6/sim/nav` | `Float32MultiArray` | 仿真位姿 → MCU（`vel` 为**机体系**速度） |
-| 订阅 | `/zit6/state/thr` | `Float32MultiArray[6]` | 转发 MCU 推力到 `/auv/thrusters_cmd` |
-| 发布 | 相机图像（同上） | `sensor_msgs/Image` | |
-
-> **已确认的缺口（登记在案，T3b 收敛进 `docs/interfaces/topic_contract.md`）**
->
-> | 缺口 | 现状 |
-> |---|---|
-> | `/perception/annotated/{cam}` | **有订阅者（GUI `visualization/auv_visualizer.py`）但全局无发布者**（B5） |
-> | `/auv/state`（`uv_msgs/AuvState`） | **无发布者、也无订阅者**（navigator 已迁到 `PoseInfo`）；消息本身只剩定义 |
-> | `/auv/dvl_altitude` | 由 Stonefish DVL 传感器发布，**无人订阅** |
-> | `/sim/{front,down}_cam/*` | 仿真相机原始话题，由 `sim_bridge` 订阅后合成 `/auv/*_cam/*` |
+参数与话题的关系：本文件只负责**参数**（谁有什么旋钮、默认值多少），
+话题归属与消息类型一律看契约文件，此处不再复制——避免两处漂移
+（此前这两个文件各维护一份话题表，已出现不一致）。

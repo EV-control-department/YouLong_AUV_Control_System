@@ -1,5 +1,12 @@
 # 硬件在环 (HIL) 仿真系统
 
+> ## ⏸ 当前阶段：只做软件在环（SIL）
+>
+> 本文档描述 HIL 的既有设计与实现，**保留备用**，但**不参与当前验收**。
+> 话题/类型的权威已迁至 `docs/interfaces/topic_contract.md`（§8 为 HIL 专属行，标 ⏸）。
+> 本文档只保留 HIL 独有的内容：micro-ROS 链路、控制数据流、MCU 固件注意事项、启动与验证。
+> 待 HIL 重新纳入范围时，再按 `roadmap.md` 的 T7 恢复逐项核对。
+
 ## 概述
 
 硬件在环仿真 (HIL, Hardware-in-the-Loop) 是在算法在环仿真 (SIL) 的基础上，将 PID 控制、推力混合、ZIT6 状态机等逻辑从 Host PC 上的 `sim_bridge` 节点迁移至真实的 STM32 MCU 执行。MCU 通过 **micro-ROS** 串行链路与 ROS 2 系统通信，运行与实机完全相同的固件。
@@ -102,38 +109,24 @@ MicroXRCEAgent serial --dev /dev/ttyUSB0 -b 921600
 
 ### 2.2 下行通信 (ROS 2 → MCU)
 
-MCU 通过 micro-ROS 订阅以下主题，获取仿真传感器数据和控制指令：
+**话题清单已收敛到唯一事实源**：见 `docs/interfaces/topic_contract.md` §3（控制与执行机构）
+与 §1（仿真传感器输入）。MCU 端经 micro-ROS 订阅的就是那张表里标 `SIL`/`⏸HIL` 的下行话题：
+`/zit6/cmd/{setpoint,agxhbt,ins,light,servo}` 与传感器侧 `/auv/{odometry,imu,dvl,pressure}`。
 
-| 主题                   | 消息类型                        | 频率  | 说明                                                                                       |
-| ---------------------- | ------------------------------- | ----- | ------------------------------------------------------------------------------------------ |
-| `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 按需  | 运动设定值；`control_key` 决定 POS/VEL/FORCE 模式；`type_mask` 决定忽略哪些轴 (1=忽略) |
-| `/auv/odometry`      | `nav_msgs/Odometry`           | 30 Hz | Stonefish 真值里程计；`pose` = NED 世界坐标系位姿；`twist` = **机体系**线速度 + 角速度（`Odometry.cpp:59,65`，注意不是世界系） |
-| `/auv/imu`           | `sensor_msgs/Imu`             | 200 Hz | 角速度 + 比力（含噪声，2026-09-15 起由 20 Hz 提升）                                        |
-| `/auv/dvl`           | `stonefish_ros2/DVL`          | 20 Hz | 4 波束 DVL 机体坐标系速度（斜置 45°、离竖直 30°、z=+0.1 m，与实机一致）                    |
-| `/zit6/cmd/agxhbt`   | `std_msgs/UInt32`             | 10 Hz | 心跳 + 布防：`1` = 正常布防 (需 INS 就绪)，`3` = 强制布防 (绕过 INS)                   |
-| `/zit6/cmd/ins`      | `std_msgs/UInt8`              | 按需  | INS 控制:`1` = 启用 DVL，`2` = 禁用 DVL，`3` = 重新对准                              |
-| `/zit6/cmd/light`    | `std_msgs/UInt8`              | 按需  | LED:`1` = 红，`2` = 黄，`3` = 绿                                                     |
+（此前这里维护过一张 7 行的话题表，与本文件外的文档重复；2026-09-16 T3a 删除，改为链接。）
 
 **带宽估算**: Odometry ~200B×30 + IMU ~150B×200 + DVL ~200B×20 ≈ **40 KB/s**
-（IMU 提到 200 Hz 后约 3 倍；921600 baud 链路理论上限约 92 KB/s，但 micro-ROS 每帧开销未计入，
-HIL 实测若拥塞，可在 `imu_sim` 侧对 MCU 通道降采样——见 `workspace_auv/docs/roadmap.md` T5）
+（IMU 200 Hz 后约为原来 3 倍；921600 baud 理论上限 ≈92 KB/s，但未计 micro-ROS 每帧开销。
+若 HIL 实测拥塞，可在 T5 的 `imu_sim` 侧对 MCU 通道降采样。）
 
 ### 2.3 上行通信 (MCU → ROS 2)
 
-MCU 通过 micro-ROS 发布以下主题：
+同样见 `docs/interfaces/topic_contract.md` §4（状态反馈）。
 
-| 主题                   | 消息类型                       | 频率  | 说明                                                                     |
-| ---------------------- | ------------------------------ | ----- | ------------------------------------------------------------------------ |
-| `/auv/thrusters_cmd` | `std_msgs/Float64MultiArray` | 60 Hz | 6 路归一化推力值`[-1.0, 1.0]`，直接驱动 Stonefish 推进器               |
-| `/zit6/state/status` | `zit6_interfaces/ZitStatus`  | 10 Hz | 布防状态、控制模式、INS 状态、力输出、电池电压、错误标志                 |
-| `/zit6/state/pos`    | `std_msgs/Float32MultiArray` | 30 Hz | 地图坐标系位姿 `[x, y, z, roll_rad, pitch_rad, yaw_rad]`（6 元素）；`uv_control` 依赖此话题 |
-| `/zit6/state/vel`    | `std_msgs/Float32MultiArray` | 50 Hz | 机体坐标系速度 `[vx, vy, vz, vroll, vpitch, vyaw_rad]`（6 元素）；`uv_control` 依赖此话题 |
-| `/zit6/state/thr`    | `std_msgs/Float32MultiArray` | 30 Hz | 当前施加的 6-DOF 力 `[Fx, Fy, Fz, Mx, My, Mz]`                      |
-| `/zit6/state/zithbt` | `std_msgs/UInt32`            | 10 Hz | 心跳序列号，用于上层心跳监控                                             |
+**带宽估算**: thrusters_cmd ~50B×60 + status ~100B×10 + pos ~60B×30 + vel ~60B×50 ≈ **8 KB/s**
 
-**带宽估算**: thrusters_cmd 约 50B×60 + status 约 100B×10 + pos 约 60B×30 + vel 约 60B×50 ≈ **8 KB/s**
-
-**总带宽**: 上下行合计约 22 KB/s，远低于 921600 baud (≈92 KB/s) 的理论上限，串口链路充足。
+**总带宽**: 上下行合计约 22 KB/s（早期版本按 IMU 20 Hz 计算）至 **~48 KB/s**（IMU 200 Hz 后），
+均低于 921600 baud 的理论上限；链路余量需在 HIL 会话中用实测帧率复核。
 
 ---
 
