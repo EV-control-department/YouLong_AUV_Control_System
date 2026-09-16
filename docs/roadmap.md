@@ -411,6 +411,7 @@ docs/
 - 新增消息 `uv_msgs/msg/Dvl.msg`（`header/velocity/velocity_valid/altitude/beam_velocity[4]`），仿真由 `dvl_sim` 生产、实机由 MCU 桥接生产
 - 配置：`config/sim_canyon.yaml`（内参由 hfov 推出 fx≈1174、`Tlr=(0.10,0,0)`、`Tbc/T_gyro_c/T_dvl_c` 来自 T2、**α=60°、β=45+90i**、IMU 200 Hz、初始化阈值按 30 m 峡谷缩小）
 - 验收：S1 构建通过；S2 10 min 无崩溃；S3 与 `/auv/odometry` SE3 对齐后 **ATE RMSE ≤ 0.15 m**、终点漂移 ≤ 2%；S4 关闭 DVL 辅助精度显著劣化；S5 一条命令完成评估（`evo`）
+- ⚠️ **帧率背景（2026-09-16 实测）**：SIL 相机实测下视 ≈9.5 Hz/眼（标称 30 Hz，4 路相机时降到 ≈1.8 Hz/眼），瓶颈是引擎的渲染+回读且**没有**多渲染器可调项；实机是 30 Hz。S3/S4 的判读必须带这个背景，需要高帧率时用 SIL 专用性能变体（降分辨率/只留一对相机），主场景不动
 
 **依赖**：T1（传感器几何）、T2（外参/α/β）、T5（`dvl_sim` 与 `/sim/sensor/*`）、B8 磁盘腾挪（≥3 GB）
 **预估**：8~10 人日（含仿真验证）
