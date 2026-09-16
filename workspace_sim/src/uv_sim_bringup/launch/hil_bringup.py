@@ -8,8 +8,10 @@ being duplicated here, which also means ``hw_manager`` now runs in HIL -- that
 is intended (the real MCU needs the ``/zit6/cmd/agxhbt`` heartbeat to arm) but
 has not been exercised against hardware.
 
-``sim_bridge`` runs with ``hil_mode:=true``: it forwards camera images and relays
-thrusters, leaving PID and mixing to the MCU over micro-ROS.
+``uv_sim`` runs with ``hil_mode:=true`` (T5: five nodes instead of the old single
+``sim_bridge``): the sensor relays ``nav_sim`` needs, the sim/nav injection, the
+thrust relay and the camera relay.  PID, mixing and ``/zit6/state/*`` belong to the
+MCU over micro-ROS.
 """
 
 from launch import LaunchDescription
@@ -42,7 +44,8 @@ def generate_launch_description():
             'Rendering quality low/medium/high (GPU mode only)'),
 
         arg('enable_mcu', 'true',
-            'Enable sim_bridge in HIL mode (camera relay + thruster passthrough)'),
+            'Enable the simulation hardware side for HIL (5 nodes: sensor relays '
+            '+ nav_sim injection + thrust relay + camera relay)'),
         arg('enable_motion', 'false',
             'Enable basic_motion (the motion action server)'),
         arg('enable_ai', 'false', 'Enable AI perception nodes'),

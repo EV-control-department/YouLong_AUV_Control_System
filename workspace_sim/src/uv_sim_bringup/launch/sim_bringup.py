@@ -41,7 +41,9 @@ def generate_launch_description():
         arg('rendering_quality', 'high',
             'Rendering quality low/medium/high (GPU mode only)'),
 
-        arg('enable_mcu', 'true', 'Enable sim_bridge (the simulated MCU)'),
+        arg('enable_mcu', 'true',
+            'Enable the simulated MCU side (uv_sim: sensor relays + nav_sim + '
+            'mcu_sim + camera_relay)'),
         arg('enable_motion', 'true',
             'Enable basic_motion (the motion action server)'),
         arg('enable_ai', 'true', 'Enable AI perception nodes'),
