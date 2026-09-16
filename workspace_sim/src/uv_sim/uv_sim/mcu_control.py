@@ -30,9 +30,9 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
 
 from uv_sim.mathutil import clamp, wrap_angle_deg
-from uv_sim.odometry import body_twist_from_odometry
+from uv_sim.odometry import apply_imu_to_state, apply_odometry_to_state
 from uv_sim.pid import Pid
-from uv_sim.pid_config import build_pids
+from uv_sim.pid_config import PID_PARAM_ATTRIBUTES, build_pids
 
 #: Coarse-alignment and SINS/DVL alignment durations of the simulated INS.
 INS_COARSE_ALIGN_SECONDS = 1.5
@@ -81,46 +81,29 @@ class McuController:
         # are all built from this one dict (see pid_config.build_pids).
         self.pid_params = pid_params
         self.pids: dict[str, Pid] = build_pids(pid_params)
+        # Named views (pid_x, pid_vx, ...) for the callers and tests that address a
+        # channel by name; PID_PARAM_ATTRIBUTES stays the single source of those
+        # names, so a channel cannot be renamed in one place only.
+        for path, attribute in PID_PARAM_ATTRIBUTES.items():
+            setattr(self, attribute, self.pids[path])
 
     # ── sensor input ────────────────────────────────────────────────────────
 
     def apply_odometry(self, msg: Odometry) -> None:
-        """Take position/orientation from ``/auv/odometry`` and mark pose ready."""
-        self.pos['x'] = msg.pose.pose.position.x
-        self.pos['y'] = msg.pose.pose.position.y
-        self.pos['z'] = msg.pose.pose.position.z
+        """Take position/orientation from ``/sim/sensor/odom`` and mark pose ready.
 
-        q = msg.pose.pose.orientation
-        roll, pitch, yaw = quat_to_rpy(q.x, q.y, q.z, q.w)
-        self.pos['rx'] = math.degrees(roll)
-        self.pos['ry'] = math.degrees(pitch)
-        self.pos['rz'] = math.degrees(yaw)
-
-        # Twist is already body-frame -- no yaw rotation here (see
-        # body_twist_from_odometry).  The DVL used to overwrite x/y/z with its own
-        # measurement (bug B19); it no longer does, so this channel has exactly one
-        # meaning: the velocity of the body origin.
-        u, v, w, p, q_rate, r = body_twist_from_odometry(msg)
-        self.vel['x'] = u
-        self.vel['y'] = v
-        self.vel['z'] = w
-        self.vel['rx'] = math.degrees(p)
-        self.vel['ry'] = math.degrees(q_rate)
-        self.vel['rz'] = math.degrees(r)
-
+        The decoding itself lives in :mod:`uv_sim.odometry` so that this state and
+        ``nav_sim``'s published state cannot disagree about frames or units.  The
+        DVL used to overwrite ``vel['x','y','z']`` with a *different* quantity (bug
+        B19); it no longer does, so this channel has exactly one meaning: the
+        velocity of the body origin.
+        """
+        apply_odometry_to_state(msg, self.pos, self.vel)
         self.current_pose_ready = True
 
     def apply_imu(self, msg: Imu) -> None:
-        """Refresh the body rates from the 200 Hz IMU.
-
-        Benign second writer for ``vel['rx'..'rz']``: both sources carry the same
-        physical quantity (body angular velocity), and the IMU is the faster and
-        intended one.  Unlike the old DVL/odometry conflict this cannot differ in
-        meaning, which is why it is kept rather than removed.
-        """
-        self.vel['rx'] = math.degrees(msg.angular_velocity.x)
-        self.vel['ry'] = math.degrees(msg.angular_velocity.y)
-        self.vel['rz'] = math.degrees(msg.angular_velocity.z)
+        """Refresh the body rates from the 200 Hz IMU."""
+        apply_imu_to_state(msg, self.vel)
 
     # ── setpoint state machine ──────────────────────────────────────────────
 
@@ -402,18 +385,3 @@ class McuController:
                     pid.z_thrust_ff = gains['z_thrust_ff']
             messages.append(f"Params: {path} → {gains}")
         return messages
-
-
-def quat_to_rpy(x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
-    """Roll/pitch/yaw (radians) from a quaternion; the usual ZYX extraction."""
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
-    sinp = 2.0 * (w * y - z * x)
-    pitch = math.asin(clamp(sinp, -1.0, 1.0))
-
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-    return roll, pitch, yaw

@@ -1021,6 +1021,18 @@ def _same_message_type(declared: str, actual: str) -> bool:
     return declared_package == actual_package
 
 
+def _declared_covers(declared: set[str], dependency: str) -> bool:
+    """True when ``dependency`` is covered by a ``package.xml`` entry.
+
+    ROS packages declare Python dependencies the **rosdep** way
+    (``<exec_depend>python3-numpy</exec_depend>``), while the import is written
+    ``import numpy``.  Comparing the two literally made the checker force people to
+    write keys ``rosdep`` cannot resolve, so the ``python3-`` prefix is accepted as
+    a spelling of the module it names.
+    """
+    return dependency in declared or f"python3-{dependency}" in declared
+
+
 def check_dependencies(facts: SourceFacts) -> list[Problem]:
     problems: list[Problem] = []
     exemptions = _dependency_exemptions()
@@ -1070,6 +1082,8 @@ def check_dependencies(facts: SourceFacts) -> list[Problem]:
                 continue  # os/sys/json/... are not manifest dependencies
             if f"{package}->{module}" in exemptions:
                 continue
+            if _declared_covers(declared, module):
+                continue  # declared under its rosdep key (python3-<module>)
             if importlib.util.find_spec(module) is None:
                 continue  # not installed here; do not report environment noise
             problems.append(

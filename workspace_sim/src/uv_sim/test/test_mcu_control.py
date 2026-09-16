@@ -1,10 +1,12 @@
 """T5/A5-4: the extracted control core must reproduce the pre-split monolith.
 
 ``test/data/thrust_golden.json`` was recorded from the **unmodified**
-``sim_bridge.SimBridgeNode`` before any of T5's refactoring (see
-``tools/record_thrust_golden.py``).  This file replays it against the ROS-free
-core (``McuController``) plus the ROS-free mixer, so "the split preserved the
-control maths" is a fact rather than a claim.
+``sim_bridge.SimBridgeNode`` before any of T5's refactoring, by a one-shot tool
+(``tools/record_thrust_golden.py``) that was deleted together with the monolith:
+its output is the fixture, and *this file* is the permanent verifier -- it names the
+failing case and step index, which is what a regeneration tool would print anyway.
+Re-recording is therefore a deliberate act (see devlog section 9) rather than a
+command someone can run by reflex whenever the maths changes.
 
 Two deliberate properties of the fixture keep this test honest:
 

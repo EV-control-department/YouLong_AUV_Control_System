@@ -23,7 +23,7 @@
 | `uv_perception/launch/perception_launch.py` | workspace_auv | 全部 | `vision` + `position` | `sim_mode`、`model_path`、`enable_gortc` |
 | `uv_nav/launch/nav_launch.py` | workspace_auv | 全部 | `navigator` | — |
 | `uv_task/launch/task_launch.py` | workspace_auv | 全部 | `task_runner` | — |
-| `uv_sim/launch/bridge_launch.py` | workspace_sim | SIL / HIL | `sim_bridge` | `hil_mode`、`pid_config_file` |
+| `uv_sim/launch/bridge_launch.py` | workspace_sim | SIL / HIL | SIL：`odom_sim`+`imu_sim`+`dvl_sim`+`pressure_sim`+`nav_sim`+`mcu_sim`+`camera_relay`（7 个）<br>HIL：去掉 `dvl_sim`/`pressure_sim`，`nav_sim`/`mcu_sim` 换角色（5 个） | `hil_mode`、`pid_config_file` |
 | `stonefish_ros2/launch/stonefish_simulator{,_nogpu}.launch.py` | workspace_sim | SIL / HIL | Stonefish 引擎（**引擎自带的 launch，被 include**） | 6 个 / 3 个引擎参数（见 `workspace_sim/stonefish_notes.md`） |
 
 ## 2. 新旧入口映射（T4）
@@ -38,6 +38,15 @@
 | `uv_control/launch/control_launch.py`（失效） | 同名（已修） | B2：原先运行不存在的 `minimal_control` |
 | （无） | `uv_sim/launch/bridge_launch.py` | 新增：`sim_bridge` 的节点定义归 `uv_sim` |
 | （无） | `uv_bringup/uv_bringup/launch_common.py` | 新增：共享编排助手（`arg()` / `include()`） |
+
+**T5 映射（节点拆分，入口不变）**
+
+| T5 之前 | T5 之后 | 说明 |
+|---|---|---|
+| `uv_sim/launch/bridge_launch.py` 里唯一一个 `sim_bridge` | 同文件里 7 个 `Node(...)` | **入口路径与参数名不变**：`hil_mode` / `pid_config_file` 仍是 launch 参数；`uv_sim_bringup` 的两个预设完全不用改 |
+| `uv_sim sim_bridge`（可执行） | `uv_sim {odom_sim,imu_sim,dvl_sim,pressure_sim,nav_sim,mcu_sim,camera_relay}` | 旧的 `ros2 run uv_sim sim_bridge` 不再存在；调参用 `mcu_sim`，看状态用 `nav_sim` |
+| `libexec/uv_sim/sim_bridge`（手写包装脚本） | **删除** | 它被装到 `lib/uv_sim/`，覆盖了 `console_scripts` 生成的同名脚本：一个入口两个作者。`test_node_split.py` 断言它不会回来 |
+| `hil_mode` 是**节点参数**（节点内部分支） | `hil_mode` 是**launch 参数**（组合 5/7 个节点） | 节点级参数变成 `nav_sim.publish_state/publish_sim_nav` 与 `mcu_sim.hil_mode`；`bridge_launch.py` 用**一个** `hil_mode` 推导它们，避免两个开关互相矛盾（I2） |
 
 **命令级映射**
 

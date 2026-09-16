@@ -56,12 +56,12 @@ def test_missing_parameter_is_reported(checker, tmp_path: Path, monkeypatch) -> 
         checker,
         "DOC_NODE_PARAMS",
         tmp_path,
-        lambda text: re.sub(r"^\| `hil_mode` \|.*\n", "", text, flags=re.M),
+        lambda text: re.sub(r"^\| `pid_config_file` \|.*\n", "", text, flags=re.M),
     )
     monkeypatch.setattr(checker, "DOC_NODE_PARAMS", doc)
     facts = checker.collect_source_facts()
     problems = checker.check_parameters(facts)
-    assert any("hil_mode" in str(p) for p in problems), problems
+    assert any("pid_config_file" in str(p) for p in problems), problems
 
 
 def test_bogus_parameter_is_reported(checker, tmp_path: Path, monkeypatch) -> None:
@@ -71,8 +71,8 @@ def test_bogus_parameter_is_reported(checker, tmp_path: Path, monkeypatch) -> No
         "DOC_NODE_PARAMS",
         tmp_path,
         lambda text: text.replace(
-            "| `hil_mode` | bool | `false` |",
-            "| `hil_mode` | bool | `false` |\n| `does_not_exist` | bool | `false` |",
+            "| `pid_config_file` | string | `''` |",
+            "| `pid_config_file` | string | `''` |\n| `does_not_exist` | bool | `false` |",
         ),
     )
     monkeypatch.setattr(checker, "DOC_NODE_PARAMS", doc)
@@ -87,9 +87,10 @@ def test_launch_argument_is_not_treated_as_a_node_parameter(checker) -> None:
     ``scenario`` as an undeclared ROS parameter.
 
     The two probes must each be unambiguous: ``enable_mcu`` is a launch argument
-    only, ``heartbeat_rate`` a node parameter only.  (``hil_mode`` would not do:
-    since T4 it is legitimately both -- ``sim_bridge`` declares it and
-    ``bridge_launch.py`` exposes it as a launch argument.)
+    only, ``heartbeat_rate`` a node parameter only.  (``pid_config_file`` would not
+    do: since T5 it is legitimately both -- ``mcu_sim`` declares it and
+    ``bridge_launch.py`` exposes it as a launch argument.  Before T5 the same was
+    true of ``hil_mode``.)
     """
     documented_params = checker.doc_parameters(checker.DOC_NODE_PARAMS)
     documented_launch = checker.doc_launch_arguments(checker.DOC_NODE_PARAMS)
@@ -206,6 +207,26 @@ def test_stdlib_imports_are_not_dependencies(checker, tmp_path: Path, monkeypatc
     facts.package_deps = {"uv_control": set()}
     facts.package_imports = {"uv_control": {"os", "json", "threading", "sys"}}
     assert checker.check_dependencies(facts) == []
+
+
+def test_rosdep_python_key_satisfies_the_import(checker, tmp_path: Path, monkeypatch) -> None:
+    """``<exec_depend>python3-numpy</exec_depend>`` must cover ``import numpy``.
+
+    ROS packages declare Python dependencies the rosdep way while importing the
+    bare module name; comparing them literally forced keys ``rosdep`` cannot
+    resolve.  (Found while fixing gap D3 in T5.)
+    """
+    doc = _copy_doc(checker, "DOC_NODE_DEPENDENCY", tmp_path, lambda text: "")
+    monkeypatch.setattr(checker, "DOC_NODE_DEPENDENCY", doc)
+
+    facts = checker.SourceFacts()
+    facts.package_deps = {"uv_sim": {"python3-numpy"}}
+    facts.package_imports = {"uv_sim": {"numpy"}}
+    assert checker.check_dependencies(facts) == []
+
+    facts.package_deps = {"uv_sim": {"python3-yaml"}}
+    problems = checker.check_dependencies(facts)
+    assert any("numpy" in str(p) for p in problems), problems
 
 
 def test_unlisted_doc_is_reported(checker, tmp_path: Path, monkeypatch) -> None:

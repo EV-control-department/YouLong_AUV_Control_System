@@ -21,7 +21,7 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 | # | 缺口 | 何时补 |
 |---|---|---|
 | 1 | ~~**launch 入口表 / 分层**：`sim_*`/`hil_*` 位于 `workspace_auv` 却引用仿真包（B1）；包级 launch 引用不存在的入口（B2）~~ | ✅ **T4 已完成**：仿真预设迁到 `workspace_sim/uv_sim_bringup`，`workspace_auv` 只留 `real_bringup.py`；入口清单与新旧映射见 `interfaces/launch_entries.md` |
-| 2 | **`sim_bridge` 参数与话题归属**：T5 将把它拆成 7 个节点，§sim_bridge 每一行都会变 | T5 |
+| 2 | ~~**`sim_bridge` 参数与话题归属**：T5 将把它拆成 7 个节点~~ | ✅ **T5 已完成**：拆成 `odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim`/`nav_sim`/`mcu_sim`/`camera_relay`，参数与话题归属见本文件 §仿真节点与 `interfaces/topic_contract.md` |
 | 3 | **话题频率 / QoS 列**：需实时快照（`ros2 topic info -v` / `hz`）；本沙箱仅 console 模式可用且无相机（B13） | T3b |
 | 4 | ~~话题表去重~~ | ✅ T3a 已完成：话题行收敛到 `docs/interfaces/topic_contract.md`，本文件与 `hil_architecture.md` 改为链接 |
 | 5 | 本文件里仍是 **C++ 仿真器与 HIL 相关**的条目（`hil_bringup` 段）——当前阶段 SIL 优先，按其原文保留但**不参与验收** | 待 HIL 重新纳入（T7） |
@@ -37,7 +37,13 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 |---|---|---|---|---|
 | `stonefish_simulator` | `stonefish_ros2` | workspace_sim | C++ | GPU 渲染仿真器（需 X Display / `xvfb-run`） |
 | `stonefish_simulator_nogpu` | `stonefish_ros2` | workspace_sim | C++ | 无头模式仿真器（**拒绝含相机的场景**，见 `workspace_sim/stonefish_notes.md`） |
-| `sim_bridge` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/sim_bridge.py` | 仿真硬件桥接（SIL 跑 PID；HIL 仅转发） |
+| `odom_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/odom_sim.py` | 转发 `/auv/odometry` → `/sim/sensor/odom` |
+| `imu_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/imu_sim.py` | 转发 `/auv/imu` → `/sim/sensor/imu` |
+| `dvl_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/dvl_sim.py` | DVL 适配（AQUA-SLAM）：`/auv/dvl` → `/sim/sensor/dvl` + 合成 4 波束 |
+| `pressure_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/pressure_sim.py` | 转发 `/auv/pressure` → `/sim/sensor/pressure` |
+| `nav_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/nav_sim.py` | 导航解组装：`/sim/sensor/*` → `/zit6/state/{pos,vel}`（SIL）或 `/zit6/sim/nav`（HIL） |
+| `mcu_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/mcu_sim.py` | 仿真 MCU：setpoint→PID→混控；HIL 只做推力转发 |
+| `camera_relay` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/camera_relay.py` | 相机转发 + 拼接 |
 | `hw_manager` | `uv_hm` | workspace_auv | `uv_hm/hw_manager.py` | 实车硬件管理（心跳 + 状态监控） |
 | `basic_motion` | `uv_control` | workspace_auv | `uv_control/basic_motion.py` | 运动控制 Action Server |
 | `vision` | `uv_perception` | workspace_auv | `uv_perception/vision.py` | YOLO 目标检测 |
@@ -47,20 +53,26 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 
 注意 `uv_sim` 只存在于 `workspace_sim/src/`，不在 `workspace_auv/src/` 中。
 
-> ✅ 已与各包 `setup.py` 的 `console_scripts` 核对：Python 入口 **7 个**（上面除两个仿真器外的 7 行）。
+> ✅ 已与各包 `setup.py` 的 `console_scripts` 核对：Python 入口 **13 个**（上面除两个仿真器外的 13 行：
+> `uv_sim` 7 个 + `workspace_auv` 6 个）。T5 之前是 7 个（`uv_sim` 只有单体 `sim_bridge`）。
 > `uv_bringup` 与 `uv_sim_bringup` 自身没有 entry point，只有 launch 文件；
 > **谁启动谁**属 launch 层，入口清单见 `interfaces/launch_entries.md`。
 
-### 包级 launch 现状 ✅（T4 重排后）
+### 包级 launch 现状 ✅（T5 重排后）
 
 | launch 文件 | 引用的入口 | 状态 |
 |---|---|---|
 | `uv_hm/launch/hm_launch.py` | `hw_manager` + micro-ROS agent | ✅ T4 修复（原先引用不存在的 `uv_hm/sim_bridge`，B2） |
 | `uv_control/launch/control_launch.py` | `basic_motion` | ✅ T4 修复（原先引用不存在的 `minimal_control`，B2） |
 | `uv_perception/launch/perception_launch.py` | `vision` + `position` | ✅ 可用（T4 新增 `sim_mode` 参数） |
-| `uv_sim/launch/bridge_launch.py` | `sim_bridge` | ✅ T4 新增（`hil_mode` / `pid_config_file`） |
+| `uv_sim/launch/bridge_launch.py` | `odom_sim` + `imu_sim` + `dvl_sim` + `pressure_sim` + `nav_sim` + `mcu_sim` + `camera_relay` | ✅ T5 重写（`hil_mode` 一个开关决定 SIL 7 节点 / HIL 5 节点） |
 | `uv_nav/launch/nav_launch.py` | `navigator` | ✅ 可用 |
 | `uv_task/launch/task_launch.py` | `task_runner` | ✅ 可用 |
+
+> `hil_mode:=true` 时：`dvl_sim` / `pressure_sim` **不启动**（HIL 下 MCU 直接订阅 `/auv/*`，
+> 这两路无人消费），`nav_sim` 被推导为 `publish_sim_nav:=true, publish_state:=false`，
+> `mcu_sim` 变成推力转发。**`hil_mode` 是唯一的模式开关** —— 两个必须互相一致的 launch 参数
+> 正是不变式 I2（`/zit6/state/*` 单发布者）最容易坏掉的地方。
 
 > 规则（T4 起）：**节点定义归各包，系统预设只做编排**。各包 launch 只声明自己的节点与
 > 节点级选项；`uv_bringup/real_bringup.py`（实机）与 `uv_sim_bringup/{sim,hil}_bringup.py`
@@ -188,22 +200,51 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 
 ---
 
-## sim_bridge 节点参数 ⏳
+## 仿真节点参数（`uv_sim`）✅（T5 拆分后）
+
+> T5 把单体 `sim_bridge` 拆成 7 个单职责节点。**控制数学**（PID、混控、setpoint 状态机、
+> 参数读写）现在住在 ROS-free 的 `uv_sim/mcu_control.py` + `uv_sim/mixer.py` 里，
+> 由 `test/data/thrust_golden.json` 做数值回归（拆分前后逐位一致）。
+
+### 无参数节点
+
+`odom_sim` / `imu_sim` / `dvl_sim` / `pressure_sim` / `camera_relay`（除下表 `log_rates`）
+不声明 ROS 参数；它们只做「引擎话题 → `/sim/sensor/*` / `/auv/*_cam/*`」的转发与类型适配。
+`dvl_sim` 的波束几何来自 `uv_sim/geometry.py` 的常量（与场景 `<specs beam_angle>` 由
+`test_scene_sensors.py` / `derive_extrinsics.py --check` 对拍），不是运行时可调参数 ——
+α 填错是**静默的水平尺度错误**（+73% 或 +30.7%），所以它必须是代码级常量并被测试钉住。
+
+### nav_sim 节点参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `hil_mode` | bool | `false` | `true`: HIL 模式（相机直通 + 转发 MCU 推力）<br>`false`: SIL 全仿真（PID + ZIT6 状态机 + 状态发布） |
-| `pid_config_file` | string | `''` | PID 增益文件路径。留空 = 自动解析（源码树 `src/uv_sim/config/sim_pid.yaml` 优先，其次包内 `share/uv_sim/config/sim_pid.yaml`）；可指向 `/tmp` 下的调参副本，无需重编译 |
+| `publish_state` | bool | `true` | SIL：发布 `/zit6/state/pos`(30 Hz) 与 `/zit6/state/vel`(60 Hz) |
+| `publish_sim_nav` | bool | `false` | HIL：发布 `/zit6/sim/nav`（12 float），**不**碰 `/zit6/state/*` |
 
-> ⏳ **本节将在 T5 重写**：`sim_bridge` 会被拆成 `odom_sim` / `imu_sim` / `dvl_sim` /
-> `pressure_sim` / `nav_sim` / `mcu_sim` / `camera_relay` 七个节点，参数与话题归属随之变化。
-> 当前内容已与代码核对，可放心使用到 T5 落地为止。
+> **两者同真 → 启动即报错退出**（那会给同一话题两个发布者，违反 I2）；两者同假只 WARN。
+> 经 `bridge_launch.py` 运行时由 `hil_mode` **推导**，不要手工把它们设成互相矛盾的值；
+> 直接 `ros2 run uv_sim nav_sim --ros-args -p publish_sim_nav:=true` 时别忘了同时
+> `-p publish_state:=false`。
 
-**PID 增益来源（2026-09-15 起）**：`workspace_sim/src/uv_sim/config/sim_pid.yaml` 是唯一事实源，9 个通道
+### mcu_sim 节点参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `hil_mode` | bool | `false` | `true`: **只做推力转发**（订阅 `/zit6/state/thr` → 混控 → `/auv/thrusters_cmd`），不算 PID、不发任何 `/zit6/state/*`、不提供服务；`false`: 完整仿真 MCU |
+| `pid_config_file` | string | `''` | PID 增益文件路径。留空 = 自动解析（源码树 `src/uv_sim/config/sim_pid.yaml` 优先，其次包内 `share/uv_sim/config/sim_pid.yaml`）；可指向 `/tmp` 下的调参副本，无需重编译。`hil_mode:=true` 时不读（不跑 PID） |
+
+### camera_relay 节点参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `log_rates` | bool | `false` | 1 Hz 打印 6 个 `/auv/*_cam/*` 的**写者侧**发布计数（Hz）。这是相机频率的第二个可信口径：大图 RELIABLE 话题上的 Python 订阅者会严重低估（见 `stonefish_notes.md`） |
+
+**PID 增益来源（2026-09-15 起，T5 后同一份代码）**：`workspace_sim/src/uv_sim/config/sim_pid.yaml` 是唯一事实源，9 个通道
 （`chassis.pid.pos.{x,y,z,yaw}` + yaw 串级内环 `chassis.pid.pos.yaw_rate` + `chassis.pid.vel.{x,y,z,yaw}`）。
-同一份数据既构造 `/zit6/get_params` 的返回值、也构造实际运行的 PID 对象，二者不会再漂移；
-`/zit6/update_params` 只改运行时、不写回文件。启动日志会打印实际加载路径。
-此前 `uv_hm/config/pid_params.yaml`（已删除，无人读取且数值已落后）与 `_init_full()` 内的硬编码副本均已废弃。
+`uv_sim/pid_config.py` 用同一份数据既构造 `/zit6/get_params` 的返回值、也构造实际运行的 PID 对象
+（`uv_sim/mcu_control.McuController`），二者不会再漂移；`/zit6/update_params` 只改运行时、不写回文件。
+启动日志会打印实际加载路径。此前 `uv_hm/config/pid_params.yaml`（已删除，无人读取且数值已落后）
+与单体 `sim_bridge._init_full()` 内的硬编码副本均已废弃。
 
 ---
 
@@ -306,12 +347,13 @@ ros2 launch uv_sim_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `hil_mode` | `false` | `true`: 只转发相机 + 透传推力（真 MCU 负责 PID）；`false`: 仿真 MCU |
-| `pid_config_file` | 空 | 空 = 用包内 `config/sim_pid.yaml` |
+| `hil_mode` | `false` | `true`: 真 MCU 负责 PID/混控与 `/zit6/state/*`（只起 5 个节点：两路转发 + `nav_sim` + 推力转发 + 相机转发）；`false`: 起全部 7 个节点（仿真 MCU） |
+| `pid_config_file` | 空 | 空 = 用包内 `config/sim_pid.yaml`（仅 `mcu_sim` 使用） |
 
 **用法：**
 ```bash
-ros2 launch uv_sim bridge_launch.py hil_mode:=true
+ros2 launch uv_sim bridge_launch.py                     # SIL：7 个节点
+ros2 launch uv_sim bridge_launch.py hil_mode:=true      # HIL：5 个节点（⏸ 未运行时验收）
 ```
 
 ### sim_bringup.py（包 `uv_sim_bringup`，SIL）

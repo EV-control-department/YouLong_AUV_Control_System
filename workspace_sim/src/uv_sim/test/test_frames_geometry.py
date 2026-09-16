@@ -418,22 +418,22 @@ def test_pid_builtin_fallback_is_structurally_complete() -> None:
 
     import yaml
 
-    import uv_sim.sim_bridge as sim_bridge
+    import uv_sim.pid_config as pid_config
 
     shipped = yaml.safe_load(
         (
             REPO_ROOT / "workspace_sim" / "src" / "uv_sim" / "config" / "sim_pid.yaml"
         ).read_text(encoding="utf-8")
     )
-    assert set(shipped) == set(sim_bridge.PID_PARAM_PATHS), (
+    assert set(shipped) == set(pid_config.PID_PARAM_PATHS), (
         "sim_pid.yaml and PID_PARAM_PATHS disagree on the channel list"
     )
-    assert set(sim_bridge.DEFAULT_PID_PARAMS) == set(sim_bridge.PID_PARAM_PATHS)
+    assert set(pid_config.DEFAULT_PID_PARAMS) == set(pid_config.PID_PARAM_PATHS)
 
-    allowed = set(sim_bridge.PID_REQUIRED_FIELDS) | set(sim_bridge.PID_OPTIONAL_FIELDS)
-    for channel, gains in sim_bridge.DEFAULT_PID_PARAMS.items():
+    allowed = set(pid_config.PID_REQUIRED_FIELDS) | set(pid_config.PID_OPTIONAL_FIELDS)
+    for channel, gains in pid_config.DEFAULT_PID_PARAMS.items():
         assert set(gains) <= allowed, f"{channel} has an unknown field"
-        for field in sim_bridge.PID_REQUIRED_FIELDS:
+        for field in pid_config.PID_REQUIRED_FIELDS:
             assert field in gains, f"{channel} is missing required field {field}"
             assert math.isfinite(float(gains[field])), f"{channel}.{field} is not finite"
         # Same field set on both sides, so a renamed field cannot go unnoticed.

@@ -1,43 +1,114 @@
-"""uv_sim entry point: the simulated MCU (``sim_bridge``).
+"""uv_sim entry point: the simulation-side nodes that stand in for hardware.
 
-SIL: setpoints in -> PID + thruster mixing -> thrusters, plus the ``/zit6/state/*``
-telemetry the control stack consumes.  HIL (``hil_mode:=true``) keeps only the
-camera relay and the thruster passthrough, because the real MCU owns PID and
-mixing there.
+Seven nodes, one responsibility each (T5):
 
-Lives here rather than in the preset so that splitting this node up later (the
-T5 task) touches only this package.
+=====================================  ==========================================
+``odom_sim`` / ``imu_sim``             ``/auv/*`` -> ``/sim/sensor/*`` relays
+``dvl_sim`` / ``pressure_sim``         (the DVL one is AQUA-SLAM's adapter)
+``nav_sim``                            ``/sim/sensor/*`` -> ``/zit6/state/{pos,vel}``
+                                       (SIL) or ``/zit6/sim/nav`` (HIL)
+``mcu_sim``                            setpoints -> PID -> mixing -> thrusters,
+                                       plus ``/zit6/state/{status,thr,zithbt}``
+``camera_relay``                       images -> ``/auv/*_cam/*`` (+ stitching)
+=====================================  ==========================================
+
+``hil_mode`` is the **single** knob for the SIL/HIL switch (there used to be one
+``sim_bridge`` with an internal branch; now the mode is composed from the nodes):
+
+* ``hil_mode:=false`` (default, the acceptance path) starts all seven.
+* ``hil_mode:=true`` starts five: ``dvl_sim``/``pressure_sim`` are skipped because
+  the real MCU subscribes ``/auv/*`` directly, and ``nav_sim`` is started with
+  ``publish_sim_nav:=true, publish_state:=false`` so the MCU keeps ownership of
+  ``/zit6/state/*`` (invariant I2).  ``mcu_sim`` becomes a thrust relay.
+
+``nav_sim``'s two roles are derived from ``hil_mode`` here rather than exposed as
+extra launch arguments: two knobs that must agree is exactly the failure mode I2
+is about.  The node also refuses to start if both are true (direct ``ros2 run``).
+
+Lives here rather than in the preset so that the node set stays owned by the
+package; the presets only decide whether to include this file.
 """
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.conditions import UnlessCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+
+HIL = LaunchConfiguration('hil_mode')
 
 
 def generate_launch_description():
+    # launch_ros coerces a substitution's text to the declared parameter type, so
+    # 'True'/'False' become booleans (the same mechanism the pre-T5 single-node
+    # launch relied on for hil_mode).
+    publish_state = PythonExpression(["'", HIL, "' == 'false'"])
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'hil_mode', default_value='false',
             description=(
-                'true: forward camera images and relay thrusters only '
-                '(a real MCU owns PID and mixing); false: simulate the MCU'
+                'true: a real MCU owns PID, mixing and /zit6/state/* -- only the '
+                'sensor relays needed for the sim/nav injection, the thrust relay '
+                'and the camera relay start; false: simulate the MCU'
             )),
         DeclareLaunchArgument(
             'pid_config_file', default_value='',
             description=(
-                'YAML file with the PID gains; empty means the packaged '
-                'uv_sim/config/sim_pid.yaml'
+                'YAML file with the PID gains for the simulated MCU; empty means '
+                'the packaged uv_sim/config/sim_pid.yaml'
             )),
 
         Node(
             package='uv_sim',
-            executable='sim_bridge',
-            name='sim_bridge',
+            executable='odom_sim',
+            name='odom_sim',
+            output='screen',
+        ),
+        Node(
+            package='uv_sim',
+            executable='imu_sim',
+            name='imu_sim',
+            output='screen',
+        ),
+        Node(
+            package='uv_sim',
+            executable='dvl_sim',
+            name='dvl_sim',
+            output='screen',
+            condition=UnlessCondition(HIL),
+        ),
+        Node(
+            package='uv_sim',
+            executable='pressure_sim',
+            name='pressure_sim',
+            output='screen',
+            condition=UnlessCondition(HIL),
+        ),
+        Node(
+            package='uv_sim',
+            executable='nav_sim',
+            name='nav_sim',
             output='screen',
             parameters=[{
-                'hil_mode': LaunchConfiguration('hil_mode'),
+                'publish_state': publish_state,
+                'publish_sim_nav': HIL,
+            }],
+        ),
+        Node(
+            package='uv_sim',
+            executable='mcu_sim',
+            name='mcu_sim',
+            output='screen',
+            parameters=[{
+                'hil_mode': HIL,
                 'pid_config_file': LaunchConfiguration('pid_config_file'),
             }],
+        ),
+        Node(
+            package='uv_sim',
+            executable='camera_relay',
+            name='camera_relay',
+            output='screen',
         ),
     ])

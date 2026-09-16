@@ -23,13 +23,13 @@
                                        ▼
    uv_sim_bringup ──▶ uv_bringup, uv_sim, uv_control, uv_hm, uv_nav, uv_perception,
    （仿真预设）        uv_task, stonefish_ros2
-   uv_sim ──▶ stonefish_ros2, zit6_interfaces
+   uv_sim ──▶ stonefish_ros2, zit6_interfaces, uv_msgs
    stonefish_ros2 ──▶（tf2, pcl, image_transport, …）
 ```
 
 | 包 | 声明的依赖（package.xml，已剔除 ament/rosidl/test） | 工作区 |
 |---|---|---|
-| `uv_msgs` | `std_msgs`, `sensor_msgs`, `action_msgs`, `builtin_interfaces` | workspace_auv |
+| `uv_msgs` | `std_msgs`, `sensor_msgs`, `geometry_msgs`, `action_msgs`, `builtin_interfaces` | workspace_auv |
 | `zit6_interfaces` | （无） | workspace_auv |
 | `uv_control` | `rclpy`, `std_msgs`, `uv_msgs`, `zit6_interfaces` | workspace_auv |
 | `uv_hm` ⏸ | `rclpy`, `std_msgs`, `sensor_msgs`, `nav_msgs`, `uv_msgs`, `zit6_interfaces` | workspace_auv |
@@ -37,7 +37,7 @@
 | `uv_perception` | `rclpy`, `std_msgs`, `sensor_msgs`, `uv_msgs`, `cv_bridge` | workspace_auv |
 | `uv_task` | `rclpy`, `std_msgs`, `uv_msgs`, `zit6_interfaces` | workspace_auv |
 | `uv_bringup` | `uv_hm`, `uv_control`, `uv_perception`, `uv_nav`, `uv_task`, `ros2launch` | workspace_auv |
-| `uv_sim` | `rclpy`, `sensor_msgs`, `nav_msgs`, `std_msgs`, `cv_bridge`, `stonefish_ros2`, `zit6_interfaces` | workspace_sim |
+| `uv_sim` | `rclpy`, `sensor_msgs`, `nav_msgs`, `std_msgs`, `cv_bridge`, `stonefish_ros2`, `zit6_interfaces`, `uv_msgs`, `python3-numpy`, `python3-yaml` | workspace_sim |
 | `uv_sim_bringup` | `uv_bringup`, `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_sim`, `stonefish_ros2`, `ros2launch` | workspace_sim |
 | `stonefish_ros2` | `rclcpp`, `std_srvs`, `geometry_msgs`, `nav_msgs`, `visualization_msgs`, `sensor_msgs`, `pcl`, `pcl_conversions`, `image_transport`, `tf2`, `tf2_ros`, `ros2launch` | workspace_sim |
 
@@ -50,7 +50,7 @@
 |---|---|---|---|
 | ~~D1~~ | ~~`uv_bringup` 的 launch 引用 `stonefish_ros2` 与 `uv_sim`，但 `package.xml` 未声明~~ | — | ✅ **T4 已修**：仿真预设迁到 `uv_sim_bringup`，并在其 `package.xml` 里声明了全部引用；`uv_bringup` 现在不引用任何仿真包（`launch-targets` + `launch-refs` 检查把关）。**注意此行已无「已知」标记**：若缺口复发，校验会直接失败 |
 | D2 | `uv_perception` 代码 import `cv2`、`numpy`、`ultralytics`，`package.xml` 只声明了 `cv_bridge` | 缺 `python3-opencv`/`python3-numpy`/`ultralytics`；`rosdep install` 装不全 | **已知**（补 `<exec_depend>` 即可） |
-| D3 | `uv_sim` 代码 import `yaml`、`cv2`（经 `cv_bridge` 间接）、`numpy`，`package.xml` 均未声明 | 同 D2；`setup.py` 的 `install_requires` 里有 `PyYAML`，但那是 pip 层，`rosdep` 不读 | **已知**（补 `<exec_depend>`） |
+| D3 | ~~`uv_sim` 代码 import `yaml`、`cv2`（经 `cv_bridge` 间接）、`numpy`，`package.xml` 均未声明~~ | — | ✅ **T5 已修**：`uv_sim/package.xml` 补了 `python3-numpy`、`python3-yaml`、`uv_msgs`；`import cv2` 本身是多余的（拼接只用 `cv_bridge` + `numpy.hstack`），已随单体删除。**此行已无「已知」标记**：若缺口复发，校验会直接失败 |
 | D4 | `uv_task` 代码 import `numpy`、`cv2`，未声明 | 同 D2 | **已知**（补 `<exec_depend>`） |
 
 > D2–D4 是**登记**，不是本轮修复项：随各包 `package.xml` 的 `<exec_depend>` 补齐即可。
@@ -65,23 +65,33 @@
 | 顺序 | 节点 | 依赖谁 | 就绪判据（代码事实） |
 |---|---|---|---|
 | 1 | `stonefish_simulator` | 场景文件、mesh、GPU/X | 打印 `Ready for running...`；随后开始发 `/auv/*` 与 `/sim/*_cam/*` |
-| 2 | `sim_bridge` | Stonefish 的 `/auv/*` | 收到 `/zit6/cmd/setpoint` 即可动；状态发布按 60 Hz tick 有节奏门控（pos 30 / vel 60 / status 10 / thr 30） |
-| 3 | `basic_motion` | `/zit6/state/{pos,vel,status}` | 收到状态后开始更新 `self.pose`；**未收到时会话仍启动**，动作会因拿不到位姿而失败/超时 |
-| 4 | `vision`（`enable_ai`） | `sim_mode:=true` 时订阅 `/auv/*_cam/stitched` | 采不到图会按退避重试（`read_failures` 指数退避，上限 0.5 s），不阻塞其它节点 |
-| 5 | `position`（`enable_ai`） | `/perception/detection/*` + `/basic_motion/pose_info` | **两者都有**才会产出 `/perception/objects`；缺位姿时静默不出结果 |
-| 6 | `navigator`（`enable_nav`） | `/basic_motion/pose_info` | `navigate_to` 在收到第一个位姿前**拒绝**并提示 `no pose yet on /basic_motion/pose_info` |
-| 7 | `task_runner`（`enable_task`） | BasicMotion action server | `main()` 里等 action server 最多 15 s；随后按 `debug_mode` 决定是否自动跑 `config/tasks.json`（**非 debug 模式启动即跑**） |
+| 2 | `odom_sim` / `imu_sim` / `dvl_sim` / `pressure_sim` | Stonefish 的 `/auv/*` | 收到即转发；不缓存、不改时间戳 |
+| 3 | `nav_sim` | `/sim/sensor/{odom,imu}` | SIL：60 Hz 定时器发 pos(30)/vel(60)；HIL：每个 odom 样本发一次 `sim/nav` |
+| 4 | `mcu_sim` | `/sim/sensor/{odom,imu}` + `/zit6/cmd/setpoint` | 收到位姿前不发推力（`current_pose_ready`）；状态按 60 Hz tick 门控（status 10 / thr 30） |
+| 5 | `basic_motion` | `/zit6/state/{pos,vel,status}` | 收到状态后开始更新 `self.pose`；**未收到时会话仍启动**，动作会因拿不到位姿而失败/超时 |
+| 6 | `vision`（`enable_ai`） | `sim_mode:=true` 时订阅 `/auv/*_cam/stitched` | 采不到图会按退避重试（`read_failures` 指数退避，上限 0.5 s），不阻塞其它节点 |
+| 7 | `position`（`enable_ai`） | `/perception/detection/*` + `/basic_motion/pose_info` | **两者都有**才会产出 `/perception/objects`；缺位姿时静默不出结果 |
+| 8 | `navigator`（`enable_nav`） | `/basic_motion/pose_info` | `navigate_to` 在收到第一个位姿前**拒绝**并提示 `no pose yet on /basic_motion/pose_info` |
+| 9 | `task_runner`（`enable_task`） | BasicMotion action server | `main()` 里等 action server 最多 15 s；随后按 `debug_mode` 决定是否自动跑 `config/tasks.json`（**非 debug 模式启动即跑**） |
+| — | `camera_relay` | Stonefish 的 `/sim/*_cam/*` | 无输入也能起（100 Hz 定时器空转），有图才开始拼接 |
 | — | `hw_manager` ⏸ | 真实 MCU（`/zit6/state/zithbt`） | SIL 不启动（`sim_bringup` 不含它）；HIL/REAL 经 `uv_hm/hm_launch.py` 启动，心跳超时进 `DEGRADED` |
 
 **`basic_motion` 是单点**：它是唯一动作入口，也是唯一的 `PoseInfo` 发布者。
 它没起来 ⇒ `position`/`navigator`/`task_runner` 全部拿不到位姿。
+**`nav_sim` 是 SIL 的状态单点**：它没起来 ⇒ `basic_motion` 拿不到位姿（`mcu_sim` 也收不到
+`/sim/sensor/*`，但 PID 会先在 `current_pose_ready` 上停住，不会乱发推力）。
 
 ## 4. 失效影响面（SIL）
 
 | 挂掉的节点 | 直接后果 | 还能验证什么 |
 |---|---|---|
-| `stonefish_simulator` | 没有 `/auv/*`，`sim_bridge` 无输入 | 无（除静态检查） |
-| `sim_bridge` | 无 `/zit6/state/*`，`basic_motion` 拿不到位姿；`/auv/thrusters_cmd` 无人发 | 静态检查、参数服务文档 |
+| `stonefish_simulator` | 没有 `/auv/*`，转发层无输入 | 无（除静态检查） |
+| `odom_sim` / `imu_sim` | 没有 `/sim/sensor/{odom,imu}` ⇒ `nav_sim` 与 `mcu_sim` 都失去输入，位姿与推力一起停 | 相机链路、`dvl_sim`/`pressure_sim` 的转发 |
+| `dvl_sim` | 没有 `/sim/sensor/dvl`（当前无消费者） | 其余全部 |
+| `pressure_sim` | 没有 `/sim/sensor/pressure`（当前无消费者） | 其余全部 |
+| `nav_sim` | 无 `/zit6/state/{pos,vel}`，`basic_motion` 拿不到位姿；HIL 下无 `sim/nav` 注入 | `dvl_sim` 转发、相机链路、静态检查 |
+| `mcu_sim` | 无 `/auv/thrusters_cmd`、无 `/zit6/state/{status,thr,zithbt}`、无参数服务 | `nav_sim` 的状态话题仍可观测（但没人被驱动） |
+| `camera_relay` | 无 `/auv/*_cam/*` ⇒ `vision`（`sim_mode`）采不到图 | 控制闭环、导航（无目标时） |
 | `basic_motion` | `position`/`navigator`/`task_runner` 全部失能；`/zit6/cmd/setpoint` 无发布者 | `vision` 仍能发检测（`/perception/detection/*` 照常） |
 | `vision` | 无检测 ⇒ `position` 无输入 ⇒ 无 `/perception/objects` | 控制闭环、导航（无目标时） |
 | `position` | 无 `/perception/objects` ⇒ `navigator`/`task_runner` 的物体相关任务失能 | 控制闭环、巡线（`line_follower` 直接订阅检测） |

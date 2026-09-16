@@ -15,6 +15,12 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>stonefish_ros2</exec_depend>
   <exec_depend>zit6_interfaces</exec_depend>
+  <!-- T5: mcu_control/odometry import numpy, pid_config imports yaml, and dvl_sim
+       produces uv_msgs/Dvl.  Before T5 these were undeclared (registered as gap D3
+       in docs/architecture/node_dependency.md; rosdep could not install them). -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>uv_msgs</exec_depend>
 
   <test_depend>pytest</test_depend>
 
