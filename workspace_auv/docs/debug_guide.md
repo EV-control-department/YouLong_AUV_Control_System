@@ -35,7 +35,9 @@ ros2 node info /vision
 ros2 node info /position
 ros2 node info /basic_motion
 ros2 node info /task_runner
-ros2 node info /sim_bridge
+ros2 node info /mcu_sim
+ros2 node info /nav_sim
+ros2 node info /camera_relay
 ```
 
 ### 检查话题
@@ -124,11 +126,13 @@ ros2 action send_goal --feedback /basic_motion uv_msgs/action/BasicMotion \
 ### 检查参数
 
 ```bash
-# 列出节点参数
-ros2 param list /sim_bridge
+# 列出节点参数（T5 起仿真 MCU 叫 mcu_sim；状态组装叫 nav_sim）
+ros2 param list /mcu_sim
+ros2 param list /nav_sim
 
 # 获取参数值
-ros2 param get /sim_bridge hil_mode
+ros2 param get /mcu_sim hil_mode
+ros2 param get /nav_sim publish_state
 ```
 
 ### 日志
@@ -160,13 +164,16 @@ ros2 launch uv_sim_bringup sim_bringup.py enable_ai:=false enable_nav:=true enab
 - `enable_nav:=true` — 开启导航
 - `enable_task:=true` — 开启任务执行器
 
-### 仿真桥（sim_bridge）状态输出
+### 仿真节点状态输出（T5 起是 7 个节点，不再是单体 sim_bridge）
 
-sim_bridge 用 `output='screen'`，所有 PID 计算、推进器混合、状态更新都会打印到终端。
+`uv_sim` 的 7 个节点都用 `output='screen'`：`odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim`
+（转发，默认安静）、`nav_sim`（状态/注入）、`mcu_sim`（PID、混控、状态，
+所有控制计算都从这里打印）、`camera_relay`（相机与拼接，`log_rates:=true` 时 1 Hz 打印
+各话题的**写者侧**频率）。
 
 ### PID 调参
 
-sim_bridge 的 8 个 PID 控制器运行时可调，无需改代码重启：
+`mcu_sim` 的 9 个 PID 控制器运行时可调，无需改代码重启：
 
 | 参数路径 | 控制器 | 级联层级 |
 |---|---|---|
@@ -174,12 +181,15 @@ sim_bridge 的 8 个 PID 控制器运行时可调，无需改代码重启：
 | `chassis.pid.pos.y` | Y 位置环 | 外环 |
 | `chassis.pid.pos.z` | Z 位置环 | 外环 |
 | `chassis.pid.pos.yaw` | Yaw 位置环 | 外环 |
+| `chassis.pid.pos.yaw_rate` | Yaw **速率**环 | 串级**内环**（2026-09-15 起也在服务里可见） |
 | `chassis.pid.vel.x` | X 速度环 | 内环 |
 | `chassis.pid.vel.y` | Y 速度环 | 内环 |
 | `chassis.pid.vel.z` | Z 速度环 | 内环 |
 | `chassis.pid.vel.yaw` | Yaw 速度环 | 内环 |
 
-每个控制器有 4 个增益：kp（比例）、ki（积分）、kd（微分）、i_limit（积分限幅）。
+每个控制器有 4 个增益：kp（比例）、ki（积分）、kd（微分）、i_limit（积分限幅）；
+`pos.z` / `vel.z` 还多一个 `z_thrust_ff`（深度环的浮力前馈，2026-09-15 修的 B14 之前
+它不在服务可见面上）。
 
 **查看当前值：**
 
@@ -187,7 +197,7 @@ sim_bridge 的 8 个 PID 控制器运行时可调，无需改代码重启：
 ros2 service call /zit6/get_params zit6_interfaces/srv/GetParams "{paths: []}"
 ```
 
-返回全部 8 个 PID 的完整配置 JSON。
+返回全部 9 个 PID 通道的完整配置 JSON。
 
 **运行时修改 PID 参数：**
 
@@ -207,7 +217,8 @@ ros2 service call /zit6/update_params zit6_interfaces/srv/UpdateParams \
 调试时可以不动包内文件，指向自己的调参副本（不必重编译）：
 
 ```bash
-ros2 run uv_sim sim_bridge --ros-args -p pid_config_file:=/tmp/my_pid.yaml
+# T5 起仿真 MCU 是 mcu_sim（旧的 `ros2 run uv_sim sim_bridge` 已不存在）
+ros2 run uv_sim mcu_sim --ros-args -p pid_config_file:=/tmp/my_pid.yaml
 ```
 
 文件支持只写要改的通道，其余沿用内置默认值；未知通道/字段/非法数字只会 WARNING，不会让节点起不来。
@@ -413,16 +424,19 @@ Stonefish 在无 GPU 的环境（SSH、WSL）会挂。三种办法：
    ros2 launch uv_sim_bringup sim_bringup.py headless:=true simulation_rate:=100.0
    ```
    用的是 console 引擎 `stonefish_simulator_nogpu`；注意它**不支持相机传感器**，
-   带相机的场景要先 `python3 workspace_sim/tools/strip_vision_sensors.py` 生成去相机副本，
-   而且 `simulation_rate` 必须给 `0`（实时）才会发 ROS 话题。相机图像在这条路径上不可用。
+   带相机的场景要先 `python3 workspace_sim/tools/strip_vision_sensors.py` 生成去相机副本。
+   ⚠️ **2026-09-16 更正**：`simulation_rate` 必须给**正数**（默认 `100.0` 即可）——
+   给 `0` 会让仿真循环停住、**什么话题都不发**（早先文档写反了，见 `stonefish_notes.md`
+   与 `docs/roadmap.md` 的 B13）。相机图像在这条路径上不可用。
 2. 降渲染质量：`rendering_quality:=low`（仍需图形环境）
 3. 或者用 VNC 连接桌面环境
 
 ### 机器人收到定深指令后转圈
 
-**历史 bug（2026-09-15 已修）**：`sim_bridge` 里 yaw 速率内环曾多一个负号
+**历史 bug（2026-09-15 已修）**：单体 `sim_bridge` 里 yaw 速率内环曾多一个负号
 （`cmd_rz = -float(self.pid_yaw_rate.step(...))`），导致定深时原地转圈。
-现在的代码是 `cmd_rz = float(self.pid_yaw_rate.step(...))`——**不要再把负号加回去**。
+现在这段代码在 `uv_sim/mcu_control.py`（T5 起由 `mcu_sim` 运行），是
+`cmd_rz = float(...)`——**不要再把负号加回去**。
 
 若仍出现转圈，先看 setpoint 的 yaw 分量是否为正：
 

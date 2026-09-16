@@ -80,7 +80,7 @@
 | B1 | 入口：`uv_bringup`（workspace_auv）内含仿真入口，违反「workspace_auv 不依赖仿真」 | `launch/sim_bringup.py`、`launch/sim_core.py`、`launch/hil_bringup.py` 直接引用 `uv_sim`/`stonefish_ros2` |
 | B2 | 各包 launch 文件陈旧失效 | `uv_control/launch/control_launch.py` 引用不存在的 `minimal_control`；`uv_hm/launch/hm_launch.py` 引用 `uv_hm/sim_bridge`（实际在 `uv_sim` 且无该 entry point）。实测 entry points 仅 `basic_motion/hw_manager/navigator/vision/position/task_runner` |
 | B3 | bringup 内联 `Node(...)`，与各包 launch 重复定义 | 三个 bringup 文件均如此 |
-| B4 | `sim_bridge.py` 单节点 765 行承担 5 类职责 | MCU 仿真 + 传感器聚合 + 相机转发 + HIL 分支 + 状态发布 |
+| B4 | ~~`sim_bridge.py` 单节点 765 行承担 5 类职责~~ **已修（T5）** | 原状：MCU 仿真 + 传感器聚合 + 相机转发 + HIL 分支 + 状态发布挤在一个文件里。现拆成 7 个单职责节点（`odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim`/`nav_sim`/`mcu_sim`/`camera_relay`）+ 5 个 ROS-free 共享模块，控制数学有拆分前后的数值黄金回归 |
 | B5 | 接口无权威文档，已存在契约漂移 | GUI 订阅 `/perception/annotated/<cam>`（`visualization/auv_visualizer.py:206`）**全局无发布者** |
 | B6 | 记忆/agent 文档绑定旧结构 | `CLAUDE.md`(11 处)、`workspace_auv/docs/debug_guide.md`(14)、`.claude/commands/auv-sim-master.md`(8)、`.github/agents/auv_master.md`(18)，另加根 `docs/node_parameters.md`（记录 `sim_bridge` 参数、`sim_core.py`、旧 launch 参数） |
 | B7 | 参考架构已存在于 `robotcup` 分支（可借鉴，不可直接合并：Foxy、包名 `uv_camera`、落后 17 提交） | robotcup: `launch/{real,sim,hil,core_sim,readiness,observability}.launch.py`、`uv_sim/{camera_passthrough.py,thrust_mixer.py,coordinate_convention.py,config/profiles/*,test/*}` |
@@ -95,7 +95,7 @@
 | B16 | **AQUA-SLAM 参考检出的外参与波束角是 blue_gx5 的（N2）** | `AQUA-SLAM/data/underwater_orbslam3_blue_gx5_{short,long}.yaml`：`alpha=[1.1780]×4`(=67.5°)、`beta=[0.7854]×4`(=45°，且是标量不是逐波束)、`Tbc=(0.4,0,0.1)`；`dvl_model/dvl.cpp:508` 另硬编码 `ALPHA=67.5°`。与 XUNYUN（α=60°、β=45/135/225/315、相机 `(0.23,−0.05,0.076)`）不符。**后果**：水平速度 +30.7%（`cos67.5/cos60=1.3066`）。**处理**：不改参考检出，改在 `extrinsics_reference.md` §5 列成 T6 逐项必改清单 |
 | B17 | **`alpha` 一词两义（N3）** | `check_dvl_frame.py` 曾用 `alpha` 表示艇的**航向**，而 AQUA-SLAM 与 `docs/frames/` 用 α 表示**波束离水平仰角**——这正是 B16 那类错误的高危来源。**已修**：统一 ψ=航向、θ=离竖直、α=离水平；脚本变量与日志改名，行为不变 |
 | B18 | **TF 从未开启，而文档曾断言它存在** | `ROS2SimulationManager.cpp` 的 TF 广播套着 `if (publishBaseLinkTransform_)`，该标志由 `ROS2ScenarioParser.cpp` 从 `<robot>` 子元素 `<ros_base_link_transform publish=...>` 读取，默认 `false`（`ROS2SimulationManager.h`）；本仓库 15 个 `.scn` **一个都没写** → 仿真**完全没有 TF**（`/tf` 实测为空，`dump_tf_tree.py` exit 1）。**T2 文档初稿误称"唯一 TF `world_ned → Vehicle/base_link`"**，并把 `ROS2SimulationManager.cpp:395` 当证据（忽略了 `if` 守卫）。**已修**：`frame_convention.md` §3 改写为"当前无 TF"+开启方式+守卫坑；`extrinsics_reference.md` 删"并广播 TF"；`dump_tf_tree.py` 改为读场景 `<robot name>` 且区分"没开 TF"与"开了没数据"；新增 2 例测试钉住（无场景声明 TF、工具从场景读名字）。**附带发现**：Canyon 场景把艇命名为 `XUNYUN`（非 `Vehicle`），工具原先硬编码 `Vehicle`，一开 TF 即误报 |
-| B19 | **`/zit6/state/vel` 有两个写者，且两者物理含义不同（T1 验收卡在这一条上）** | `sim_bridge._odom_cb` 写的是**机体系原点处**的 odometry twist（30 Hz），`_dvl_cb` 写的是**DVL 位置处**的速度（20 Hz，= 原点速度 + `ω×r_dvl`，`r_dvl=(-0.375,0,0.1)`）——两者在**有角速度时相差 `0.375·\|ω_z\|`**。实测：原地 90° 回转时 `dvl.y − odom.y = +0.037` 而 `ω_z=−0.099`，`−0.375·ω_z = +0.037`（三位小数吻合）；按 `MAX_YAW_RATE=0.35` 折算最大可差 **0.13 m/s**，正是 `check_dvl_frame.py` 里 `stv err` 报的 0.033~0.150。**归属 T5**：`dvl_sim` 给「DVL 位置处速度」（含杆臂），`nav_sim` 给「原点处速度」（单一定义），两个话题分开；在此之前 `error_state` 会继续 FAIL，**不要去放宽阈值**（工具里已写明）。同轮还修掉该脚本的 `along ratio` 度量 bug：它把 DVL 速度投影到**未做杆臂修正**的 `linear` 上，于是转得越快的腿比值越偏（psi=90° 实测 1.117），改为投影到 `expected` |
+| B19 | ~~**`/zit6/state/vel` 有两个写者，且两者物理含义不同（T1 验收卡在这一条上）**~~ **已修（T5，由"分开"而不是"改公式"）** | 原状：`sim_bridge._odom_cb` 写的是**机体系原点处**的 odometry twist（30 Hz），`_dvl_cb` 写的是**DVL 位置处**的速度（20 Hz，= 原点速度 + `ω×r_dvl`，`r_dvl=(-0.375,0,0.1)`）——两者在**有角速度时相差 `0.375·\|ω_z\|`**。实测：原地 90° 回转时 `dvl.y − odom.y = +0.037` 而 `ω_z=−0.099`，`−0.375·ω_z = +0.037`（三位小数吻合）；按 `MAX_YAW_RATE=0.35` 折算最大可差 **0.13 m/s**，正是 `check_dvl_frame.py` 里 `stv err` 报的 0.033~0.150。**T5 修复**：`/zit6/state/vel` 只剩 `nav_sim` 一个写者、线性部分 = **原点** twist；DVL 处的值走 `/sim/sensor/dvl.velocity`（`dvl_sim`，含杆臂），并另带 4 路合成波束。同轮还修掉该脚本的 `along ratio` 度量 bug：它把 DVL 速度投影到**未做杆臂修正**的 `linear` 上，于是转得越快的腿比值越偏（psi=90° 实测 1.117），改为投影到 `expected` |
 
 ---
 
@@ -356,7 +356,19 @@ docs/
 
 ---
 
-### T5 ☐ sim_bridge 按传感器拆分（MCU 视为一种「传感器」）
+### T5 ✅ sim_bridge 按传感器拆分（MCU 视为一种「传感器」）— **已完成（2026-09-16）**
+
+> **交付实况**（与下面的计划有三处差异，都以代码为准）：① `hil_mode` 从**节点参数**变成
+> `bridge_launch.py` 的**组合开关**（SIL 7 节点 / HIL 5 节点），节点级参数变成
+> `nav_sim.publish_state/publish_sim_nav` 与 `mcu_sim.hil_mode`；
+> ② 没有引入 `coordinate_convention.py` 也没有复用 `thrust_mixer.py`/`pid_controller.py`
+> （两者零 import 且数学已漂移：死代码 yaw ×0.5/heave ×1.0 vs 活代码 ×1.0/×0.8），
+> 改为把活数学搬进 `mixer.py`/`mcu_control.py` 并用黄金夹具钉住；
+> ③ `velocity_valid` 用 `altitude >= 0` 而不是 `velocity_covariance[0] >= 0`
+> （后者在本引擎里恒为正，等于"永远有效"）。
+> 另有一个没写在计划里的坑：`uv_sim` 缺 `setup.cfg`，所以 7 个 `console_scripts`
+> 全被装到了 `install/uv_sim/bin/`（`ros2 run`/launch 看不到）——拆分前那个手写的
+> `libexec` 包装脚本一直在替一个坏掉的入口干活。详见 devlog §9。
 
 **目标**：把 765 行单体拆成 7 个单职责节点，**话题名/类型零变化**（只新增命名空间）。
 
@@ -382,16 +394,19 @@ docs/
 - 两者语义写进 `topic_contract.md`，并让 `check_dvl_frame.py` 分别对拍（`error_dvl` 对 DVL 话题、
   `error_state` 对原点话题，各自用各自参考量）。
 
-**共享模块**：`thrust_mixer.py`、`pid_controller.py`（已有）、`coordinate_convention.py`（新增；表达「当前场景已 NED 对齐 ⇒ 恒等映射」，**不照搬 robotcup 的巡航场景旋转**）
+**共享模块**：`mixer.py`（混控，活数学）、`mcu_control.py`（ROS-free 控制核）、`pid.py`/`pid_config.py`、
+`odometry.py`（唯一的 `/auv/odometry` 解码器）、`mathutil.py`、`runner.py`。
+`thrust_mixer.py`/`pid_controller.py` **已删除**（零 import、数学漂移，见上面的交付实况）；
+`coordinate_convention.py` **不引入**（`geometry.py` 已是几何唯一权威，本场景 NED 对齐 ⇒ 恒等映射）。
 
 **迁移映射**：`_odom_cb/_imu_cb/_dvl_cb/_pressure_cb`→四个 `*_sim`；`_publish_{pos,vel,state}`→`nav_sim`；`_setpoint_cb/_tick_60hz/_*_pid_step/_publish_thrust_from_4dof/_agxhbt_cb/_publish_zithbt/_ins_cb/_update_ins_alignment/_get_params_cb/_update_params_cb/_publish_thr`→`mcu_sim`；`_init_camera_*`/`*_img_cb`/`_publish_stitched_*`→`camera_relay`
 
 **验收**
-- A5-1 `ros2 pkg executables uv_sim` 列出 7 个节点，无 `sim_bridge`
-- A5-2 拆分前后**话题名与消息类型零变化**（用 T3 的快照 diff 证明）
-- A5-3 BasicMotion `START` + `SET(1,0,-1,0)` 在峡谷场景端到端成功（证明 MCU 闭环未坏）
-- A5-4 同 setpoint 下推力序列与拆分前一致（数值回归）
-- A5-5 `test_camera_relay.py`：stitched 宽度 = 2×单目宽
+- ✅ A5-1 `ros2 pkg executables uv_sim` 列出 7 个节点，无 `sim_bridge`（实跑确认；另见 `test_node_split.py`）
+- ✅ A5-2 拆分前后**话题名与消息类型零变化**（`test/data/topics_before_split.json` 的 AST 三元组对拍：无删除、无类型变化，新增恰好是 `/sim/sensor/*` 的 6 个端点）
+- ⏳ A5-3 BasicMotion `START` + `SET(0.5,0,3.0,0)` 在峡谷场景端到端成功（console 运行记录见 devlog §9.4）
+- ✅ A5-4 同 setpoint 下推力序列与拆分前一致（`test/data/thrust_golden.json`：133 个 PID 步 + 3 例力模式 + 6 例混控探针，**逐位相等**）
+- ✅ A5-5 `test_camera_relay.py`：stitched 宽度 = 2× 单目宽
 
 **依赖**：T4（新入口承载新节点）
 **预估**：2~2.5 人日
@@ -478,7 +493,7 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 | A3-4 | 话题表无重复事实源（`hil_architecture.md`/`node_parameters.md` 已改为链接） | T3a（已绿） |
 | A3-5 | 服务/动作字段语义、~~launch 入口表~~（T4 已交付）、频率/QoS 列 | T3b（待 T5） |
 | A4-1..4 | 分层干净；入口契约测试通过 | T4（✅ 已绿，见 T4 节） |
-| A5-1..5 | 7 节点可执行；话题零变化；端到端动作成功；数值回归 | T5 |
+| A5-1..5 | 7 节点可执行 ✅；话题零变化 ✅；数值回归 ✅；端到端动作 ⏳（console 记录见 devlog §9.4） | T5（已交付） |
 | S1..S5 | AQUA-SLAM 构建/稳定性/精度/DVL 消融/一键评估 | T6 |
 
 ---
@@ -492,6 +507,7 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 | ~~O1~~ | 实机 DVL 波束倾角 = **30°（离竖直）** ⇒ `beam_angle=30`、AQUA-SLAM `α=60°`（不再是条件项） |
 | ~~O2~~ | 「45°」= **DVL 斜置**（波束相对艇体系 45° 斜向）⇒ 按 D1 改仿真：`rpy=(0,0,0)` + `beam_positive_z="true"` + `xyz z=0.1` |
 | ~~O3~~ | 文档树放**仓库根 `docs/`**（与既有权威文档同处），工具放仓库根 `tools/`；`workspace_auv/docs/` 只保留包级文档 |
+| ~~O4~~ | `coordinate_convention.py` **不引入**（T5 定案）：`geometry.py` 已是几何唯一权威，本场景 NED 对齐 ⇒ 恒等映射，再加一层只会多一个漂移点 |
 | ~~O6~~ | 磁盘已腾出：`/` 剩余 **12 GB**，满足 T6 要求 |
 | ~~O7~~ | 已随 O3 消解：archify 产物本就在根 `docs/`，不迁动 |
 
@@ -499,7 +515,6 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 
 | # | 问题 | 影响 | 默认取向 |
 |---|---|---|---|
-| O4 | `robotcup` 分支的 `coordinate_convention.py` 是否需要（该分支场景是旋转绘制的） | T5 | 仅保留「恒等映射 + 判据」，不引入场景旋转 |
 | O5 | 是否需要「就绪门控」（等待 Stonefish 话题出现再启动下游） | T4 可选增强 | 做成 `startup_gate` 参数，默认关闭 |
 
 ---
@@ -551,8 +566,8 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 |---|---|---|
 | `xunyun_fixed.scn` | DVL/IMU/相机参数变更 | 直接改 |
 | `canyon_vision_dvl.scn`、`sauvc_2026_finals.scn`、`underwater_xunyun.scn`、`wuurc_murc_2026_auv.scn` | 通过 include 继承改动 | 更新各自头部注释中的传感器说明 |
-| `sim_bridge._dvl_cb` → `/zit6/state/vel` | 速度由「DVL 系（错位 45°）」变为「机体系（正确）」 | 行为修复；T5 拆分时归入 `nav_sim` |
-| `basic_motion._vel_cb` → `v_along` | 收敛判据输入变正确 | 观察 WMOVE 行为变化（可能表现为步进节奏变化，属预期修复） |
-| `/auv/dvl` 其它消费者 | 实测当前仅 `sim_bridge`；T5 后将新增 `dvl_sim`（转发 + 合成波束） | 契约写入 T3 |
+| `sim_bridge._dvl_cb` → `/zit6/state/vel` | 速度由「DVL 系（错位 45°）」变为「机体系（正确）」 | ✅ 行为修复；T5 起该话题只由 `nav_sim` 写，DVL 值走 `/sim/sensor/dvl` |
+| `basic_motion._vel_cb` → `v_along` | 收敛判据输入变正确（不再被 DVL 的杆臂项间歇覆盖） | 观察 WMOVE 行为变化（可能表现为步进节奏变化，属预期修复） |
+| `/auv/dvl` 其它消费者 | 实测原本仅 `sim_bridge`；T5 起新增 `dvl_sim`（转发 + 合成 4 波束 → `/sim/sensor/dvl`） | 契约在 `topic_contract.md` §1；T6 的 AQUA-SLAM 是它的消费者 |
 | `workspace_sim/stonefish_notes.md` | 记录了旧的 DVL 说明 | 同步更新 |
 | AQUA-SLAM `config/sim_canyon.yaml` | `T_dvl_c`、α/β 依赖新安装 | T2/T6 生成 |

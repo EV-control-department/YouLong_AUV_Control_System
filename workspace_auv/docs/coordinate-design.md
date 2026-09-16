@@ -93,14 +93,14 @@ class Coordinate:
 ### 使用示例
 
 ```python
-# sim_bridge: 记录 AUV 当前位置
+# 仿真 MCU（T5 之前叫 sim_bridge，现在是 uv_sim/mcu_sim）: 记录 AUV 当前位置
 auv_pose = Coordinate(x=pos['x'], y=pos['y'], z=pos['z'], rz=pos['rz'])
 
 # basic_motion: 计算目标点相对于 AUV 的位置
 target_world = Coordinate(x=10, y=5, z=2, rz=45)
 target_in_auv = auv_pose.transform_to(target_world)   # AUV 视角看目标
 
-# minimal_control: 机体系偏移转世界系
+# basic_motion: 机体系偏移转世界系
 step = Coordinate(x=1.0, y=0.0, z=0.0)                # 前进 1m
 new_target = auv_pose.transform_from(step)             # 世界系新目标
 ```

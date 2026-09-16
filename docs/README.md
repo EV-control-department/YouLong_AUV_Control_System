@@ -102,8 +102,8 @@
 | # | 缺口 | 何时 |
 |---|---|---|
 | 1 | `interfaces/service_action_contract.md`（服务/动作字段语义） | T3b |
-| 2 | `interfaces/launch_entries.md` 与 launch 参数表（T4 重排 `uv_bringup` 后） | T4 |
+| 2 | ~~`interfaces/launch_entries.md` 与 launch 参数表（T4 重排 `uv_bringup` 后）~~ | ✅ T4 |
 | 3 | 话题频率 / QoS 列（需实时快照；本沙箱仅 console 模式可用） | T3b |
-| 4 | `sim_bridge` 参数与话题归属按 T5 的新结构改写 | T5 |
+| 4 | ~~`sim_bridge` 参数与话题归属按 T5 的新结构改写~~ | ✅ T5（拆成 7 节点，见 `node_parameters.md` §仿真节点与 `topic_contract.md` §1） |
 | 5 | 实机外参的实测复测（`frames/extrinsics_reference.md` §2 中「未验证」的行） | ⏸ 待硬件 |
-| 6 | `node_dependency.md` §2 的 D1–D4 依赖缺口 | T4 / 随包补齐 |
+| 6 | `node_dependency.md` §2 的 D2/D4 依赖缺口（D1/D3 已修） | 随包补齐 |

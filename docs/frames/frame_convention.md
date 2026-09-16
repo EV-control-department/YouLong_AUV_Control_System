@@ -104,8 +104,9 @@ ROS2SimulationManager.h      publishBaseLinkTransform_(false)                 �
 **里程计 twist 的系**：`pose` 在 `header.frame_id`（`world_ned`），`twist` 在
 `child_frame_id`（机体系）。口诀：**pose 跟 header，twist 跟 child**。
 重复旋转一次 yaw 会把 `v_body` 变成 `R(-psi)·v_body`（psi=90° 时纯前进变成 `(0,-u)`）。
-唯一编码点是 `uv_sim/sim_bridge.py` 的 `body_twist_from_odometry()`
-（回归：`test_odometry_frame.py`）。
+唯一编码点是 `uv_sim/odometry.py` 的 `body_twist_from_odometry()` /
+`apply_odometry_to_state()`（T5 之前是单体 `sim_bridge.py`；`nav_sim` 与 `mcu_sim` 共用，
+回归：`test_odometry_frame.py`）。
 
 ---
 
@@ -149,7 +150,7 @@ AQUA-SLAM 的波束矩阵行 = `(-cosβ·cosα, sinβ·cosα, sinα)`，速度�
 
 | 话题 | 取值范围 | 含义 | 锚点 |
 |---|---|---|---|
-| `/auv/thrusters_cmd` | **[-1, 1]** | 6 个推进器归一化设定点 | `sim_bridge.py` 的推进器混控段 |
+| `/auv/thrusters_cmd` | **[-1, 1]** | 6 个推进器归一化设定点 | `uv_sim/mixer.py` 的 `mix_thruster_forces()`（T5 之前是 `sim_bridge.py` 的混控段） |
 | `ZitSetpoint` | 视字段 | MCU 协议（力/力矩或轴指令） | `zit6_interfaces/msg/ZitSetpoint.msg` |
 | `type_mask` | **0 = 轴生效，1 = 轴屏蔽** | 反逻辑！`0x0F` 是**全屏蔽** | `uv_control` 的 `MotionCommand.type_mask` |
 

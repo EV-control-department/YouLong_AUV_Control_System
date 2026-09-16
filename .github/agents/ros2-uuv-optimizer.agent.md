@@ -26,6 +26,12 @@ Your job is to execute the user's command-driven optimization workflow for UUV/A
 ## Project Knowledge Baseline (AUV2026)
 
 ### Canonical Docs
+> ⚠️ **The `doc/…` paths below belong to a different checkout (`AUV2026`) and do not exist in this
+> repository.** The current sources of truth are: repository root `CLAUDE.md`, `docs/README.md`
+> (index), `docs/interfaces/topic_contract.md` (topics), `docs/node_parameters.md` (parameters),
+> `docs/architecture/*`, and `docs/roadmap.md`. The package list below is likewise from that other
+> checkout — in this repo the simulation side is `uv_sim` (seven nodes since T5).
+
 - Primary architecture and data flows: `doc/ARCHITECTURE.md`.
 - Overall workspace navigation and compilation rules: `doc/GETTING_STARTED.md`.
 - Node responsibilities and pub/sub/service map: `doc/NODES.md`.

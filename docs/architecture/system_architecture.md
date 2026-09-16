@@ -12,7 +12,8 @@
 ```
 层  包                 角色                                       语言/构建
 0   stonefish_ros2     Stonefish 1.6 物理引擎封装（含 GPU/无头两种仿真器）   C++ / ament_cmake
-1   uv_sim             仿真硬件桥：SIL 下扮演 MCU（PID + 推力混控 + 状态）    Python / ament_python
+1   uv_sim             仿真侧 7 节点：传感器转发层（odom/imu/dvl/pressure）+    Python / ament_python
+                       nav_sim + mcu_sim（仿真 MCU）+ camera_relay
     uv_hm              实机硬件管理：心跳 + 状态监控（SIL 下不启动）         Python / ament_python
 2   uv_control         运动 API：唯一动作入口 basic_motion                   Python / ament_python
 3   uv_perception      YOLO 检测（vision）+ 多射线 3D 定位（position）        Python / ament_python
@@ -26,15 +27,18 @@
 
 **依赖方向是单向的**：上层依赖下层的接口（话题/服务/动作），下层**不知道**上层的存在。
 唯一的例外是 `uv_control` 通过 `/zit6/cmd/setpoint` 与 `/zit6/state/*` 与"MCU"对话——
-而 SIL 里那个"MCU"就是 `uv_sim`，这正是 SIL/HIL 可切换的关键抽象。
+而 SIL 里那个"MCU"就是 `uv_sim` 的 `mcu_sim`，这正是 SIL/HIL 可切换的关键抽象。
 
-## 2. 可执行节点（9 个）
+## 2. 可执行节点（15 个）
 
 | 可执行 | 包 | 工作区 | 职责 | SIL 是否启动 |
 |---|---|---|---|---|
 | `stonefish_simulator` | `stonefish_ros2` | workspace_sim | GPU 渲染仿真器（物理 + 传感器 + 渲染） | ✅（需 X/GPU） |
 | `stonefish_simulator_nogpu` | `stonefish_ros2` | workspace_sim | 无头仿真器（**拒绝含相机的场景**） | 仅离线物理验证 |
-| `sim_bridge` | `uv_sim` | workspace_sim | SIL：PID + 混控 + 状态发布；HIL：相机转发 + 推力转发 | ✅ |
+| `odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim` | `uv_sim` | workspace_sim | `/auv/*` → `/sim/sensor/*` 转发层（`dvl_sim` 兼 AQUA-SLAM 适配器） | ✅（HIL 下只起前两个） |
+| `nav_sim` | `uv_sim` | workspace_sim | 导航解组装：`/sim/sensor/*` → `/zit6/state/{pos,vel}`（SIL）或 `/zit6/sim/nav`（HIL） | ✅ |
+| `mcu_sim` | `uv_sim` | workspace_sim | 仿真 MCU：setpoint→PID→混控→推力 + 状态 + 参数服务；HIL 只做推力转发 | ✅ |
+| `camera_relay` | `uv_sim` | workspace_sim | 相机转发 + 左右目拼接 | ✅ |
 | `basic_motion` | `uv_control` | workspace_auv | 运动动作服务端（START/SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL） | ✅ |
 | `vision` | `uv_perception` | workspace_auv | YOLO 检测（`sim_mode` 订阅仿真图像） | 可选（`enable_ai`） |
 | `position` | `uv_perception` | workspace_auv | 多射线交会 3D 定位（位姿源 = `PoseInfo`） | 可选（`enable_ai`） |
@@ -46,7 +50,7 @@
 
 ```
                  ┌─────────────── 控制下行 ───────────────┐
-用户/GUI ──动作──▶ basic_motion ──/zit6/cmd/setpoint──▶ sim_bridge
+用户/GUI ──动作──▶ basic_motion ──/zit6/cmd/setpoint──▶ mcu_sim
 （task_runner）        ▲                                    │
                        │                           串级 PID + 6 推进器混控
                        │                                    │
@@ -56,24 +60,34 @@
                        │                                    │
                        │                        /auv/{odometry,imu,dvl,pressure}
                        │                                    │
-                       └──── /zit6/state/{pos,vel,thr,…} ◀──┘
-                              （sim_bridge 聚合，~60 Hz）
+                       │                   转发层 ×4（odom/imu/dvl/pressure_sim）
+                       │                                    │
+                       │                            /sim/sensor/*
+                       │                          ┌─────────┴─────────┐
+                       │                          ▼                   ▼
+                       │                       nav_sim             mcu_sim
+                       │                          │              （PID 反馈）
+                       └──── /zit6/state/{pos,vel} ◀──┘   （30 / 60 Hz）
 ```
 
 关键点：
 
-1. **`sim_bridge` 是 MCU 的替身**：仿真传感器进、力/力矩出；PID 与混控都在它内部。
+1. **`mcu_sim` 是 MCU 的替身**：仿真传感器进、力/力矩出；PID 与混控都在它内部。
    换成真 MCU 时，同一套 `/zit6/*` 接口不变（这就是 HIL，⏸）。
 2. **`/auv/odometry` 的 `twist` 是机体系**（`pose` 才是 `world_ned`）；唯一解码点是
-   `sim_bridge.body_twist_from_odometry()`，见 `docs/frames/frame_convention.md` §3。
-3. **位姿源是 `PoseInfo`**（`basic_motion` 发布 30 Hz）：`position` 用它做射线原点与姿态，
+   `uv_sim/odometry.py`（`nav_sim` 与 `mcu_sim` 共用），见 `docs/frames/frame_convention.md` §3。
+3. **`/zit6/state/*` 单发布者（I2）**：SIL 由 `nav_sim`(pos/vel) + `mcu_sim`(status/thr/zithbt)
+   发布；HIL 下全部归真 MCU，此时 `nav_sim` 只发 `/zit6/sim/nav`、`mcu_sim` 只转发推力。
+4. **转发层（`/sim/sensor/*`）是我们自己的命名空间**：引擎话题变它不变，
+   而且 T6 的 AQUA-SLAM 消费的是它（`/sim/sensor/dvl` 带 4 路合成波束）。
+5. **位姿源是 `PoseInfo`**（`basic_motion` 发布 30 Hz）：`position` 用它做射线原点与姿态，
    `navigator` 用它做规划前置，`task_runner` 用它做本地坐标记账。
    `/auv/state`（`AuvState`）已无发布者，属历史。
 
 ### 感知支路（可选）
 
 ```
-/sim/*_cam/*/image_color ─▶ sim_bridge（拼接）─▶ /auv/{front,down}_cam/stitched
+/sim/*_cam/*/image_color ─▶ camera_relay（拼接）─▶ /auv/{front,down}_cam/stitched
                                                         │  (sim_mode:=true)
                                                         ▼
                                                       vision
@@ -89,8 +103,8 @@
 | 入口 | 所在工作区 | 说明 |
 |---|---|---|
 | `ros2 launch uv_bringup real_bringup.py` | `workspace_auv` | **唯一实机入口**：`uv_hm`（agent + hw_manager）+ 控制/感知/（可选）nav/task |
-| `ros2 launch uv_sim_bringup sim_bringup.py` | `workspace_sim` | 完整 SIL：Stonefish + `sim_bridge` + 控制/感知/（可选）nav/task |
-| `ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false` | `workspace_sim` | 等价于已删除的 `sim_core`：只有引擎 + 仿真 MCU |
+| `ros2 launch uv_sim_bringup sim_bringup.py` | `workspace_sim` | 完整 SIL：Stonefish + `uv_sim` 的 7 个节点 + 控制/感知/（可选）nav/task |
+| `ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false` | `workspace_sim` | 等价于已删除的 `sim_core`：只有引擎 + 仿真 MCU（7 个仿真节点仍在） |
 | `ros2 launch uv_sim_bringup hil_bringup.py` | `workspace_sim` | HIL ⏸：Stonefish + 真 MCU |
 
 规则：**节点定义归各包，系统预设只做编排**。预设文件里没有 `Node(...)`，只有 include +

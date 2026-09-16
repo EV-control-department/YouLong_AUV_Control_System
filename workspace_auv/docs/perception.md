@@ -14,8 +14,8 @@
 ## 架构
 
 ```
-sim_bridge                          vision                              position
-─────────                          ──────                              ────────
+camera_relay                        vision                              position
+────────────                          ──────                              ────────
 front_cam/left ──┐                 ┌─ front_left  (1280×960) ── YOLO ──→ /perception/detection/front_left
 front_cam/right ─┼─ hstack(2560×960)┤                                         │
                  └─ /auv/front_cam/stitched ──┤                             │
@@ -48,7 +48,7 @@ basic_motion ── /basic_motion/pose_info (30Hz) ─────────�
 
 ### 功能
 
-订阅 sim_bridge 发布的拼接双目图像，从**中线**切开为左右独立图像（前视各 1280×960、下视各 1920×1080），分别运行 YOLO 检测，每个通道独立发布检测结果。切分位置是 `mid = width // 2`，不依赖固定分辨率。
+订阅 `camera_relay`（`uv_sim`）发布的拼接双目图像，从**中线**切开为左右独立图像（前视各 1280×960、下视各 1920×1080），分别运行 YOLO 检测，每个通道独立发布检测结果。切分位置是 `mid = width // 2`，不依赖固定分辨率。
 
 ### 订阅
 
@@ -89,7 +89,7 @@ go2rtc 视频流（默认端口 `1984`）：
 
 ### 图像拆分
 
-拼接图由 sim_bridge 通过 `np.hstack` 水平拼接左右目得到（前视 1280×960×2 → 2560×960，
+拼接图由 `camera_relay`（`uv_sim`，T5 之前是单体 `sim_bridge`）通过 `np.hstack` 水平拼接左右目得到（前视 1280×960×2 → 2560×960，
 下视 1920×1080×2 → 3840×1080）。vision 从正中间切开：
 
 ```python

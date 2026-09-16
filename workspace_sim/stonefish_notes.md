@@ -55,9 +55,9 @@ stonefish_simulator_nogpu <simulation_data> <scenario.scn> <rate>
 仿真入口都在 `workspace_sim` 的 **`uv_sim_bringup`** 包（`workspace_auv` 自 T4 起不含任何
 仿真依赖，只留 `uv_bringup real_bringup.py`）：
 
-- `ros2 launch uv_sim_bringup sim_bringup.py`：仿真全栈（引擎 + sim_bridge + control + perception + 可选 nav/task）。
-- `ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false`：只有引擎 + sim_bridge（等价于已删除的 `sim_core.py`）。
-- `ros2 launch uv_sim_bringup hil_bringup.py`：HIL ⏸，sim_bridge 只透传相机、PID 交给实机 MCU。
+- `ros2 launch uv_sim_bringup sim_bringup.py`：仿真全栈（引擎 + `uv_sim` 的 7 个节点 + control + perception + 可选 nav/task）。
+- `ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false`：只有引擎 + 仿真 MCU 一侧的 7 个节点（等价于已删除的 `sim_core.py`）。
+- `ros2 launch uv_sim_bringup hil_bringup.py`：HIL ⏸，`hil_mode:=true` ⇒ 只起 5 个节点（两路转发 + `nav_sim` + 推力转发 + 相机转发），PID 交给实机 MCU。
 - `ros2 launch uv_sim_bringup sim_bringup.py headless:=true simulation_rate:=100.0`：**无头物理仿真**
   （console 版引擎，无相机图像）；相机传感器需先用 `tools/strip_vision_sensors.py` 去掉。
 
@@ -366,7 +366,8 @@ GUI 里按显示模式切换会看到凸包/物理网格，容易误判成「模
   `v_along = V·cos(2α+45°)`（α=22.5° 时恒为 0）。回归测试见
   `src/uv_sim/test/test_scene_sensors.py`，端到端检查见 `tools/check_dvl_frame.py`。
 
-- 数据流：`Stonefish → /auv/* → sim_bridge → /zit6/state/* → basic_motion → PoseInfo`。
+- 数据流（T5 起有转发层）：`Stonefish → /auv/* → odom/imu/dvl/pressure_sim → /sim/sensor/* →
+  {nav_sim → /zit6/state/*} + {mcu_sim → /auv/thrusters_cmd} → basic_motion → PoseInfo`。
   GPU 版是相机出图的前提；无图形环境要 `xvfb-run`。
 
 - **无头（nogpu / console）模式的两个坑**：
@@ -383,7 +384,8 @@ GUI 里按显示模式切换会看到凸包/物理网格，容易误判成「模
      = 只留下视一对、丢掉前视一对），**用来判别 GPU 出图慢的瓶颈**：若保留的那对速率近似翻倍，
      说明成本 ∝ 相机数 × 分辨率（每帧一次 FBO 渲染 + `glMapBuffer` 阻塞回读），
      而**与 `rendering_quality` 关系不大**（用户实测降画质帮助有限）。
-     ⚠️ 量图像频率时注意：Stonefish 的相机话题是 `create_publisher<Image>(topic, 10)`（**RELIABLE, depth 10**），单帧 6 MB 量级；用 `ros2 topic hz` 或 best-effort/depth1 的 Python 订阅者会**严重低估**（实测 1.93 Hz，而由同一批回调驱动的 `/auv/down_cam/stitched` 却是 19 Hz ⇒ 单眼实际约 9.5 Hz）。交叉验证口径：`/auv/{front,down}_cam/{left,right}`（sim_bridge 从回调里转发）、`ros2 topic bw` ÷ 帧大小、写者侧计数。
+     ⚠️ 量图像频率时注意：Stonefish 的相机话题是 `create_publisher<Image>(topic, 10)`（**RELIABLE, depth 10**），单帧 6 MB 量级；用 `ros2 topic hz` 或 best-effort/depth1 的 Python 订阅者会**严重低估**（实测 1.93 Hz，而由同一批回调驱动的 `/auv/down_cam/stitched` 却是 19 Hz ⇒ 单眼实际约 9.5 Hz）。交叉验证口径：`/auv/{front,down}_cam/{left,right}`（`camera_relay` 从回调里转发）、`ros2 topic bw` ÷ 帧大小、写者侧计数。**T5 起还有一条更省事的**：`ros2 run uv_sim camera_relay --ros-args -p log_rates:=true` 直接按 1 Hz 打印这 6 个话题的写者侧频率。
+     ⚠️ **T5 起 `stitched` 的频率含义变了**：拼接改为 100 Hz 定时器 + dirty 标志，每对图只拼一次（拆分前左右回调各拼一次，一帧对发两张相同 stitched）。所以 stitched 的**话题频率**降到≈单眼速率，**唯一帧数不变**（拿 stitched 的 Hz ÷ 2 去推单眼率的旧算法不再成立——直接看单目话题或 `log_rates`）。
   2. **`simulation_rate` 必须给正数**（默认 `100.0` 即可）。⚠️ **2026-09-16 更正**：本节此前写
      「传 `0` 走实时模式才会发布 ROS 话题」，**实测相反**——`rate=0` 时仿真线程不再推进物理，
      **一条 ROS 消息都不发**。根因：`SimulationManager` 用
@@ -426,9 +428,13 @@ GUI 里按显示模式切换会看到凸包/物理网格，容易误判成「模
   （`/zit6/state/vel` 的 `_odom_cb`、`/zit6/sim/nav` 的 `_sim_nav_odom_cb`）各多乘了
   一次 `R(−ψ)`，ψ=90° 时纯 surge 0.3 m/s 会被报成 `(0, −0.3)`；而固件对
   `/zit6/sim/nav` 的契约明确要求 `vel_body`。
-  现在约定集中在 `sim_bridge.body_twist_from_odometry()`，回归测试
+  现在约定集中在 `uv_sim/odometry.py`（T5 之前是 `sim_bridge.body_twist_from_odometry()`，
+  `nav_sim` 与 `mcu_sim` 共用），回归测试
   `src/uv_sim/test/test_odometry_frame.py`（ψ=90° 合成消息）钉住它。
   **判别口诀：pose 跟 header、twist 跟 child。**
+- **`/zit6/state/vel` 的线性速度是"机体原点"值**（T5 起 B19 已修）：`nav_sim` 用
+  odometry twist 填它，**不掺** DVL 的杆臂项；DVL 处的速度在 `/sim/sensor/dvl.velocity`
+  （两者相差 `ω×r_dvl`，`r_dvl=(-0.375,0,0.1)`，原地回转时能差 0.13 m/s）。
 
 ---
 
@@ -594,7 +600,7 @@ InsBasePlate 6.269 / BatteryPod 18.110。6 个 duct 本来就没写 `thickness`�
 6. **稳定性**：浮心 CB 是否高于重心 CG？（Compound 会按质量/体积自动加权）
 7. **质量覆盖**：显式 `<mass>` 只改质量、不改体积，配重时别把两者搞混。
 8. **碰撞**：凹形外壳会被当成凸包，注意别在凹处卡住。
-9. **话题**：模型给的话题和下游节点（sim_bridge / vision）约定的一致吗？
+9. **话题**：模型给的话题和下游节点（`uv_sim` 的转发层 / `vision`）约定的一致吗？
 10. **渲染环境**：有没有 X Display？没有就用 nogpu 或 `xvfb-run`。
 
 ### 常用命令

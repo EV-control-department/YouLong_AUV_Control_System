@@ -8,11 +8,12 @@ tools: [read, search, edit, terminal]
 >
 > 本文件写作于 2026-05，仍描述旧版话题与目录结构，与当前代码不一致，至少包括：
 > `/auv/cmd/motion`（现为 `/zit6/cmd/setpoint`）、`/auv/state`（**已无发布者**）、
-> `sim_bridge` 属于 `uv_hm` 且位于 `workspace_auv`（现属包 **`uv_sim`**，位于 **`workspace_sim`**）、
+> `sim_bridge` 属于 `uv_hm` 且位于 `workspace_auv`（现属包 **`uv_sim`**，位于 **`workspace_sim`**，
+> 且 **T5 起已拆成 7 个节点**：`odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim`/`nav_sim`/`mcu_sim`/`camera_relay`）、
 > `/auv/cmd/pid` 等。
 >
-> **权威来源**：仓库根 `CLAUDE.md`、`docs/node_parameters.md`、`docs/hil_architecture.md`、
-> `workspace_auv/docs/`。本文件保留仅作历史参考。
+> **权威来源**：仓库根 `CLAUDE.md`、`docs/node_parameters.md`、`docs/interfaces/topic_contract.md`、
+> `docs/interfaces/launch_entries.md`、`workspace_auv/docs/`。本文件保留仅作历史参考。
 
 # YouLong AUV 控制系统专家
 

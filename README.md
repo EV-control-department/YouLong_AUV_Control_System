@@ -132,20 +132,21 @@ SSH_KEY=~/.ssh/auv \
 ### ✅ 已确认可用
 
 - **basic_motion 节点** — 运动控制核心逻辑已审查和修正（单位一致性、掩码系统清理），内部使用 Action Server 对外暴露接口
+- **仿真侧节点（`uv_sim`，T5 拆分后 7 个）** — `odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim` 转发、
+  `nav_sim` 状态组装、`mcu_sim` 仿真 MCU、`camera_relay` 相机与拼接：控制数学有拆分前后的
+  **数值黄金回归**（`test/data/thrust_golden.json`），全套 `pytest` 绿
 
 ### ❓ 待审查/待完善
 
-- **sim_bridge (uv_hm)** — 仿真桥接逻辑未审查
 - **hw_manager (uv_hm)** — STM32 MCU 通信仅占位
-- **PID 控制参数** — 参数未调优
-- **thrust_mixer** — 推力分配矩阵未验证
+- **PID 控制参数** — 参数未调优（唯一事实源是 `uv_sim/config/sim_pid.yaml`）
 - **vision (uv_perception)** — YOLO 检测流程，4 通道双目 YOLO + sim/real 模式切换，已仿真验证
 - **position (uv_perception)** — 多帧单目射线交会 3D 定位，已仿真验证
 - **astar / navigator (uv_nav)** — 路径规划与避障未审查
 - **task_runner (uv_task)** — 竞赛任务执行器未审查
 - **stonefish 场景和物理参数** — 仿真场景（`underwater_xunyun.scn` 等）未验证
-- **坐标系单位一致性** — 除 basic_motion 外，其他节点的角度/坐标单位未审查
-- **测试** — 无单元测试或集成测试
+- **坐标系单位一致性** — 除 basic_motion 与 `uv_sim` 外，其他节点的角度/坐标单位未审查
+- **HIL / 实机路径** — 当前只做软件在环（SIL），HIL 与实机保留在册但不参与验收（见 `docs/architecture/sim_real_boundary.md`）
 
 ## 坐标系约定
 

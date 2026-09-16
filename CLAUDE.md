@@ -65,7 +65,7 @@ This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater
 | Layer | Package | Role |
 |---|---|---|
 | 0 | `stonefish_ros2` (C++) | Stonefish 1.6 marine physics simulator. GPU mode runs `stonefish_simulator`, headless runs `stonefish_simulator_nogpu`. Lives in `workspace_sim/` |
-| 1 | `uv_hm` + `uv_sim` | Cascaded PID + thruster mixing → 6 thrusters. `sim_bridge` (package **`uv_sim`**, **`workspace_sim/`**) for SIL; `hw_manager` (package `uv_hm`, `workspace_auv/`) keeps the STM32 MCU armed and monitors `/zit6/state/*` |
+| 1 | `uv_hm` + `uv_sim` | Cascaded PID + thruster mixing → 6 thrusters. Since T5 `uv_sim` (**`workspace_sim/`**) is **seven** nodes: sensor relays (`odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim` → `/sim/sensor/*`), `nav_sim` (state/injection), `mcu_sim` (the simulated MCU), `camera_relay`; `hw_manager` (package `uv_hm`, `workspace_auv/`) keeps the STM32 MCU armed and monitors `/zit6/state/*` |
 | 2 | `uv_control` | Motion API: SET/WMOVE/BMOVE/TRAVEL. Only entry point is `basic_motion` |
 | 3 | `uv_perception` | 4 通道双目 YOLO 检测 + 多帧单目射线交会 3D 定位。sim/real 模式切换，发布 PoseInfo 位姿源 |
 | 4 | `uv_nav` | A* pathfinding + obstacle avoidance waypoint following |
@@ -270,23 +270,52 @@ The main thread runs `rclpy.spin(node)` with SingleThreadedExecutor; the work th
 
 ### AuvState — Sim-Only Topic
 
-`uv_msgs/msg/AuvState` is intended for simulation only, and **nothing publishes `/auv/state`** any more (the old `stonefish_ros2` publisher is gone; sim_bridge publishes `/zit6/state/*` and `/zit6/sim/nav`). Real AUV hardware never publishes it. Nodes running on the real AUV must not depend on it.
+`uv_msgs/msg/AuvState` is intended for simulation only, and **nothing publishes `/auv/state`** any more (the old `stonefish_ros2` publisher is gone; `uv_sim`'s `nav_sim`/`mcu_sim` publish `/zit6/state/*` and `nav_sim` publishes `/zit6/sim/nav`). Real AUV hardware never publishes it. Nodes running on the real AUV must not depend on it.
 
 For pose feedback, both perception and navigation use `/basic_motion/pose_info` (`uv_msgs/PoseInfo`, 30Hz) published by `basic_motion`. This works in both simulation and real-hardware modes — `navigator.py` was migrated to it (2026-09-13), and it refuses to plan until a pose has arrived.
 
 The `AuvState` message itself is now unused by any node; only `uv_msgs` still defines it.
 
-### sim_bridge (`uv_sim`, workspace_sim)
+### uv_sim — the simulation-side nodes (T5: seven nodes, one responsibility each)
 
-`sim_bridge` lives at `workspace_sim/src/uv_sim/uv_sim/sim_bridge.py` (package `uv_sim`, **not** `uv_hm`). It plays the role of the MCU in SIL mode: `ZitSetpoint` in → PID + thruster mixing → `/auv/thrusters_cmd`, and publishes `/zit6/state/{pos,vel,thr,status,zithbt}`. With `hil_mode:=True` it only forwards camera images and relays `/zit6/state/thr` → thrusters, leaving PID/mixing to the real MCU.
+`uv_sim` lives at `workspace_sim/src/uv_sim/` (package `uv_sim`, **not** `uv_hm`). Until T5 it was one
+919-line node called `sim_bridge`; it is now seven entry points, all launched by
+`uv_sim/launch/bridge_launch.py`:
+
+| Node | Role |
+|---|---|
+| `odom_sim` / `imu_sim` / `pressure_sim` | pure relays `/auv/*` → `/sim/sensor/*` (message and stamp forwarded unchanged) |
+| `dvl_sim` | `/auv/dvl` → `/sim/sensor/dvl` (`uv_msgs/Dvl`): AQUA-SLAM's adapter; passes the DVL-frame velocity through and **synthesizes the four along-beam speeds** (the engine never fills `beams`) |
+| `nav_sim` | assembles `/sim/sensor/*` into `/zit6/state/{pos,vel}` (SIL) **or** `/zit6/sim/nav` (HIL). Two mutually exclusive params `publish_state` / `publish_sim_nav`; both true ⇒ startup `RuntimeError` (invariant I2) |
+| `mcu_sim` | the simulated MCU: `ZitSetpoint` in → PID + mixing → `/auv/thrusters_cmd`, plus `/zit6/state/{status,thr,zithbt}` and `/zit6/{get,update}_params`. With `hil_mode:=true` it is a **thrust relay only** (no PID, no state publishing, no services -- the real MCU owns those) |
+| `camera_relay` | `/sim/*_cam/*` → `/auv/*_cam/*` + stitched; one stitch per frame pair on a 100 Hz timer with a dirty flag (pre-T5 both callbacks stitched, doubling the topic rate). `log_rates:=true` prints writer-side rates |
+
+**Where the maths lives**: `uv_sim/mcu_control.py` (`McuController`: setpoint state machine, cascaded
+PID, force mode, ARM/INS, parameter read/write -- ROS-free), `uv_sim/mixer.py` (4-DOF → 6 thrusters;
+yaw ×1.0, heave ×0.8), `uv_sim/pid_config.py` (the gain file), `uv_sim/odometry.py` (the one
+`/auv/odometry` decoder shared by `nav_sim` and `mcu_sim`), `uv_sim/runner.py` (the `main()` body).
+`test/data/thrust_golden.json` + `test_mcu_control.py` exist to prove the T5 refactor did not change the
+control maths (recorded from the pre-split monolith, replayed bit-exactly).
+
+**SIL vs HIL is one launch argument.** `bridge_launch.py` declares `hil_mode` (+ `pid_config_file`) and
+derives `nav_sim`'s role from it; `hil_mode:=true` starts **five** nodes (`odom_sim`, `imu_sim`,
+`nav_sim`, `mcu_sim`, `camera_relay`) and skips `dvl_sim`/`pressure_sim`, because a real MCU subscribes
+`/auv/*` itself. Do not add a second mode knob: two switches that must agree is exactly how I2 breaks.
+
+**`/auv/dvl` carries the DVL-frame velocity** (velocity at the DVL acoustic centre), while
+`/zit6/state/vel` carries the **body-origin** velocity. They differ by `omega x r_dvl`
+(`r_dvl = (-0.375, 0, 0.1)`), up to ~0.13 m/s while yawing. That was bug B19 (two writers on one topic
+with different meanings); T5 fixed it by **separation** -- `/zit6/state/vel` has exactly one writer
+(`nav_sim`, origin twist) and the DVL value has its own topic. Do not "helpfully" add the lever arm to
+the state topic, and do not read `/zit6/state/*` back into `mcu_sim`.
 
 Historical note: the yaw-polarity bug documented in earlier revisions (`cmd_rz = -float(self.pid_yaw_rate.step(...))`) has been **fixed** — the negation is gone (now `cmd_rz = float(...)`). Do not re-apply that fix.
 
 **Sim sensor geometry (2026-09-15, aligned with the real vehicle).** The XUNYUN DVL in `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn` is mounted flush with the body (`origin rpy="0 0 0" xyz="-0.375 0 0.1"`) with `<specs beam_angle="30.0" beam_positive_z="true"/>`, matching the real DVL (yaw=0 mount, beams offset 45°, 30° off vertical, z≈+0.1 m). Consequences worth remembering:
-- `/auv/dvl` therefore carries **body-frame** velocity. The pre-2026-09-15 scene used `rpy=(3.1416 0 -0.785)` with the default `beam_positive_z=false`, which made Stonefish publish velocity in a frame rotated 45° from the body with y/z flipped; `sim_bridge` forwards that straight into `/zit6/state/vel`, so `basic_motion`'s along-track speed became `V·cos(2α+45°)` (≈0 at α=22.5°). Regression pinned by `workspace_sim/src/uv_sim/test/test_scene_sensors.py`; end-to-end check in `workspace_sim/tools/check_dvl_frame.py`.
+- `/auv/dvl` therefore carries **body-frame** velocity. The pre-2026-09-15 scene used `rpy=(3.1416 0 -0.785)` with the default `beam_positive_z=false`, which made Stonefish publish velocity in a frame rotated 45° from the body with y/z flipped; the old monolith forwarded that straight into `/zit6/state/vel`, so `basic_motion`'s along-track speed became `V·cos(2α+45°)` (≈0 at α=22.5°). Regression pinned by `workspace_sim/src/uv_sim/test/test_scene_sensors.py`; end-to-end check in `workspace_sim/tools/check_dvl_frame.py`.
 - IMU is 200 Hz with injected noise (σ = density × √rate) to match AQUA-SLAM's `NoiseGyro=1e-3` / `NoiseAcc=1e-2`.
 - Headless note: the console simulator rejects any scene containing cameras, and `simulation_rate` must stay **positive** (0 stops the simulation loop and publishes nothing). Since T4 this is a first-class parameter path — `ros2 launch uv_sim_bringup sim_bringup.py headless:=true` — see `workspace_sim/stonefish_notes.md` and `docs/interfaces/launch_entries.md`.
-- **PID gains live in one external file**: `workspace_sim/src/uv_sim/config/sim_pid.yaml` (9 channels: `chassis.pid.pos.{x,y,z,yaw}` + the yaw-cascade inner loop `chassis.pid.pos.yaw_rate` + `chassis.pid.vel.{x,y,z,yaw}`). The same data builds both the `/zit6/get_params` view and the live `_Pid` objects, so the service can never report gains that differ from the running controllers (before 2026-09-15 they were two hardcoded copies that had drifted: `pos.z.ki` 30 vs 80, `vel.x.kp` 300 vs 600, and the yaw-rate loop was invisible to the service). Override the file at runtime with `-p pid_config_file:=/path/to/tuned.yaml`; `/zit6/update_params` changes only the running process, never the file. Control structure: position mode = x/y/z single loops + **yaw two-level cascade**; velocity mode = four single loops.
+- **PID gains live in one external file**: `workspace_sim/src/uv_sim/config/sim_pid.yaml` (9 channels: `chassis.pid.pos.{x,y,z,yaw}` + the yaw-cascade inner loop `chassis.pid.pos.yaw_rate` + `chassis.pid.vel.{x,y,z,yaw}`). The same data builds both the `/zit6/get_params` view and the live `Pid` objects (`uv_sim/pid_config.build_pids` → `McuController.pids`), so the service can never report gains that differ from the running controllers (before 2026-09-15 they were two hardcoded copies that had drifted: `pos.z.ki` 30 vs 80, `vel.x.kp` 300 vs 600, and the yaw-rate loop was invisible to the service). Override the file at runtime with `-p pid_config_file:=/path/to/tuned.yaml`; `/zit6/update_params` changes only the running process, never the file. Control structure: position mode = x/y/z single loops + **yaw two-level cascade**; velocity mode = four single loops.
 - Build mode matters for Python edits: `colcon build` (no flag) **copies** the package into `install/`, while `colcon build --symlink-install` keeps `build/uv_sim/uv_sim -> src/uv_sim/uv_sim` live. If a source edit seems ignored, check the layout: `ls -l workspace_sim/install/uv_sim/lib/python3.12/site-packages/` (egg-link = live, a real `uv_sim/` directory = stale copy).
 
 ### 6-DOF State Feedback (migrated 2026-07-20, MCU side complete)
@@ -297,16 +326,17 @@ Historical note: the yaw-polarity bug documented in earlier revisions (`cmd_rz =
 
 | 话题 | 格式 | 发布者 |
 |---|---|---|
-| `/zit6/state/pos` | `[x, y, z, roll_rad, pitch_rad, yaw_rad]` | sim_bridge (SIL) / MCU (HIL·实机) |
-| `/zit6/state/vel` | `[vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad_s]` | sim_bridge (SIL) / MCU (HIL·实机) |
-| `/zit6/state/thr` | `[Fx, Fy, Fz, Mx, My, Mz]`（sim_bridge 的 Mx/My 恒为 0） | sim_bridge (SIL) / MCU (HIL·实机) |
+| `/zit6/state/pos` | `[x, y, z, roll_rad, pitch_rad, yaw_rad]` | `nav_sim` (SIL) / MCU (HIL·实机) |
+| `/zit6/state/vel` | `[vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad_s]` | `nav_sim` (SIL) / MCU (HIL·实机) |
+| `/zit6/state/thr` | `[Fx, Fy, Fz, Mx, My, Mz]`（`mcu_sim` 的 Mx/My 恒为 0） | `mcu_sim` (SIL) / MCU (HIL·实机) |
 | `PoseInfo` | 含 `robot_roll`, `robot_pitch` (deg) | basic_motion 30Hz |
 
 **MCU 固件状态（`third_party/AUV_zit6_cmake`，`MicroRosPublisher.cpp`）：** 已完成 4→6 元素升级，`pos/vel/thr` 的 `data.size = capacity = 6`，`pos_world[3..5]` = roll/pitch/yaw。devlog #2 记录的「协议层截断 roll/pitch」问题已不存在。
 
 **数据流：**
 ```
-IMU → sim_bridge._odom_cb (全 RPY 提取)
+/auv/odometry + /auv/imu → odom_sim/imu_sim → /sim/sensor/*
+  → nav_sim 解码（全 RPY + 机体 twist，唯一编码点 uv_sim/odometry.py）
   → /zit6/state/pos [6elem] → basic_motion._pos_cb → self.pose.rx/ry
   → PoseInfo (robot_roll/pitch) → position._pose_cb → _euler_to_rotation_matrix(roll,pitch,yaw)
   → 射线方向 v_world = R_robot @ v_body (完整姿态)
@@ -390,7 +420,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 | `workspace_auv/src/uv_task/config/tasks.json` | Competition task list (JSON array of `{name, params}`) |
 | `workspace_auv/src/uv_task/uv_task/task_runner.py` | Task executor, BasicMotion action client |
 | `workspace_auv/src/uv_control/uv_control/basic_motion.py` | Motion action server (cmd_type dispatch) |
-| `workspace_sim/src/uv_sim/uv_sim/sim_bridge.py` | Simulation hardware bridge (SIL PID + thruster mixing / HIL passthrough); package `uv_sim` |
+| `workspace_sim/src/uv_sim/uv_sim/` | The seven simulation nodes (`odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim`/`nav_sim`/`mcu_sim`/`camera_relay`) plus the ROS-free core they share (`mcu_control.py`, `mixer.py`, `pid_config.py`, `pid.py`, `odometry.py`, `mathutil.py`, `runner.py`) and `geometry.py`; package `uv_sim` |
 | `workspace_auv/src/uv_perception/uv_perception/vision.py` | Vision node: 4-channel YOLO, sim/real switch, dataset capture. Camera calibration is intentionally **empty** (new cameras, not yet calibrated) → undistortion skipped; sim images have no distortion anyway. `*_CAPTURE_RESOLUTION` are V4L2 **request** values; actual frame size is read back and a mismatch is warned. front 2560×960 / down 3840×1080 stitched (left+right eyes). Cameras deliver **MJPEG over USB** (`CAP_PROP_FOURCC='MJPG'`), so the "raw" BGR buffer is already JPEG-decoded. Dataset capture saves the **full stitched frame before split/undistort** (`front_*.jpg` / `down_*.jpg`, JPEG q95, 5 fps per camera), hence independent of calibration parameters and of model loading; default `dataset_dir` is `<repo>/datasets` (repo root found by walking up to `.git`, **not** by counting `__file__` levels — that lands in `build/`), overridable via `-p dataset_dir:=`, falls back to `~/.ros/auv_dataset` when no repo root is found |
 | `workspace_auv/src/uv_perception/uv_perception/position.py` | Position node: multi-ray 3D localization (now uses full RPY for ray casting). `CAM_PARAMS` per-eye geometry: front 1280×960 @ hfov 57.19°, down **1920×1080** @ hfov 87.19°; intrinsics are derived from HFOV, not from any calibration file |
 | `visualization/auv_visualizer.py` | PySide6 GUI: 2D map, objects/rays, node list, task status, force remote control |
@@ -418,8 +448,11 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- **Tests**: only `uv_sim` has them so far (**72 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
-  contract, odometry frame conventions, PID-config single-source + fallback structure, entry-point
-  integrity, frame/beam geometry, scene↔YAML↔doc contract, camera-offset (N1), TF (B18),
-  documentation-contract (T3a) and launch-contract / layering (T4) checks).
+- **Tests**: only `uv_sim` has them so far (**134 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
+  contract, odometry frame conventions (now via `nav_sim`/`mcu_sim`), PID-config single-source + fallback
+  structure, entry-point integrity (derived from `setup.py`), frame/beam geometry, scene↔YAML↔doc
+  contract, camera-offset (N1), TF (B18), documentation-contract (T3a), launch-contract / layering (T4),
+  and since T5: the thrust golden regression (`test_mcu_control.py`), the node set + topic-contract
+  immutability + I2 ownership (`test_node_split.py`), `nav_sim` role switch (`test_nav_sim.py`),
+  DVL beams/validity (`test_dvl_sim.py`) and stitching (`test_camera_relay.py`)).
   Run with `python3 -m pytest workspace_sim/src/uv_sim/test/ -q` after sourcing both workspaces; keep it green.

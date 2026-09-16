@@ -9,7 +9,7 @@
 
 ## 概述
 
-硬件在环仿真 (HIL, Hardware-in-the-Loop) 是在算法在环仿真 (SIL) 的基础上，将 PID 控制、推力混合、ZIT6 状态机等逻辑从 Host PC 上的 `sim_bridge` 节点迁移至真实的 STM32 MCU 执行。MCU 通过 **micro-ROS** 串行链路与 ROS 2 系统通信，运行与实机完全相同的固件。
+硬件在环仿真 (HIL, Hardware-in-the-Loop) 是在算法在环仿真 (SIL) 的基础上，将 PID 控制、推力混合、ZIT6 状态机等逻辑从 Host PC 上的仿真 MCU（T5 之前是单体 `sim_bridge`，现在是 `uv_sim` 的 `mcu_sim`）迁移至真实的 STM32 MCU 执行。MCU 通过 **micro-ROS** 串行链路与 ROS 2 系统通信，运行与实机完全相同的固件。
 
 SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_perception` → `uv_nav` → `uv_task`），两者的区别仅在硬件抽象层。
 
@@ -30,9 +30,9 @@ SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_perception` �
 │        │   setpoint    │   cam/*      │              │            │
 │        ▼               ▲              │              │            │
 │  ┌─────────────┐  ┌─────────────┐     │              │            │
-│  │ micro-ROS   │  │  sim_bridge │     │              │            │
-│  │ Agent       │  │  HIL 模式   │     │              │            │
-│  │MicroXRCEAgent│ │  仅相机转发  │     │              │            │
+│  │ micro-ROS   │  │ camera_relay│     │              │            │
+│  │ Agent       │  │ + mcu_sim   │     │              │            │
+│  │MicroXRCEAgent│ │ (推力转发)   │     │              │            │
 │  └──────┬──────┘  └──────┬──────┘     │              │            │
 │         │                │            │              │            │
 │         │ serial (UART)  │            │              │            │
@@ -213,16 +213,20 @@ MCU 通过 `ZitSetpoint.control_key & 0x03` 解析控制模式：
 > `/basic_motion/pose_info`（仿真/实机通用）。在此之前，`real_bringup.py` 虽默认 `enable_nav:=true`，
 > 也只是拉起一个空转节点。
 
-| 组件          | SIL (`sim_bridge` 正常模式)              | HIL (`sim_bridge hil_mode:=True`) |
+| 组件          | SIL（`mcu_sim` 正常模式 + `nav_sim`）    | HIL（`hil_mode:=true`）             |
 | ------------- | ------------------------------------------ | ----------------------------------- |
-| PID 控制      | Python`_Pid` 数据类                      | STM32 C 实现                        |
-| 推力混合      | `_publish_thrust_from_4dof()`            | STM32 固件                          |
-| ZIT6 状态发布 | sim_bridge 发布`/zit6/state/*`           | MCU 发布`/zit6/state/*`           |
-| INS 对准      | 模拟 (开机 1.5s 自动完成)                  | MCU 实际执行                        |
-| ARM/安全      | 注释跳过 (始终布防)                        | MCU 实际执行心跳 + 布防逻辑         |
-| PID 参数服务  | sim_bridge`/zit6/get_params`             | MCU 提供 (micro-ROS service)        |
-| 相机转发      | sim_bridge                                 | sim_bridge (相同)                   |
+| PID 控制      | Python `uv_sim/mcu_control.py` 的 `Pid`   | STM32 C 实现                        |
+| 推力混合      | `uv_sim/mixer.py` 的 `mix_thruster_forces()` | STM32 固件                        |
+| ZIT6 状态发布 | `nav_sim` 发 pos/vel、`mcu_sim` 发 status/thr/zithbt | MCU 发布**全部** `/zit6/state/*` |
+| INS 对准      | 模拟（开机 1.5s 自动完成）                  | MCU 实际执行                        |
+| ARM/安全      | 心跳超时检查未实现（始终布防）              | MCU 实际执行心跳 + 布防逻辑         |
+| PID 参数服务  | `mcu_sim` 提供 `/zit6/get_params`          | MCU 提供 (micro-ROS service)        |
+| 相机转发      | `camera_relay`                             | `camera_relay`（相同）              |
 | 上层接口      | `/zit6/cmd/setpoint` + `/zit6/state/*` | **完全相同 — 上层透明**      |
+
+> HIL 下 `dvl_sim` / `pressure_sim` **不启动**（真 MCU 直接订阅 `/auv/dvl`、`/auv/pressure`），
+> `nav_sim` 只发 `/zit6/sim/nav`（`publish_state:=false`），`mcu_sim` 只订阅
+> `/zit6/state/thr` 并转发成 `/auv/thrusters_cmd`。见 `docs/interfaces/topic_contract.md` §8。
 
 ---
 
@@ -254,7 +258,7 @@ MCU 固件应通过编译宏区分数据源，使 HIL 与实机共用同一份�
 
 ### 5.3 安全机制
 
-- MCU 须在检测到心跳超时后自动 Disarm (当前 `sim_bridge` 中此检查被注释)
+- MCU 须在检测到心跳超时后自动 Disarm（SIL 侧 `uv_sim/mcu_control.py` 里此检查未实现：始终布防）
 - 串口断开 → 通信超时 → 安全状态 (推力归零)
 - 重连后需重新发送布防命令
 
@@ -289,13 +293,16 @@ Launch 参数:
 | `enable_motion` | `false`               | 启用 basic_motion  |
 | `scenario_desc` | `underwater_xunyun.scn` | 场景文件名（在 `Data/` 内；**T4 起真正生效**） |
 | `headless`    | `false`                 | `true` = console 引擎（无渲染、无相机图像） |
-| `simulation_rate` | `100.0`             | 物理步进率；console 模式需给 `0`（实时）才会发 ROS 话题 |
+| `simulation_rate` | `100.0`             | 物理步进率；⚠️ **必须给正数**——给 `0` 会让仿真循环停住、一条话题都不发（2026-09-16 实测更正，早先这里写反了） |
 
 > ⚠️ HIL 默认上层节点为 `false`（launch 只拉起 MCU 链路与相机），需要显式 `enable_ai:=true` 等开启。
 > T4 修正（**静态核查通过，运行时未验证**）：`scenario_desc` 以前声明了却没传进仿真器
 > `arguments`（改它不换场景），现在会真正传下去；`headless`/`simulation_rate` 取代了原先写死的
 > GPU 版与 `100.0`；micro-ROS agent 与 `hw_manager` 统一由 `uv_hm/hm_launch.py` 提供
 > （因此 HIL 会起 `hw_manager`——真 MCU 需要 `/zit6/cmd/agxhbt` 心跳才会解锁）。
+> T5 变化（**同样只做静态核查**）：`hil_mode` 现在是 `bridge_launch.py` 的**组合开关**，
+> HIL 起 5 个节点（`odom_sim`/`imu_sim`/`nav_sim`/`mcu_sim`/`camera_relay`），
+> 参数含义见本文件"与 SIL 的对比"一节与 `docs/interfaces/launch_entries.md`。
 
 ---
 
