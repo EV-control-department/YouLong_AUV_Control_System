@@ -18,6 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from builtin_interfaces.msg import Time
 from std_msgs.msg import Header, Int32MultiArray
 
 from uv_msgs.msg import Detection, DetectionArray, LineState
@@ -45,6 +46,15 @@ FEATURE_BBOX_CENTER = 0
 FEATURE_GATE_CENTERLINE = 1
 FEATURE_GATE_SEGMENTATION = 2
 GATE_FRONT_CLASS_ID = model_class_id('gate_front')
+
+
+def _ros_time(value):
+    """Convert a ROS Time or a sec/nanosec-compatible test value to Time."""
+    if value is None:
+        return None
+    if isinstance(value, Time):
+        return value
+    return Time(sec=int(value.sec), nanosec=int(value.nanosec))
 
 
 class Ai:
@@ -206,6 +216,9 @@ class Ai:
                     Path.cwd() / 'workspace_auv' / 'src' / 'uv_camera' /
                     'weights' / DEFAULT_MODEL_FILENAME)
                 candidates.append(
+                    Path.cwd() / 'workspace_auv' / 'src' / 'uv_camera' /
+                    'resource' / DEFAULT_MODEL_FILENAME)
+                candidates.append(
                     Path.cwd() / 'workspace_auv' / 'src' / 'datas' / DEFAULT_MODEL_FILENAME)
                 candidates.append(Path.cwd() / 'datas' / DEFAULT_MODEL_FILENAME)
                 try:
@@ -214,6 +227,9 @@ class Ai:
                     candidates.append(
                         Path(get_package_share_directory('uv_camera')) /
                         'weights' / DEFAULT_MODEL_FILENAME)
+                    candidates.append(
+                        Path(get_package_share_directory('uv_camera')) /
+                        'resource' / DEFAULT_MODEL_FILENAME)
                 except Exception:
                     # Keep model discovery usable for offline/unit-test imports.
                     pass
@@ -295,7 +311,7 @@ class Ai:
             right_stamp = work[4] if len(work) > 4 else None
             stereo_pair_id = int(work[5]) if len(work) > 5 else 0
             header = Header()
-            header.stamp = (stamp if stamp is not None
+            header.stamp = (_ros_time(stamp) if stamp is not None
                             else self.node.get_clock().now().to_msg())
             self._process_frame(
                 header, frame, camera, right_stamp, stereo_pair_id)
@@ -323,8 +339,8 @@ class Ai:
 
         right_header = Header()
         right_header.frame_id = header.frame_id
-        right_header.stamp = (
-            right_stamp if right_stamp is not None else header.stamp)
+        right_header.stamp = (_ros_time(right_stamp)
+                             if right_stamp is not None else header.stamp)
         # Keep the ROS detection topics alive with explicit empty results when
         # optional YOLO is unavailable.  This lets readiness finish for data
         # collection without pretending that detections were produced.
@@ -525,16 +541,19 @@ class Ai:
                 det.pixel_x = (x1 + x2) / 2.0
                 det.pixel_y = (y1 + y2) / 2.0
                 poly = None
-                if (det.class_id == GATE_FRONT_CLASS_ID
-                        and masks is not None and len(masks.xy) > i):
+                if masks is not None and len(masks.xy) > i:
                     poly = masks.xy[i].astype(np.float32)
                     polygons.append(poly)
-                    area = cv2.contourArea(poly)
-                    if area > max_pipe_area and area >= self._line_contour_min_area:
-                        max_pipe_area = area
-                        best_pipe_poly = poly
+                    if det.class_id == GATE_FRONT_CLASS_ID:
+                        area = cv2.contourArea(poly)
+                        if area > max_pipe_area and area >= self._line_contour_min_area:
+                            max_pipe_area = area
+                            best_pipe_poly = poly
                 else:
                     polygons.append(None)
+                if poly is not None and hasattr(det, 'mask_x'):
+                    det.mask_x = [float(point[0]) for point in poly]
+                    det.mask_y = [float(point[1]) for point in poly]
                 self._set_gate_feature(det, poly, cv_img)
                 det_array.detections.append(det)
 

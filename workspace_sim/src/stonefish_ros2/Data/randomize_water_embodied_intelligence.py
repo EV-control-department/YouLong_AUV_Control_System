@@ -21,7 +21,7 @@ from pathlib import Path
 
 DEFAULT_SCENE = Path(__file__).with_name("water_embodied_intelligence_2026.scn")
 TAG_TEXTURES = {
-    tag_id: f"aruco_4x4_id{tag_id}.png" for tag_id in range(7)
+    tag_id: f"apriltag_36h11_id{tag_id}.png" for tag_id in range(7)
 }
 
 # NED x is north and y is east. The grid is centered at (2,-4), with 2 m sides.
@@ -43,6 +43,23 @@ BAND_NAMES = (
     "TrafficConeSquareBand01",
 )
 MAX_CELL_OFFSET = 0.05
+
+
+def ensure_tag_texture(directory: Path, tag_id: int) -> Path:
+    """Generate an exact code with black border and white quiet zone."""
+    import cv2
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36H11)
+    marker = cv2.aruco.generateImageMarker(dictionary, tag_id, 640)
+    texture = cv2.copyMakeBorder(marker, 80, 80, 80, 80,
+                                cv2.BORDER_CONSTANT, value=255)
+    detector = cv2.aruco.ArucoDetector(dictionary)
+    _, ids, _ = detector.detectMarkers(texture)
+    if ids is None or ids.flatten().tolist() != [tag_id]:
+        raise ValueError(f'AprilTag 纹理自检失败: id={tag_id}')
+    path = directory / TAG_TEXTURES[tag_id]
+    if not cv2.imwrite(str(path), cv2.cvtColor(texture, cv2.COLOR_GRAY2BGR)):
+        raise OSError(f'无法写入 AprilTag 纹理: {path}')
+    return path
 
 # Keep the randomized environment usable for camera/perception experiments.
 # Stonefish expects Jerlov water type in the interval [0, 1].
@@ -184,6 +201,8 @@ def randomize_scene(
 
     selected_tag = tag_id if tag_id is not None else rng.randrange(7)
     _set_tag_texture(root, selected_tag)
+    # Assets are resolved relative to the source Data directory by Stonefish.
+    ensure_tag_texture(source.parent, selected_tag)
     environment = _set_environment(
         root,
         rng,
@@ -224,7 +243,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--jerlov-range", nargs=2, type=float, metavar=("MIN", "MAX"),
         default=DEFAULT_JERLOV_RANGE,
-        help="Jerlov water type range in [0, 1] (default: 0.10 0.35)",
+        help="Jerlov water type range in [0, 1] (default: 0.10 0.25)",
     )
     return parser.parse_args()
 

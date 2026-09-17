@@ -1,0 +1,18 @@
+{
+  "mission": {
+    "name": "robocup_embodied_mapping",
+    "tasks": [
+      {
+        "name": "start",
+        "config": "../tasks/start.yaml",
+        "params": {
+          "skip_preparation": true
+        }
+      },
+      {
+        "name": "mapping_grid",
+        "config": "../tasks/mapping_grid.json"
+      }
+    ]
+  }
+}

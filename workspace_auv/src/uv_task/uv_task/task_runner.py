@@ -57,6 +57,7 @@ RB26FindCollectionFrameTask = import_module(
 RB26DropBeaconTask = import_module(
     'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
+from uv_task.mapping_task import MappingTask
 from uv_camera.model_classes import model_class_id
 
 
@@ -160,18 +161,18 @@ class TaskRunnerNode(Node):
         # Competition metadata only.  The current cruise environment keeps all
         # targets visible; this value tells task logic which one is correct and
         # intentionally does not create scoring or grasping behaviour.
-        self.declare_parameter('target_id', 'yellow_golf')
+        self.declare_parameter('target_id', 'mapping_grid')
         self.target_id = self.get_parameter('target_id').get_parameter_value().string_value
-        valid_target_ids = {
+        valid_target_ids = {'mapping_grid'}
+        valid_target_ids.update(
             name for name in ('yellow_golf', 'pink_golf', 'red_ring')
-            if model_class_id(name, required=False) is not None
-        }
+            if model_class_id(name, required=False) is not None)
         if self.target_id not in valid_target_ids:
             self.get_logger().warning(
-                f"未知的 target_id {self.target_id!r}；将使用 'yellow_golf'。"
+                f"未知的 target_id {self.target_id!r}；将使用 'mapping_grid'。"
                 f"有效值：{', '.join(sorted(valid_target_ids))}"
             )
-            self.target_id = 'yellow_golf'
+            self.target_id = 'mapping_grid'
         self.get_logger().info(f'比赛目标元数据：{self.target_id}')
 
         # Camera parameters (used by LineFollower sub-task via get_parameter)
@@ -239,6 +240,8 @@ class TaskRunnerNode(Node):
             'take_water_sample': self._task_take_water_sample,
             'release_sampler': self._task_release_sampler,
             'return_origin': self._task_return_origin,
+            'mapping_grid': self._task_mapping_grid,
+            'map_grid': self._task_mapping_grid,
         }
 
         # Action client
@@ -843,6 +846,11 @@ class TaskRunnerNode(Node):
         return skip.is_set()
 
     def _task_start(self, p: dict) -> bool:
+        if bool(p.get('skip_preparation', False)):
+            self.get_logger().info(
+                '仿真/自动任务：跳过拔缆倒计时，立即初始化里程计原点')
+            return self._do_start()
+
         # ── 后台监听 Enter 键跳过准备 ──
         skip = threading.Event()
 
@@ -1697,6 +1705,14 @@ class TaskRunnerNode(Node):
             return gate_task.execute()
         finally:
             gate_task.destroy()
+
+    def _task_mapping_grid(self, p: dict) -> bool:
+        """访问九宫格，融合分割掩膜内 SGBM 深度并输出地图。"""
+        task = MappingTask(self, p)
+        try:
+            return task.execute()
+        finally:
+            task.destroy()
 
     def _task_hit_balls(self, p: dict) -> bool:
         """执行 26rb 撞球任务模块。"""

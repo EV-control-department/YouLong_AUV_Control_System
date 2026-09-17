@@ -172,6 +172,7 @@ def generate_launch_description():
     gortc_http_port = LaunchConfiguration("gortc_http_port")
     target_id = LaunchConfiguration("target_id")
     startup_timeout = LaunchConfiguration("startup_timeout")
+    wait_for_detections = LaunchConfiguration("wait_for_detections")
     record_dataset = LaunchConfiguration("record_dataset")
     dataset_dir = LaunchConfiguration("dataset_dir")
 
@@ -249,12 +250,16 @@ def generate_launch_description():
     })
     readiness_sensors = _include("uv_bringup", "readiness.launch.py", {
         "phase": "sensors",
-        "require_ai": enable_ai,
+        # Sensor calibration and odometry are independent of YOLO warm-up.
+        # Requiring detections here stalls the whole mission on CPU systems.
+        "require_ai": "false",
         "timeout": startup_timeout,
     })
     readiness_perception = _include("uv_bringup", "readiness.launch.py", {
         "phase": "perception",
-        "require_ai": enable_ai,
+        # Do not hold the mapping task at the spawn pose while CPU YOLO warms
+        # up. Mapping waits for fresh detections at each cell itself.
+        "require_ai": wait_for_detections,
         "timeout": startup_timeout,
     })
 
@@ -339,6 +344,13 @@ def generate_launch_description():
             window_height_default=str(sim_height),
             render_quality_default="low",
             camera_stitch_fps_default="5.0",
+        ),
+        DeclareLaunchArgument(
+            "wait_for_detections", default_value="false",
+            description=(
+                "Wait for AI detections before releasing tasks; mapping can "
+                "start while CPU YOLO warms up"
+            ),
         ),
         *desktop_environment,
         configure_simulator_gpu_environment(gpu, gpu_backend),

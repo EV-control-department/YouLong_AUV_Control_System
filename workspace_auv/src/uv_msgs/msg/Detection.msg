@@ -18,3 +18,8 @@ uint8 FEATURE_GATE_SEGMENTATION=2
 uint8 feature_type
 float32 feature_pixel_x
 float32 feature_pixel_y
+
+# Optional YOLO segmentation contour in the published image coordinates.
+# The x and y arrays have the same length and are paired by index.
+float32[] mask_x
+float32[] mask_y

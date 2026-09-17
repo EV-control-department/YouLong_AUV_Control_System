@@ -52,7 +52,7 @@ SAVE_DATASET = False
 # This keeps host and Edge deployments independent of the Docker /workspace
 # mount; callers can still override it with the dataset_dir parameter.
 DATASET_DIR = 'records/datasets'
-DEFAULT_MODEL_FILENAME = 'robotcup20260901.pt'
+DEFAULT_MODEL_FILENAME = 'best.pt'
 
 
 class _ScalarKalman:

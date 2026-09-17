@@ -3,7 +3,7 @@
 从原 sim_bridge 抽出,行为保持一致:
 - 订阅 /sim/front_cam/{left,right}/image_color, /sim/down_cam/{left,right}/image_color
 - 重发布为 /auv/front_cam/{left,right}, /auv/down_cam/{left,right}
-- 仅将同一时刻的左右图拼接后发布 /auv/front_cam/stitched,
+- 仅将时间差在允许窗口内的左右图拼接后发布 /auv/front_cam/stitched,
   /auv/down_cam/stitched
 供 uv_camera 使用,与控制逻辑正交。
 """
@@ -32,6 +32,11 @@ STEREO_STITCH_SLOP_SEC = 0.04
 # but allow this simulator-specific front-camera offset so the front stream is
 # not silently dropped forever.
 FRONT_STEREO_STITCH_SLOP_SEC = 0.12
+# The down cameras are rendered in the same serial sensor pass as the front
+# cameras. They therefore have the same capture-time offset in simulation.
+# Keeping the default 40 ms gate would reject every down-camera pair and leave
+# uv_camera with no input frames.
+SIM_STEREO_STITCH_SLOP_SEC = 0.12
 
 
 class CameraPassthrough:
@@ -55,6 +60,9 @@ class CameraPassthrough:
             0.0 if stitch_fps <= 0.0 else 1.0 / stitch_fps)
         self._last_stitch_time = {'Front': float('-inf'), 'Down': float('-inf')}
         self._pair_sequence = {'Front': 0, 'Down': 0}
+        self._raw_counts = {'Front': 0, 'Down': 0}
+        self._stitched_counts = {'Front': 0, 'Down': 0}
+        self._diagnostic_timer = None
         self.front_left_img = None
         self.front_right_img = None
         self.down_left_img = None
@@ -64,6 +72,7 @@ class CameraPassthrough:
 
     def bind(self, node):
         self.node = node
+        self._diagnostic_timer = node.create_timer(5.0, self._report_diagnostics)
 
         # The perception path consumes only the stitched topics.  Individual
         # camera republishers duplicate several megabytes/s of ROS traffic and
@@ -113,25 +122,38 @@ class CameraPassthrough:
         if self.front_rect_left_pub is not None:
             self.front_rect_left_pub.publish(msg)
         self.front_left_img = msg
+        self._raw_counts['Front'] += 1
         self._publish_stitched_front()
 
     def _front_right_img_cb(self, msg):
         if self.front_rect_right_pub is not None:
             self.front_rect_right_pub.publish(msg)
         self.front_right_img = msg
+        self._raw_counts['Front'] += 1
         self._publish_stitched_front()
 
     def _down_left_img_cb(self, msg):
         if self.down_rect_left_pub is not None:
             self.down_rect_left_pub.publish(msg)
         self.down_left_img = msg
+        self._raw_counts['Down'] += 1
         self._publish_stitched_down()
 
     def _down_right_img_cb(self, msg):
         if self.down_rect_right_pub is not None:
             self.down_rect_right_pub.publish(msg)
         self.down_right_img = msg
+        self._raw_counts['Down'] += 1
         self._publish_stitched_down()
+
+    def _report_diagnostics(self):
+        """Make a silent DDS/topic failure visible without logging every frame."""
+        self.node.get_logger().info(
+            'camera passthrough: raw callbacks '
+            f"front={self._raw_counts['Front']} down={self._raw_counts['Down']}; "
+            f"stitched={self._stitched_counts['Front']}/"
+            f"{self._stitched_counts['Down']}"
+        )
 
     def _publish_stitched_front(self):
         self._last_front_pair_key = self._publish_stitched(
@@ -144,6 +166,7 @@ class CameraPassthrough:
         self._last_down_pair_key = self._publish_stitched(
             "Down", self.down_left_img, self.down_right_img,
             self.down_rect_pub, self._last_down_pair_key,
+            slop_sec=SIM_STEREO_STITCH_SLOP_SEC,
             info_publisher=self.down_stereo_info_pub)
 
     @staticmethod
@@ -201,6 +224,7 @@ class CameraPassthrough:
                 info_publisher.publish(info)
             publisher.publish(out)
             self._last_stitch_time[camera_name] = now
+            self._stitched_counts[camera_name] += 1
             return pair_key
         except Exception as error:
             self.node.get_logger().error(f"{camera_name} stitch failed: {error}")

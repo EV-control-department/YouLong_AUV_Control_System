@@ -39,13 +39,12 @@ PROFILE_PACKAGES = {
 def configure_simulator_gpu_environment(gpu, gpu_backend):
     """Select the OpenGL provider used by the Stonefish process.
 
-    On hybrid laptops the default GLX provider can be the integrated AMD
-    adapter even when an NVIDIA device and X server are available.  Stonefish
-    then reports a pair of generic shader link failures while constructing its
-    flat-ocean programs.  ``auto`` only enables NVIDIA PRIME offload when the
-    NVIDIA device node is present; ``system`` leaves the user's environment
-    untouched; ``nvidia`` fails early with an actionable message if the device
-    is unavailable.
+    On hybrid laptops the default GLX provider can be the integrated adapter
+    even when an NVIDIA device and X server are available.  Stonefish can then
+    fail while creating its OpenGL context.  ``auto`` selects NVIDIA PRIME
+    when the device node is present and otherwise selects Mesa software
+    rendering.  ``system`` leaves the user's environment untouched, while
+    ``software`` explicitly selects Mesa software rendering.
     """
 
     def _configure(context):
@@ -56,14 +55,26 @@ def configure_simulator_gpu_environment(gpu, gpu_backend):
         if not use_gpu or backend == "system":
             return []
 
+        software_environment = [
+            SetEnvironmentVariable("LIBGL_ALWAYS_SOFTWARE", "1"),
+            SetEnvironmentVariable("MESA_LOADER_DRIVER_OVERRIDE", "llvmpipe"),
+            # Do not let a stale NVIDIA override redirect GLX to an unavailable
+            # vendor library when software rendering was requested.
+            SetEnvironmentVariable("__GLX_VENDOR_LIBRARY_NAME", ""),
+            LogInfo(msg="Stonefish GPU backend: Mesa software OpenGL (llvmpipe)"),
+        ]
+
+        if backend == "software":
+            return software_environment
+
         nvidia_device = Path("/dev/nvidia0").exists()
         if backend == "nvidia" and not nvidia_device:
             raise RuntimeError(
                 "gpu_backend:=nvidia requested, but /dev/nvidia0 is not "
-                "available; check the NVIDIA driver or use gpu_backend:=system"
+                "available; check the NVIDIA driver or use gpu_backend:=software"
             )
         if backend == "auto" and not nvidia_device:
-            return [LogInfo(msg="Stonefish GPU backend: system OpenGL provider")]
+            return software_environment
 
         return [
             SetEnvironmentVariable("__NV_PRIME_RENDER_OFFLOAD", "1"),
@@ -224,10 +235,11 @@ def declare_simulation_arguments(
         ),
         DeclareLaunchArgument(
             "gpu_backend", default_value="auto",
-            choices=["auto", "nvidia", "system"],
+            choices=["auto", "nvidia", "system", "software"],
             description=(
                 "OpenGL provider for Stonefish GPU mode: auto detects "
-                "NVIDIA PRIME, nvidia forces it, system preserves the environment"
+                "NVIDIA PRIME, nvidia forces it, system preserves the "
+                "environment, software uses Mesa llvmpipe"
             ),
         ),
         DeclareLaunchArgument(
@@ -255,7 +267,7 @@ def declare_simulation_arguments(
             description="Front gate anchor: auto, centerline, segmentation, or bbox",
         ),
         DeclareLaunchArgument(
-            "target_id", default_value="yellow_golf",
+            "target_id", default_value="mapping_grid",
             description="Competition target metadata",
         ),
         DeclareLaunchArgument(

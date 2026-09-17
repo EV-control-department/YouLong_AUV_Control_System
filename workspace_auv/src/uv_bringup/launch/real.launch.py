@@ -97,7 +97,7 @@ def generate_launch_description():
             enable_motion="true",
         ),
         DeclareLaunchArgument("enable_hardware", default_value="true"),
-        DeclareLaunchArgument("target_id", default_value="yellow_golf"),
+        DeclareLaunchArgument("target_id", default_value="mapping_grid"),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         validate_profile(profile, "real"),
         LogInfo(msg=["Real vehicle profile: ", profile]),

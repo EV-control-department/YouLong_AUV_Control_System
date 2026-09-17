@@ -14,6 +14,8 @@ weight_files = [
 data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml', 'GO2RTC.md']),
+    ('share/' + package_name + '/resource',
+     ['resource/best.pt'] if os.path.isfile('resource/best.pt') else []),
     ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
     ('share/' + package_name + '/weights', weight_files),
     ('share/' + package_name + '/config', [
@@ -41,6 +43,7 @@ setup(
         'Pillow>=9.0',
         'numpy<1.25; python_version < "3.9"',
         'numpy==1.26.4; python_version >= "3.9"',
+        'ultralytics>=8.0,<9',
     ],
     zip_safe=True,
     maintainer='origin',

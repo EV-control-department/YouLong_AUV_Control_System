@@ -64,6 +64,9 @@ venv/
 **/prompt*
 **/*prompt*
 
+# Local task-authoring notes (keep for local reference, do not commit)
+workspace_auv/docs/任务撰写学习总结.md
+
 # Local workspace primer (not a doc)
 REASONIX.md
 

@@ -35,7 +35,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_task", default_value="true"),
-        DeclareLaunchArgument("target_id", default_value="yellow_golf"),
+        DeclareLaunchArgument("target_id", default_value="mapping_grid"),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument(
             "mission_file",

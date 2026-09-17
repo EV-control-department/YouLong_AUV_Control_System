@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from uv_sim.camera_passthrough import (
     FRONT_STEREO_STITCH_SLOP_SEC,
+    SIM_STEREO_STITCH_SLOP_SEC,
     CameraPassthrough,
 )
 
@@ -29,4 +30,11 @@ def test_front_simulator_pair_accepts_its_render_offset():
     assert CameraPassthrough._synchronized_pair_key(
         _image_at(14, 100_000_000), _image_at(14, 0),
         slop_sec=FRONT_STEREO_STITCH_SLOP_SEC) == (
-            14, 100_000_000, 14, 0)
+        14, 100_000_000, 14, 0)
+
+
+def test_down_simulator_pair_accepts_its_render_offset():
+    assert CameraPassthrough._synchronized_pair_key(
+        _image_at(15, 100_000_000), _image_at(15, 0),
+        slop_sec=SIM_STEREO_STITCH_SLOP_SEC) == (
+            15, 100_000_000, 15, 0)

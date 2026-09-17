@@ -144,7 +144,7 @@ ros2 run uv_control basic_motion --ros-args --log-level debug
 
 ### 完整执行 RoboCup 任务
 
-下面的命令会重新构建两个工作空间，并启动 `robotcup` 分支当前的完整任务链：Stonefish、`sim_bridge`、运动控制和 `uv_task`。当前分支的默认比赛场景包含相机传感器，因此即使关闭 AI，也必须使用 GPU 模式；`LIBGL_ALWAYS_SOFTWARE=1` 可在没有可用 NVIDIA 驱动时使用软件 OpenGL。
+下面的命令会重新构建两个工作空间，并启动当前 `robocup_enbody` 分支的具身智能建图任务链。仿真起点固定为 `(0, 0, 0.10)`；任务启动不等待 YOLO 首次推理，避免 CPU 推理把任务释放延后数十秒。
 
 ```bash
 REPO_ROOT=/home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System
@@ -157,13 +157,13 @@ if ! "$REPO_ROOT/workspace_auv/.venv/bin/python" -c 'import numpy' >/dev/null 2>
 fi
 export PATH="$REPO_ROOT/workspace_auv/.venv/bin:$PATH"
 
-# 构建 AUV 控制栈
-cd "$REPO_ROOT/workspace_auv"
+# 构建仿真栈（先构建其独立依赖）
+cd "$REPO_ROOT/workspace_sim"
 colcon build --symlink-install
 source install/setup.bash
 
-# 构建仿真栈
-cd "$REPO_ROOT/workspace_sim"
+# 构建 AUV 控制栈
+cd "$REPO_ROOT/workspace_auv"
 colcon build --symlink-install
 source install/setup.bash
 
@@ -176,13 +176,14 @@ LIBGL_ALWAYS_SOFTWARE=1 \
 ros2 launch uv_bringup sim.launch.py \
   profile:=sim_dev \
   gpu:=true \
-  gpu_backend:=system \
-  enable_ai:=false \
+  gpu_backend:=software \
+  enable_ai:=true \
   enable_nav:=false \
   enable_task:=true \
   enable_preview:=false \
-  scenario_desc:=guoshui_2026_cruise.scn \
-  mission_file:="$REPO_ROOT/workspace_auv/src/uv_task/config/missions/robocup_26.yaml"
+  wait_for_detections:=false \
+  scenario_desc:=water_embodied_intelligence_random.scn \
+  mission_file:="$REPO_ROOT/workspace_auv/src/uv_task/config/missions/mapping_grid.json"
 ```
 
 任务启动后可在另一个终端查看任务状态：
@@ -195,6 +196,7 @@ ros2 topic echo /task/status
 ```
 
 按 `Ctrl+C` 会停止整套仿真和任务节点。
+
 
 ### 快速启动仿真
 
@@ -223,13 +225,14 @@ ros2 launch uv_bringup sim.launch.py enable_preview:=false
 如果启动日志在 `Generating ocean waves...` 后出现两个
 `Failed to link program!`，先检查是否误用了集成显卡。bringup 默认
 `gpu_backend:=auto`：检测到 `/dev/nvidia0` 时会自动选择 NVIDIA PRIME
-offload；也可以显式指定：
+offload，否则自动选择 Mesa `llvmpipe` 软件 OpenGL。也可以显式指定：
 
 ```bash
 ros2 launch uv_bringup sim.launch.py gpu_backend:=nvidia
 ```
 
-强制 NVIDIA 但设备不可用时，启动会立即报出驱动检查提示。需要保留系统
+强制 NVIDIA 但设备不可用时，启动会立即报出驱动检查提示。没有可用的
+NVIDIA 驱动时可以使用 `gpu_backend:=software`。需要保留系统
 OpenGL 选择时使用 `gpu_backend:=system`。`gpu:=false` 是 Stonefish 的
 无 GPU 可执行项，不适用于包含相机的完整场景。
 
