@@ -95,9 +95,14 @@ class MappingTask:
         self.filters = {}
         self.class_votes = {}
         self.visit_order = []
+        self.observation_failures = []
+        self.cell_observations = {}
         self.current_cell = None
         self.state = 'initializing'
         self.last_detection_stamp = -1.0
+        self.perception_stop = threading.Event()
+        self.perception_thread = None
+        self._next_perception_error_log = 0.0
         self.tag_scan_stats = {'frames': 0, 'markers': 0, 'wrong_id': 0,
                                'no_depth': 0}
         self.last_tag_reason = 'not_scanned'
@@ -230,6 +235,7 @@ class MappingTask:
                     'observations': track.observations if track else 0,
                     'accepted_observations': track.accepted if track else 0,
                     'votes': votes,
+                    'observation': self.cell_observations.get(index),
                     'residual': (track.position - center).tolist() if track else None,
                 })
             payload = {
@@ -246,6 +252,8 @@ class MappingTask:
                 'tag': self._tag_json(),
                 'cells': cells,
                 'visit_order': list(self.visit_order),
+                'observation_failures': list(self.observation_failures),
+                'all_cells_visited': len(self.visit_order) == len(self.grid_centers),
             }
         self.map_pub.publish(String(data=json.dumps(payload, allow_nan=False)))
 
@@ -268,8 +276,19 @@ class MappingTask:
         if not poses:
             raise ValueError('pose is unavailable')
         pose = min(poses, key=lambda item: abs(_stamp(item) - timestamp))
-        if abs(_stamp(pose) - timestamp) > float(self.params['pose_slop_s']):
+        delta = abs(_stamp(pose) - timestamp)
+        strict_slop = float(self.params['pose_slop_s'])
+        fallback_slop = max(strict_slop, 1.0)
+        if delta > fallback_slop:
             raise ValueError('no pose close enough to image timestamp')
+        if (delta > strict_slop
+                and self.state in ('reading_tag', 'observe_cell')):
+            now = time.monotonic()
+            if now >= getattr(self, '_next_pose_fallback_log', 0.0):
+                self.node.get_logger().warning(
+                    f'位姿时间戳未严格同步，使用最近位姿：时间差={delta:.3f}s，'
+                    f'严格阈值={strict_slop:.3f}s')
+                self._next_pose_fallback_log = now + 3.0
         return pose
 
     def _prepare_calibration(self):
@@ -308,8 +327,23 @@ class MappingTask:
                 return None
             candidate = min(self.image_history,
                             key=lambda item: abs(item[0] - timestamp))
-        if abs(candidate[0] - timestamp) > float(self.params['image_slop_s']):
+        delta = abs(candidate[0] - timestamp)
+        strict_slop = float(self.params['image_slop_s'])
+        # Detection and stitched-image messages are produced by different
+        # callbacks.  At a low simulation/render rate, the nearest image can
+        # arrive later than the strict synchronization window.  The vehicle
+        # is stationary during cell observation, so a bounded fallback is
+        # valid and prevents a detection from being discarded unnecessarily.
+        fallback_slop = max(strict_slop, 1.0)
+        if delta > fallback_slop:
             return None
+        if delta > strict_slop:
+            now = time.monotonic()
+            if now >= getattr(self, '_next_image_fallback_log', 0.0):
+                self.node.get_logger().warning(
+                    f'图像时间戳未严格同步，使用最近帧：时间差={delta:.3f}s，'
+                    f'严格阈值={strict_slop:.3f}s')
+                self._next_image_fallback_log = now + 3.0
         left, right = candidate[1], candidate[2]
         left = cv2.remap(left, *self.rectify_maps[0], cv2.INTER_LINEAR)
         right = cv2.remap(right, *self.rectify_maps[1], cv2.INTER_LINEAR)
@@ -325,19 +359,42 @@ class MappingTask:
                 continue
             candidates = []
             for right_message in right_messages:
-                if abs(_stamp(right_message) - timestamp) > float(self.params['detection_slop_s']):
-                    continue
                 left_id = int(getattr(left_message, 'stereo_pair_id', 0) or 0)
                 right_id = int(getattr(right_message, 'stereo_pair_id', 0) or 0)
-                if left_id and right_id and left_id != right_id:
+                # The simulator carries the same pair ID even when the two
+                # camera headers differ by roughly 100 ms.  Pair ID is the
+                # authoritative association; timestamp is the fallback for
+                # legacy publishers that do not provide it.
+                if left_id and right_id:
+                    if left_id != right_id:
+                        continue
+                elif (abs(_stamp(right_message) - timestamp)
+                      > float(self.params['detection_slop_s'])):
                     continue
                 candidates.append(right_message)
             if candidates:
                 right_message = min(candidates,
                                     key=lambda item: abs(_stamp(item) - timestamp))
-                self.last_detection_stamp = timestamp
                 return left_message, right_message, timestamp
         return None
+
+    def _record_observation_frame(self):
+        """记录当前格点收到了一帧可用于定位的同步感知数据。"""
+        if self.state != 'observe_cell' or self.current_cell is None:
+            return
+        with self.lock:
+            observation = self.cell_observations.setdefault(
+                self.current_cell,
+                {'synchronized_frames': 0, 'valid_measurements': 0})
+            observation['synchronized_frames'] += 1
+
+    def _record_observation_measurement(self, cell):
+        """把本次有效深度测量记入其理论格点。"""
+        with self.lock:
+            observation = self.cell_observations.setdefault(
+                int(cell),
+                {'synchronized_frames': 0, 'valid_measurements': 0})
+            observation['valid_measurements'] += 1
 
     def _depth_map(self, left, right):
         left_gray = cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
@@ -395,52 +452,41 @@ class MappingTask:
         return body_position + body_rotation @ (
             self.camera_translation + self.camera_rotation @ point_optical)
 
-    def _observe_cones(self):
-        end = min(self.deadline, time.monotonic() + float(self.params['observe_seconds']))
-        frames = 0
-        observed_frames = 0
-        while self._ready() and time.monotonic() < end:
-            pair = self._detection_pair()
-            if pair is None:
-                time.sleep(0.03)
+    def _process_cone_pair(self, left_message, right_message, timestamp,
+                           image_pair, pose):
+        """处理一对已经完成时间配对的左右检测。"""
+        _, depth = self._depth_map(*image_pair)
+        self._record_observation_frame()
+        right_detections = [d for d in right_message.detections
+                            if int(d.class_id) in (0, 1)]
+        measurements = 0
+        for left_detection in left_message.detections:
+            class_id = int(left_detection.class_id)
+            if (class_id not in (0, 1)
+                    or float(left_detection.confidence)
+                    < float(self.params['min_confidence'])):
                 continue
-            left_message, right_message, timestamp = pair
-            image_pair = self._image_for(timestamp)
-            if image_pair is None:
-                self._emit('frame_rejected', reason='image timestamp unavailable', measurement_stamp=timestamp)
+            if not any(int(item.class_id) == class_id for item in right_detections):
                 continue
-            try:
-                pose = self._pose_for(timestamp)
-                _, depth = self._depth_map(*image_pair)
-            except ValueError as error:
-                self._emit('frame_rejected', reason=str(error), measurement_stamp=timestamp)
+            result = self._mask_depth_mode(left_detection, depth)
+            if result is None:
+                self._emit('measurement_rejected', reason='no_depth_mode', class_id=class_id,
+                           measurement_stamp=timestamp)
                 continue
-            right_detections = [d for d in right_message.detections
-                                if int(d.class_id) in (0, 1)]
-            observed_frames += 1
-            for left_detection in left_message.detections:
-                class_id = int(left_detection.class_id)
-                if class_id not in (0, 1) or float(left_detection.confidence) < float(self.params['min_confidence']):
-                    continue
-                if not any(int(item.class_id) == class_id for item in right_detections):
-                    continue
-                result = self._mask_depth_mode(left_detection, depth)
-                if result is None:
-                    self._emit('measurement_rejected', reason='no_depth_mode', class_id=class_id,
-                               measurement_stamp=timestamp)
-                    continue
-                distance, pixel, sample_count = result
-                point = self._world_measurement(pixel, distance, pose)
-                cell = min(self.grid_centers,
-                           key=lambda index: np.linalg.norm(point[:2] - self.grid_centers[index][:2]))
-                residual = float(np.linalg.norm(point[:2] - self.grid_centers[cell][:2]))
-                if residual > float(self.params['cell_gate_m']):
-                    self._emit('measurement_rejected', reason='outside_cell_gate', class_id=class_id,
-                               position=point.tolist(), residual_m=residual,
-                               measurement_stamp=timestamp)
-                    continue
-                covariance = np.eye(3) * float(self.params['measurement_sigma_m']) ** 2
-                covariance[2, 2] *= 2.0
+            distance, pixel, sample_count = result
+            point = self._world_measurement(pixel, distance, pose)
+            cell = min(self.grid_centers,
+                       key=lambda index: np.linalg.norm(
+                           point[:2] - self.grid_centers[index][:2]))
+            residual = float(np.linalg.norm(point[:2] - self.grid_centers[cell][:2]))
+            if residual > float(self.params['cell_gate_m']):
+                self._emit('measurement_rejected', reason='outside_cell_gate', class_id=class_id,
+                           position=point.tolist(), residual_m=residual,
+                           measurement_stamp=timestamp)
+                continue
+            covariance = np.eye(3) * float(self.params['measurement_sigma_m']) ** 2
+            covariance[2, 2] *= 2.0
+            with self.lock:
                 track = self.filters.get(cell)
                 if track is None:
                     self.filters[cell] = StaticPositionFilter(point, covariance, timestamp)
@@ -453,16 +499,31 @@ class MappingTask:
                         float(self.params['mahalanobis_gate']))
                 if accepted:
                     self.class_votes[cell][class_id] += 1
-                self._emit('cone_measurement', cell=cell, class_id=class_id,
-                           confidence=float(left_detection.confidence), depth_m=distance,
-                           depth_samples=sample_count, position=point.tolist(),
-                           residual_m=residual, accepted=accepted, reason=reason,
-                           measurement_stamp=timestamp)
-                frames += 1
+            self._record_observation_measurement(cell)
+            self._emit('cone_measurement', cell=cell, class_id=class_id,
+                       confidence=float(left_detection.confidence), depth_m=distance,
+                       depth_samples=sample_count, position=point.tolist(),
+                       residual_m=residual, accepted=accepted, reason=reason,
+                       measurement_stamp=timestamp)
+            measurements += 1
+        return measurements
+
+    def _observe_cones(self):
+        """等待后台感知线程累计当前格点的观测，不再主动取帧。"""
+        cell = self.current_cell
+        with self.lock:
+            start = dict(self.cell_observations.get(
+                cell, {'synchronized_frames': 0, 'valid_measurements': 0}))
+        end = min(self.deadline, time.monotonic() + float(self.params['observe_seconds']))
+        while self._ready() and time.monotonic() < end:
+            time.sleep(0.05)
+        with self.lock:
+            current = dict(self.cell_observations.get(cell, start))
+        observed_frames = current['synchronized_frames'] - start['synchronized_frames']
+        measurements = current['valid_measurements'] - start['valid_measurements']
         self.node.get_logger().info(
-            f'格点{self.current_cell}观察完成：同步帧={observed_frames}，有效目标测量={frames}')
-        # Empty cells are expected (four cones occupy nine cells).  Require
-        # actual synchronized perception frames; silence is not empty space.
+            f'格点{cell}观察完成：后台同步帧={observed_frames}，'
+            f'新增有效目标测量={measurements}，累计有效目标测量={current["valid_measurements"]}')
         return observed_frames >= int(self.params['min_observations'])
 
     def _tag_measurement(self, image_pair, pose):
@@ -506,57 +567,116 @@ class MappingTask:
             self.last_tag_reason = 'no_marker'
         return None
 
+    def _accept_tag_result(self, result, timestamp):
+        """将后台线程得到的 AprilTag 测量写入静态滤波器。"""
+        if result is None:
+            return False
+        tag_id, point, sample_count = result
+        with self.lock:
+            if hasattr(self, 'tag_filter') and tag_id != self.tag_id:
+                self.last_tag_reason = '标记ID改变，拒绝合并不同目标'
+                return False
+            covariance = np.eye(3) * float(self.params['measurement_sigma_m']) ** 2
+            if not hasattr(self, 'tag_filter'):
+                self.tag_id = tag_id
+                self.tag_filter = StaticPositionFilter(point, covariance, timestamp)
+                accepted, reason = True, 'initial'
+            else:
+                accepted, reason = self.tag_filter.update(
+                    point, covariance, timestamp,
+                    float(self.params['process_noise']),
+                    float(self.params['mahalanobis_gate']))
+            observations = self.tag_filter.observations
+        self._emit('tag_measurement', tag_id=tag_id, position=point.tolist(),
+                   depth_samples=sample_count, accepted=accepted, reason=reason,
+                   measurement_stamp=timestamp)
+        if observations >= int(self.params['min_observations']):
+            self.node.get_logger().info(
+                f'标记确认成功：ID={tag_id}，有效观测={observations}')
+        return accepted
+
+    def _perception_loop(self):
+        """后台持续处理最新图像、AprilTag 和左右目分割检测。"""
+        last_image_processed = -1.0
+        self.node.get_logger().info('建图后台感知线程已启动：视觉与WTRAVEL并行运行')
+        while self._ready() and not self.perception_stop.is_set():
+            did_work = False
+            with self.lock:
+                images = list(self.image_history)
+            for timestamp, _, _ in sorted(images, key=lambda item: item[0]):
+                if timestamp <= last_image_processed:
+                    continue
+                try:
+                    pose = self._pose_for(timestamp)
+                    image_pair = self._image_for(timestamp)
+                except (ValueError, cv2.error) as error:
+                    self.last_tag_reason = f'图像或位姿无效：{error}'
+                    continue
+                if image_pair is None:
+                    # 图像时间配对可能在下一次回调才成立，暂不消费该帧。
+                    continue
+                last_image_processed = timestamp
+                try:
+                    self._accept_tag_result(
+                        self._tag_measurement(image_pair, pose), timestamp)
+                except (ValueError, cv2.error) as error:
+                    self.last_tag_reason = f'标记处理失败：{error}'
+                did_work = True
+
+            pair = self._detection_pair()
+            if pair is not None:
+                left_message, right_message, timestamp = pair
+                image_pair = self._image_for(timestamp)
+                if image_pair is None:
+                    self._emit('frame_rejected', reason='image timestamp unavailable',
+                               measurement_stamp=timestamp)
+                else:
+                    try:
+                        pose = self._pose_for(timestamp)
+                        self.last_detection_stamp = timestamp
+                        self._process_cone_pair(
+                            left_message, right_message, timestamp, image_pair, pose)
+                    except (ValueError, cv2.error) as error:
+                        self.last_detection_stamp = timestamp
+                        self._emit('frame_rejected', reason=str(error),
+                                   measurement_stamp=timestamp)
+                    did_work = True
+            if not did_work:
+                self.perception_stop.wait(0.03)
+        self.node.get_logger().info('建图后台感知线程已停止')
+
+    def _start_perception_worker(self):
+        if self.perception_thread is not None and self.perception_thread.is_alive():
+            return
+        self.perception_stop.clear()
+        self.perception_thread = threading.Thread(
+            target=self._perception_loop, name='mapping-perception', daemon=True)
+        self.perception_thread.start()
+
+    def _stop_perception_worker(self):
+        self.perception_stop.set()
+        if self.perception_thread is not None:
+            self.perception_thread.join(timeout=2.0)
+            self.perception_thread = None
+
     def _read_tag(self):
         self.state = 'reading_tag'
         self.node.get_logger().info(
             f'开始识别池底标记：字典={self.params["tag_dictionary"]}，'
             f'期望ID={self.params["tag_id"]}，图像={self.params["image_topic"]}；'
             f'代码路径={__file__}')
-        last_processed = -1.0
         next_log = time.monotonic()
         end = min(self.deadline, time.monotonic() + float(self.params['tag_timeout']))
         while self._ready() and time.monotonic() < end:
+            with self.lock:
+                tag_filter = getattr(self, 'tag_filter', None)
+                observations = tag_filter.observations if tag_filter else 0
+            if observations >= int(self.params['min_observations']):
+                return True
             if time.monotonic() >= next_log:
                 self.node.get_logger().info(
                     f'标记识别进度：{self.tag_scan_stats}，最近原因={self.last_tag_reason}')
                 next_log = time.monotonic() + 3.0
-            with self.lock:
-                images = list(self.image_history)
-            for timestamp, _, _ in sorted(images, key=lambda item: item[0]):
-                if timestamp <= last_processed or time.monotonic() >= end:
-                    continue
-                last_processed = timestamp
-                try:
-                    pose = self._pose_for(timestamp)
-                    image_pair = self._image_for(timestamp)
-                    result = (None if image_pair is None else
-                              self._tag_measurement(image_pair, pose))
-                except (ValueError, cv2.error) as error:
-                    self.last_tag_reason = f'图像或位姿无效：{error}'
-                    result = None
-                if result is None:
-                    continue
-                tag_id, point, sample_count = result
-                if hasattr(self, 'tag_filter') and tag_id != self.tag_id:
-                    self.last_tag_reason = '标记ID改变，拒绝合并不同目标'
-                    continue
-                covariance = np.eye(3) * float(self.params['measurement_sigma_m']) ** 2
-                if not hasattr(self, 'tag_filter'):
-                    self.tag_id = tag_id
-                    self.tag_filter = StaticPositionFilter(point, covariance, timestamp)
-                    accepted, reason = True, 'initial'
-                else:
-                    accepted, reason = self.tag_filter.update(
-                        point, covariance, timestamp,
-                        float(self.params['process_noise']),
-                        float(self.params['mahalanobis_gate']))
-                self._emit('tag_measurement', tag_id=tag_id, position=point.tolist(),
-                           depth_samples=sample_count, accepted=accepted, reason=reason,
-                           measurement_stamp=timestamp)
-                if self.tag_filter.observations >= int(self.params['min_observations']):
-                    self.node.get_logger().info(
-                        f'标记确认成功：ID={tag_id}，有效观测={self.tag_filter.observations}')
-                    return True
             time.sleep(0.05)
         self.node.get_logger().error(
             'AprilTag 识别超时: frames=%d markers=%d wrong_id=%d '
@@ -596,6 +716,7 @@ class MappingTask:
             if self.calibration is None:
                 raise RuntimeError('camera calibration or pose unavailable')
             self._emit('calibration_ready', baseline_m=self.calibration.baseline_m)
+            self._start_perception_worker()
             self.state = 'travel_to_tag'
             if not self._travel_to(
                     [self.params['tag_x'], self.params['tag_y']], 'mapping:travel_to_april_tag'):
@@ -609,10 +730,22 @@ class MappingTask:
                 if not self._travel_to(center[:2], f'mapping:travel_to_cell_{cell}'):
                     raise RuntimeError(f'WTRAVEL to cell {cell} failed')
                 self.state = 'observe_cell'
-                if not self._observe_cones():
-                    raise RuntimeError(f'no valid segmented depth measurements at cell {cell}')
+                observation_ok = self._observe_cones()
                 self.visit_order.append(self.current_cell)
-                self._emit('cell_completed', cell=self.current_cell)
+                observation = self.cell_observations.get(self.current_cell, {})
+                if not observation_ok:
+                    self.observation_failures.append(self.current_cell)
+                    self.node.get_logger().warning(
+                        f'格点{cell}未获得足够有效观测，记录为空格并继续检索九宫格：'
+                        f'同步帧={observation.get("synchronized_frames", 0)}，'
+                        f'有效目标测量={observation.get("valid_measurements", 0)}')
+                    self._emit(
+                        'cell_completed', cell=self.current_cell,
+                        observation_ok=False, **observation)
+                else:
+                    self._emit(
+                        'cell_completed', cell=self.current_cell,
+                        observation_ok=True, **observation)
                 self.publish_map()
             confirmed = [index for index, votes in self.class_votes.items()
                          if sum(votes) >= int(self.params['min_observations'])
@@ -630,9 +763,11 @@ class MappingTask:
             self.node.stopped = True
             return False
         finally:
+            self._stop_perception_worker()
             self.publish_map()
 
     def destroy(self):
+        self._stop_perception_worker()
         self.node.destroy_timer(self.publish_timer)
         for subscription in self.subscriptions:
             self.node.destroy_subscription(subscription)
