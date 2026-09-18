@@ -120,6 +120,11 @@ class MappingTask:
         ])
         self.grid_rotation = _rpy_matrix(0, 0, params['grid_yaw_deg'])
         self.grid_centers = self._make_grid_centers()
+        # Keep raw world-space measurements for DDS visualization and offline
+        # parameter tuning. The filtered track remains task-authoritative.
+        self.measurement_points = {
+            index: deque(maxlen=120) for index in self.grid_centers
+        }
         self.camera_translation = np.asarray(params['left_translation'], dtype=float)
         self.right_translation = np.asarray(params['right_translation'], dtype=float)
         self.camera_rotation = np.asarray(
@@ -243,9 +248,10 @@ class MappingTask:
                     'votes': votes,
                     'observation': self.cell_observations.get(index),
                     'residual': (track.position - center).tolist() if track else None,
+                    'measurements': list(self.measurement_points.get(index, ())),
                 })
             payload = {
-                'schema_version': 1,
+                'schema_version': 2,
                 'frame_id': 'mapping_odom',
                 'state': self.state,
                 'stamp': self.node.get_clock().now().nanoseconds * 1e-9,
@@ -260,6 +266,8 @@ class MappingTask:
                 'visit_order': list(self.visit_order),
                 'observation_failures': list(self.observation_failures),
                 'all_cells_visited': len(self.visit_order) == len(self.grid_centers),
+                'measurement_count': sum(
+                    len(points) for points in self.measurement_points.values()),
             }
         self.map_pub.publish(String(data=json.dumps(payload, allow_nan=False)))
 
@@ -489,6 +497,17 @@ class MappingTask:
                        key=lambda index: np.linalg.norm(
                            point[:2] - self.grid_centers[index][:2]))
             residual = float(np.linalg.norm(point[:2] - self.grid_centers[cell][:2]))
+            point_record = {
+                'position': point.tolist(),
+                'class_id': class_id,
+                'confidence': float(left_detection.confidence),
+                'depth_m': distance,
+                'residual_m': residual,
+                'accepted': False,
+                'timestamp': float(timestamp),
+            }
+            with self.lock:
+                self.measurement_points[cell].append(point_record)
             if residual > float(self.params['cell_gate_m']):
                 self._emit('measurement_rejected', reason='outside_cell_gate', class_id=class_id,
                            position=point.tolist(), residual_m=residual,
@@ -509,6 +528,7 @@ class MappingTask:
                         float(self.params['mahalanobis_gate']))
                 if accepted:
                     self.class_votes[cell][class_id] += 1
+                    point_record['accepted'] = True
             self._record_observation_measurement(cell)
             self._emit('cone_measurement', cell=cell, class_id=class_id,
                        confidence=float(left_detection.confidence), depth_m=distance,

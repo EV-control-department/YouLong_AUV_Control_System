@@ -1,5 +1,7 @@
 PySide6>=6.0
 matplotlib>=3.5
+numpy>=1.23
+opencv-python>=4.6
 # ROS 2 依赖通过 colcon workspace 提供：
 # rclpy, uv_msgs, zit6_interfaces
 # 运行前需 source install/setup.bash
