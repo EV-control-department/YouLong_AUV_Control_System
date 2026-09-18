@@ -1,9 +1,9 @@
 {
   "task": "mapping_grid",
   "params": {
-    "timeout": 420.0,
+    "timeout": 900.0,
     "move_timeout": 150.0,
-    "observe_seconds": 4.0,
+    "observe_seconds": 6.0,
     "min_observations": 3,
     "min_confidence": 0.35,
     "class_vote_ratio": 0.67,

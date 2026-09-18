@@ -103,6 +103,12 @@ class MappingTask:
         self.perception_stop = threading.Event()
         self.perception_thread = None
         self._next_perception_error_log = 0.0
+        self.perception_stats = {
+            'detection_pairs': 0,
+            'image_unavailable': 0,
+            'pose_unavailable': 0,
+            'processed_pairs': 0,
+        }
         self.tag_scan_stats = {'frames': 0, 'markers': 0, 'wrong_id': 0,
                                'no_depth': 0}
         self.last_tag_reason = 'not_scanned'
@@ -278,7 +284,9 @@ class MappingTask:
         pose = min(poses, key=lambda item: abs(_stamp(item) - timestamp))
         delta = abs(_stamp(pose) - timestamp)
         strict_slop = float(self.params['pose_slop_s'])
-        fallback_slop = max(strict_slop, 1.0)
+        fallback_slop = max(
+            strict_slop,
+            5.0 if self.state in ('reading_tag', 'observe_cell') else 1.0)
         if delta > fallback_slop:
             raise ValueError('no pose close enough to image timestamp')
         if (delta > strict_slop
@@ -334,7 +342,9 @@ class MappingTask:
         # arrive later than the strict synchronization window.  The vehicle
         # is stationary during cell observation, so a bounded fallback is
         # valid and prevents a detection from being discarded unnecessarily.
-        fallback_slop = max(strict_slop, 1.0)
+        fallback_slop = max(
+            strict_slop,
+            5.0 if self.state in ('reading_tag', 'observe_cell') else 1.0)
         if delta > fallback_slop:
             return None
         if delta > strict_slop:
@@ -523,7 +533,8 @@ class MappingTask:
         measurements = current['valid_measurements'] - start['valid_measurements']
         self.node.get_logger().info(
             f'格点{cell}观察完成：后台同步帧={observed_frames}，'
-            f'新增有效目标测量={measurements}，累计有效目标测量={current["valid_measurements"]}')
+            f'新增有效目标测量={measurements}，累计有效目标测量={current["valid_measurements"]}；'
+            f'感知统计={self.perception_stats}')
         return observed_frames >= int(self.params['min_observations'])
 
     def _tag_measurement(self, image_pair, pose):
@@ -625,9 +636,11 @@ class MappingTask:
 
             pair = self._detection_pair()
             if pair is not None:
+                self.perception_stats['detection_pairs'] += 1
                 left_message, right_message, timestamp = pair
                 image_pair = self._image_for(timestamp)
                 if image_pair is None:
+                    self.perception_stats['image_unavailable'] += 1
                     self._emit('frame_rejected', reason='image timestamp unavailable',
                                measurement_stamp=timestamp)
                 else:
@@ -636,7 +649,10 @@ class MappingTask:
                         self.last_detection_stamp = timestamp
                         self._process_cone_pair(
                             left_message, right_message, timestamp, image_pair, pose)
+                        self.perception_stats['processed_pairs'] += 1
                     except (ValueError, cv2.error) as error:
+                        if 'pose' in str(error):
+                            self.perception_stats['pose_unavailable'] += 1
                         self.last_detection_stamp = timestamp
                         self._emit('frame_rejected', reason=str(error),
                                    measurement_stamp=timestamp)
