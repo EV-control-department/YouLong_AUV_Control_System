@@ -5,10 +5,8 @@ from __future__ import annotations
 import math
 import time
 
-import numpy as np
-
 from uv_msgs.action import BasicMotion
-from uv_camera.model_classes import model_class_id, model_class_name
+from uv_camera.model_classes import model_class_id
 from uv_task.task_outcome import TaskOutcome
 
 
@@ -23,7 +21,8 @@ def _wrap_yaw(value: float) -> float:
 class RB26GrabBallTask:
     """Center a coloured ball under down-left, offset to the gripper, descend.
 
-    The task intentionally uses only ``/perception/detection/down_left`` for
+    The task intentionally uses only the downward-left canonical detection
+    stream for
     the visual servo.  It does not use the object localizer position estimate,
     because the final pickup alignment is relative to the camera and gripper.
     """
@@ -90,18 +89,13 @@ class RB26GrabBallTask:
 
     @staticmethod
     def _parse_ball_color(value) -> int | None:
-        if isinstance(value, (int, np.integer)):
-            class_id = int(value)
-            name = model_class_name(class_id)
-        else:
-            text = str(value or '').strip()
-            if text.isdigit():
-                return RB26GrabBallTask._parse_ball_color(int(text))
-            class_id = model_class_id(text, required=False)
-            name = model_class_name(class_id) if class_id is not None else None
+        if not isinstance(value, str):
+            return None
+        name = value.strip()
+        class_id = model_class_id(name, required=False)
         return class_id if name in {
             'impact_ball_blue', 'impact_ball_red', 'pink_golf', 'yellow_golf'
-        } else None
+        } and class_id is not None else None
 
     def _best_left_detection(self):
         """Return the freshest/highest-quality target in down-left."""
@@ -171,7 +165,7 @@ class RB26GrabBallTask:
         last_status_log = float('-inf')
         self._logger.info(
             f'26rb_grab_ball：水平视觉伺服已启动；'
-            f'话题=/perception/detection/down_left，'
+            f'话题=/auv/perception/detections/downward/left，'
             f'class_id={self._class_id}，容差={self._pixel_tolerance:.3f}，'
             f'投影深度={self._projection_depth:.2f}m')
         while (not self._node.stopped and time.monotonic() < deadline):

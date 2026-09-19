@@ -21,7 +21,6 @@ def generate_test_description():
         PythonLaunchDescriptionSource(
             str(LAUNCH_ROOT / 'observability.launch.py')),
         launch_arguments={
-            'enable_ai': 'false',
             'enable_preview': 'false',
             'record_session': 'false',
         }.items(),

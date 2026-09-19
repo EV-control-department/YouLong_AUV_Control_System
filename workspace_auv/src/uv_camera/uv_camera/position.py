@@ -17,6 +17,7 @@ import rclpy
 from rclpy.node import Node
 
 from uv_msgs.msg import DetectionArray, ObjectPosition, ObjectPositionArray, PoseInfo
+from auv_protocol.topics import DETECTIONS, OBJECTS, STATE_ODOM
 
 from .camera_config import load_camera_config, profile_for_mode
 from .model_classes import (
@@ -127,14 +128,14 @@ class PositionNode(Node):
                 }
 
         # Subscribers
-        self.create_subscription(DetectionArray, '/perception/detection/front_left', self._front_left_cb, 10)
-        self.create_subscription(DetectionArray, '/perception/detection/front_right', self._front_right_cb, 10)
-        self.create_subscription(DetectionArray, '/perception/detection/down_left', self._down_left_cb, 10)
-        self.create_subscription(DetectionArray, '/perception/detection/down_right', self._down_right_cb, 10)
-        self.create_subscription(PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10)
+        self.create_subscription(DetectionArray, DETECTIONS('front_left'), self._front_left_cb, 10)
+        self.create_subscription(DetectionArray, DETECTIONS('front_right'), self._front_right_cb, 10)
+        self.create_subscription(DetectionArray, DETECTIONS('down_left'), self._down_left_cb, 10)
+        self.create_subscription(DetectionArray, DETECTIONS('down_right'), self._down_right_cb, 10)
+        self.create_subscription(PoseInfo, STATE_ODOM, self._pose_cb, 10)
 
         # Publisher
-        self.pub_objects = self.create_publisher(ObjectPositionArray, '/perception/objects', 10)
+        self.pub_objects = self.create_publisher(ObjectPositionArray, OBJECTS, 10)
 
         # Broadcast timer
         self.create_timer(0.1, self._broadcast_objects)  # 10Hz

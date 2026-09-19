@@ -5,14 +5,14 @@ profiles:
   sim:
     capture_resolution: [2560, 960]
     eye_resolution: [1280, 960]
-    image_topic: /auv/front_cam/stitched
+    image_topic: /auv/sensors/camera/front/image_stitched
     eye_image_topics:
-      left: /sim/front_cam/left/image_color
-      right: /sim/front_cam/right/image_color
-    stereo_info_topic: /auv/front_cam/stereo_info
+      left: /auv/sim/raw/camera/front/left/image_raw
+      right: /auv/sim/raw/camera/front/right/image_raw
+    stereo_info_topic: /auv/sensors/camera/front/stereo_info
     camera_info_topics:
-      left: /sim/front_cam/left/camera_info
-      right: /sim/front_cam/right/camera_info
+      left: /auv/sim/raw/camera/front/left/camera_info
+      right: /auv/sim/raw/camera/front/right/camera_info
     device: null
     calibration_source: sim_camera_info
     calibration_npz: robotcup_front.npz
@@ -34,14 +34,14 @@ profiles:
   real:
     capture_resolution: [2560, 960]
     eye_resolution: [1280, 960]
-    image_topic: /auv/front_cam/stitched
+    image_topic: /auv/sensors/camera/front/image_stitched
     eye_image_topics:
       left: ""
       right: ""
-    stereo_info_topic: /auv/front_cam/stereo_info
+    stereo_info_topic: /auv/sensors/camera/front/stereo_info
     camera_info_topics:
-      left: ""
-      right: ""
+      left: /auv/sensors/camera/front/left/camera_info
+      right: /auv/sensors/camera/front/right/camera_info
     device: /dev/video0
     calibration_source: npz
     calibration_npz: front.npz
@@ -55,7 +55,7 @@ profiles:
     extrinsics:
       left:
         translation: [0.23, -0.05, 0.076]
-        optical_to_body: [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
+        optical_to_body: [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
       right:
         translation: [0.23, 0.05, 0.076]
-        optical_to_body: [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
+        optical_to_body: [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]

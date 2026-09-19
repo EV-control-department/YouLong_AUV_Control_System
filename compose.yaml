@@ -56,6 +56,8 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: all
       __NV_PRIME_RENDER_OFFLOAD: "1"
       __GLX_VENDOR_LIBRARY_NAME: nvidia
+      QT_QPA_PLATFORM: xcb
+      QT_QPA_FONTDIR: /usr/share/fonts/opentype/noto
       QT_X11_NO_MITSHM: "1"
       LANG: C.UTF-8
       LC_ALL: C.UTF-8

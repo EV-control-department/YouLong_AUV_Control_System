@@ -1,0 +1,44 @@
+\chapter{运动控制}
+\label{ch:control}
+
+\section{控制层职责}
+\pkg{uv_control} 的核心节点是 \code{basic_motion}。它提供面向任务的 BasicMotion Action，维护 odom/map/body 坐标转换，按动作类型生成目标位姿，并将唯一的底层协议出口收敛到 ZIT6 Setpoint。控制节点消费 \topic{/auv/state/odom}、\topic{/auv/state/twist} 和 ZIT6 状态。
+
+\section{动作类型}
+\begin{description}
+  \item[SET] 在 odom 中设置绝对目标；未指定轴由调用方或控制器保持。
+  \item[WMOVE] 在世界/NED 坐标中按增量移动。
+  \item[BMOVE] 在当前 FRD 机体坐标中按增量移动，再转换到 odom/map。
+  \item[WTRAVEL/BTRAVEL] 沿直线目标方向移动，适合过门、巡线等任务。
+  \item[START] 记录当前位置为 odom 原点，并发送状态 reset。
+\end{description}
+
+\section{坐标转换}
+控制接口的高层目标通常使用 odom 坐标；ZIT6 协议出口使用 map 坐标。以 yaw 为例，若 odom 原点在 map 中的位姿为 $(x_o,y_o,\psi_o)$，则局部点到 map 的变换为
+\begin{equation}
+  \begin{bmatrix}x_m\\y_m\end{bmatrix}
+  = \begin{bmatrix}x_o\\y_o\end{bmatrix}
+  + \begin{bmatrix}\cos\psi_o&-\sin\psi_o\\
+  \sin\psi_o&\cos\psi_o\end{bmatrix}
+  \begin{bmatrix}x_o'\\y_o'\end{bmatrix},
+  \qquad \psi_m=\psi_o+\psi_o'.
+\end{equation}
+BMOVE 还需要以当前车辆姿态将 body 增量旋转到 odom；所有角度在内部计算中使用弧度，兼容 ZIT6/\code{PoseInfo} 边界再转换为协议需要的形式。
+
+\section{BasicMotion Action Server}
+Action 请求包含命令类型、有效轴、目标数组、超时时间和任务上下文；反馈报告剩余距离；结果报告成功和失败原因。\pkg{uv_task} 通过 ActionClient 调用它，而不是直接修改控制器内部状态。停止或取消动作时，节点必须停止继续发送新的运动目标，并让上层看到明确的失败结果。
+
+\section{控制核与推力分配}
+在 SIL 中，\pkg{zit6_control_core} 复用固件级联 PID、设定值路由和运动学配置，控制线程按 SI{100}{Hz} 调用，输出归一化 6-DOF 机体力/力矩；\pkg{uv_sim_bridge} 的 mixer 再将其映射为六路推进器命令。HIL/真机中，最终 PID 和分配可以由 MCU/电机板执行，但上层协议不变。
+
+\section{到达判定与超时}
+当前 BasicMotion 使用机体误差判断 x/y/z/yaw 是否进入容差，并为步进动作计算动态步长和收敛时间。任何到达判定都必须包含超时、取消、状态过期和通信异常分支；“动作服务器收到目标”不能作为“车辆已经完成动作”。
+
+\section{安全约束}
+\begin{enumerate}
+  \item 状态未就绪时不接受需要闭环的位置/速度目标。
+  \item 目标、速度、角度和 mask 必须在消息边界校验，拒绝 NaN/Inf 和非法轴。
+  \item 推力饱和、控制周期超限和 MCU watchdog 触发时，必须记录原因并进入安全处置。
+  \item 调试工具使用旧接口时只能走兼容出口，不能绕过任务/控制状态机直接制造隐式控制链。
+\end{enumerate}
+

@@ -1,0 +1,446 @@
+<?xml version='1.0' encoding='utf-8'?>
+<scenario>
+<arg name="robot_orientation" default="0.0 0.0 0.0" />
+    
+    <robot name="$(arg robot_name)" fixed="false" self_collisions="false">
+        
+		<base_link name="Vehicle" type="compound" physics="submerged">
+            
+            
+            
+
+			<external_part name="BuoyancyBlock" type="model" physics="submerged" buoyant="true">
+				<physical>
+					
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="1.0" />
+					
+					<origin rpy="0 0 0" xyz="0 0 0" />
+				</physical>
+				<visual>
+					<mesh filename="vehicles/youlong/meshes/visual/xy_buoyancy_block.obj" scale="0.001" />
+					<origin rpy="3.1415926 0.0 0" xyz="-0.00000 -0.00000 0.18" />
+				</visual>
+                
+				<material name="Fiberglass" />
+				
+				<mass value="0.001" />
+                
+				<look name="yellow" />
+                
+				<compound_transform rpy="0 0 -2.65359e-06" xyz="0 0 0" />
+			</external_part>
+
+
+			<external_part name="RightSidePlate" type="model" physics="disabled" buoyant="false">
+				<physical>
+                    
+					
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+                    
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</physical>
+				<visual>
+					<mesh filename="vehicles/youlong/meshes/visual/xy_right_sideplate.obj" scale="0.001" />
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</visual>
+                
+				<material name="Fiberglass" />
+				<mass value="0.001" />
+                
+				<look name="white" />
+                
+				<compound_transform rpy="0 0 3.14159" xyz="0 0 0" />
+			</external_part>
+
+			<external_part name="LeftSidePlate" type="model" physics="disabled" buoyant="false">
+				<physical>
+                    
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+                    
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</physical>
+				<visual>
+					<mesh filename="vehicles/youlong/meshes/visual/xy_left_sideplate.obj" scale="0.001" />
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</visual>
+                
+				<material name="Fiberglass" />
+				<mass value="0.001" />
+                
+				<look name="white" />
+                
+				<compound_transform rpy="0 0 3.14159" xyz="0 0 0" />
+			</external_part>
+
+			<external_part name="ForwardBracket" type="model" physics="disabled" buoyant="false">
+				<physical>
+                    
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+                    
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</physical>
+				<visual>
+					<mesh filename="vehicles/youlong/meshes/visual/xy_forward_bracket.obj" scale="0.001" />
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</visual>
+                
+				<material name="Fiberglass" />
+				<mass value="0.001" />
+                
+				<look name="white" />
+                
+				<compound_transform rpy="0 0 3.14159" xyz="0 0 0" />
+			</external_part>
+
+
+			<external_part name="AftBracket" type="model" physics="disabled" buoyant="false">
+				<physical>
+                    
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+                    
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</physical>
+				<visual>
+					<mesh filename="vehicles/youlong/meshes/visual/xy_aft_bracket.obj" scale="0.001" />
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</visual>
+                
+				<material name="Fiberglass" />
+				<mass value="0.001" />
+                
+				<look name="white" />
+                
+				<compound_transform rpy="0 0 3.14159" xyz="0 0 0" />
+			</external_part>
+
+			<external_part name="CoreEnclosure" type="model" physics="disabled" buoyant="false">
+				<physical>
+                    
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+                    
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</physical>
+				<visual>
+					<mesh filename="vehicles/youlong/meshes/visual/xy_core_enclosure.obj" scale="0.001" />
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</visual>
+                
+				<material name="Fiberglass" />
+				<mass value="0.001" />
+                
+				<look name="white" />
+                
+				<compound_transform rpy="0 0 3.14159" xyz="0 0 0" />
+			</external_part>
+
+			<external_part name="InsBasePlate" type="model" physics="disabled" buoyant="false">
+				<physical>
+                    
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+                    
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</physical>
+				<visual>
+					<mesh filename="vehicles/youlong/meshes/visual/xy_ins_base_plate.obj" scale="0.001" />
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</visual>
+                
+				<material name="Fiberglass" />
+				<mass value="0.001" />
+                
+				<look name="white" />
+                
+				<compound_transform rpy="0 0 3.14159" xyz="0 0 0" />
+			</external_part>
+
+			<external_part name="BatteryPod" type="model" physics="disabled" buoyant="false">
+				<physical>
+                    
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+                    
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</physical>
+				<visual>
+					<mesh filename="vehicles/youlong/meshes/visual/battery_pod.obj" scale="0.001" />
+					<origin rpy="3.1415926 0.0 3.14159" xyz="-0.00000 -0.00000 0.18" />
+				</visual>
+                
+				<material name="Fiberglass" />
+				<mass value="0.001" />
+                
+				<look name="white" />
+                
+				<compound_transform rpy="0 0 3.14159" xyz="0 0 0" />
+			</external_part>
+
+			<external_part name="Port0" type="model" physics="disabled" buoyant="false">
+				<physical>
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+					<origin rpy="-1.57 0.0 3.14159" xyz="-0.00000 -0.00000 0.0" />
+				</physical>
+				
+				<material name="Neutral" />
+				<look name="duct" />
+				<mass value="0.001" />
+				<compound_transform rpy="0 0 -2.36159" xyz="0.16485 -0.12935 0.1095" />
+			</external_part>
+
+			<external_part name="Port1" type="model" physics="disabled" buoyant="false">
+				<physical>
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+					<origin rpy="-1.57 0.0 3.14159" xyz="-0.00000 -0.00000 0.0" />
+				</physical>
+				
+				<material name="Neutral" />
+				<look name="duct" />
+				<mass value="0.001" />
+				<compound_transform rpy="0 0 2.36159" xyz="0.16485 0.12935 0.1095" />
+			</external_part>
+
+			<external_part name="Port2" type="model" physics="disabled" buoyant="false">
+				<physical>
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+					<origin rpy="0.0 -1.57 3.14159" xyz="-0.00000 -0.00000 0.0" />
+				</physical>
+				
+				<material name="Neutral" />
+				<look name="duct" />
+				<mass value="0.001" />
+				<compound_transform rpy="0 0 -0.00159265" xyz="0 0.13 0.015" />
+			</external_part>
+
+			<external_part name="Port3" type="model" physics="disabled" buoyant="false">
+				<physical>
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+					<origin rpy="0.0 -1.57 3.14159" xyz="-0.00000 -0.00000 0.0" />
+				</physical>
+				
+				<material name="Neutral" />
+				<look name="duct" />
+				<mass value="0.001" />
+				<compound_transform rpy="0 0 3.14159" xyz="0 -0.13 0.015" />
+			</external_part>
+
+			<external_part name="Port4" type="model" physics="disabled" buoyant="false">
+				<physical>
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+					<origin rpy="-1.57 0.0 3.14159" xyz="-0.00000 -0.00000 0.0" />
+				</physical>
+				
+				<material name="Neutral" />
+				<look name="duct" />
+				<mass value="0.001" />
+				<compound_transform rpy="0 0 -0.785593" xyz="-0.16485 -0.12935 0.1095" />
+			</external_part>
+
+			<external_part name="Port5" type="model" physics="disabled" buoyant="false">
+				<physical>
+					<mesh filename="vehicles/youlong/meshes/physical/youlong_collision_hydro.obj" scale="0.001" />
+					<origin rpy="-1.57 0.0 3.14159" xyz="-0.00000 -0.00000 0.0" />
+				</physical>
+				
+				<material name="Neutral" />
+				<look name="duct" />
+				<mass value="0.001" />
+				<compound_transform rpy="0 0 0.785593" xyz="-0.16485 0.12935 0.1095" />
+			</external_part>
+
+			
+			<internal_part name="LowerBallast" type="box" physics="surface" buoyant="false">
+				<dimensions xyz="0.02 0.02 0.02" />
+				<origin rpy="0 0 0" xyz="0 0 0" />
+				<material name="Neutral" />
+				<mass value="34.999" />
+				<look name="manipulator" />
+				<compound_transform rpy="0 0 0" xyz="0 0 0.18" />
+			</internal_part>
+		</base_link>
+        
+		
+        
+        
+        
+        <comm name="USBL" type="usbl" device_id="1">
+            
+        	<connect device_id="2" />
+        	<link name="Vehicle" />
+            
+	        <origin rpy="0 0 -2.65359e-06" xyz="0 0 0.5" />
+            
+        	<specs min_vertical_fov="0.0" max_vertical_fov="220.0" range="1000.0" />
+        	
+            <autoping rate="10.0" />
+            
+			<resolution range="0.1" angle="0.1" />
+        </comm>
+		
+        
+		<sensor name="dynamics" type="odometry" rate="30.0">
+			<link name="Vehicle" />
+			<origin rpy="0 0 -2.65359e-06" xyz="0 0 0" />
+            
+			<ros_publisher topic="/auv/sim/ground_truth/odom" />
+		</sensor>
+
+        
+		<sensor name="pressure" type="pressure" rate="5.0">
+			<link name="Vehicle" />
+			<origin rpy="0 0 -2.65359e-06" xyz="-0.24 0.175 -0.2" />
+			<ros_publisher topic="/auv/sensors/pressure" />
+		</sensor>
+
+        
+		<sensor name="dvl" type="dvl" rate="20.0">
+			<history samples="1000" />
+			<link name="Vehicle" />
+            
+			<origin rpy="3.1416 0 -0.785003" xyz="-0.375 0 0.2" />
+			<specs beam_angle="30.0" /> 
+            
+			<range velocity="9.0 9.0 9.0" altitude_min="0.5" altitude_max="81.0" />
+            
+			<water_layer minimum_layer_size="5.0" boundary_near="10.0" boundary_far="30.0" />
+	            
+			<ros_publisher topic="/auv/sim/raw/dvl/velocity" altitude_topic="/auv/sim/raw/dvl/altitude" />
+		</sensor>
+
+        
+		<sensor name="imu_filter" type="imu" rate="20.0">
+			<history samples="1000" />
+			<link name="Vehicle" />
+			<origin rpy="0 0 -2.65359e-06" xyz="0 0 0" />
+			<ros_publisher topic="/auv/sensors/imu/data" />
+		</sensor>
+
+		<actuator name="Thruster0" type="thruster">
+			<link name="Vehicle" />
+            
+			<origin rpy="0 0 0.780003" xyz="-0.16485 0.12935 0.1095" />
+            
+			<specs max_setpoint="${1000.0/60.0*2.0*pi}" inverted_setpoint="false" normalized_setpoint="true" />
+            
+			<propeller diameter="0.1" right="true">
+					<mesh filename="vehicles/youlong/meshes/visual/propeller.obj" scale="0.35" />
+				<material name="Neutral" />
+				<look name="propeller" />
+			</propeller>
+            
+			<rotor_dynamics type="zero_order" />
+            
+			<thrust_model type="fluid_dynamics">
+				<thrust_coeff forward="0.5" reverse="0.5" />
+				<torque_coeff value="0.05" />
+			</thrust_model>
+		</actuator>
+
+		<actuator name="Thruster1" type="thruster">
+			<link name="Vehicle" />
+            
+			<origin rpy="0 0 -0.780003" xyz="-0.16485 -0.12935 0.1095" />
+            
+			<specs max_setpoint="${1000.0/60.0*2.0*pi}" inverted_setpoint="true" normalized_setpoint="true" />
+            
+			<propeller diameter="0.1" right="false">
+				<mesh filename="vehicles/youlong/meshes/visual/propeller.obj" scale="0.35" />
+				<material name="Neutral" />
+				<look name="propeller" />
+			</propeller>
+            
+			<rotor_dynamics type="zero_order" />
+            
+			<thrust_model type="fluid_dynamics">
+				<thrust_coeff forward="0.5" reverse="0.5" />
+				<torque_coeff value="0.05" />
+			</thrust_model>
+		</actuator>
+
+		<actuator name="Thruster2" type="thruster">
+			<link name="Vehicle" />
+			<origin rpy="0 -1.5708 -2.65359e-06" xyz="0 -0.13 0.015" />
+            
+			<specs max_setpoint="${1000.0/60.0*2.0*pi}" inverted_setpoint="false" normalized_setpoint="true" />
+            
+			<propeller diameter="0.1" right="true">
+				<mesh filename="vehicles/youlong/meshes/visual/propeller.obj" scale="0.35" />
+				<material name="Neutral" />
+				<look name="propeller" />
+			</propeller>
+            
+			<rotor_dynamics type="zero_order" />
+            
+			<thrust_model type="fluid_dynamics">
+				<thrust_coeff forward="0.5" reverse="0.5" />
+				<torque_coeff value="0.05" />
+			</thrust_model>
+		</actuator>
+
+		<actuator name="Thruster3" type="thruster">
+			<link name="Vehicle" />
+			<origin rpy="0 -1.5708 -2.65359e-06" xyz="0 0.13 0.015" />
+            
+			<specs max_setpoint="${1000.0/60.0*2.0*pi}" inverted_setpoint="true" normalized_setpoint="true" />
+            
+			<propeller diameter="0.1" right="false">
+				<mesh filename="vehicles/youlong/meshes/visual/propeller.obj" scale="0.35" />
+				<material name="Neutral" />
+				<look name="propeller" />
+			</propeller>
+            
+			<rotor_dynamics type="zero_order" />
+            
+			<thrust_model type="fluid_dynamics">
+				<thrust_coeff forward="0.5" reverse="0.5" />
+				<torque_coeff value="0.05" />
+			</thrust_model>
+		</actuator>
+
+		<actuator name="Thruster4" type="thruster">
+			<link name="Vehicle" />
+            
+			<origin rpy="0 0 2.356" xyz="0.16485 0.12935 0.1095" />
+            
+			<specs max_setpoint="${1000.0/60.0*2.0*pi}" inverted_setpoint="false" normalized_setpoint="true" />
+            
+			<propeller diameter="0.1" right="true">
+				<mesh filename="vehicles/youlong/meshes/visual/propeller.obj" scale="0.35" />
+				<material name="Neutral" />
+				<look name="propeller" />
+			</propeller>
+            
+			<rotor_dynamics type="zero_order" />
+            
+			<thrust_model type="fluid_dynamics">
+				<thrust_coeff forward="0.5" reverse="0.5" />
+				<torque_coeff value="0.05" />
+			</thrust_model>
+		</actuator>
+
+		<actuator name="Thruster5" type="thruster">
+			<link name="Vehicle" />
+            
+			<origin rpy="0 0 -2.356" xyz="0.16485 -0.12935 0.1095" />
+            
+			<specs max_setpoint="${1000.0/60.0*2.0*pi}" inverted_setpoint="true" normalized_setpoint="true" />
+            
+			<propeller diameter="0.1" right="false">
+				<mesh filename="vehicles/youlong/meshes/visual/propeller.obj" scale="0.35" />
+				<material name="Neutral" />
+				<look name="propeller" />
+			</propeller>
+            
+			<rotor_dynamics type="zero_order" />
+            
+			<thrust_model type="fluid_dynamics">
+				<thrust_coeff forward="0.5" reverse="0.5" />
+				<torque_coeff value="0.05" />
+			</thrust_model>
+		</actuator>
+		
+		
+		<ros_subscriber thrusters="/auv/sim/actuators/thruster_command" />
+		<ros_publisher thrusters="/auv/sim/actuators/thruster_state" />
+        
+        
+		<world_transform rpy="$(arg robot_orientation)" xyz="$(arg robot_position)" />
+	</robot>
+</scenario>

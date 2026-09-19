@@ -1,4 +1,4 @@
-"""Optional preview windows and crash-resilient session recording."""
+"""Crash-resilient session recording."""
 
 from __future__ import annotations
 
@@ -9,25 +9,16 @@ from launch.actions import (
     OpaqueFunction,
     SetEnvironmentVariable,
 )
-from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-from uv_bringup.desktop import focused_monitor
 from uv_bringup.session_logging import session_log_handlers
 from uv_log.session import default_output_root
 
 
 def generate_launch_description():
-    enable_ai = LaunchConfiguration("enable_ai")
     enable_preview = LaunchConfiguration("enable_preview")
-    open_windows = LaunchConfiguration("open_annotated_windows")
-    stream_annotated = LaunchConfiguration("stream_annotated")
     preview_port = LaunchConfiguration("preview_port")
-    preview_width = LaunchConfiguration("preview_width")
-    preview_height = LaunchConfiguration("preview_height")
-    preview_wait_timeout = LaunchConfiguration("preview_wait_timeout")
-    sim_window_width = LaunchConfiguration("sim_window_width")
     record_session = LaunchConfiguration("record_session")
     record_root = LaunchConfiguration("record_root")
     record_raw_video = LaunchConfiguration("record_raw_video")
@@ -40,8 +31,6 @@ def generate_launch_description():
     bag_segment_seconds = LaunchConfiguration("bag_segment_seconds")
     record_bag_storage = LaunchConfiguration("record_bag_storage")
     record_use_sim_time = LaunchConfiguration("record_use_sim_time")
-
-    monitor_x, monitor_y, monitor_width, monitor_height = focused_monitor()
 
     def _recording_actions(context):
         if record_session.perform(context).strip().lower() not in (
@@ -82,41 +71,9 @@ def generate_launch_description():
             recorder,
         ]
 
-    preview = Node(
-        package="uv_bringup",
-        executable="annotated_preview",
-        name="annotated_preview",
-        output="both",
-        arguments=[
-            "--port", preview_port,
-            "--width", preview_width,
-            "--height", preview_height,
-            "--sim-width", sim_window_width,
-            "--monitor-x", str(monitor_x),
-            "--monitor-y", str(monitor_y),
-            "--monitor-width", str(monitor_width),
-            "--monitor-height", str(monitor_height),
-            "--sim-title", "Stonefish Simulator",
-            "--wait-timeout", preview_wait_timeout,
-        ],
-        condition=IfCondition(PythonExpression([
-            "'", enable_ai, "'.lower() == 'true' and '",
-            enable_preview, "'.lower() == 'true' and '",
-            open_windows, "'.lower() == 'true' and '",
-            stream_annotated, "'.lower() == 'true'",
-        ])),
-    )
-
     return LaunchDescription([
-        DeclareLaunchArgument("enable_ai", default_value="true"),
         DeclareLaunchArgument("enable_preview", default_value="true"),
-        DeclareLaunchArgument("open_annotated_windows", default_value="true"),
-        DeclareLaunchArgument("stream_annotated", default_value="true"),
         DeclareLaunchArgument("preview_port", default_value="8090"),
-        DeclareLaunchArgument("preview_width", default_value="960"),
-        DeclareLaunchArgument("preview_height", default_value="540"),
-        DeclareLaunchArgument("preview_wait_timeout", default_value="60.0"),
-        DeclareLaunchArgument("sim_window_width", default_value="960"),
         DeclareLaunchArgument("record_session", default_value="false"),
         DeclareLaunchArgument("record_root", default_value=str(default_output_root())),
         DeclareLaunchArgument("record_raw_video", default_value="false"),
@@ -136,5 +93,4 @@ def generate_launch_description():
         DeclareLaunchArgument("record_bag_storage", default_value="auto"),
         DeclareLaunchArgument("record_use_sim_time", default_value="false"),
         OpaqueFunction(function=_recording_actions),
-        preview,
     ])

@@ -1,0 +1,30 @@
+\chapter{仿真、SIL 与 HIL}
+\label{ch:simulation}
+
+\section{仿真分层}
+Stonefish 负责水动力、场景、传感器和推进器动力学；其在本项目中的使用方式与项目文献资料一致 \cite{stonefish,youlongrepo}。\pkg{uv_sim_bridge} 负责把 Stonefish 专有消息转换为项目的 Canonical ROS 2 消息；\pkg{uv_sim_bringup} 负责场景准备、启动顺序和模式参数；下游定位、感知、控制、规划和任务使用与真机一致的接口。
+
+\section{SIL 数据流}
+Stonefish 发布仿真原始传感器：Ground Truth、DVL 原始消息、相机原始左右目等。bridge 将 DVL 转换为 \code{DvlVelocity}/\code{DvlAltitude}，将相机转发并生成同步 stitched 图像；当前场景中的 IMU/压力数据发布在相应 canonical Topic。控制侧的 \code{Zit6Emulator} 调用固件控制核 Host 编译版本，\code{ActuatorAdapter} 将 mixer 输出发给 Stonefish。
+
+\section{HIL 数据流}
+HIL 使用仿真世界提供传感器和动力学，用真实 MCU 执行 ZIT6 控制核。\pkg{uv_sim_bridge} 处于 HIL 模式时，不运行 SIL 的 Host PID，而是将 MCU 输出的 6-DOF 力/推力状态混合后送入 Stonefish，并将估计状态作为 MCU 导航输入。micro-ROS Agent 由 \code{hil.launch.py} 启动。
+
+\section{Ground Truth 隔离}
+\topic{/auv/sim/ground_truth/odom} 和 \topic{/auv/sim/ground_truth/twist} 只用于评测、调试和离线记录。\pkg{uv_localization}、\pkg{uv_control}、\pkg{uv_nav}、\pkg{uv_task} 和 ZIT6 控制适配器不能订阅 Ground Truth。评测节点同时读取 Ground Truth 和 \topic{/auv/state/odom}，在评测内部做原点对齐和误差计算，但不把对齐结果回灌到运行时。
+
+\section{退化注入}
+\pkg{uv_sim_degradation} 使用显式输出 Topic，避免对 canonical 输入形成反馈环。可注入：
+\begin{itemize}
+  \item DVL 丢帧、丢波束、底锁丢失、噪声和延迟；
+  \item IMU 丢帧、噪声、偏置、随机游走和延迟；
+  \item stitched 视觉丢帧、亮度变化、噪声、模糊和延迟；
+  \item USBL 丢帧、噪声、离群点和延迟。
+\end{itemize}
+所有随机退化必须绑定 seed，并将事件发布到 \topic{/auv/sim/degradation/events}，以便实验复现。
+
+\section{场景与 seed}
+默认生成的竞赛场景会复制到独立临时 assets 目录，再按 seed 生成场景，不修改源码场景。运行多个 seed 时可使用不同 \code{ROS_DOMAIN_ID} 隔离 DDS 域。场景描述文件、生成器和模型资产位于 \pathref{workspace_sim/src/uv_sim_assets/}；Stonefish wrapper 本身不再安装资源目录。
+
+\section{仿真有效性}
+仿真结果只能说明在给定场景、模型、传感器噪声和控制核下的行为；不能直接等价为真机性能。报告必须同时写清：场景文件、seed、simulation rate、GPU/CPU 模式、退化 profile、估计器版本、代码 commit 和输出目录。

@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uv_sim_bringup</name>
+  <version>0.1.0</version>
+  <description>Stonefish and HIL launch orchestration for the YouLong AUV.</description>
+  <maintainer email="origin@example.com">origin</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>auv_protocol</exec_depend>
+  <exec_depend>uv_bringup</exec_depend>
+  <exec_depend>uv_sim_bridge</exec_depend>
+  <exec_depend>stonefish_ros2</exec_depend>
+  <exec_depend>uv_sim_assets</exec_depend>
+  <exec_depend>uv_sim_description</exec_depend>
+  <exec_depend>uv_localization</exec_depend>
+  <exec_depend>uv_control</exec_depend>
+  <exec_depend>uv_camera</exec_depend>
+  <exec_depend>uv_perception</exec_depend>
+  <exec_depend>uv_planning</exec_depend>
+  <exec_depend>uv_task</exec_depend>
+  <exec_depend>uv_sim_evaluation</exec_depend>
+  <exec_depend>uv_sim_degradation</exec_depend>
+  <exec_depend>uv_log</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -58,6 +58,26 @@ def test_stereo_gate_uses_front_extrinsics_for_body_geometry():
     assert np.allclose(observation.normal_body, [1.0, 0.0, 0.0], atol=0.02)
 
 
+def test_detection_candidates_accept_small_gate_without_extent_rejection():
+    task = GateTask.__new__(GateTask)
+    task._detection_min_confidence = 0.02
+    detection = type('Detection', (), {
+        'class_id': _gate._GATE_FRONT_CLASS_ID,
+        'confidence': 0.5,
+        'bbox_x1': 100.0,
+        'bbox_y1': 100.0,
+        'bbox_x2': 130.0,
+        'bbox_y2': 130.0,
+        'feature_type': 0,
+    })()
+    message = type('DetectionArray', (), {'detections': [detection]})()
+
+    candidates = task._detection_candidates(message, 1280, 960)
+
+    assert len(candidates) == 1
+    assert candidates[0].extent_fraction < 0.10
+
+
 def test_left_eye_observation_uses_left_camera_extrinsics():
     task = GateTask.__new__(GateTask)
     task._front_left_offset = _FRONT_OFFSET_LEFT

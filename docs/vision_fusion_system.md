@@ -34,17 +34,17 @@
 
 ```text
 Stonefish 左/右目图像
-  /sim/front_cam/left/image_color
-  /sim/front_cam/right/image_color
-  /sim/down_cam/left/image_color
-  /sim/down_cam/right/image_color
+  /auv/sim/raw/camera/front/left/image_raw
+  /auv/sim/raw/camera/front/right/image_raw
+  /auv/sim/raw/camera/downward/left/image_raw
+  /auv/sim/raw/camera/downward/right/image_raw
              │
              ▼
       CameraPassthrough
       左右时间配对、hstack 拼接
              │
-             ├─ /auv/front_cam/stitched
-             └─ /auv/down_cam/stitched
+             ├─ /auv/sensors/camera/front/image_stitched
+             └─ /auv/sensors/camera/downward/image_stitched
                          │
                          ▼
              uv_camera::uv_sensor
@@ -58,10 +58,10 @@ Stonefish 左/右目图像
              uv_camera::uv_ai
              YOLO 左目/右目分别检测
                          │
-                         ├─ /perception/detection/front_left
-                         ├─ /perception/detection/front_right
-                         ├─ /perception/detection/down_left
-                         └─ /perception/detection/down_right
+                         ├─ /auv/perception/detections/front/left
+                         ├─ /auv/perception/detections/front/right
+                         ├─ /auv/perception/detections/downward/left
+                         └─ /auv/perception/detections/downward/right
 ```
 
 仿真图像的左右拼接由
@@ -110,7 +110,7 @@ Stonefish 左/右目图像
 
 ### 3.2 位姿时间对齐
 
-`object_localizer` 订阅 `/basic_motion/pose_info`，把最近的最多 300 个位姿样本保存到
+`object_localizer` 订阅 `/auv/state/odom`，把最近的最多 300 个位姿样本保存到
 `_pose_buffer`。对每一帧检测，节点会：
 
 1. 取检测消息 header 的时间戳；
@@ -732,7 +732,7 @@ X ~ N(position, covariance)
 
 - 每个簇绑定一个下视实例 ID；
 - 每个实例使用该簇最近 `50` 条观测做 Kalman 窗口滤波；
-- 当下视可靠观测重新锚定一个原先只有前视证据的假设时，会清理旧的前视-only 证据；
+- 当下视可靠观测重新锚定一个原先只有前视证据的假设时，会清理旧的“仅前视”证据；
 - 当前一次聚类未选中的已有下视定位 track 不会立即被移除，而是保留并按正常年龄规则变为 `STALE`；只有明确的重复下视目标合并才会删除 loser track；
 - 发布前还会按 N/E 距离执行一次重复下视 track 合并；
 - 合并时保留较小 instance ID，并优先复制下视证据更强的状态。
@@ -819,7 +819,7 @@ confidence = clip(
 
 前视 gate 还有额外发布条件：观测数至少 `3`，且置信度不低于
 `front_min_publish_confidence=0.15`。不满足时，前视 gate 不进入
-`/perception/target_positions`，但相关观测仍可在观测池/历史中看到。
+`/auv/perception/targets`，但相关观测仍可在观测池/历史中看到。
 
 ## 12. ROS 接口
 
@@ -827,15 +827,15 @@ confidence = clip(
 
 | 话题 | 类型 | 用途 |
 |---|---|---|
-| `/perception/detection/front_left` | `uv_msgs/DetectionArray` | 前视左目检测 |
-| `/perception/detection/front_right` | `uv_msgs/DetectionArray` | 前视右目检测 |
-| `/perception/detection/down_left` | `uv_msgs/DetectionArray` | 下视左目检测 |
-| `/perception/detection/down_right` | `uv_msgs/DetectionArray` | 下视右目检测 |
-| `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 检测时刻的机器人位姿 |
-| `/sim/front_cam/left/camera_info` | `sensor_msgs/CameraInfo` | 仿真前视左目标定输入 |
-| `/sim/front_cam/right/camera_info` | `sensor_msgs/CameraInfo` | 仿真前视右目标定输入 |
-| `/sim/down_cam/left/camera_info` | `sensor_msgs/CameraInfo` | 仿真下视左目标定输入 |
-| `/sim/down_cam/right/camera_info` | `sensor_msgs/CameraInfo` | 仿真下视右目标定输入 |
+| `/auv/perception/detections/front/left` | `uv_msgs/DetectionArray` | 前视左目检测 |
+| `/auv/perception/detections/front/right` | `uv_msgs/DetectionArray` | 前视右目检测 |
+| `/auv/perception/detections/downward/left` | `uv_msgs/DetectionArray` | 下视左目检测 |
+| `/auv/perception/detections/downward/right` | `uv_msgs/DetectionArray` | 下视右目检测 |
+| `/auv/state/odom` | `uv_msgs/PoseInfo` | 检测时刻的机器人位姿 |
+| `/auv/sim/raw/camera/front/left/camera_info` | `sensor_msgs/CameraInfo` | 仿真前视左目标定输入 |
+| `/auv/sim/raw/camera/front/right/camera_info` | `sensor_msgs/CameraInfo` | 仿真前视右目标定输入 |
+| `/auv/sim/raw/camera/downward/left/camera_info` | `sensor_msgs/CameraInfo` | 仿真下视左目标定输入 |
+| `/auv/sim/raw/camera/downward/right/camera_info` | `sensor_msgs/CameraInfo` | 仿真下视右目标定输入 |
 
 `object_localizer` 不直接消费拼接图像，它消费 AI 已经按左、右目拆开的检测元数据。
 
@@ -843,22 +843,22 @@ confidence = clip(
 
 | 话题 | 类型 | 用途 |
 |---|---|---|
-| `/sim/front_cam/left/image_color` | `sensor_msgs/Image` | Stonefish 前视左目原图 |
-| `/sim/front_cam/right/image_color` | `sensor_msgs/Image` | Stonefish 前视右目原图 |
-| `/sim/down_cam/left/image_color` | `sensor_msgs/Image` | Stonefish 下视左目原图 |
-| `/sim/down_cam/right/image_color` | `sensor_msgs/Image` | Stonefish 下视右目原图 |
-| `/auv/front_cam/stitched` | `sensor_msgs/Image` | 前视左右拼接图，供 `uv_camera` 使用 |
-| `/auv/down_cam/stitched` | `sensor_msgs/Image` | 下视左右拼接图，供 `uv_camera` 使用 |
-| `/auv/front_cam/stereo_info` | `uv_msgs/StereoFrameInfo` | 仿真前视左右真实采集时间和配对 ID |
-| `/auv/down_cam/stereo_info` | `uv_msgs/StereoFrameInfo` | 仿真下视左右真实采集时间和配对 ID |
+| `/auv/sim/raw/camera/front/left/image_raw` | `sensor_msgs/Image` | Stonefish 前视左目原图 |
+| `/auv/sim/raw/camera/front/right/image_raw` | `sensor_msgs/Image` | Stonefish 前视右目原图 |
+| `/auv/sim/raw/camera/downward/left/image_raw` | `sensor_msgs/Image` | Stonefish 下视左目原图 |
+| `/auv/sim/raw/camera/downward/right/image_raw` | `sensor_msgs/Image` | Stonefish 下视右目原图 |
+| `/auv/sensors/camera/front/image_stitched` | `sensor_msgs/Image` | 前视左右拼接图，供 `uv_camera` 使用 |
+| `/auv/sensors/camera/downward/image_stitched` | `sensor_msgs/Image` | 下视左右拼接图，供 `uv_camera` 使用 |
+| `/auv/sensors/camera/front/stereo_info` | `uv_msgs/StereoFrameInfo` | 仿真前视左右真实采集时间和配对 ID |
+| `/auv/sensors/camera/downward/stereo_info` | `uv_msgs/StereoFrameInfo` | 仿真下视左右真实采集时间和配对 ID |
 
 ### 12.3 输出话题
 
 | 话题 | 类型 | 内容和使用方 |
 |---|---|---|
-| `/perception/objects` | `uv_msgs/ObjectPositionArray` | 兼容接口；当前只输出未过期的下视估计，供任务/导航等旧消费者使用 |
-| `/perception/target_positions` | `uv_msgs/TargetPositionArray` | 丰富目标状态；包含前视和下视独立估计、协方差、来源、观测计数和状态 |
-| `/perception/target_observations` | `uv_msgs/TargetObservationArray` | 最近的直接三维观测和多视角射线历史 |
+| `/auv/perception/observations` | `uv_msgs/ObjectPositionArray` | 兼容接口；当前只输出未过期的下视估计，供任务/导航等旧消费者使用 |
+| `/auv/perception/targets` | `uv_msgs/TargetPositionArray` | 丰富目标状态；包含前视和下视独立估计、协方差、来源、观测计数和状态 |
+| `/auv/perception/target_observations` | `uv_msgs/TargetObservationArray` | 最近的直接三维观测和多视角射线历史 |
 
 三个输出的 header frame 都是 `odom`。
 
@@ -976,7 +976,7 @@ Stonefish 左右相机的真实渲染时间，同时避免相邻帧串配。旧�
 
 ### 13.4 仿真启动覆盖值
 
-[`sim_bringup.py`](../workspace_auv/src/uv_bringup/launch/sim_bringup.py) 对定位节点覆盖了部分默认值：
+[`uv_sim_bringup/sim.launch.py`](../workspace_sim/src/uv_sim_bringup/launch/sim.launch.py) 对定位节点覆盖了部分默认值：
 
 | 参数 | 仿真值 |
 |---|---:|
@@ -1018,10 +1018,10 @@ Stonefish 左右相机的真实渲染时间，同时避免相邻帧串配。旧�
 | `down_calibration_file` | `""` | `npz` 模式的下视标定文件；空值时搜索包内 `config/down.npz` |
 | `front_image_width` / `front_image_height` | `1280` / `960` | 前视检测图像尺寸 |
 | `down_image_width` / `down_image_height` | `1280` / `960` | 下视检测图像尺寸 |
-| `front_left_camera_info_topic` | `/sim/front_cam/left/camera_info` | 仿真前视左目 CameraInfo |
-| `front_right_camera_info_topic` | `/sim/front_cam/right/camera_info` | 仿真前视右目 CameraInfo |
-| `down_left_camera_info_topic` | `/sim/down_cam/left/camera_info` | 仿真下视左目 CameraInfo |
-| `down_right_camera_info_topic` | `/sim/down_cam/right/camera_info` | 仿真下视右目 CameraInfo |
+| `front_left_camera_info_topic` | `/auv/sim/raw/camera/front/left/camera_info` | 仿真前视左目 CameraInfo |
+| `front_right_camera_info_topic` | `/auv/sim/raw/camera/front/right/camera_info` | 仿真前视右目 CameraInfo |
+| `down_left_camera_info_topic` | `/auv/sim/raw/camera/downward/left/camera_info` | 仿真下视左目 CameraInfo |
+| `down_right_camera_info_topic` | `/auv/sim/raw/camera/downward/right/camera_info` | 仿真下视右目 CameraInfo |
 | `front_left_translation` / `front_right_translation` | `[0.23,-0.05,0.076]` / `[0.23,0.05,0.076]` | 前视左右相机机体外参平移（m） |
 | `down_left_translation` / `down_right_translation` | `[-0.13,-0.05,0.0645]` / `[-0.13,0.05,0.0645]` | 下视左右相机机体外参平移（m） |
 | `front_left_rotation` / `front_right_rotation` | `[0,0,1,-1,0,0,0,-1,0]` | 前视左右相机机体外参旋转矩阵（行优先） |
@@ -1033,7 +1033,7 @@ Stonefish 左右相机的真实渲染时间，同时避免相邻帧串配。旧�
 | `down_default_target_z_m` | `1.294` | 未配置类别高度时的兼容默认场景深度 |
 | `down_target_z_json` | `""` | 按语义类别覆盖目标场景深度的 JSON 对象 |
 | `down_direct_queue_gate_chi2` | `16.0` | 下视窗口的创新门控 |
-| `down_direct_reanchor_chi2` | `9.0` | 下视可靠观测重新锚定前视-only 假设的门控 |
+| `down_direct_reanchor_chi2` | `9.0` | 下视可靠观测重新锚定“仅前视”假设的门控 |
 | `position_gate_chi2` | `16.0` | 下视/旧直接三维兼容路径的关联门控 |
 | `huber_delta` | `2.5` | 前视 bearing LM 和旧兼容更新的 Huber 转折值 |
 | `max_instances_default` | `1` | 普通语义类别最大实例数 |
@@ -1044,7 +1044,7 @@ Stonefish 左右相机的真实渲染时间，同时避免相邻帧串配。旧�
 ## 14. 启动时序
 
 当前仿真启动入口是
-[`sim_bringup.py`](../workspace_auv/src/uv_bringup/launch/sim_bringup.py)：
+[`uv_sim_bringup/sim.launch.py`](../workspace_sim/src/uv_sim_bringup/launch/sim.launch.py)：
 
 ```text
 Stonefish
@@ -1181,28 +1181,28 @@ down_direct_accepted=... down_direct_rejected=...
 3. 下视 track 仍会保留并转为 `STALE`；只有重复目标合并才会删除 loser，检查
    `down_duplicate_merged` 是否异常增长。
 
-应同时检查 `target_positions`、`target_observations` 和摘要日志，不要只根据 `/perception/objects` 判断视觉系统是否还有观测。
+应同时检查 `target_positions`、`target_observations` 和摘要日志，不要只根据 `/auv/perception/observations` 判断视觉系统是否还有观测。
 
 ### 15.3 建议的 ROS 检查命令
 
 ```bash
 ros2 node info /object_localizer
-ros2 topic hz /perception/detection/front_left
-ros2 topic hz /perception/detection/front_right
-ros2 topic echo /perception/target_positions
-ros2 topic echo /perception/target_observations
-ros2 topic echo /perception/objects
-ros2 topic hz /basic_motion/pose_info
+ros2 topic hz /auv/perception/detections/front/left
+ros2 topic hz /auv/perception/detections/front/right
+ros2 topic echo /auv/perception/targets
+ros2 topic echo /auv/perception/target_observations
+ros2 topic echo /auv/perception/observations
+ros2 topic hz /auv/state/odom
 ```
 
 如果是仿真启动问题，还应检查：
 
 ```bash
-ros2 topic hz /sim/front_cam/left/image_color
-ros2 topic hz /sim/front_cam/right/image_color
-ros2 topic hz /auv/front_cam/stitched
-ros2 topic hz /auv/down_cam/stitched
-ros2 topic echo /sim/front_cam/left/camera_info --once
+ros2 topic hz /auv/sim/raw/camera/front/left/image_raw
+ros2 topic hz /auv/sim/raw/camera/front/right/image_raw
+ros2 topic hz /auv/sensors/camera/front/image_stitched
+ros2 topic hz /auv/sensors/camera/downward/image_stitched
+ros2 topic echo /auv/sim/raw/camera/front/left/camera_info --once
 ```
 
 ## 16. 当前实现的边界和注意事项
@@ -1218,7 +1218,7 @@ ros2 topic echo /sim/front_cam/left/camera_info --once
    原始射线仍不是三维观测，必须先获得有效交会初始化或已有模型状态；
 9. 下视 known-height 依赖类别目标高度配置，未知类别不会自动假设与默认平面相同；
 10. 下视左右平面结果当前是“左目代表 + 右目一致性检查”，不是两点平均；
-11. `/perception/objects` 是兼容接口，当前只提供未过期下视结果；
+11. `/auv/perception/observations` 是兼容接口，当前只提供未过期下视结果；
 12. 预览视频存在并不代表检测或定位观测已经进入池，图像链路和几何链路需要分别检查。
 13. 当前 `Detection` 只携带一个可选稳定锚点，因此门框优先使用中心线/分割包络中心，
     尚未传输一组带编号的四角关键点；需要遮挡条件下更稳定的角点几何时，必须扩展消息
@@ -1284,12 +1284,12 @@ python scripts/train_bbox.py \
 - 增加按语义类别的 raw bearing 滚动观测池、几何候选聚类和软关联；
 - 增加 bearing LM/Huber 后验、Hessian 协方差、实例后验匹配和历史观测消息；
 - 增加 `TargetPosition`/`TargetObservation` 丰富接口；
-- 保留 `/perception/objects` 作为任务和旧消费者的兼容输出。
+- 保留 `/auv/perception/observations` 作为任务和旧消费者的兼容输出。
 
 因此，调试当前视觉融合时，优先查看：
 
 1. [`object_localizer.py`](../workspace_auv/src/uv_camera/uv_camera/object_localizer.py)；
 2. [`ai.py`](../workspace_auv/src/uv_camera/uv_camera/ai.py)；
 3. [`camera_passthrough.py`](../workspace_sim/src/uv_sim/uv_sim/camera_passthrough.py)；
-4. [`sim_bringup.py`](../workspace_auv/src/uv_bringup/launch/sim_bringup.py)；
+4. [`uv_sim_bringup/sim.launch.py`](../workspace_sim/src/uv_sim_bringup/launch/sim.launch.py)；
 5. [`uv_msgs/msg`](../workspace_auv/src/uv_msgs/msg)。

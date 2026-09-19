@@ -1,0 +1,21 @@
+schema_version: 1
+name: refactor-baseline-v1
+branch: robotcup
+created: 2026-09-16
+purpose: 接口协议与回归测试基线
+required_modes:
+  - real
+  - sim
+  - hil
+canonical_state_topic: /auv/state/odom
+canonical_tf_topics:
+  dynamic: /auv/tf
+  static: /auv/tf_static
+ground_truth_topics:
+  - /auv/sim/ground_truth/odom
+  - /auv/sim/ground_truth/twist
+ground_truth_consumers:
+  - uv_sim_evaluation
+notes:
+  - 本清单用于在实现 FGO/SLAM 前冻结接口协议基线。
+  - rosbag 由实验/录制流程生成，不存入 git 仓库。

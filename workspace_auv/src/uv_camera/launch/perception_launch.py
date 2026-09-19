@@ -1,13 +1,29 @@
 """Launch the camera AI and object-localization component."""
 
+from pathlib import Path
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from auv_protocol.topics import DOWN_STITCHED, FRONT_STITCHED
+
 
 def _as_bool(value):
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _workspace_python():
+    """Use the interpreter where setup_workspace_python.sh installs AI deps."""
+    launch_path = Path(__file__).resolve()
+    for parent in launch_path.parents:
+        for candidate in (
+                parent / '.venv' / 'bin' / 'python',
+                parent / 'workspace_auv' / '.venv' / 'bin' / 'python'):
+            if candidate.is_file():
+                return str(candidate)
+    return None
 
 
 def generate_launch_description():
@@ -39,6 +55,9 @@ def generate_launch_description():
     camera_config_dir = LaunchConfiguration("camera_config_dir")
     profile_params = LaunchConfiguration("profile_params")
     object_localizer_params = LaunchConfiguration("object_localizer_params")
+    detection_report_period = LaunchConfiguration("detection_report_period_sec")
+    front_image_topic = LaunchConfiguration("front_image_topic")
+    down_image_topic = LaunchConfiguration("down_image_topic")
 
     def _nodes(context):
         ai_enabled = _as_bool(enable_ai.perform(context))
@@ -94,11 +113,15 @@ def generate_launch_description():
             localizer_parameters.append(profile)
         if localizer_config:
             localizer_parameters.append(localizer_config)
-        localizer_parameters.append({"sim_mode": sim_mode})
+        localizer_parameters.append({
+            "sim_mode": sim_mode,
+            "detection_report_period_sec": detection_report_period,
+        })
         if camera_overrides:
             localizer_parameters.append(camera_overrides)
 
         nodes = []
+        workspace_python = _workspace_python()
         # Recording consumes the sensor stream before the YOLO FrameGate, so
         # it must be possible to run uv_camera without enabling detection.
         if ai_enabled or recording_enabled:
@@ -107,8 +130,14 @@ def generate_launch_description():
                 executable="uv_camera",
                 name="uv_camera",
                 exec_name="uv_camera",
+                prefix=workspace_python,
                 output="both",
                 parameters=vision_parameters,
+                remappings=[
+                    ('/tf', '/auv/tf'), ('/tf_static', '/auv/tf_static'),
+                    (FRONT_STITCHED, front_image_topic),
+                    (DOWN_STITCHED, down_image_topic),
+                ],
                 respawn=True,
                 respawn_delay=1.0,
             ))
@@ -118,8 +147,14 @@ def generate_launch_description():
                 executable="object_localizer",
                 name="object_localizer",
                 exec_name="object_localizer",
+                prefix=workspace_python,
                 output="both",
                 parameters=localizer_parameters,
+                remappings=[
+                    ('/tf', '/auv/tf'), ('/tf_static', '/auv/tf_static'),
+                    (FRONT_STITCHED, front_image_topic),
+                    (DOWN_STITCHED, down_image_topic),
+                ],
                 respawn=True,
                 respawn_delay=1.0,
             ))
@@ -154,5 +189,8 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_config_dir", default_value=""),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument("object_localizer_params", default_value=""),
+        DeclareLaunchArgument("detection_report_period_sec", default_value="5.0"),
+        DeclareLaunchArgument("front_image_topic", default_value=FRONT_STITCHED),
+        DeclareLaunchArgument("down_image_topic", default_value=DOWN_STITCHED),
         OpaqueFunction(function=_nodes),
     ])

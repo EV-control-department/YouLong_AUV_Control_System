@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import shutil
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import pytest
@@ -31,8 +32,8 @@ def test_config_dir_accepts_package_config_root():
 def test_front_sim_registry_contains_task_extrinsics():
     config = load_camera_config("front", "sim")
     assert config.eye_image_topics == {
-        "left": "/sim/front_cam/left/image_color",
-        "right": "/sim/front_cam/right/image_color",
+        "left": "/auv/sim/raw/camera/front/left/image_raw",
+        "right": "/auv/sim/raw/camera/front/right/image_raw",
     }
     assert config.side("left").translation.tolist() == [0.19, -0.05, 0.176]
     assert config.side("right").translation.tolist() == [0.19, 0.05, 0.176]
@@ -41,6 +42,47 @@ def test_front_sim_registry_contains_task_extrinsics():
         [1.0, 0.0, 0.0],
         [0.0, 1.0, 0.0],
     ]
+
+
+def test_sim_camera_info_topics_match_stonefish_publishers():
+    scene = (Path(__file__).resolve().parents[4] / 'workspace_sim' / 'src'
+             / 'uv_sim_assets' / 'vehicles' / 'youlong' / 'model'
+             / 'youlong.scn')
+    root = ET.parse(scene).getroot()
+    publishers = {
+        sensor.get('name'): sensor.find('ros_publisher').get('topic')
+        for sensor in root.iter('sensor')
+        if sensor.get('type') == 'camera'
+        and sensor.find('ros_publisher') is not None
+    }
+    for camera, prefix in (('front', 'front'), ('down', 'down')):
+        config = load_camera_config(camera, 'sim')
+        for side in ('left', 'right'):
+            topic = publishers[f'{prefix}_cam_{side}'] + '/camera_info'
+            assert config.camera_info_topics[side] == topic
+
+
+def test_real_registry_matches_pdf_nominal_body_extrinsics():
+    front = load_camera_config("front", "real")
+    down = load_camera_config("down", "real")
+    front_rotation = [
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ]
+    down_rotation = [
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+    assert front.side("left").translation.tolist() == [0.23, -0.05, 0.076]
+    assert front.side("right").translation.tolist() == [0.23, 0.05, 0.076]
+    assert front.side("left").optical_to_body.tolist() == front_rotation
+    assert front.side("right").optical_to_body.tolist() == front_rotation
+    assert down.side("left").translation.tolist() == [-0.13, -0.05, 0.0645]
+    assert down.side("right").translation.tolist() == [-0.13, 0.05, 0.0645]
+    assert down.side("left").optical_to_body.tolist() == down_rotation
+    assert down.side("right").optical_to_body.tolist() == down_rotation
 
 
 def test_yaml_npz_intrinsic_mismatch_is_rejected(tmp_path):

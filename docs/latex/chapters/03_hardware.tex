@@ -1,0 +1,37 @@
+\chapter{机械与硬件平台}
+\label{ch:hardware}
+
+\section{平台组成}
+车辆硬件由水下舱体、六推进器或等效推进执行机构、前视/下视相机、惯性测量单元、DVL、深度/压力传感器、USBL 接口、MCU 控制器、Jetson/Edge 计算机和电源系统组成。软件通过 \pkg{auv_description} 的 URDF 和组件清单表达车辆几何，通过 \pkg{uv_hm} 和 ZIT6 接口表达控制与状态边界。
+
+\begin{table}[H]
+  \centering
+  \caption{硬件信息的事实来源}
+  \label{tab:hardware-sources}
+  \begin{tabularx}{\textwidth}{p{0.31\textwidth}X}
+    \toprule
+    内容 & 来源与维护方式 \\
+    \midrule
+    机械尺寸、部件位置、标定参考点 & 项目 \code{docs} 目录中的机械说明 PDF 及 \pkg{auv_description}。 \\
+    真实 TF 和传感器安装关系 & \pathref{workspace_auv/src/auv_description/urdf/auv.urdf}。 \\
+    真实组件登记 & \pathref{workspace_auv/src/auv_description/config/real_components.yaml}。 \\
+    相机内参与立体外参 & \pathref{workspace_auv/src/uv_camera/config/cameras/}、\code{*.npz} 和相机 profile。 \\
+    ZIT6 控制参数 & 固件配置和 \pathref{workspace_auv/src/uv_hm/config/}。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{推进器与执行器}
+SIL 中，ZIT6 控制核输出归一化 6-DOF 机体力/力矩，\pkg{uv_sim_bridge} 的 \code{ThrustMixer} 根据车辆推进器布局完成分配，再通过 \topic{/auv/sim/actuators/thruster_command} 送入 Stonefish。真实系统中，控制核和最终执行器分配可以位于 MCU 或外部电机控制板；上层不应依赖具体的电机编号。
+
+\section{相机平台}
+系统将前视和下视相机分别建模为左右目。真实模式中，\pkg{uv_camera} 的传感器线程打开 V4L2 设备并发布标准相机 Topic；仿真模式中，\pkg{uv_sim_bridge} 接收 Stonefish 图像，转发左右目图像并生成时间匹配的 stitched 图像。相机标定的解释和使用见第~\ref{ch:calibration}~章。
+
+\section{计算与通信}
+Jetson/Edge 计算机运行 ROS 2 节点、感知和任务；MCU 运行 ZIT6 控制核及底层传感器/执行器接口。HIL 模式通过 micro-ROS Agent 和串口承载 MCU 的 DDS/XRCE 通信。\pkg{workspace_auv} 的真机启动文件不包含 Stonefish，也不强制包含串口 Agent；部署系统应提供可用的 MCU ROS 2 通道。
+
+\section{未测量外参的处理}
+当前机械 PDF 没有给出真实 DVL 的安装外参，因此真实 URDF 不发布未经测量的 \code{dvl_link}。收到实测结果后，应先更新组件登记和标定文件，再生成固定 TF；禁止为了“补齐 TF 树”而编造安装位置。
+
+\section{硬件平台待补字段}
+以下内容保留为可追溯字段，不能用估计值替代：\TODO{车辆总质量、排水体积、浮力余量、质心/浮心、推进器型号与最大推力、电池容量、MCU 型号、网络地址、完整 pin map 和实物照片}。

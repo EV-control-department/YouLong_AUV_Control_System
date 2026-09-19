@@ -9,12 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import (
-    DeclareLaunchArgument,
-    LogInfo,
-    OpaqueFunction,
-    SetEnvironmentVariable,
-)
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
@@ -24,54 +19,12 @@ from launch_ros.substitutions import FindPackageShare
 
 
 PROFILE_CHOICES = {
-    "sim": ("sim_dev", "sim_ci"),
-    "hil": ("hil_lab",),
     "real": ("real_default", "real_safe"),
 }
 
 PROFILE_PACKAGES = {
-    "sim": ("uv_sim", "uv_camera"),
-    "hil": ("uv_sim", "uv_camera"),
     "real": ("uv_hm", "uv_camera"),
 }
-
-
-def configure_simulator_gpu_environment(gpu, gpu_backend):
-    """Select the OpenGL provider used by the Stonefish process.
-
-    On hybrid laptops the default GLX provider can be the integrated AMD
-    adapter even when an NVIDIA device and X server are available.  Stonefish
-    then reports a pair of generic shader link failures while constructing its
-    flat-ocean programs.  ``auto`` only enables NVIDIA PRIME offload when the
-    NVIDIA device node is present; ``system`` leaves the user's environment
-    untouched; ``nvidia`` fails early with an actionable message if the device
-    is unavailable.
-    """
-
-    def _configure(context):
-        use_gpu = gpu.perform(context).strip().lower() in {
-            "1", "true", "yes", "on"
-        }
-        backend = gpu_backend.perform(context).strip().lower()
-        if not use_gpu or backend == "system":
-            return []
-
-        nvidia_device = Path("/dev/nvidia0").exists()
-        if backend == "nvidia" and not nvidia_device:
-            raise RuntimeError(
-                "gpu_backend:=nvidia requested, but /dev/nvidia0 is not "
-                "available; check the NVIDIA driver or use gpu_backend:=system"
-            )
-        if backend == "auto" and not nvidia_device:
-            return [LogInfo(msg="Stonefish GPU backend: system OpenGL provider")]
-
-        return [
-            SetEnvironmentVariable("__NV_PRIME_RENDER_OFFLOAD", "1"),
-            SetEnvironmentVariable("__GLX_VENDOR_LIBRARY_NAME", "nvidia"),
-            LogInfo(msg="Stonefish GPU backend: NVIDIA PRIME offload"),
-        ]
-
-    return OpaqueFunction(function=_configure)
 
 
 def profile_path(profile, package):
@@ -167,116 +120,11 @@ def declare_feature_arguments(
     return arguments
 
 
-def declare_simulation_arguments(
-    *,
-    core=False,
-    scenario_default=None,
-    window_width_default=None,
-    window_height_default=None,
-    render_quality_default=None,
-    camera_stitch_fps_default=None,
-):
-    """Declare simulator and SIL/HIL bridge arguments."""
-    scenario_default = scenario_default or (
-        "underwater_xunyun.scn" if core
-        else "guoshui_2026_cruise_seeded.scn")
-    window_width_default = window_width_default or ("1280" if core else "960")
-    window_height_default = window_height_default or ("720" if core else "540")
-    render_quality_default = render_quality_default or (
-        "high" if core else "low")
-    camera_stitch_fps_default = camera_stitch_fps_default or (
-        "10.0" if core else "5.0")
-    arguments = [
-        DeclareLaunchArgument(
-            "scenario_desc", default_value=scenario_default,
-            description="Stonefish scenario file name or absolute path",
-        ),
-        DeclareLaunchArgument(
-            "scene_seed", default_value="0",
-            description=(
-                "Integer seed for the Guoshui generated scene; "
-                "the fixed baseline is used for seed 0"
-            ),
-        ),
-        DeclareLaunchArgument(
-            "simulation_rate", default_value="100.0",
-            description="Stonefish simulation rate in Hz",
-        ),
-        DeclareLaunchArgument(
-            "sim_window_width", default_value=window_width_default,
-            description="Stonefish window width in pixels",
-        ),
-        DeclareLaunchArgument(
-            "sim_window_height", default_value=window_height_default,
-            description="Stonefish window height in pixels",
-        ),
-        DeclareLaunchArgument(
-            "render_quality", default_value=render_quality_default,
-            description="Stonefish rendering quality: low, medium, or high",
-        ),
-        DeclareLaunchArgument(
-            "render_fps", default_value="30.0",
-            description="Stonefish display refresh limit",
-        ),
-        DeclareLaunchArgument(
-            "gpu", default_value="true",
-            description="Use the GPU Stonefish executable when true",
-        ),
-        DeclareLaunchArgument(
-            "gpu_backend", default_value="auto",
-            choices=["auto", "nvidia", "system"],
-            description=(
-                "OpenGL provider for Stonefish GPU mode: auto detects "
-                "NVIDIA PRIME, nvidia forces it, system preserves the environment"
-            ),
-        ),
-        DeclareLaunchArgument(
-            "camera_stitch_fps", default_value=camera_stitch_fps_default,
-            description="Maximum stitched camera topic rate",
-        ),
-        DeclareLaunchArgument(
-            "publish_raw_camera_topics", default_value="false",
-            description="Republish individual raw camera image topics",
-        ),
-        DeclareLaunchArgument(
-            "ai_inference_fps", default_value="3.0",
-            description="Maximum AI inference rate per camera",
-        ),
-        DeclareLaunchArgument(
-            "inference_threads", default_value="2",
-            description="Maximum PyTorch CPU threads used by AI",
-        ),
-        DeclareLaunchArgument(
-            "ai_confidence", default_value="0.8",
-            description="YOLO confidence threshold",
-        ),
-        DeclareLaunchArgument(
-            "gate_feature_mode", default_value="auto",
-            description="Front gate anchor: auto, centerline, segmentation, or bbox",
-        ),
-        DeclareLaunchArgument(
-            "target_id", default_value="yellow_golf",
-            description="Competition target metadata",
-        ),
-        DeclareLaunchArgument(
-            "startup_timeout", default_value="120.0",
-            description="Maximum seconds per readiness stage",
-        ),
-    ]
-    return arguments
-
-
-def declare_observability_arguments(
-    *, preview_width_default="960", preview_height_default="540"
-):
-    """Declare preview and session recording arguments."""
+def declare_observability_arguments():
+    """Declare MJPEG/go2rtc and session recording arguments."""
     from uv_log.session import default_output_root
 
     return [
-        DeclareLaunchArgument(
-            "open_annotated_windows", default_value="true",
-            description="Open front/down annotated preview windows",
-        ),
         DeclareLaunchArgument(
             "stream_annotated", default_value="true",
             description="Generate annotated MJPEG streams",
@@ -290,24 +138,12 @@ def declare_observability_arguments(
             description="Annotated MJPEG width limit; 0 means full size",
         ),
         DeclareLaunchArgument(
-            "preview_width", default_value=preview_width_default,
-            description="Annotated preview window width in pixels",
-        ),
-        DeclareLaunchArgument(
-            "preview_height", default_value=preview_height_default,
-            description="Annotated preview window maximum height in pixels",
-        ),
-        DeclareLaunchArgument(
             "preview_port", default_value="8090",
             description="uv_camera MJPEG port",
         ),
         DeclareLaunchArgument(
             "gortc_http_port", default_value="1984",
             description="go2rtc HTTP/WebRTC page port; auto-falls back if occupied",
-        ),
-        DeclareLaunchArgument(
-            "preview_wait_timeout", default_value="60.0",
-            description="Seconds before logging a missing preview stream",
         ),
         DeclareLaunchArgument(
             "record_session", default_value="false",

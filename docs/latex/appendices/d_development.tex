@@ -1,0 +1,26 @@
+\chapter{开发规范与文档维护}
+\label{app:development}
+
+\section{新增节点}
+新增节点应放入职责明确的 ROS 2 package，声明依赖和 console entry point，使用 \pkg{auv_protocol} 的名称常量，写出输入/输出契约和最小单元测试。若需要访问真实设备或 Stonefish，必须通过适配器边界，不能让通用控制包反向依赖仿真包。
+
+\section{新增传感器}
+新增传感器时依次完成：确定消息类型和单位；确定 frame 和外参来源；确定真实驱动和仿真输入；在适配器层转换到 \topic{/auv/sensors/*}；补充有效标志、健康、超时和退化行为；增加 Topic 契约测试；在本手册第 3、4、5、14 章登记。
+
+\section{新增任务}
+任务应由 YAML 参数和独立 Python 模块组成，通过 task runner 的公开 Action/Topic 工作。必须定义开始条件、完成条件、超时、取消、失败恢复、传感器丢失和安全停止行为，并在测试中覆盖至少一个失败路径。
+
+\section{Git 与版本}
+代码、配置和文档的接口性改动应在同一提交中完成。正式实验记录 commit、分支、profile、seed、场景、标定版本和结果目录。LaTeX 封面由 Makefile 自动读取当前 commit；生成 PDF 不能脱离源码版本单独传播。
+
+\section{提交前检查}
+\begin{lstlisting}[language=bash,caption={提交前最小检查集}]
+git diff --check
+python3 -m py_compile $(find workspace_auv/src workspace_sim/src \
+  -name '*.py')
+cd docs/latex && make check
+\end{lstlisting}
+
+\section{文档维护约定}
+正文章节按系统职责划分，避免把同一个参数或接口复制到多个“真值表”。如果代码尚未实现，使用“设计预留”或“后续工作”标注；如果实现与旧 Markdown 不一致，以当前源码为准并在同一提交修正快速文档。图表文件名使用稳定、描述性的英文名称，引用使用 \code{label/ref}，不要依赖页面编号。
+

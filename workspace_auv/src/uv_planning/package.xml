@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uv_planning</name>
+  <version>0.1.0</version>
+  <description>Canonical planning boundary with the existing uv_nav implementation as a transition backend.</description>
+  <maintainer email="origin@example.com">origin</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>uv_nav</exec_depend>
+  <exec_depend>auv_protocol</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

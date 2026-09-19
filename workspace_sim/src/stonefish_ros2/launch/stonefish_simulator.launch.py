@@ -1,6 +1,13 @@
 from launch_ros.actions import Node
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    LogInfo,
+    RegisterEventHandler,
+)
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
@@ -56,6 +63,18 @@ def generate_launch_description():
             parameters=[{'render_fps': render_fps}],
     )
 
+    def _stonefish_exit(event, context):
+        """Stop the complete SIL graph when the simulator is gone."""
+        if context.is_shutdown:
+            return []
+        return [
+            LogInfo(msg=[
+                'Stonefish simulator exited (returncode=',
+                str(event.returncode), '); shutting down simulation',
+            ]),
+            EmitEvent(event=Shutdown(reason='Stonefish simulator exited')),
+        ]
+
     return LaunchDescription([
         simulation_data_arg,
         scenario_desc_arg,
@@ -64,5 +83,9 @@ def generate_launch_description():
         window_res_y_arg,
         rendering_quality_arg,
         render_fps_arg,
-        stonefish_simulator_node
+        stonefish_simulator_node,
+        RegisterEventHandler(OnProcessExit(
+            target_action=stonefish_simulator_node,
+            on_exit=_stonefish_exit,
+        )),
     ])

@@ -12,7 +12,7 @@
 | `uv_camera` | `uv_camera` | workspace_auv | YOLO 目标检测 |
 | `object_localizer` | `uv_camera` | workspace_auv | 3D 目标定位 |
 | `navigator` | `uv_nav` | workspace_auv | A* 路径规划 + 避障 |
-| `task_runner` | `uv_task` | workspace_auv | YAML mission 任务执行器 |
+| `task_runner` | `uv_task` | workspace_auv | YAML 任务执行器 |
 
 ---
 
@@ -80,13 +80,13 @@
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `mission_file` | string | `config/missions/robocup_26.yaml` | 启动时加载的 YAML mission 或单个 task 文件 |
+| `mission_file` | string | `config/missions/robocup_26.yaml` | 启动时加载的 YAML 任务流程或单个任务文件 |
 | `target_id` | string | `yellow_golf` | 比赛目标元数据 |
-| `debug_mode` | bool | `false` | 开启后跳过 mission 自动执行，仅允许 `/task/exec` |
+| `debug_mode` | bool | `false` | 开启后跳过任务流程自动执行，仅允许 `/auv/mission/execute` |
 
 ---
 
-## 启动文件 Launch Arguments
+## 启动文件参数
 
 ### sim.launch.py
 
@@ -96,16 +96,16 @@
 | `enable_motion` | `true` | 启用 basic_motion |
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
-| `mission_file` | `config/missions/robocup_26.yaml` | YAML mission 或单个 task 文件路径 |
+| `mission_file` | `config/missions/robocup_26.yaml` | YAML 任务流程或单个任务文件路径 |
 | `scenario_desc` | `guoshui_2026_cruise_seeded.scn` | Stonefish 场景文件 |
 | `scene_seed` | `0` | 生成场景使用的整数 seed，运行目录隔离 |
 **用法：**
 ```bash
-ros2 launch uv_bringup sim.launch.py profile:=sim_dev enable_ai:=true
+ros2 launch uv_sim_bringup sim.launch.py profile:=sim_dev enable_ai:=true
 ```
 
-任务配置由 `mission_file` 指定。它可以指向描述任务顺序的 mission 文件，
-也可以直接指向 `config/tasks/*.yaml` 执行单个任务。mission 条目的
+任务配置由 `mission_file` 指定。它可以指向描述任务顺序的任务流程文件，
+也可以直接指向 `config/tasks/*.yaml` 执行单个任务。任务流程条目的
 `params` 可以覆盖任务默认值。
 
 ### real.launch.py
@@ -134,7 +134,7 @@ ros2 launch uv_bringup real.launch.py profile:=real_default
 | `serial_baud` | `921600` | 串口波特率 |
 **用法：**
 ```bash
-ros2 launch uv_bringup hil.launch.py enable_ai:=true
+ros2 launch uv_sim_bringup hil.launch.py enable_ai:=true
 ```
 
 ### uv_camera/launch/perception_launch.py
@@ -152,10 +152,10 @@ ros2 launch uv_camera perception_launch.py
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
-| `/perception/detection/front_left` | `DetectionArray` | 前视左检测结果 |
-| `/perception/detection/front_right` | `DetectionArray` | 前视右检测结果 |
-| `/perception/detection/down_left` | `DetectionArray` | 下视左检测结果 |
-| `/perception/detection/down_right` | `DetectionArray` | 下视右检测结果 |
+| `/auv/perception/detections/front/left` | `DetectionArray` | 前视左检测结果 |
+| `/auv/perception/detections/front/right` | `DetectionArray` | 前视右检测结果 |
+| `/auv/perception/detections/downward/left` | `DetectionArray` | 下视左检测结果 |
+| `/auv/perception/detections/downward/right` | `DetectionArray` | 下视右检测结果 |
 uv_camera 不发布图像 DDS 话题；请通过 go2rtc 的 `front`、`down`、
 `front_annotated`、`down_annotated` 流查看视频。
 
@@ -170,4 +170,4 @@ go2rtc 视频流：
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
-| `/perception/objects` | `ObjectPositionArray` | 3D 物体世界坐标 |
+| `/auv/perception/observations` | `ObjectPositionArray` | 3D 物体世界坐标 |

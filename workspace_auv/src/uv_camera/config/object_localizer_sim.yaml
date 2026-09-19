@@ -16,7 +16,8 @@
     front_stereo_out_of_range_noise_scale: 6.0
     front_stereo_trusted_range_only: false
     front_stereo_out_of_range_as_ray: false
-    front_observation_pool_size: 300
+    pose_max_age_sec: 0.25
+    front_observation_pool_size: 60
     front_direct_queue_size: 50
     publish_period_sec: 0.2
     observation_history_size: 100

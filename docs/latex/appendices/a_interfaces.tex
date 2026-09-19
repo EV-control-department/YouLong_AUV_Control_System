@@ -1,0 +1,54 @@
+\chapter{接口速查表}
+\label{app:interfaces}
+
+\section{消息包}
+\begin{longtable}{p{0.31\textwidth}p{0.29\textwidth}p{0.29\textwidth}}
+  \caption{uv\_msgs 主要接口}\label{tab:uv-msgs}\\
+  \toprule
+  接口 & 主要发布者 & 用途 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  接口 & 主要发布者 & 用途 \\
+  \midrule
+  \endhead
+  \code{PoseInfo} & \pkg{uv_localization} & 兼容 odom 状态，yaw 字段为度。 \\
+  \code{DvlVelocity}/\code{DvlAltitude} & 传感器适配器 & DVL 速度和高度。 \\
+  \code{DetectionArray} & \pkg{uv_camera} & 单相机左右目检测结果。 \\
+  \code{TargetObservationArray} & \code{object_localizer} & 几何有效目标观测。 \\
+  \code{TargetPositionArray} & \code{object_localizer} & 目标静态位置估计。 \\
+  \code{WaypointPath} & \pkg{uv_nav} & A* 规划得到的路径。 \\
+  \code{TaskStatus} & \pkg{uv_task} & Mission 进度与失败信息。 \\
+  \code{SensorHealth} & 状态/评测节点 & 传感器或估计器健康状态。 \\
+  \bottomrule
+\end{longtable}
+
+\section{接口生成源}
+\pkg{uv_msgs} 的生成源在 \pathref{workspace_auv/src/uv_msgs/msg/}、\pathref{workspace_auv/src/uv_msgs/srv/} 和 \pathref{workspace_auv/src/uv_msgs/action/}。
+ZIT6 接口生成源在 \pathref{workspace_auv/src/zit6_interfaces/}。修改字段后必须重新构建对应 workspace，并同步更新契约测试和本手册。
+
+\section{主要 Topic 类型}
+\begin{longtable}{p{0.48\textwidth}p{0.35\textwidth}}
+  \caption{Canonical Topic 与消息类型}\label{tab:topic-types}\\
+  \toprule
+  Topic & 消息类型 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  Topic & 消息类型 \\
+  \midrule
+  \endhead
+  \topic{/auv/state/odom} & \code{uv_msgs/PoseInfo}（当前兼容实现） \\
+  \topic{/auv/state/twist} & \path{geometry_msgs/TwistWithCovarianceStamped} \\
+  \topic{/auv/state/health} & \code{uv_msgs/SensorHealth} \\
+  \topic{/auv/perception/detections/*} & \code{uv_msgs/DetectionArray} \\
+  \topic{/auv/perception/targets} & \path{uv_msgs/TargetPositionArray} \\
+  \topic{/auv/perception/observations} & \path{uv_msgs/TargetObservationArray} \\
+  \topic{/auv/control/trajectory} & \code{uv_msgs/WaypointPath} \\
+  \topic{/auv/mission/status} & \code{uv_msgs/TaskStatus} \\
+  \topic{/auv/sim/ground_truth/odom} & \code{nav_msgs/Odometry} \\
+  \bottomrule
+\end{longtable}
+
+\section{接口审查问题}
+新增接口评审时必须回答：谁发布、谁订阅、消息是否可丢失、如何检测过期、frame id 是什么、单位是什么、时间戳来自哪里、异常值如何处理、是否支持仿真/真机、是否会泄漏 Ground Truth、旧接口如何兼容。

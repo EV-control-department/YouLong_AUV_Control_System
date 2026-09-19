@@ -9,13 +9,15 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml']),
-    ('share/' + package_name + '/launch', ['launch/bridge.launch.py']),
+    ('share/' + package_name + '/launch', [
+        'launch/bridge.launch.py',
+        'launch/sim.launch.py',
+    ]),
     ('share/' + package_name + '/config/profiles', [
         'config/profiles/sim_dev.yaml',
         'config/profiles/sim_ci.yaml',
         'config/profiles/hil_lab.yaml',
     ]),
-    ('lib/' + package_name, ['libexec/uv_sim/sim_bridge']),
     ],
     # Keep the NumPy 1.x ABI used by cv_bridge on both ROS 2 Foxy/Python 3.8
     # and ROS 2 Jazzy/newer Python runtimes.
@@ -34,7 +36,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'sim_bridge = uv_sim.sim_bridge:main',
+            'sim_bridge = uv_sim_bridge.sim_bridge:main',
         ],
     },
 )

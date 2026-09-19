@@ -859,7 +859,11 @@ Sensor* ROS2ScenarioParser::ParseSensor(XMLElement* element, const std::string& 
                 {
                     case VisionSensorType::COLOR_CAMERA:
                     {
-                        img_pubs[sensorName] = it->advertise(topicStr + "/image_color", queueSize);
+                        // Canonical simulator sensor transport uses the same
+                        // image_raw suffix as the real camera adapter.
+                        // Simulator color frames use shared memory. Keep only
+                        // the small CameraInfo topic on DDS; publishing the
+                        // pixel payload here would duplicate every frame.
                         pubs[sensorName + "/info"] = nh_->create_publisher<sensor_msgs::msg::CameraInfo>(topicStr + "/camera_info", queueSize);
                         ColorCamera* cam = (ColorCamera*)sens;
                         cam->InstallNewDataHandler(std::bind(&ROS2SimulationManager::ColorCameraImageReady, sim, _1));

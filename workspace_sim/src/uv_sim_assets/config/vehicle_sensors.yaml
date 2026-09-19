@@ -1,0 +1,20 @@
+vehicle: youlong
+source_scene: youlong.scn
+sensors:
+  dynamics: /auv/sim/ground_truth/odom
+  pressure: /auv/sensors/pressure
+  dvl_velocity: /auv/sim/raw/dvl/velocity
+  dvl_altitude: /auv/sim/raw/dvl/altitude
+  imu: /auv/sensors/imu/data
+  cameras: /auv/sim/raw/camera
+dvl_mount:
+  # Stonefish sensor origin in the vehicle body-FRD frame. The bridge uses
+  # the orientation to express velocity in body axes; localization removes
+  # omega x r using the position before dead reckoning.
+  position_body: [-0.375, 0.0, 0.2]
+  orientation_rpy: [3.1416, 0.0, -0.785003]
+camera_frames:
+  front_left: front_left_camera_optical_frame
+  front_right: front_right_camera_optical_frame
+  downward_left: downward_left_camera_optical_frame
+  downward_right: downward_right_camera_optical_frame

@@ -12,7 +12,9 @@ uint8 MODE_VEL_WORLD_STEP = 7   # Incremental world velocity step
 uint8 MODE_VEL_BODY_STEP  = 8   # Incremental body velocity step
 
 uint8 mode            # One of the MODE_* constants
-uint8 type_mask       # Bitmask: bit0=x, bit1=y, bit2=z, bit3=yaw (1=ignore axis)
+# ZIT6 six-axis mask: bit0=x, bit1=y, bit2=z, bit3=roll,
+# bit4=pitch, bit5=yaw. A set bit leaves that axis unchanged.
+uint8 type_mask
 
 float32 x
 float32 y

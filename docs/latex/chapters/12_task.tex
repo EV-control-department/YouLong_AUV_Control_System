@@ -1,0 +1,49 @@
+\chapter{任务与行为层}
+\label{ch:task}
+
+\section{Mission 模型}
+\pkg{uv_task} 的 \code{task_runner} 读取 Mission YAML 或单个 Task YAML，将任务转换为顺序执行链。Mission 描述任务名称、配置文件、初始姿态和失败策略；Task 文件描述任务参数、超时和具体行为所需的视觉/控制阈值。默认 Mission 为 \code{robocup_26.yaml}。
+
+\section{执行模型}
+任务层订阅估计状态、目标位置、目标观测、下视/前视检测和 MCU 状态；它通过 BasicMotion Action 请求运动，通过 ZIT6 light/servo Topic 控制灯光和舵机，并在 \topic{/auv/mission/status} 发布当前状态。竞赛任务模块包括过门、击球、寻找收集框、抓球、投放信标和返回原点等。
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    box/.style={draw=YoulongBlue, rounded corners, fill=YoulongLight,
+      minimum width=36mm, minimum height=9mm, align=center},
+    arr/.style={-{Latex[length=2mm]}, thick, color=YoulongBlue},
+    node distance=9mm
+  ]
+    \node[box] (mission) {Mission YAML};
+    \node[box, below=of mission] (runner) {task\_runner\\任务状态机};
+    \node[box, below left=of runner] (perception) {检测/目标/状态};
+    \node[box, below right=of runner] (action) {BasicMotion\\ActionClient};
+    \node[box, below=of action] (zit) {ZIT6 setpoint\\灯光/舵机};
+    \draw[arr] (mission) -- (runner);
+    \draw[arr] (perception) -- (runner);
+    \draw[arr] (runner) -- (action);
+    \draw[arr] (action) -- (zit);
+    \draw[arr] (zit) |- (perception);
+  \end{tikzpicture}
+  \caption{任务层控制关系}
+  \label{fig:task-flow}
+\end{figure}
+
+\section{配置与校验}
+配置加载器检查 YAML 重复键、任务名称、命令类型、姿态结构、参数类型和默认值。任务参数应放在 Task YAML 或 Mission 的 initial override 中；运行时通过 profile 和 launch 参数传入的设备/环境选项不应写死在任务实现中。
+
+\section{失败、超时与恢复}
+每个任务必须定义完成条件、观测丢失条件、动作超时、取消响应和失败结果。Mission 可以按任务名和失败类型选择覆盖策略；失败策略应保持可记录、可重放，不能通过无限重试掩盖底层通信或传感器故障。任务开始前通常执行 START 或初始姿态动作，任务结束后执行安全停留或返回原点。
+
+\section{典型任务分层}
+\begin{description}
+  \item[搜索类] 通过航向扫描或路径移动获得视觉观测。
+  \item[对准类] 使用 bbox 中心、双目视差、垂直/高度误差和 PID 产生小步运动。
+  \item[执行类] 在满足几何和稳定条件后进行穿门、击球、抓取或释放。
+  \item[验证类] 通过剩余目标检测、位置观测或设备状态判断动作是否真正完成。
+\end{description}
+
+\section{任务设计规则}
+任务模块只调用公开 Action/Topic，不直接调用另一个任务模块的私有变量；视觉阈值、速度上限和时间窗口进入 YAML；任务代码记录上下文和失败原因；所有以物理单位表达的参数必须在配置注释和文档中注明单位。
+

@@ -4,7 +4,7 @@
 # force Qt's software path to avoid the bundled application's GLX abort.
 set -euo pipefail
 
-APP="/home/doc049/下载/X-AnyLabeling-v4.0.2-Linux-CPU"
+APP="/home/doc049/Applications/X-AnyLabeling-v4.0.0-Linux-CUDA13"
 
 if [[ ! -x "$APP" ]]; then
     printf 'X-AnyLabeling executable not found: %s\n' "$APP" >&2

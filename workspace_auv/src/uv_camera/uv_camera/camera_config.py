@@ -103,6 +103,22 @@ def _mapping(value: Any, context: str) -> Mapping[str, Any]:
     return value
 
 
+def _canonical_topic(value: str, context: str, *, allow_empty: bool = False) -> str:
+    """Validate a topic used by the camera registry.
+
+    The registry is shared by real and simulated camera adapters, therefore a
+    non-empty topic must already be in the vehicle namespace.  Empty real
+    eye-input topics remain valid because V4L2 supplies those frames locally.
+    """
+    topic = value.strip()
+    if not topic and allow_empty:
+        return topic
+    if not topic or not topic.startswith('/auv/'):
+        raise CameraConfigError(
+            f"{context} 必须使用 /auv/ 前缀")
+    return topic
+
+
 def _config_candidates(config_dir: str | os.PathLike | None) -> list[Path]:
     if config_dir:
         root = Path(config_dir).expanduser().resolve()
@@ -270,12 +286,20 @@ def load_camera_config(
     eye = _resolution(
         raw_profile.get("eye_resolution"),
         f"{path}.profiles.{selected_profile}.eye_resolution")
+    context = f"{path}.profiles.{selected_profile}"
+    if capture[0] != 2 * eye[0] or capture[1] != eye[1]:
+        raise CameraConfigError(
+            f"{path}.profiles.{selected_profile} 的 capture_resolution "
+            "必须是左右目 eye_resolution 的水平拼接尺寸")
     image_topic = raw_profile.get("image_topic")
     if not isinstance(image_topic, str) or not image_topic.strip():
         raise CameraConfigError("image_topic 必须是非空字符串")
+    image_topic = _canonical_topic(image_topic, f"{context}.image_topic")
     stereo_info_topic = raw_profile.get("stereo_info_topic", "")
     if not isinstance(stereo_info_topic, str):
         raise CameraConfigError("stereo_info_topic 必须是字符串")
+    stereo_info_topic = _canonical_topic(
+        stereo_info_topic, f"{context}.stereo_info_topic", allow_empty=True)
     raw_camera_info_topics = _mapping(
         raw_profile.get("camera_info_topics", {}),
         f"{path}.profiles.{selected_profile}.camera_info_topics")
@@ -285,7 +309,8 @@ def load_camera_config(
         if not isinstance(topic, str):
             raise CameraConfigError(
                 f"camera_info_topics.{side} 必须是字符串")
-        camera_info_topics[side] = topic.strip()
+        camera_info_topics[side] = _canonical_topic(
+            topic, f"{context}.camera_info_topics.{side}", allow_empty=True)
     raw_eye_image_topics = _mapping(
         raw_profile.get("eye_image_topics", {}),
         f"{path}.profiles.{selected_profile}.eye_image_topics")
@@ -295,12 +320,12 @@ def load_camera_config(
         if not isinstance(topic, str):
             raise CameraConfigError(
                 f"eye_image_topics.{side} 必须是字符串")
-        eye_image_topics[side] = topic.strip()
+        eye_image_topics[side] = _canonical_topic(
+            topic, f"{context}.eye_image_topics.{side}", allow_empty=True)
     device = raw_profile.get("device")
     if device is not None and (not isinstance(device, str) or not device.strip()):
         raise CameraConfigError("device 必须是字符串或 null")
 
-    context = f"{path}.profiles.{selected_profile}"
     source = str(raw_profile.get("calibration_source", "npz")).strip().lower()
     if source not in {"npz", "sim_camera_info"}:
         raise CameraConfigError(f"不支持的 calibration_source：{source!r}")
@@ -337,9 +362,9 @@ def load_camera_config(
         profile=selected_profile,
         capture_resolution=capture,
         eye_resolution=eye,
-        image_topic=image_topic.strip(),
+        image_topic=image_topic,
         eye_image_topics=eye_image_topics,
-        stereo_info_topic=stereo_info_topic.strip(),
+        stereo_info_topic=stereo_info_topic,
         camera_info_topics=camera_info_topics,
         device=device.strip() if isinstance(device, str) else None,
         calibration_source=source,

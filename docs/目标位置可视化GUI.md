@@ -18,7 +18,7 @@ GUI 是诊断工具，不参与定位或控制；不要在无桌面显示的机�
 ~~~bash
 source /opt/ros/jazzy/setup.bash
 source /home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/install/setup.bash
-ros2 launch uv_bringup sim.launch.py
+ros2 launch uv_sim_bringup sim.launch.py
 ~~~
 
 在有桌面环境的另一个终端启动 GUI：
@@ -44,8 +44,8 @@ ros2 run uv_camera target_position_gui --ros-args \
 
 | 话题 | 用途 |
 |---|---|
-| `/perception/target_positions` | 每个静态目标的融合位置、协方差、融合观测来源、状态和年龄 |
-| `/perception/target_observations` | 定位器保留的最近有效几何观测，默认 500 条 |
+| `/auv/perception/targets` | 每个静态目标的融合位置、协方差、融合观测来源、状态和年龄 |
+| `/auv/perception/target_observations` | 定位器保留的最近有效几何观测，默认 500 条 |
 | `/basic_motion/pose_info` | 机器人实时位置与完整姿态（X/Y/Z、Roll/Pitch/Yaw） |
 
 第二个话题由 `object_localizer` 发布。默认保留 500 条；如需更长回放历史，可在启动文件的 `object_localizer` 节点参数中设置 `observation_history_size`。

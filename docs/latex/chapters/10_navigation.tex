@@ -1,0 +1,33 @@
+\chapter{导航与规划}
+\label{ch:navigation}
+
+\section{当前结构}
+\pkg{uv_planning} 是规划边界包，当前启动时实际调用 \pkg{uv_nav} 的 \code{navigator} 节点。\pkg{uv_nav} 读取估计状态和感知得到的目标/障碍位置，使用 \code{AStarPlanner} 生成当前阶段的 WaypointPath，并通过 \topic{/auv/control/trajectory} 发布。
+
+\section{A* 规划}
+当前二维 A* 将平面离散为给定分辨率的栅格，使用障碍物安全半径检查候选点和线段。规划输入至少包括起点、目标点、障碍位置和安全半径；输出为一组带深度、航向和速度字段的 \code{Waypoint}。若目标不可达，应返回明确失败原因，不应返回静默的空路径。
+
+\section{服务接口}
+\topic{/auv/planning/navigate_to} 接收以字符串编码的目标参数，当前兼容格式为 \code{x,y} 或 \code{x,y,z}。服务成功表示“规划成功并发布路径”，不等价于车辆已经到达目标。
+
+\section{规划与执行的边界}
+当前 navigator 的实现主要发布路径并记录导航信息；它不直接调用 BasicMotion Action，也没有通用的轨迹跟踪器消费全部 WaypointPath。现阶段竞赛任务通常由 \pkg{uv_task} 直接调用 \pkg{uv_control} 执行 SET/WMOVE/BMOVE/TRAVEL。未来若接入路径跟踪器，应新增清晰的路径跟踪节点或 Action，不能让 planner 隐式地控制车辆。
+
+\begin{table}[H]
+  \centering
+  \caption{规划数据流}
+  \label{tab:planning-flow}
+  \begin{tabularx}{\textwidth}{p{0.27\textwidth}p{0.30\textwidth}X}
+    \toprule
+    输入 & 处理 & 输出 \\
+    \midrule
+    \topic{/auv/state/odom} & 读取当前起点和深度/航向 & Waypoint 起点 \\
+    \topic{/auv/perception/observations} & 形成障碍物集合 & 栅格占用约束 \\
+    navigate service 目标 & A* 搜索与安全半径检查 & \topic{/auv/control/trajectory} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{后续规划能力}
+完整规划层应逐步补齐局部/全局规划、路径跟踪、在线重规划、动态障碍、控制可达性、深度约束和任务优先级。每项能力都必须保持只消费估计状态和标准感知结果，不得读取仿真真值。
+

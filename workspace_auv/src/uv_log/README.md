@@ -10,17 +10,16 @@ rosbag，也不会因为编码器积压造成录制卡顿。
 仿真启动时，录制 FPS 默认跟随 `camera_stitch_fps`：
 
 ```bash
-ros2 launch uv_bringup sim.launch.py \
+ros2 launch uv_sim_bringup sim.launch.py \
   record_session:=true \
   record_video_mode:=raw \
-  open_annotated_windows:=false \
   stream_annotated:=false
 ```
 
 需要同时保存标注流时使用：
 
 ```bash
-ros2 launch uv_bringup sim.launch.py \
+ros2 launch uv_sim_bringup sim.launch.py \
   record_session:=true \
   record_video_mode:=both
 ```
@@ -45,8 +44,8 @@ ros2 run uv_log player records/sessions/YYYYMMDD_HHMMSS
 `record_video_format:=ts`，此时恢复 H.264 转码路径，但 CPU 和编码延迟会更高。
 
 仿真启动默认使用 `record_use_sim_time:=false`，录制时间戳采用稳定的墙上时钟，
-不依赖 `/clock`。为了保留交互仿真的两个标注窗口，`enable_preview` 默认开启；
-无显示或只跑控制/任务时可显式设置 `enable_preview:=false` 节省 CPU。手动执行
+不依赖 `/clock`。`enable_preview` 默认开启 go2rtc 视频流；无显示或只跑控制/任务时可显式设置
+`enable_preview:=false` 节省 CPU。手动执行
 `record` 时，也应加上 `--use-sim-time false`。
 
 每个 session 还会保存启动和运行诊断信息：
@@ -60,8 +59,7 @@ ros2 run uv_log player records/sessions/YYYYMMDD_HHMMSS
 - `heartbeat.json`：约每秒更新，用于判断录制器是否还在工作。
 
 仿真默认将 Stonefish 的显示刷新限制为 30 FPS，物理步进仍为 100 Hz。可用
-`render_fps:=60` 临时提高显示刷新，或用 `enable_preview:=false` 关闭 MJPEG、
-go2rtc 和两个标注窗口，进一步降低负载。启动时任务不会立即释放：会先等待仿真
+`render_fps:=60` 临时提高显示刷新，或用 `enable_preview:=false` 关闭 MJPEG 和 go2rtc，进一步降低负载。启动时任务不会立即释放：会先等待仿真
 位姿/里程计和四路相机标定连续到达，再等待四路检测消息连续到达，最后才启动导航
 和任务节点；等待过程和超时原因记录在 `logs/nodes/` 中。
 

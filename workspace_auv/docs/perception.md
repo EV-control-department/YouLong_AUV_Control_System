@@ -16,23 +16,23 @@
 ```
 sim_bridge                          vision                              position
 ─────────                          ──────                              ────────
-front_cam/left ──┐                 ┌─ front_left  (1280×960) ── YOLO ──→ /perception/detection/front_left
-front_cam/right ─┼─ hstack(2560×960)┤                                         │
-                 └─ /auv/front_cam/stitched ──┤                             │
+/auv/sensors/camera/front/left ──┐                 ┌─ front_left  (1280×960) ── YOLO ──→ /auv/perception/detections/front/left
+/auv/sensors/camera/front/right ─┼─ hstack(2560×960)┤                                         │
+                 └─ /auv/sensors/camera/front/image_stitched ──┤                             │
                                               ├─ split ──┤                  │
-                 ┌─ /auv/down_cam/stitched  ──┤           │                  │
-down_cam/left  ─┼─ hstack(2560×960)          │  └─ front_right (1280×960) ──→ /perception/detection/front_right
-down_cam/right ─┘                            │                              │
-                                             │  ┌─ down_left  (1280×960) ──→ /perception/detection/down_left
+                 ┌─ /auv/sensors/camera/downward/image_stitched  ──┤           │                  │
+/auv/sensors/camera/downward/left  ─┼─ hstack(2560×960)          │  └─ front_right (1280×960) ──→ /auv/perception/detections/front/right
+/auv/sensors/camera/downward/right ─┘                            │                              │
+                                             │  ┌─ down_left  (1280×960) ──→ /auv/perception/detections/downward/left
                                              └─┤                              │
-                                                └─ down_right (1280×960) ──→ /perception/detection/down_right
+                                                └─ down_right (1280×960) ──→ /auv/perception/detections/downward/right
                                                                              │
-basic_motion ── /basic_motion/pose_info (30Hz) ─────────────────────────────┘
+basic_motion ── /auv/state/odom (30Hz) ─────────────────────────────┘
                                                                              │
                                                               射线累积 + 交会
                                                                              │
                                                                              ↓
-                                                              /perception/objects (10Hz)
+                                                              /auv/perception/observations (10Hz)
                                                                              │
                                                               ┌──────────────┤
                                                               ↓              ↓
@@ -54,20 +54,21 @@ basic_motion ── /basic_motion/pose_info (30Hz) ─────────�
 
 | 主题 | 类型 | 说明 |
 |------|------|------|
-| `/auv/front_cam/stitched` | `sensor_msgs/Image` | 前视双目拼接图 (2560×960, bgr8) |
-| `/auv/down_cam/stitched` | `sensor_msgs/Image` | 下视双目拼接图 (2560×960, bgr8) |
+| `/auv/sensors/camera/front/image_stitched` | `sensor_msgs/Image` | 前视双目拼接图 (2560×960, bgr8) |
+| `/auv/sensors/camera/downward/image_stitched` | `sensor_msgs/Image` | 下视双目拼接图 (2560×960, bgr8) |
 
 ### 发布
 
 | 主题 | 类型 | 说明 |
 |------|------|------|
-| `/perception/detection/front_left` | `DetectionArray` | 前视左目检测结果 |
-| `/perception/detection/front_right` | `DetectionArray` | 前视右目检测结果 |
-| `/perception/detection/down_left` | `DetectionArray` | 下视左目检测结果 |
-| `/perception/detection/down_right` | `DetectionArray` | 下视右目检测结果 |
+| `/auv/perception/detections/front/left` | `DetectionArray` | 前视左目检测结果 |
+| `/auv/perception/detections/front/right` | `DetectionArray` | 前视右目检测结果 |
+| `/auv/perception/detections/downward/left` | `DetectionArray` | 下视左目检测结果 |
+| `/auv/perception/detections/downward/right` | `DetectionArray` | 下视右目检测结果 |
 
-vision 不再发布 `/perception/image/*` 或 `/perception/annotated/*` 图像话题。
-实机模式下图像始终留在进程内，通过本地 MJPEG 源交给 go2rtc，避免大图像进入 DDS。
+vision 不再发布 `/auv/perception/image/*` 或 `/auv/perception/annotated/*` 图像话题。
+实机图像来自进程内 V4L2；仿真图像来自 Stonefish 的 POSIX 共享内存环。两种模式都
+通过本地 MJPEG 源交给 go2rtc，避免大图像进入 DDS。
 
 go2rtc 视频流（默认端口 `1984`）：
 
@@ -81,7 +82,7 @@ go2rtc 视频流（默认端口 `1984`）：
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `model_path` | `str` | `""` | YOLO 模型 .pt 文件路径。为空时自动搜索默认路径 |
-| `sim_mode` | `bool` | `false` | `true` 从 `/auv/*/stitched` 取图；`false` 从 V4L2 直接取图 |
+| `sim_mode` | `bool` | `false` | `true` 从 Stonefish POSIX 共享内存环读取并在进程内拼接；`false` 从 V4L2 直接取图 |
 | `enable_gortc` | `bool` | `true` | 启用本地 MJPEG 服务和 go2rtc |
 | `mjpeg_port` | `int` | `8090` | vision 本地 MJPEG 端口 |
 | `gortc_http_port` | `int` | `1984` | go2rtc HTTP/WebRTC 端口 |
@@ -144,17 +145,17 @@ right_img = cv_img[:, mid:]   # 1280×960
 
 | 主题 | 类型 | 说明 |
 |------|------|------|
-| `/perception/detection/front_left` | `DetectionArray` | 前视左目检测 |
-| `/perception/detection/front_right` | `DetectionArray` | 前视右目检测 |
-| `/perception/detection/down_left` | `DetectionArray` | 下视左目检测 |
-| `/perception/detection/down_right` | `DetectionArray` | 下视右目检测 |
-| `/basic_motion/pose_info` | `PoseInfo` | 机器人位姿 (30Hz) |
+| `/auv/perception/detections/front/left` | `DetectionArray` | 前视左目检测 |
+| `/auv/perception/detections/front/right` | `DetectionArray` | 前视右目检测 |
+| `/auv/perception/detections/downward/left` | `DetectionArray` | 下视左目检测 |
+| `/auv/perception/detections/downward/right` | `DetectionArray` | 下视右目检测 |
+| `/auv/state/odom` | `PoseInfo` | 机器人位姿 (30Hz) |
 
 ### 发布
 
 | 主题 | 类型 | 频率 | 说明 |
 |------|------|------|------|
-| `/perception/objects` | `ObjectPositionArray` | 10Hz | 被跟踪物体的 3D 世界坐标列表 |
+| `/auv/perception/observations` | `ObjectPositionArray` | 10Hz | 被跟踪物体的 3D 世界坐标列表 |
 
 ### 相机参数
 
@@ -246,7 +247,7 @@ ray_origin = robot_pos + R_robot @ camera_offset
 
 感知系统通过 `basic_motion` 节点获取机器人位姿，不再依赖仅仿真可用的 `/auv/state`。
 
-**主题**: `/basic_motion/pose_info`
+**主题**: `/auv/state/odom`
 **类型**: `uv_msgs/msg/PoseInfo`
 **频率**: 30Hz
 
@@ -293,10 +294,10 @@ ros2 launch uv_camera perception_launch.py \
 
 ```bash
 # 仿真 (默认 enable_ai:=true)
-ros2 launch uv_bringup sim.launch.py
+ros2 launch uv_sim_bringup sim.launch.py
 
 # 关闭感知
-ros2 launch uv_bringup sim.launch.py enable_ai:=false
+ros2 launch uv_sim_bringup sim.launch.py enable_ai:=false
 
 # 开启图像转发 (调试用)
 ros2 run uv_camera uv_camera --ros-args -p stream_annotated:=false

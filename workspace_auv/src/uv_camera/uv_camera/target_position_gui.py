@@ -19,6 +19,7 @@ from rclpy.node import Node
 from uv_msgs.msg import TargetObservation, TargetObservationArray
 from uv_msgs.msg import TargetPosition, TargetPositionArray
 from uv_msgs.msg import PoseInfo
+from auv_protocol.topics import TARGETS, TARGET_OBSERVATIONS, STATE_ODOM
 
 
 FORM_NAMES = {
@@ -148,19 +149,19 @@ class TargetPositionGui(Node):
 
         self.create_subscription(
             TargetPositionArray,
-            "/perception/target_positions",
+            TARGETS,
             self._on_targets,
             10,
         )
         self.create_subscription(
             TargetObservationArray,
-            "/perception/target_observations",
+            TARGET_OBSERVATIONS,
             self._on_observations,
             10,
         )
         self.create_subscription(
             PoseInfo,
-            "/basic_motion/pose_info",
+            STATE_ODOM,
             self._on_pose,
             10,
         )
@@ -230,7 +231,7 @@ class TargetPositionGui(Node):
                   anchor=tk.W, padding=(10, 3)).pack(fill=tk.X)
 
     def _build_target_table(self, parent):
-        frame = ttk.Labelframe(parent, text="前/下视估计（/perception/target_positions）", padding=5)
+        frame = ttk.Labelframe(parent, text="前/下视估计（/auv/perception/targets）", padding=5)
         frame.pack(fill=tk.BOTH, expand=False)
         columns = ("source", "id", "class", "x", "y", "z", "sigma", "forms", "status", "age")
         self.target_tree = ttk.Treeview(
@@ -256,7 +257,7 @@ class TargetPositionGui(Node):
         self.target_tree.bind("<<TreeviewSelect>>", self._select_target)
 
     def _build_observation_table(self, parent):
-        frame = ttk.Labelframe(parent, text="观测历史（/perception/target_observations）", padding=5)
+        frame = ttk.Labelframe(parent, text="观测历史（/auv/perception/target_observations）", padding=5)
         frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         columns = ("seq", "id", "class", "form", "kind", "location", "confidence", "stamp")
         self.observation_tree = ttk.Treeview(

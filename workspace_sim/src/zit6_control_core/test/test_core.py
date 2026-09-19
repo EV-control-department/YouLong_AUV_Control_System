@@ -83,6 +83,25 @@ def test_position_yaw_positive_myaw():
     assert last[5] > 0.0
 
 
+def test_position_mask_preserves_uncommanded_axes():
+    """An x-only position command must not invent a depth or yaw target.
+
+    ZitSetpoint masks use the native order [x, y, z, roll, pitch, yaw].
+    ``0x3e`` therefore updates x and preserves the current y/z/attitude.
+    """
+    core = Zit6Controller(CHASSIS)
+    core.update_nav((0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
+                    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    core.update_setpoint(
+        0, (0.5, 0.0, 0.0, 0.0, 0.0, 0.0),
+        0x3e, False, False,
+    )
+    force = core.step()
+    assert force[0] > 0.0
+    assert abs(force[2]) < 1e-6
+    assert abs(force[5]) < 1e-6
+
+
 def test_velocity_mode_level():
     """VELOCITY 模式(control_key=1)应映射为 control_level=2。"""
     core = Zit6Controller(CHASSIS)

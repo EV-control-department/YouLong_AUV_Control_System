@@ -1,0 +1,40 @@
+\chapter{参数与配置入口}
+\label{app:parameters}
+
+\section{启动参数}
+\begin{longtable}{p{0.28\textwidth}p{0.27\textwidth}p{0.32\textwidth}}
+  \caption{主要 launch 参数}\label{tab:launch-params}\\
+  \toprule
+  参数 & 适用入口 & 作用 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  参数 & 适用入口 & 作用 \\
+  \midrule
+  \endhead
+  \code{profile} & real/sim/hil & 选择模式参数文件。 \\
+  \code{enable_motion} & 所有运行模式 & 是否启动 BasicMotion。 \\
+  \code{enable_ai} & real/sim/hil & 是否启动 AI/目标定位。 \\
+  \code{enable_nav} & real/sim/hil & 是否启动导航节点。 \\
+  \code{enable_task} & real/sim/hil & 是否启动任务执行器。 \\
+  \code{mission_file} & 任务模式 & Mission 或单个 Task YAML。 \\
+  \code{scenario_desc} & sim/hil & Stonefish 场景文件。 \\
+  \code{scene_seed} & sim/hil & 生成场景的整数 seed。 \\
+  \code{enable_degradation} & sim & 是否启用传感器退化。 \\
+  \code{evaluation_output_dir} & sim/experiment & 指标和轨迹输出目录。 \\
+  \bottomrule
+\end{longtable}
+
+\section{参数查找路径}
+\begin{itemize}
+  \item 硬件监控：\pathref{workspace_auv/src/uv_hm/config/profiles/}。
+  \item 相机与 AI：\pathref{workspace_auv/src/uv_camera/config/profiles/}。
+  \item 相机标定：\pathref{workspace_auv/src/uv_camera/config/cameras/} 和 \code{*.npz}。
+  \item 任务 Mission：\pathref{workspace_auv/src/uv_task/config/missions/}。
+  \item 任务 Task：\pathref{workspace_auv/src/uv_task/config/tasks/}。
+  \item 仿真 bridge：\pathref{workspace_sim/src/uv_sim_bridge/config/profiles/}。
+  \item 退化参数：\path{uv_sim_bringup/degradation.launch.py} 及 sim launch 参数。
+\end{itemize}
+
+\section{参数审查原则}
+参数名称应包含物理含义，时间用秒、距离用米、角度明确度或弧度；速度和推力参数要说明坐标系和正方向；随机退化参数必须说明 seed；真机安全参数必须有更保守的 profile。完整生效树通过 ROS 2 参数查询和启动日志确认。

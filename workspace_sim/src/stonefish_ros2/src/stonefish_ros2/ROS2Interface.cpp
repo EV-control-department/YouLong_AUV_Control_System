@@ -714,7 +714,10 @@ std::pair<sensor_msgs::msg::Image::SharedPtr, sensor_msgs::msg::CameraInfo::Shar
 
 	//Camera info message
 	sensor_msgs::msg::CameraInfo::SharedPtr info = std::make_shared<sensor_msgs::msg::CameraInfo>();
-	info->header.frame_id = cam->getName();
+	// Keep CameraInfo and image headers on the same canonical optical frame
+	// when the scenario supplies one.  Older scenes omit frame_id and retain
+	// the sensor-name fallback for compatibility.
+	info->header.frame_id = frame_id != "" ? frame_id : cam->getName();
     info->width = img->width;
     info->height = img->height;
     info->binning_x = 0;

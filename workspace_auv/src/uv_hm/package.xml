@@ -16,6 +16,7 @@
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>uv_msgs</depend>
+  <depend>auv_protocol</depend>
   <depend>zit6_interfaces</depend>
 
   <test_depend>ament_copyright</test_depend>

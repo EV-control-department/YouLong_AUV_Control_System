@@ -1,0 +1,45 @@
+\chapter{Hardware Manager 与底层通信}
+\label{ch:hardware-manager}
+
+\section{边界职责}
+\pkg{uv_hm} 是 ROS 侧的硬件管理节点，当前职责包括：以固定频率发送心跳/布防命令；订阅 ZIT6 状态、心跳和推进器状态；执行电池、错误标志、通信超时和推力饱和监控；将已有旧 \topic{/zit6/state/*} 数据适配到 \topic{/auv/hardware/zit6/state/*}。
+
+它不是一个把所有底层设备细节都塞进来的“大硬件类”。真实 MCU 的固件控制核、传感器驱动和串口传输属于 MCU/外部 micro-ROS 通道；ROS 节点只依赖稳定的 ZIT6 Topic/Service 边界。
+
+\section{ZIT6 命令与状态}
+\begin{table}[H]
+  \centering
+  \caption{ZIT6 Canonical 接口}
+  \label{tab:zit6-interface}
+  \begin{tabularx}{\textwidth}{p{0.37\textwidth}p{0.24\textwidth}X}
+    \toprule
+    Topic/Service & 类型 & 语义 \\
+    \midrule
+    \topic{/auv/hardware/zit6/cmd/setpoint} & \code{ZitSetpoint} & 位置、速度或力设定值。 \\
+    \topic{/auv/hardware/zit6/cmd/heartbeat} & \code{UInt32} & 心跳和布防模式。 \\
+    \topic{/auv/hardware/zit6/cmd/ins} & \code{UInt8} & INS/DVL 控制。 \\
+    \topic{/auv/hardware/zit6/cmd/light}、\code{/servo} & 基础标量消息 & 灯光和舵机设备命令。 \\
+    \topic{/auv/hardware/zit6/state/status} & \code{ZitStatus} & 布防、INS、控制级别、电池和错误状态。 \\
+    \topic{/auv/hardware/zit6/state/position} & \code{Float32MultiArray} & 兼容的原始位置状态。 \\
+    \topic{/auv/hardware/zit6/state/velocity} & \code{Float32MultiArray} & 兼容的原始速度状态。 \\
+    \topic{/auv/hardware/zit6/get_params}、\code{/update_params} & ZIT6 Service & PID/控制参数在线查询和更新。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{心跳与 watchdog}
+心跳发送器按 profile 选择的频率发布命令；硬件管理器记录 MCU 上行心跳和状态最后到达时间。超过 watchdog 阈值时进入 degraded 记录并发出错误日志。电池低于阈值、状态错误标志非零或推进器接近饱和时，系统应进入人工检查流程，而不是继续假设车辆健康。
+
+\section{SIL 中的等价边界}
+SIL 的 \pkg{uv_sim_bridge} 模拟 ZIT6 的 Topic/Service 行为，使用 \pkg{zit6_control_core} 的 Host 控制核产生 6-DOF 力，再用推进器 mixer 连接 Stonefish。这样控制、任务和状态消费方看到的接口与真机一致，而底层执行介质不同。
+
+\section{HIL 通信}
+HIL 中，micro-ROS Agent 通过串口连接真实 MCU。这里的 Agent 边界遵循 micro-ROS 的典型部署方式 \cite{micro_ros}。仿真侧 bridge 将标准仿真传感器数据交给状态估计，并将估计状态作为 MCU 导航输入；MCU 输出的控制/推力状态经过 bridge 的执行器适配后驱动 Stonefish。Ground Truth 不作为 MCU 的导航输入。
+
+\section{安全原则}
+\begin{enumerate}
+  \item 未收到有效状态或导航未就绪时，位置/速度设定值不能被当成有效闭环。
+  \item heartbeat 丢失、MCU 异常解锁或通信超时时必须可观测并停止继续扩展运动命令。
+  \item 任何强制布防模式只允许在明确的实验/维护 profile 中启用。
+  \item 在线更新 PID 后必须记录参数快照、时间和 Git commit。
+\end{enumerate}

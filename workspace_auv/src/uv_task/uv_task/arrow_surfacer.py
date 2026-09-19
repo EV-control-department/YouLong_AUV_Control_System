@@ -13,6 +13,7 @@ import numpy as np
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, PoseInfo
+from auv_protocol.topics import ARUCO_IDS, DETECTIONS, STATE_ODOM
 from std_msgs.msg import Int32MultiArray
 from uv_camera.model_classes import configured_class_id
 
@@ -133,12 +134,12 @@ class ArrowSurfacer:
 
         for cam in ('down_left', 'down_right'):
             self._subs.append(node.create_subscription(
-                DetectionArray, f'/perception/detection/{cam}',
+                DetectionArray, DETECTIONS(cam),
                 lambda msg, c=cam: self._det_cb(c, msg), 10))
         self._subs.append(node.create_subscription(
-            PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10))
+            PoseInfo, STATE_ODOM, self._pose_cb, 10))
         self._subs.append(node.create_subscription(
-            Int32MultiArray, '/perception/aruco/ids', self._aruco_cb, 10))
+            Int32MultiArray, ARUCO_IDS, self._aruco_cb, 10))
 
         self._logger.info('ArrowSurfacer：已创建')
 

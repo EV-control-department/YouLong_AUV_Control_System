@@ -1,0 +1,60 @@
+schema_version: 1
+source: docs/auv元件说明和标定数据_第四版.pdf
+coordinate_frame:
+  name: body_frd
+  origin: drawing_black_triangle
+  axes: { x: forward, y: right, z: down }
+  length_unit: m
+
+# Mechanical reference geometry for the real vehicle.  Camera K/D and final
+# stereo R/T/P/Q remain in uv_camera/config/cameras/*.yaml and *.npz.
+reference_points:
+  down_camera:
+    position_body: [-0.130, 0.000, 0.0645]
+    orientation_status: nominal
+  front_camera:
+    position_body: [0.230, 0.000, 0.076]
+    orientation_status: nominal
+  ins:
+    position_body: [0.030, 0.000, 0.000]
+    origin_definition: housing_geometric_center
+    orientation_status: not_defined
+  dvl:
+    position_body: null
+    orientation_status: not_defined_in_pdf
+    note: >-
+      PDF v4 does not define the DVL installation pose. Do not publish a
+      real dvl_link transform until a measured calibration is supplied.
+  usbl_core:
+    position_body: [0.160, 0.000, 0.0235]
+  usbl_array_geometry_center:
+    position_body: [0.130, 0.000, 0.105]
+  usbl_transducers:
+    a1: [0.030, -0.100, 0.105]
+    a2: [0.030, 0.100, 0.105]
+    a3: [0.230, 0.100, 0.105]
+
+thrusters:
+  order: [M0, M1, M2, M3, M4, M5]
+  position_body:
+    M0: [0.187, -0.132, 0.000]
+    M1: [0.187, 0.132, 0.000]
+    M2: [0.000, -0.132, 0.000]
+    M3: [0.000, 0.132, 0.000]
+    M4: [-0.246, -0.132, 0.000]
+    M5: [-0.246, 0.132, 0.000]
+  direction_body:
+    M0: [0.819152, 0.573576, 0.000]
+    M1: [0.819152, -0.573576, 0.000]
+    M2: [0.000000, 0.000000, -1.000000]
+    M3: [0.000000, 0.000000, -1.000000]
+    M4: [-0.819152, 0.573576, 0.000]
+    M5: [-0.819152, -0.573576, 0.000]
+  horizontal_angle_deg: 35.0
+  # Rows are [Fx, Fy, Fz, Mz], columns follow order above.  Inputs and
+  # outputs are signed thrust values; PWM conversion is hardware-specific.
+  allocation_matrix:
+    - [0.819152, 0.819152, 0.000000, 0.000000, -0.819152, -0.819152]
+    - [0.573576, -0.573576, 0.000000, 0.000000, 0.573576, -0.573576]
+    - [0.000000, 0.000000, -1.000000, -1.000000, 0.000000, 0.000000]
+    - [0.215387, -0.215387, 0.000000, 0.000000, -0.249228, 0.249228]

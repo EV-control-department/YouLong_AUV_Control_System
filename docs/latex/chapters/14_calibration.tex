@@ -1,0 +1,52 @@
+\chapter{标定与参数管理}
+\label{ch:calibration}
+
+\section{标定原则}
+标定结果必须有来源、单位、坐标系、时间、工具版本和验证样本。原始数据、优化结果和部署文件应分离保存；LaTeX 记录方法和引用路径，配置文件保存实际运行数值。
+
+\section{相机内参}
+每个前视/下视相机的左右目需要记录图像分辨率、焦距、主点、畸变模型和畸变系数。运行时由 \pkg{uv_camera.camera_config} 根据 profile 加载 YAML/NPZ；视觉算法不能假定所有相机共用一套 $f_x,f_y,c_x,c_y$。
+
+\section{双目外参}
+左右目外参用于像素射线生成和三角测量。对于校正后的双目对，水平视差 $d=u_l-u_r$ 与近似深度关系为
+\begin{equation}
+  Z \approx \frac{fB}{d},
+\end{equation}
+其中 $f$ 为像素焦距，$B$ 为基线。$d$ 越小，深度对像素误差越敏感，因此目标定位需要设置有效视差、极线误差和范围门限。
+
+\section{相机到机体外参}
+相机外参应包含相机中心在 base/body 中的位置和 optical-to-body 旋转。前视 stereo、前视多视角射线和下视已知高度定位都依赖同一套外参。任何外参修订必须重新跑几何单元测试和至少一段录制数据回放。
+
+\section{IMU、DVL 与 USBL}
+真实 IMU/DVL/USBL 的安装外参必须通过测量或设备文档确认。当前 PDF 未给出真实 DVL 外参，故 URDF 不发布未经测量的 \code{dvl_link}。USBL 测量还应记录 beacon 坐标系、有效标志、协方差和声学延迟假设。
+
+\section{推进器和车辆参数}
+推进器标定包括编号、方向、最大推力、死区、响应时间和饱和行为；车辆参数包括质量、浮力、质心、浮心和水动力近似。SIL 的 mixer 和控制核配置必须与 HIL/真机使用的定义建立映射，不能只凭仿真收敛来证明真实推力标定正确。
+
+\section{验证清单}
+\begin{enumerate}
+  \item 对每个相机检查图像尺寸、内参矩阵、畸变系数和左右目时间戳。
+  \item 用已知棋盘/标靶验证重投影误差和双目深度误差。
+  \item 用已知车体位姿验证相机射线在 NED/FRD 中的方向。
+  \item 用静态目标验证目标位置协方差、实例关联和过期处理。
+  \item 用零输入和单轴输入验证推进器 mixer 符号、轴向和饱和。
+\end{enumerate}
+
+\section{当前文件映射}
+\begin{table}[H]
+  \centering
+  \caption{标定与参数文件入口}
+  \label{tab:calibration-files}
+  \begin{tabularx}{\textwidth}{p{0.39\textwidth}X}
+    \toprule
+    资产 & 用途 \\
+    \midrule
+    \pathref{workspace_auv/src/uv_camera/config/cameras/*.yaml} & 相机设备和相机 profile。 \\
+    \pathref{workspace_auv/src/uv_camera/config/*.npz} & 内参与立体标定数据。 \\
+    \pathref{workspace_auv/src/auv_description/urdf/auv.urdf} & 真机固定几何和 TF。 \\
+    \pathref{workspace_auv/src/uv_hm/config/pid_params.yaml} & 控制/PID 参数入口。 \\
+    \pathref{workspace_sim/src/zit6_control_core/sim_config.json} & SIL Host 控制核的 chassis 配置。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+

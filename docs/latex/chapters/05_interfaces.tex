@@ -1,0 +1,61 @@
+\chapter{ROS 2 软件接口规范}
+\label{ch:interfaces}
+
+\section{接口分层}
+接口分为三类。\pkg{auv_protocol} 是 Topic/Service/Action 名称的单一注册表；\pkg{uv_msgs} 保存应用层消息、服务和 BasicMotion Action；\pkg{zit6_interfaces} 保存与 ZIT6 固件兼容的设定值、状态和参数服务。新节点应从 \code{auv_protocol.topics} 导入名称，不能在业务代码中散落字符串。
+
+\section{Canonical Topic 空间}
+{\small
+\begin{longtable}{p{0.29\textwidth}p{0.25\textwidth}p{0.34\textwidth}}
+  \caption{主要 Canonical Topic 契约}\label{tab:topics-main}\\
+  \toprule
+  类别 & Topic 前缀/示例 & 语义 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  类别 & Topic 前缀/示例 & 语义 \\
+  \midrule
+  \endhead
+  传感器 & \topic{/auv/sensors/camera/*}, \topic{/auv/sensors/imu/data}, \topic{/auv/sensors/dvl/*} & 真实或仿真适配后的统一测量。 \\
+  感知 & \topic{/auv/perception/detections/*}, \topic{/auv/perception/targets} & 检测、线状态、目标观测和目标位置。 \\
+  状态 & \topic{/auv/state/odom}, \topic{/auv/state/twist}, \topic{/auv/state/health} & 控制、规划和任务的估计状态入口。 \\
+  TF & \topic{/auv/tf}, \topic{/auv/tf_static} & 动态和固定坐标变换。 \\
+  控制 & \topic{/auv/basic_motion}, \topic{/auv/control/trajectory} & BasicMotion Action 和规划路径。 \\
+  任务 & \topic{/auv/mission/run}, \topic{/auv/mission/status} & Mission 控制服务和状态。 \\
+  硬件 & \topic{/auv/hardware/zit6/cmd/*}, \topic{/auv/hardware/zit6/state/*} & ZIT6 下行命令和上行状态。 \\
+  仿真 & \topic{/auv/sim/raw/*}, \topic{/auv/sim/ground_truth/*}, \topic{/auv/sim/actuators/*} & 仿真原始输入、真值和执行器接口。 \\
+  \bottomrule
+\end{longtable}
+}
+
+\Needspace{6\baselineskip}
+\section{状态接口现状}
+\topic{/auv/state/odom} 当前实际消息类型是 \path{uv_msgs/PoseInfo}，而不是最终形态的 \path{nav_msgs/Odometry} 或 \path{uv_msgs/AuvState}。这是有意保留的兼容边界：\code{PoseInfo} 的 yaw 字段为度，\pkg{uv_localization} 内部仍使用弧度。未来更换状态消息时，应保持 Topic 语义稳定，并在迁移期提供明确的转换器。
+
+\section{QoS 与有效性}
+高频图像采用只保留最新样本的 Best Effort 策略，避免 CPU/IO 短暂阻塞导致处理旧帧；状态和控制消息使用可靠的普通队列策略，具体深度由启动代码和节点设置。任何消息契约必须同时说明：消息类型、发布者、订阅者、频率、时间戳来源、frame id、单位、有效条件、超时行为和是否允许为空。
+
+\section{Service 与 Action}
+\begin{table}[H]
+  \centering
+  \caption{当前主要 Service/Action}
+  \label{tab:services-actions}
+  \begin{tabularx}{\textwidth}{p{0.28\textwidth}p{0.24\textwidth}X}
+    \toprule
+    名称 & 类型 & 用途 \\
+    \midrule
+    \topic{/auv/basic_motion} & \code{uv_msgs/BasicMotion} Action & SET、WMOVE、BMOVE、WTRAVEL、BTRAVEL、START。 \\
+    \topic{/auv/mission/run} & \code{uv_msgs/RunTask} & 启动任务或任务链。 \\
+    \topic{/auv/mission/stop} & \code{std_srvs/Trigger} & 停止当前任务。 \\
+    \topic{/auv/mission/execute} & \code{uv_msgs/ExecTask} & 调试执行单个任务。 \\
+    \topic{/auv/planning/navigate_to} & \code{uv_msgs/RunTask} & 请求 A* 规划。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{兼容接口}
+旧的 \topic{/task/*}、\topic{/basic_motion*} 和 \topic{/zit6/*} 只应由兼容适配器暴露。当前若干节点仍同时发布新旧 Topic，以便已有 Foxy 固件和调试工具过渡；新业务代码不得依赖旧名字。
+
+\Needspace{7\baselineskip}
+\section{接口变更流程}
+新增字段优先保持向后兼容；改变单位、frame 或语义时必须提升协议版本，更新 \pathref{docs/architecture/} 下的契约、相关测试和本手册，并在实验记录中绑定 commit。不能只修改 LaTeX 表格而不修改生成消息或 Topic 注册表。

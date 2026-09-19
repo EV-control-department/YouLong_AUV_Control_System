@@ -1,0 +1,79 @@
+\chapter{运行时契约索引}
+\label{app:runtime-contracts}
+
+\section{Canonical 命名空间}
+\pkg{auv_protocol} 将公共接口集中在 \pathref{workspace_auv/src/auv_protocol/auv_protocol/topics.py}。下面按命名空间记录运行时审查重点；完整字符串和消息类型仍以源码及接口生成结果为准。
+
+\begin{longtable}{p{0.28\textwidth}p{0.28\textwidth}p{0.30\textwidth}}
+  \caption{运行时命名空间审查索引}\label{tab:runtime-contract-index}\\
+  \toprule
+  命名空间 & 代表 Topic & 审查重点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  命名空间 & 代表 Topic & 审查重点 \\
+  \midrule
+  \endhead
+  传感器 & \topic{/auv/sensors/camera/*}、imu、dvl、pressure、usbl & 时间戳、frame、单位、QoS、输入新鲜度。 \\
+  感知 & \topic{/auv/perception/detections/*}、lines、aruco、targets & 左右目关联、置信度、几何有效性和目标过期。 \\
+  状态 & \topic{/auv/state/odom}、twist、health & 估计状态与健康状态分离；不得读取仿真真值。 \\
+  TF & \topic{/auv/tf}、\topic{/auv/tf_static} & 动态/固定发布归属、frame tree 和时间戳。 \\
+  控制 & \topic{/auv/basic_motion}、\topic{/auv/control/trajectory}、\code{motion_command} & Action 取消、目标单位、坐标系、超时和执行边界。 \\
+  任务 & \topic{/auv/mission/run}、stop、status、execute & Mission/Task 状态、失败、重试和人工停止。 \\
+  硬件 & \topic{/auv/hardware/zit6/cmd/*}、state/* & heartbeat、布防、错误码、电池、推进器和参数服务。 \\
+  仿真 & \topic{/auv/sim/raw/*}、\topic{/auv/sim/ground_truth/*}、\topic{/auv/sim/actuators/*} & 真值隔离、仿真时间、场景 seed 和执行器映射。 \\
+  评测 & \topic{/auv/evaluation/metrics}、events、sim/performance & 只读运行闭环，记录指标、退化和性能事件。 \\
+  \bottomrule
+\end{longtable}
+
+\section{新增 Topic 的最小契约}
+任何新 Topic 在进入主分支前都应填写以下字段：
+
+\begin{enumerate}
+  \item 完整名称、消息类型、发布者、订阅者和是否属于 canonical namespace。
+  \item Header 时间戳来源、frame id、位置/速度/角度单位、坐标方向和数组排列。
+  \item 预期频率、QoS、队列深度、最大允许延迟、过期检测和丢帧行为。
+  \item 真机、SIL、HIL 是否都支持；若不支持，启动 profile 如何显式关闭或替代。
+  \item 是否可能包含 Ground Truth、未标定数据、旧接口字段或仅供调试的数据。
+  \item 对应的 \code{ros2 topic info}、\code{ros2 topic hz}、最小发布/订阅 smoke test 和记录 Topic。
+\end{enumerate}
+
+\section{接口审查命令}
+\begin{lstlisting}[language=bash,caption={运行时契约的最小检查命令}]
+ros2 node list
+ros2 topic list | sort
+ros2 topic info -v /auv/state/odom
+ros2 topic hz /auv/state/odom
+ros2 interface show uv_msgs/msg/PoseInfo
+ros2 action info /auv/basic_motion
+ros2 service list | rg '/auv|/zit6'
+\end{lstlisting}
+
+\section{Ground Truth 隔离审查}
+审查时同时检查静态代码和运行时 graph：
+
+\begin{itemize}
+  \item 静态代码中，定位、控制、导航、任务和 ZIT6 适配器不得把 \topic{/auv/sim/ground_truth/*} 作为输入。
+  \item 运行时用 \code{ros2 topic info -v} 检查 Ground Truth 的 subscriber，只允许评测、调试或记录节点。
+  \item 若实验需要对齐误差，在 \pkg{uv_sim_evaluation} 内完成，不得发布一个被控制器误认为正式状态的“校正状态”。
+  \item 任何违反规则的 graph 都应使实验报告标记为无效，而不是仅在结果中增加一个 warning。
+\end{itemize}
+
+\section{契约变更记录模板}
+\begin{table}[H]
+  \centering
+  \caption{接口变更记录字段}
+  \label{tab:contract-change-record}
+  \begin{tabularx}{\textwidth}{p{0.28\textwidth}X}
+    \toprule
+    字段 & 内容 \\
+    \midrule
+    Change ID & 与 Git commit、Issue 或实验编号关联。 \\
+    Old/New contract & 旧 Topic/类型/单位与新 Topic/类型/单位。 \\
+    Compatibility & 是否双发、转换器位置、迁移截止条件。 \\
+    Runtime evidence & launch、\code{ros2 topic info}、bag 或 smoke test 证据。 \\
+    Safety impact & 对布防、控制频率、watchdog、Ground Truth 隔离的影响。 \\
+    Documentation & 本手册章节、Markdown 契约和接口测试的更新位置。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}

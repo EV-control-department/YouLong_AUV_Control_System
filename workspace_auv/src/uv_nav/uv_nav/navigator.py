@@ -10,8 +10,9 @@ import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
-from uv_msgs.msg import AuvState, ObjectPositionArray, Waypoint, WaypointPath
+from uv_msgs.msg import ObjectPositionArray, PoseInfo, Waypoint, WaypointPath
 from uv_msgs.srv import RunTask
+from auv_protocol.topics import OBJECTS, STATE_ODOM, TRAJECTORY
 
 from uv_nav.astar import AStarPlanner
 
@@ -22,25 +23,30 @@ class NavigatorNode(Node):
     def __init__(self):
         super().__init__('navigator')
 
-        self.state = AuvState()
+        # ``/auv/state/odom`` is the canonical PoseInfo stream currently
+        # produced by basic_motion.  Keep the planner on that interface until
+        # the estimator publishes nav_msgs/Odometry as the next protocol
+        # revision; subscribing as AuvState here would create a DDS type
+        # mismatch on the same topic.
+        self.state = PoseInfo()
         self.obstacles = []  # list of (x, y)
         self._state_lock = threading.Lock()
 
         self.planner = AStarPlanner(resolution=0.5, safe_radius=2.0)
 
         # Subscribers
-        self.create_subscription(AuvState, '/auv/state', self._state_cb, 10)
-        self.create_subscription(ObjectPositionArray, '/perception/objects', self._objects_cb, 10)
+        self.create_subscription(PoseInfo, STATE_ODOM, self._state_cb, 10)
+        self.create_subscription(ObjectPositionArray, OBJECTS, self._objects_cb, 10)
 
         # Publishers
-        self.pub_path = self.create_publisher(WaypointPath, '/nav/path', 10)
+        self.pub_path = self.create_publisher(WaypointPath, TRAJECTORY, 10)
 
         # Services
-        self.create_service(RunTask, '/nav/navigate_to', self._navigate_to_cb)
+        self.create_service(RunTask, '/auv/planning/navigate_to', self._navigate_to_cb)
 
         self.get_logger().info('Navigator node started')
 
-    def _state_cb(self, msg: AuvState):
+    def _state_cb(self, msg: PoseInfo):
         with self._state_lock:
             self.state = msg
 
@@ -68,7 +74,7 @@ class NavigatorNode(Node):
             True if navigation planned successfully
         """
         s = self.state
-        start_x, start_y = s.pos_x, s.pos_y
+        start_x, start_y = s.robot_x, s.robot_y
 
         # Plan path
         next_x, next_y = self.planner.plan(
@@ -82,15 +88,16 @@ class NavigatorNode(Node):
         wp_start = Waypoint()
         wp_start.x = start_x
         wp_start.y = start_y
-        wp_start.z = s.pos_z
-        wp_start.yaw = s.yaw
+        wp_start.z = s.robot_z
+        wp_start.yaw = math.radians(s.robot_yaw)
         path_msg.waypoints.append(wp_start)
 
         wp_next = Waypoint()
         wp_next.x = next_x
         wp_next.y = next_y
-        wp_next.z = goal_z if goal_z is not None else s.pos_z
-        wp_next.yaw = goal_yaw if goal_yaw is not None else s.yaw
+        wp_next.z = goal_z if goal_z is not None else s.robot_z
+        wp_next.yaw = (goal_yaw if goal_yaw is not None
+                       else math.radians(s.robot_yaw))
         path_msg.waypoints.append(wp_next)
 
         self.pub_path.publish(path_msg)

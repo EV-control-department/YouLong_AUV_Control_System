@@ -1,0 +1,88 @@
+\chapter{安全状态模型与故障隔离}
+\label{ch:safety-state}
+
+\section{系统级状态模型}
+当前代码没有一个覆盖所有节点的中央安全状态机；状态由 launch、readiness、\pkg{uv_hm}、\pkg{uv_localization}、\pkg{uv_control} 和 \pkg{uv_task} 分散维护。本章给出用于设计审查和测试的系统级抽象，不把它误写成当前已经存在的单一 ROS 节点。
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.92\textwidth}{!}{%
+  \begin{tikzpicture}[
+    node distance=11mm and 15mm,
+    state/.style={draw=YoulongBlue, rounded corners, fill=YoulongLight,
+      minimum width=31mm, minimum height=10mm, align=center},
+    fault/.style={draw=WarningBorder, rounded corners, fill=WarningBackground,
+      minimum width=31mm, minimum height=10mm, align=center},
+    arr/.style={-{Latex[length=2mm]}, thick, color=YoulongBlue}
+  ]
+    \node[state] (boot) {BOOT\\启动中};
+    \node[state, right=of boot] (ready) {READY\\已就绪};
+    \node[state, right=of ready] (armed) {ARMED\\允许布防};
+    \node[state, below=of armed] (active) {ACTIVE\\运动中};
+    \node[fault, left=of active] (degraded) {DEGRADED\\降级};
+    \node[fault, left=of degraded] (faulted) {FAULT\\故障};
+    \draw[arr] (boot) -- node[above]{readiness} (ready);
+    \draw[arr] (ready) -- node[above]{profile} (armed);
+    \draw[arr] (armed) -- node[right]{motion} (active);
+    \draw[arr] (active) -- node[below]{timeout} (degraded);
+    \draw[arr] (degraded) -- node[above]{不可恢复} (faulted);
+    \draw[arr] (active) |- (faulted);
+    \draw[arr] (degraded.north) |- node[pos=0.24,left]{人工恢复} (ready.south);
+    \draw[arr] (armed.west) -| (ready.south);
+  \end{tikzpicture}}
+  \caption{用于审查的系统级安全状态抽象}
+  \label{fig:safety-state}
+\end{figure}
+
+\section{状态语义}
+\begin{longtable}{p{0.18\textwidth}p{0.34\textwidth}p{0.36\textwidth}}
+  \caption{安全状态的进入和退出条件}\label{tab:safety-states}\\
+  \toprule
+  状态 & 进入条件 & 允许与禁止事项 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  状态 & 进入条件 & 允许与禁止事项 \\
+  \midrule
+  \endhead
+  BOOT & launch 正在启动，接口和设备尚未通过 readiness。 & 允许初始化、诊断和日志；禁止接受需要运动闭环的目标。 \\
+  READY & 后端、状态和所需传感器通过门禁。 & 允许查询、标定和非运动准备；是否布防由 profile 决定。 \\
+  ARMED & profile 和硬件布防条件满足，heartbeat 正常。 & 允许接受受约束的运动命令；必须保留 stop/cancel 和 watchdog 路径。 \\
+  ACTIVE & BasicMotion 或任务正在执行。 & 控制周期、目标有效性、超时和推力饱和必须持续监控。 \\
+  DEGRADED & 输入短时失效、频率异常、丢帧或 watchdog 预警。 & 限制或停止运动，保留诊断；不能静默降级为使用 Ground Truth。 \\
+  FAULT & 无法安全恢复、关键进程退出或硬件错误。 & 进入安全输出和人工接管流程；恢复前不得自动重新运动。 \\
+  \bottomrule
+\end{longtable}
+
+\section{故障隔离原则}
+故障处理按边界隔离，而不是让所有节点互相重启：
+
+\begin{enumerate}
+  \item 传感器异常先影响对应输入和 health；定位器应发布不可用/过期状态，控制器拒绝无效目标。
+  \item 感知异常只影响目标观测和任务分支，不能让任务 runner 复用上一帧无限期有效的目标。
+  \item 控制器异常或关键进程退出应触发 launch 层关闭或安全输出；真机入口当前已对硬件、BasicMotion 和 localization 的关键退出进行 shutdown 处理。
+  \item 评测和记录异常不应反向关闭控制闭环，除非实验 profile 明确将记录作为成功条件；但它必须记录 session 不完整的原因。
+\end{enumerate}
+
+\section{真机、SIL 与 HIL 的安全差异}
+\begin{table}[H]
+  \centering
+  \caption{不同运行模式下的安全责任}
+  \label{tab:safety-modes}
+  \begin{tabularx}{\textwidth}{p{0.18\textwidth}p{0.35\textwidth}X}
+    \toprule
+    模式 & 主要执行者 & 额外安全关注点 \\
+    \midrule
+    real & MCU/控制板、\pkg{uv_hm}、\pkg{uv_control} & 急停、电源、布防、真实推进器、通信超时和人工接管。 \\
+    sim & Host 控制核、mixer、Stonefish & 仿真进程退出、时间倍率、场景隔离、Ground Truth 泄漏和 seed 可复现。 \\
+    hil & 真实 MCU 加仿真车辆 & micro-ROS 串口、真实控制核输出范围、仿真传感器输入与 MCU 导航输入一致性。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{安全测试最小集}
+每次修改会影响控制或硬件边界时，至少执行：正常启动、传感器断流、状态过期、BasicMotion 超时、任务取消、heartbeat 丢失、关键进程退出、记录进程异常退出和恢复后禁止自动运动。SIL 可以自动化这些测试；真机还必须在台架和水池环境分别验证。
+
+\begin{warningbox}
+“收到 Action result”不等于“车辆已经安全完成动作”。结果必须与状态新鲜度、控制器状态、实际位置误差、watchdog 和执行器状态一起判定。
+\end{warningbox}

@@ -1,0 +1,6 @@
+vehicle: youlong
+count: 6
+command_topic: /auv/sim/actuators/thruster_command
+state_topic: /auv/sim/actuators/thruster_state
+source_scene: youlong.scn
+ordering: [Thruster0, Thruster1, Thruster2, Thruster3, Thruster4, Thruster5]

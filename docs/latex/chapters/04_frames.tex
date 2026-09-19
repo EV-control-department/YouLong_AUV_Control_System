@@ -1,0 +1,63 @@
+\chapter{坐标系、TF、时间与单位}
+\label{ch:frames}
+
+\section{坐标系树}
+项目采用 ROS 风格的固定/动态变换分工：
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    level distance=13mm,
+    level 3/.style={sibling distance=44mm},
+    scale=0.82,
+    transform shape,
+    every node/.style={draw=YoulongBlue, rounded corners, fill=YoulongLight,
+      inner sep=4pt, align=center},
+    edge from parent/.style={draw=YoulongBlue, -{Latex[length=1.5mm]}}
+  ]
+    \node {map}
+      child { node {odom}
+        child { node {base\_link\\FRD}
+          child { node {front\_camera\_link} }
+          child { node {downward\_camera\_link} }
+          child { node {imu\_link} }
+          child { node {usbl\_link} }
+        }
+      };
+  \end{tikzpicture}
+  \caption{项目固定和动态 TF 的逻辑树}
+  \label{fig:tf-tree}
+\end{figure}
+
+\section{世界与机体约定}
+世界坐标使用 NED：$x$ 指向北，$y$ 指向东，$z$ 指向下。机体坐标使用 FRD：$x$ 指向前，$y$ 指向右，$z$ 指向下。偏航角零度指向北，顺时针为正。对于仅考虑平面偏航的转换，机体速度到世界速度的关系为
+\begin{equation}
+  \begin{bmatrix}v_N\\v_E\end{bmatrix}
+  =
+  \begin{bmatrix}\cos\psi&-\sin\psi\\
+  \sin\psi&\cos\psi\end{bmatrix}
+  \begin{bmatrix}v_x^b\\v_y^b\end{bmatrix}.
+\end{equation}
+
+\section{map、odom 与 body}
+\begin{description}
+  \item[map] ZIT6 或仿真世界使用的绝对坐标。真实控制命令最终以 map 坐标发送。
+  \item[odom] 任务运行时的局部坐标。\code{START} 动作将当前 map 位姿设为 odom 原点，任务通常在该坐标中给出目标。
+  \item[body] 以当前车辆位姿为原点的 FRD 机体坐标，用于 BMOVE、BTRAVEL 和机体速度控制。
+\end{description}
+
+\section{TF 发布归属}
+真实和仿真描述包通过 \code{robot_state_publisher} 发布固定树，并重映射为 \topic{/auv/tf_static}。\pkg{uv_localization} 是动态 \code{odom -> base_link} 的唯一发布者，并输出到 \topic{/auv/tf}。Stonefish Ground Truth 不得成为正式 TF 来源。
+
+\section{单位与兼容字段}
+内部算法、canonical 控制设定值和角速度统一使用 SI 单位：位置为 \si{m}，线速度为 \si{m.s^{-1}}，角度为 \si{rad}，角速度为 \si{rad.s^{-1}}。当前 \code{PoseInfo} 为历史兼容消息，其 roll/pitch/yaw 字段仍以度表达；转换只允许出现在消息边界，不能扩散到内部计算。
+
+\section{时间戳}
+ROS 消息使用消息 Header 或等价时间字段。仿真模式使用 ROS simulation time，真机模式使用系统/ROS 时间；相机左右目匹配必须依据图像时间戳或 \code{StereoFrameInfo}，禁止将相邻帧简单拼成一个立体对。目标定位还需要用时间最接近的位姿样本补偿车辆运动。
+
+\section{外参命名原则}
+每个传感器外参必须说明父坐标系、子坐标系、旋转方向、平移单位和获得方式。相机 optical frame 遵循 ROS 光学坐标约定（$x$ 右、$y$ 下、$z$ 前），不能将图像像素坐标直接当作机体 FRD 坐标。
+
+\begin{warningbox}
+坐标系错误通常表现为“控制方向反了”“目标位置随航向旋转错误”或“仿真看起来正确但真机失败”。任何新增传感器、任务或视觉几何代码，都必须在单元测试中给出至少一个轴向和一个偏航旋转的已知答案。
+\end{warningbox}

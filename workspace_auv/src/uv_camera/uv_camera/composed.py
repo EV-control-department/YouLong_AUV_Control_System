@@ -1,16 +1,17 @@
 """Composed uv_camera node: uv_sensor + uv_ai in ONE process (A3).
 
 One rclpy Node hosts both:
-  * uv_sensor (sensor.Sensor) — selects the frame source (Stonefish sim via ROS
-    stitched topics, or real V4L2 camera), updates the raw MJPEG go2rtc preview,
+  * uv_sensor (sensor.Sensor) — selects the frame source (Stonefish sim via
+    POSIX shared-memory rings, or real V4L2 camera), updates the raw MJPEG
+    go2rtc preview,
     and hands each BGR frame to uv_ai through an in-memory FrameGate.
-  * uv_ai (ai.Ai) — YOLO detection + draw + publish /perception/detection/*,
-    /perception/line/*, /perception/aruco/ids, and the annotated MJPEG cache.
+  * uv_ai (ai.Ai) — YOLO detection + draw + publish /auv/perception/* and the
+    annotated MJPEG cache.
 
 No ROS sensor_msgs/Image crosses sensor->ai, and no JPEG is encoded between
 them (A3): frames are BGR numpy arrays handed over the FrameGate. go2rtc is
 used only for the outward preview (:1984). position runs as a separate
-executable in this package and consumes /perception/detection/*.
+executable in this package and consumes /auv/perception/detections/*.
 """
 
 import os
@@ -26,11 +27,14 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-from std_msgs.msg import Float32MultiArray, Header
+from std_msgs.msg import Header
+from auv_protocol.topics import STATE_ODOM
 
 from . import ai as ai_mod
 from . import sensor as sensor_mod
 from .camera_config import load_camera_config, profile_for_mode
+from uv_msgs.msg import PoseInfo
+
 from .common import (
     DATASET_DIR,
     ENABLE_GORTC,
@@ -98,12 +102,12 @@ class CameraAiNode(Node):
             pass
 
         # Latest ZIT6 pose used for the small telemetry overlay on all streams.
-        # /zit6/state/pos has no header, so the newest received sample is the
+        # Hardware position has no header, so the newest received sample is the
         # closest available pose for the frame being encoded.
         self._pose_lock = threading.Lock()
         self._pose_overlay = None
         self._pose_sub = self.create_subscription(
-            Float32MultiArray, '/zit6/state/pos', self._pose_cb, 10)
+            PoseInfo, STATE_ODOM, self._pose_cb, 10)
 
         # determine active cameras
         active = []
@@ -208,7 +212,7 @@ class CameraAiNode(Node):
     def _read_params(self):
         g = self.get_parameter
         return {
-            'sim_mode': g('sim_mode').value,
+            'sim_mode': _as_bool(g('sim_mode').value),
             'enable_ai': _as_bool(g('enable_ai').value),
             'inference_fps': max(0.0, float(g('inference_fps').value)),
             'dataset_fps': max(0.0, float(g('dataset_fps').value)),
@@ -235,8 +239,8 @@ class CameraAiNode(Node):
                 g('stream_pose_overlay').value),
             'annotated_max_width': max(0, int(g('annotated_max_width').value)),
             'mjpeg_port': g('mjpeg_port').value,
-            'enable_front': g('enable_front_camera').value,
-            'enable_down': g('enable_down_camera').value,
+            'enable_front': _as_bool(g('enable_front_camera').value),
+            'enable_down': _as_bool(g('enable_down_camera').value),
             'camera_config_profile': str(g('camera_config_profile').value),
             'camera_config_dir': str(g('camera_config_dir').value).strip(),
             'model_path': g('model_path').value,
@@ -255,18 +259,11 @@ class CameraAiNode(Node):
         return rclpy.ok()
 
     def _pose_cb(self, msg):
-        """Cache the latest ZIT6 position for video telemetry.
-
-        Supported formats are the current 4-element [x, y, z, yaw_rad]
-        format and the 6-element [x, y, z, roll_rad, pitch_rad, yaw_rad]
-        format used by newer ZIT6 firmware.
-        """
-        if len(msg.data) >= 6:
-            values = (msg.data[0], msg.data[1], msg.data[2], msg.data[5])
-        elif len(msg.data) >= 4:
-            values = (msg.data[0], msg.data[1], msg.data[2], msg.data[3])
-        else:
-            return
+        """Cache the formal estimated pose for video telemetry."""
+        values = (
+            msg.robot_x, msg.robot_y, msg.robot_z,
+            math.radians(msg.robot_yaw),
+        )
         if not all(math.isfinite(float(value)) for value in values):
             return
         with self._pose_lock:
@@ -307,12 +304,11 @@ class CameraAiNode(Node):
 
     # ── sensor connector: ROS->BGR gate submission + raw preview ────────
     def submit_image(self, camera, msg, right_stamp=None, stereo_pair_id=0):
-        """Called from uv_sensor when a ROS Image arrives (sim mode).
+        """Compatibility entry point for callers that already have an Image.
 
-        Decode to BGR, update the raw preview cache (same as the V4L2 path),
-        then hand the frame to uv_ai through the in-memory gate.  Simulator
-        stereo metadata keeps the two eye detections tied to their original
-        capture stamps without changing the stitched image transport.
+        The simulator Sensor no longer calls this method: it reads the shared
+        memory rings and uses :meth:`submit_frame`, so image payloads do not
+        enter the ROS graph.
         """
         try:
             cv_img = image_msg_to_bgr(msg)
@@ -321,15 +317,13 @@ class CameraAiNode(Node):
             return
         # raw preview updated at arrival (independent of YOLO speed)
         self.update_raw_preview(camera, cv_img, msg.header.stamp)
-        # Keep the annotated endpoint usable while the first YOLO inference is
-        # still warming up. It starts as a pose-overlay-only frame and is
-        # replaced by the real annotated frame as soon as AI finishes. This
-        # prevents the preview window from waiting on model startup forever.
+        # Show live frames until the first inference finishes. If YOLO could
+        # not load, keep the annotated endpoint live without detection boxes.
         if self.stream_requested(camera, True):
             with self._stream_lock:
                 annotated_ready = (
                     self._stream_annotated_jpegs[camera] is not None)
-            if not annotated_ready:
+            if not self.ai._model_loaded or not annotated_ready:
                 self.update_annotated_stream(
                     camera, cv_img, msg.header.stamp)
         self.ai.record_capture_frame(
@@ -340,19 +334,28 @@ class CameraAiNode(Node):
              right_stamp, int(stereo_pair_id or 0)),
         )
 
-    def submit_frame(self, camera, frame, stamp=None):
-        """Called from uv_sensor when a V4L2 frame arrives (real mode)."""
+    def submit_frame(self, camera, frame, stamp=None, right_stamp=None,
+                     stereo_pair_id=0):
+        """Hand a local BGR frame to preview and AI without ROS Image."""
         stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
+        # Keep the raw preview fed by both the simulator shared-memory path
+        # and the real V4L2 path.  The HTTP handler registers a client before
+        # waiting, so encoding happens only while a stream is requested.
+        self.update_raw_preview(camera, frame, stamp)
         if self.stream_requested(camera, True):
             with self._stream_lock:
                 annotated_ready = (
                     self._stream_annotated_jpegs[camera] is not None)
-            if not annotated_ready:
+            if not self.ai._model_loaded or not annotated_ready:
                 self.update_annotated_stream(camera, frame, stamp)
         capture_header = Header()
         capture_header.stamp = stamp
-        self.ai.record_capture_frame(camera, frame, capture_header)
-        self._gate.submit(camera, ('opencv', frame, stamp, True, None, 0))
+        self.ai.record_capture_frame(
+            camera, frame, capture_header, right_stamp,
+            int(stereo_pair_id or 0))
+        self._gate.submit(
+            camera, ('opencv', frame, stamp, True, right_stamp,
+                     int(stereo_pair_id or 0)))
 
     @staticmethod
     def _stamp_to_ns(stamp):

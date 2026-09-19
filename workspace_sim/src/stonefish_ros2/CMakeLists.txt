@@ -20,6 +20,7 @@ set(CMAKE_CXX_STANDARD 20)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -48,7 +49,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SonarSettings.srv"
   "srv/SonarSettings2.srv"
   "srv/Respawn.srv"
-  DEPENDENCIES std_msgs std_srvs geometry_msgs
+  DEPENDENCIES std_msgs std_srvs geometry_msgs builtin_interfaces
 )
 
 # rosidl_get_typesupport_target() is available in newer ROS 2 releases,
@@ -68,6 +69,7 @@ add_library(stonefish_ros2_interface SHARED
   src/${PROJECT_NAME}/ROS2ConsoleSimulationApp.cpp
   src/${PROJECT_NAME}/ROS2GraphicalSimulationApp.cpp
   src/${PROJECT_NAME}/ROS2SimulationManager.cpp
+  src/${PROJECT_NAME}/SimCameraShm.cpp
   src/${PROJECT_NAME}/ROS2ScenarioParser.cpp
   src/${PROJECT_NAME}/ROS2Interface.cpp
 )
@@ -85,6 +87,7 @@ target_include_directories(stonefish_ros2_interface
     $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(stonefish_ros2_interface
  rclcpp 
+ builtin_interfaces
  ament_index_cpp 
  std_srvs
  geometry_msgs
@@ -128,11 +131,6 @@ install(
   DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
-install(
-  DIRECTORY Data
-  DESTINATION share/${PROJECT_NAME}
-)
-
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights

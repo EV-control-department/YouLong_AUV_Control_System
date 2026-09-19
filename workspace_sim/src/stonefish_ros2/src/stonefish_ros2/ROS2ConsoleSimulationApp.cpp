@@ -30,7 +30,7 @@ namespace sf
 {
 
 ROS2ConsoleSimulationApp::ROS2ConsoleSimulationApp(std::string title, std::string dataPath, ROS2SimulationManager* sim)
-    : ConsoleSimulationApp(title, dataPath, sim)
+    : ConsoleSimulationApp(title, dataPath, sim), cleanedUp_(false)
 {
 }
 
@@ -42,6 +42,19 @@ void ROS2ConsoleSimulationApp::Startup()
 
 void ROS2ConsoleSimulationApp::Shutdown()
 {
+    if(cleanedUp_)
+    {
+        return;
+    }
+
+    cleanedUp_ = true;
+    // SIGINT returns rclcpp::spin() before the normal FINISHED path.  Stop
+    // the simulation thread before releasing Stonefish resources, matching
+    // the graphical adapter's shutdown ordering.
+    if(state_ == SimulationState::RUNNING)
+    {
+        StopSimulation();
+    }
     CleanUp();
 }
 

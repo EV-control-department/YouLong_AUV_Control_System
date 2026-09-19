@@ -13,6 +13,7 @@ import numpy as np
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, LineState, PoseInfo
+from auv_protocol.topics import DETECTIONS, LINES, STATE_ODOM
 from uv_camera.model_classes import configured_class_id
 
 
@@ -187,13 +188,13 @@ class LineFollower:
         self._subs = []
         for cam in ('down_left', 'down_right'):
             self._subs.append(node.create_subscription(
-                LineState, f'/perception/line/{cam}',
+                LineState, LINES(cam),
                 lambda msg, c=cam: self._line_cb(c, msg), 10))
             self._subs.append(node.create_subscription(
-                DetectionArray, f'/perception/detection/{cam}',
+                DetectionArray, DETECTIONS(cam),
                 lambda msg, c=cam: self._det_cb(c, msg), 10))
         self._subs.append(node.create_subscription(
-            PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10))
+            PoseInfo, STATE_ODOM, self._pose_cb, 10))
 
         # ── PID 状态（横向和偏航独立控制）──
         self._lat_prev_err = None

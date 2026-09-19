@@ -1,0 +1,43 @@
+\chapter{项目概述}
+\label{ch:overview}
+
+\section{项目定义}
+YouLong AUV 是面向水下自主航行、视觉目标识别、目标定位和竞赛任务执行的自治水下航行器软件系统。系统将真实车辆、仿真环境和硬件在环环境统一到一套 ROS 2 接口之后，使任务层和算法层可以在不同运行模式之间迁移。本文档按仓库源码和配置记录当前事实，并以 ROS 2 的节点、Topic、Service、Action 模型作为术语背景 \cite{ros2docs,youlongrepo}。
+
+本项目的核心不是某一个单独算法，而是一条可观测、可替换、可实验的闭环：传感器产生测量，感知和状态估计产生对世界的解释，规划和任务层产生意图，控制层将意图转化为 ZIT6 命令，底层控制核驱动推进器，新的传感器数据再回到估计器。
+
+\section{应用场景}
+当前仓库针对 SAUVC/国水等竞赛场景组织任务配置，包含起始、巡游、过门、击球、寻找收集框、抓球、投放以及返回原点等任务模块。任务链位于 \pathref{workspace_auv/src/uv_task/config/missions/}，具体参数位于 \pathref{workspace_auv/src/uv_task/config/tasks/}。
+
+\section{设计目标}
+\begin{enumerate}
+  \item \textbf{接口一致性：} 真机、SIL 和 HIL 使用相同的传感器、状态、控制和任务接口。
+  \item \textbf{状态可信：} 控制、规划和任务只消费估计状态，不消费仿真真值。
+  \item \textbf{边界可替换：} 定位器、规划器和感知后端可以在不改变下游接口的情况下替换。
+  \item \textbf{可复现实验：} 场景 seed、参数、rosbag、指标和 Git commit 可以绑定在同一次实验中。
+  \item \textbf{安全可诊断：} 心跳、watchdog、健康状态、控制频率和传感器退化事件可被记录和检查。
+\end{enumerate}
+
+\section{能力边界与当前状态}
+\begin{table}[H]
+  \centering
+  \caption{系统能力的当前实现与边界}
+  \label{tab:overview-status}
+  \begin{tabularx}{\textwidth}{p{0.25\textwidth}X}
+    \toprule
+    能力 & 当前状态 \\
+    \midrule
+    运动执行 & \pkg{uv_control} 提供 BasicMotion Action 和坐标变换，向 ZIT6 输出位置设定值。 \\
+    状态估计 & \pkg{uv_localization} 当前实现 bootstrap 估计器；未宣称已实现 FGO、SLAM 或 Active SLAM。 \\
+    视觉 & \pkg{uv_camera} 集成相机、YOLO、线检测、ArUco 和目标位置估计。 \\
+    规划 & \pkg{uv_nav} 提供 A* 兼容后端；\pkg{uv_planning} 当前主要承担边界封装。 \\
+    仿真 & \pkg{stonefish_ros2} 与 \pkg{uv_sim_bridge} 提供 SIL/HIL 链路，Ground Truth 只用于评测。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{文档与代码的职责}
+代码和配置是机器可执行的事实来源，本手册负责解释其设计意图、数据契约、数学约定和验证方法。对于相机内参、PID 增益、场景坐标和设备路径，手册只记录来源、含义和验证方式，不在正文中维护容易漂移的第二份数值。
+
+\section{术语约定}
+除非特别说明，本手册中的“状态”指估计状态，“真值”专指仿真器提供的理想 Ground Truth；“命令”指从上层向控制器或执行器发送的意图；“测量”指传感器或传感器适配器发布的数据。

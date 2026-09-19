@@ -15,8 +15,16 @@ V4L2 → OpenCV（进程内）→ YOLO
 ```
 
 实机模式不会把原始或标注图像封装成 `sensor_msgs/Image` 发布到 DDS；ROS 2
-只传输检测和状态元数据。uv_camera 默认使用实机 V4L2 输入，仿真启动文件会显式
-设置 `sim_mode:=true`，通过 `/auv/*/stitched` 接收模拟器图像。
+只传输检测、状态和相机标定元数据。uv_camera 默认使用实机 V4L2 输入。仿真启动文件
+显式设置 `sim_mode:=true`：Stonefish 将四路 RGB8 图像写入 POSIX 共享内存环，
+`uv_camera` 直接映射读取并在进程内拼接，DDS 只保留 `CameraInfo`。
+
+仿真视频链路为：
+
+```text
+Stonefish → /dev/shm/uv_sim_camera_{front,down}_{left,right}
+          → uv_camera（读取、拼接、AI、MJPEG）→ go2rtc :1984
+```
 
 ## 部署
 

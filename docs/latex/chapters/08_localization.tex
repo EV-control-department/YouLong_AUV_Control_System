@@ -1,0 +1,40 @@
+\chapter{状态估计与定位}
+\label{ch:localization}
+
+\section{状态边界}
+\pkg{uv_localization} 是正式状态发布者。其输出为：估计位姿 \topic{/auv/state/odom}、机体速度 \topic{/auv/state/twist}、健康状态 \topic{/auv/state/health} 和动态 TF \topic{/auv/tf}。控制、规划和任务只应从这些 Topic 获取当前车辆状态。
+
+\section{当前 bootstrap 实现}
+当前估计器在真机模式下读取 ZIT6 原始位置/速度，并根据启动或 START 建立 odom 原点；在仿真/HIL 模式下读取 canonical DVL、IMU 和可用性信息，以简单航位推算积分状态。实现刻意不订阅 \topic{/auv/sim/ground_truth/odom}。该边界允许未来把内部实现替换成 FGO/ESKF/SLAM，而不改下游 Topic。
+
+\section{状态表示}
+用于设计讨论的连续状态可以写成
+\begin{equation}
+  \mathbf{x} = \begin{bmatrix}
+    \mathbf{p}^{n} & \mathbf{v}^{b} & \boldsymbol{\theta}^{n} &
+    \mathbf{b}_{g} & \mathbf{b}_{a}
+  \end{bmatrix}^{\mathsf T},
+\end{equation}
+其中 $\mathbf{p}^{n}$ 是 NED 位置，$\mathbf{v}^{b}$ 是 FRD 机体速度，$\boldsymbol{\theta}^{n}$ 是姿态参数，$\mathbf{b}_{g}$ 和 $\mathbf{b}_{a}$ 分别为陀螺和加速度计偏置。当前实现只使用其中一部分字段，并不代表所有状态量已经被估计。
+
+\section{传感器使用}
+\begin{description}
+  \item[DVL] 提供机体线速度；无效、非有限或超时数据不应更新估计状态。
+  \item[IMU] 当前 bootstrap 实现使用角速度，姿态融合和偏置估计留给后续估计器。
+  \item[USBL] 当前边界记录有效性供健康/后续融合使用，不宣称已经完成全量融合。
+  \item[压力计] 提供深度相关观测，具体使用方式应由后续状态估计实现明确规定。
+\end{description}
+
+\section{原点与 reset}
+\topic{/auv/state/reset} 用于重新建立 odom 原点。\code{START} 动作由 \pkg{uv_control} 发布 reset 请求；估计器记录当前原始位置为新原点，之后将局部位置和 yaw 归零。重新定义原点时，控制器的动作目标也必须同步清零。
+
+\section{健康状态}
+健康消息至少应包含传感器/估计器名称、可用标志、质量分数、时间戳和人类可读的 detail。健康状态用于 readiness、评测和故障诊断，但不能被误认为是一个具有统计意义的完整协方差。
+
+\section{未来定位后端接口}
+未来 FGO、ESKF 或 SLAM 后端必须满足：继续发布相同的估计状态 Topic；明确状态坐标系和时间基准；提供协方差或质量含义；可处理 DVL 丢失、USBL 离群、视觉间歇观测和时间延迟；不得订阅仿真真值。算法替换应通过同一包内的实现选择或插件边界完成。
+
+\begin{warningbox}
+当前的 bootstrap 估计器适合接口打通、SIL/HIL 回归和控制链路验证，不应在实验报告中写成高精度融合定位系统。若需要发表定位精度结果，必须说明传感器组合、估计器版本、真值对齐方法和数据集来源。
+\end{warningbox}
+

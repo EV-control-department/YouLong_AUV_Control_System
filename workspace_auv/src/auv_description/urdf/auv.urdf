@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<robot name="youlong_auv">
+  <link name="base_link"/>
+
+  <!-- Real vehicle geometry from docs/auv元件说明和标定数据_第四版.pdf.
+       Coordinates are body-FRD metres: x forward, y right, z down. -->
+  <link name="front_camera_link"/>
+  <joint name="front_camera_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_camera_link"/>
+    <origin xyz="0.23 0.0 0.076" rpy="0 0 0"/>
+  </joint>
+  <link name="front_left_camera_optical_frame"/>
+  <joint name="front_left_camera_mount" type="fixed">
+    <parent link="front_camera_link"/>
+    <child link="front_left_camera_optical_frame"/>
+    <origin xyz="0 -0.05 0" rpy="1.5708 0 1.5708"/>
+  </joint>
+  <link name="front_right_camera_optical_frame"/>
+  <joint name="front_right_camera_mount" type="fixed">
+    <parent link="front_camera_link"/>
+    <child link="front_right_camera_optical_frame"/>
+    <origin xyz="0 0.05 0" rpy="1.5708 0 1.5708"/>
+  </joint>
+
+  <link name="downward_camera_link"/>
+  <joint name="downward_camera_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="downward_camera_link"/>
+    <origin xyz="-0.13 0 0.0645" rpy="0 0 0"/>
+  </joint>
+  <link name="downward_left_camera_optical_frame"/>
+  <joint name="downward_left_camera_mount" type="fixed">
+    <parent link="downward_camera_link"/>
+    <child link="downward_left_camera_optical_frame"/>
+    <origin xyz="0 -0.05 0" rpy="0 0 1.5708"/>
+  </joint>
+  <link name="downward_right_camera_optical_frame"/>
+  <joint name="downward_right_camera_mount" type="fixed">
+    <parent link="downward_camera_link"/>
+    <child link="downward_right_camera_optical_frame"/>
+    <origin xyz="0 0.05 0" rpy="0 0 1.5708"/>
+  </joint>
+
+  <link name="imu_link"/>
+  <joint name="imu_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <!-- PDF gives the INS housing geometric-centre measurement origin;
+         attitude/orientation is intentionally left undefined. -->
+    <origin xyz="0.03 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="usbl_link"/>
+  <joint name="usbl_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="usbl_link"/>
+    <origin xyz="0.16 0 0.0235" rpy="0 0 0"/>
+  </joint>
+
+  <!-- USBL transducer positions.  They are exposed for calibration and TF
+       consumers; the acoustic reference point remains usbl_link. -->
+  <link name="usbl_transducer_a1"/>
+  <joint name="usbl_transducer_a1_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="usbl_transducer_a1"/>
+    <origin xyz="0.03 -0.10 0.105" rpy="0 0 0"/>
+  </joint>
+  <link name="usbl_transducer_a2"/>
+  <joint name="usbl_transducer_a2_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="usbl_transducer_a2"/>
+    <origin xyz="0.03 0.10 0.105" rpy="0 0 0"/>
+  </joint>
+  <link name="usbl_transducer_a3"/>
+  <joint name="usbl_transducer_a3_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="usbl_transducer_a3"/>
+    <origin xyz="0.23 0.10 0.105" rpy="0 0 0"/>
+  </joint>
+  <link name="usbl_array_geometry_center"/>
+  <joint name="usbl_array_geometry_center_mount" type="fixed">
+    <parent link="base_link"/>
+    <child link="usbl_array_geometry_center"/>
+    <origin xyz="0.13 0 0.105" rpy="0 0 0"/>
+  </joint>
+</robot>

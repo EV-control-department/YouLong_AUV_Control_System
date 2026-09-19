@@ -13,26 +13,29 @@ This package delivers a ROS2 interface for the _Stonefish_ library. It also incl
 To run the standard simulator node you have to include the 'stonefish_simulator.launch.py' file in your own launch file, overriding the default arguments.
 Please refer to the documentation for details.
 
-### Project-specific quick start (UUV2025)
+### Project-specific quick start (YouLong)
 
-In this repository, Stonefish is typically started through `uv_launch_pkg`:
+The public project entry point owns world and vehicle selection:
 
 ```bash
-cd .
-source conda activate ros2_jazzy_env
 source /opt/ros/jazzy/setup.bash
-source Cruise/install/setup.bash
-ros2 launch uv_launch_pkg sim_launch.py
+source workspace_auv/install/setup.bash
+source workspace_sim/install/setup.bash
+ros2 launch uv_sim sim.launch.py \
+  world:=guoshui_2026/cruise_seeded vehicle:=youlong
 ```
 
-To run the SAUVC pool scene:
+For a direct Stonefish parser invocation, pass the installed asset package as
+`simulation_data` and a package-relative scenario:
 
 ```bash
-ros2 launch uv_launch_pkg sim_launch.py \
-   scenario_desc:=Cruise/stonefish_ros2/Data/stonefish_pool/pool.scn
+ros2 launch stonefish_ros2 stonefish_simulator_nogpu.launch.py \
+  scenario_desc:=worlds/guoshui_2026/guoshui_2026_cruise.scn \
+  simulation_data:=$(ros2 pkg prefix uv_sim_assets)/share/uv_sim_assets
 ```
 
-If `uv_launch_pkg` is not found or custom message types are missing in `rqt`, build and source the `Cruise` workspace overlay first.
+`uv_sim_bringup sim.launch.py scenario_desc:=...` remains available as the
+legacy forwarding/compatibility entry point.
 
 ### Credits
 This software was written and is continuously developed by Patryk Cieślak.

@@ -10,6 +10,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     enable_motion = LaunchConfiguration("enable_motion")
     profile_params = LaunchConfiguration("profile_params")
+    sim_mode = LaunchConfiguration("sim_mode")
 
     def _nodes(context):
         parameters = []
@@ -22,12 +23,14 @@ def generate_launch_description():
             name="basic_motion",
             exec_name="basic_motion",
             output="both",
-            parameters=parameters,
+            parameters=parameters + [{'sim_mode': sim_mode}],
+            remappings=[('/tf', '/auv/tf'), ('/tf_static', '/auv/tf_static')],
             condition=IfCondition(enable_motion),
         )]
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_motion", default_value="true"),
+        DeclareLaunchArgument("sim_mode", default_value="false"),
         DeclareLaunchArgument("profile_params", default_value=""),
         OpaqueFunction(function=_nodes),
     ])

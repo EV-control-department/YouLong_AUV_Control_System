@@ -10,7 +10,7 @@ params:
   detection_timeout: 1.5 # 检测结果最大允许年龄，单位：秒。
   min_gate_detection_confidence: 0.02 # 门框检测最低置信度。
   image_timeout: 8.0 # 图像输入或视觉观测超时，单位：秒。
-  min_gate_extent_fraction: 0.25 # 门框最小视场占比。
+  min_gate_extent_fraction: 0.1 # 兼容旧配置；不再用于拒绝门框候选。
   target_gate_extent_fraction: 0.75 # 期望门框视场占比。
   target_gate_height_fraction: 0.5 # 距离控制目标高度占比。
   extent_tolerance: 0.15 # 门框尺寸目标允许误差。
@@ -23,14 +23,16 @@ params:
   search:
     # 相对当前参考航向的搜索起点和扫描范围，单位：度。
     start_offset_deg: -30.0
-    sweep_deg: 60.0
+    sweep_deg: 60.0 # 第一轮扫描范围。
+    retry_sweep_deg: 120.0 # 第一轮没有门框时的第二轮范围。
+    final_sweep_deg: 180.0 # 第二轮仍无门框时的最后一轮范围。
     right_yaw_sign: 1.0 # 坐标约定的航向正方向符号。
     yaw_rate_deg_s: 36.0 # 恒速搜索航向速度，单位：度/秒。
     yaw_publish_period: 0.05 # 搜索航向速度指令周期，单位：秒。
     settle_time: 0.4 # 扫描旋转或选门后的稳定时间，单位：秒。
     timeout: 60.0 # 单个门搜索最长时间，单位：秒。
-    rotate_timeout: 12.0 # 搜索旋转位置环超时，单位：秒。
-    stop_height_fraction: 0.4 # 门框高度占图像高度超过该值时立即停止扫描并锁定目标。
+    rotate_timeout: 20.0 # 搜索旋转位置环超时，单位：秒。
+    stop_height_fraction: 0.4 # 兼容旧配置；现在会完成整轮扫描后选择最大门框。
 
   # 对准阶段。
   alignment:
@@ -101,5 +103,6 @@ params:
   # 穿门阶段。
   pass:
     distance_m: 1.6 # 穿过门框距离，单位：米。
+    segment_distance_m: 0.4 # 固定绝对位置环每段距离，单位：米。
     timeout: 20.0 # 单个门穿越最长时间，单位：秒。
     pause: 0.5 # 通过后停顿时间，单位：秒。

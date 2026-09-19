@@ -1,0 +1,12 @@
+vehicle: youlong
+# Values retained from xunyun_fixed.scn. This is a simulation baseline, not a
+# claim that the vehicle has been physically calibrated.
+mass:
+  lower_ballast_kg: 34.999
+  auxiliary_part_count: 14
+  auxiliary_each_kg: 0.001
+  total_scene_mass_kg: 35.013
+inertia_kg_m2: [0.103, 0.262, 0.491]
+center_of_mass: source_scene
+center_of_buoyancy: source_scene
+calibration_status: uncalibrated

@@ -9,12 +9,16 @@
 
 | 层 | 包 | 说明 |
 |---|---|---|
-| 仿真 | `stonefish_ros2` (C++) | Stonefish 1.6 水下物理仿真，无 GPU 模式 |
-| 硬件管理 | `uv_hm` | SIM：级联 PID + 推力分配 → 6 推进器；实机：hw_manager 占位 |
-| 运动控制 | `uv_control` | 运动 API：SET / WMOVE / BMOVE / TRAVEL |
-| 感知 | `uv_camera` | YOLO 目标检测 + 单目射线求交 3D 定位 |
-| 导航 | `uv_nav` | A* 路径规划 + 避障路径跟踪 |
-| 任务 | `uv_task` | YAML mission 竞赛任务顺序执行 |
+| 协议 | `auv_protocol` | `/auv` canonical topic/service/action 注册表 |
+| 描述 | `auv_description` | real 车辆 URDF 与 PDF 机械几何、静态 TF |
+| 硬件管理 | `uv_hm` | ZIT6 adapter、heartbeat、状态监控与 watchdog |
+| 运动控制 | `uv_control` | BasicMotion：SET / WMOVE / BMOVE / TRAVEL |
+| 相机/感知 | `uv_camera`, `uv_perception` | 相机采集、标定、YOLO 和目标观测 |
+| 定位 | `uv_localization` | `/auv/state/*` 估计状态边界（当前 bootstrap） |
+| 规划/导航 | `uv_planning`, `uv_nav` | planning 边界与 A* 兼容后端 |
+| 任务 | `uv_task` | YAML mission 与竞赛任务顺序执行 |
+| 仿真 | `uv_sim_description`, `uv_sim_bridge`, `stonefish_ros2` | Stonefish 世界、传感器 adapter 和 SIL/HIL |
+| 实验 | `uv_sim_degradation`, `uv_sim_evaluation`, `experiments/` | 退化注入、ATE/RPE 和结果目录 |
 
 ### 工作区结构
 
@@ -24,17 +28,28 @@
 YouLong_AUV_Control_System/
 ├── workspace_auv/        # AUV 控制栈（无仿真依赖）
 │   └── src/
+│       ├── auv_protocol/   # /auv 接口注册表
+│       ├── auv_description/# real URDF、机械几何与静态 TF
+│       ├── uv_msgs/        # canonical 消息、服务和 Action
 │       ├── uv_control/     # 运动控制
-│       ├── uv_hm/          # 硬件管理
-│       ├── uv_camera/       # 感知
-│       ├── uv_nav/         # 导航
+│       ├── uv_hm/          # 真机硬件 adapter
+│       ├── uv_camera/      # 相机 IO、标定和视觉兼容层
+│       ├── uv_perception/  # 感知接口边界
+│       ├── uv_localization/# 状态估计边界
+│       ├── uv_planning/    # 规划接口边界
+│       ├── uv_nav/         # A* 过渡后端
 │       ├── uv_task/        # 任务执行
-│       ├── uv_bringup/     # 启动文件
-│       ├── uv_msgs/        # 自定义消息格式
-│       └── zit6_interfaces/# ZIT6 协议定义
+│       ├── uv_bringup/     # real/通用启动
+│       └── zit6_interfaces/# ZIT6 固件协议定义
 ├── workspace_sim/        # 仿真覆盖层（依赖 workspace_auv）
 │   └── src/
-│       └── stonefish_ros2/ # Stonefish 仿真器
+│       ├── uv_sim_description/ # 仿真 URDF 与静态 TF
+│       ├── uv_sim_bridge/     # Stonefish canonical adapters
+│       ├── uv_sim_degradation/# 传感器退化
+│       ├── uv_sim_evaluation/ # 真值评测
+│       ├── uv_sim_bringup/    # SIM/HIL launch
+│       ├── stonefish_ros2/    # Stonefish 仿真器
+│       └── zit6_control_core/ # 固件控制核 host adapter
 ├── docs/          # 设计文档
 └── datas/         # 模型权重、标定数据、参数
 ```
@@ -53,7 +68,24 @@ ros2 launch uv_bringup real.launch.py
 # 仿真栈（需要先 source workspace_auv）
 cd workspace_sim
 colcon build && source install/setup.bash
-ros2 launch uv_bringup sim.launch.py
+ros2 launch uv_sim sim.launch.py \
+  world:=guoshui_2026/cruise_seeded vehicle:=youlong
+```
+
+`uv_sim_assets` 是 Stonefish 资源的唯一维护入口：`vehicles/` 保存车辆，
+`worlds/` 保存环境，`objects/` 和 `textures/` 保存可复用比赛物体。旧脚本仍可
+调用 `uv_sim_bringup sim.launch.py scenario_desc:=...`；旧的场景 basename 会映射到
+迁移后的维护场景或 `worlds/examples/`，其余旧 fixture 从 `legacy_data/` 运行。新的入口同时指定 `world:=` 和
+`scenario_desc:=` 会直接报错，避免场景选择歧义。
+
+常用 world 名称：
+
+```text
+guoshui_2026/cruise
+guoshui_2026/cruise_seeded
+sauvc_2026/finals
+sauvc_2026/qualification
+sauvc_2026/pool
 ```
 
 仿真 Python 节点会自动使用 `workspace_auv/.venv`。依赖文件会按 Python 版本
@@ -72,7 +104,7 @@ workspace_auv/src/uv_task/config/
 YAML 和单个 task YAML；例如直接执行过门任务：
 
 ```bash
-ros2 launch uv_bringup sim.launch.py enable_task:=true \
+ros2 launch uv_sim_bringup sim.launch.py enable_task:=true \
   mission_file:=/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_task/config/tasks/26rb_gate_task.yaml
 ```
 
@@ -82,14 +114,18 @@ ros2 launch uv_bringup sim.launch.py enable_task:=true \
 
 ```bash
 # SIL 仿真：默认 sim_dev；CI/headless 显式关闭桌面观测
-ros2 launch uv_bringup sim.launch.py profile:=sim_dev
-ros2 launch uv_bringup sim.launch.py profile:=sim_ci enable_preview:=false
+ros2 launch uv_sim_bringup sim.launch.py profile:=sim_dev
+ros2 launch uv_sim_bringup sim.launch.py profile:=sim_ci enable_preview:=false
+
+# 竞赛 world 预设；显式 world:= 会覆盖 profile 选择
+ros2 launch uv_sim sim.launch.py profile:=sauvc_finals
+ros2 launch uv_sim sim.launch.py profile:=guoshui_cruise_seeded
 
 # 混合显卡机器：auto 会在检测到 NVIDIA 设备时自动启用 PRIME offload
-ros2 launch uv_bringup sim.launch.py gpu_backend:=auto
+ros2 launch uv_sim_bringup sim.launch.py gpu_backend:=auto
 
 # HIL：串口参数直接传给 micro-ROS agent
-ros2 launch uv_bringup hil.launch.py profile:=hil_lab \
+ros2 launch uv_sim_bringup hil.launch.py profile:=hil_lab \
   serial_dev:=/dev/ttyUSB0 serial_baud:=921600
 
 # 真机：real_safe 使用更保守的功能参数
@@ -103,8 +139,8 @@ ros2 launch uv_bringup real.launch.py profile:=real_safe
 需要并行运行多个 seed 时，为每个 launch 使用不同的 DDS domain：
 
 ```bash
-ROS_DOMAIN_ID=41 ros2 launch uv_bringup sim.launch.py scene_seed:=1
-ROS_DOMAIN_ID=42 ros2 launch uv_bringup sim.launch.py scene_seed:=2
+ROS_DOMAIN_ID=41 ros2 launch uv_sim_bringup sim.launch.py scene_seed:=1
+ROS_DOMAIN_ID=42 ros2 launch uv_sim_bringup sim.launch.py scene_seed:=2
 ```
 
 ## 一键部署到 AUV 电脑
@@ -180,31 +216,28 @@ SSH_KEY=~/.ssh/auv \
 ./scripts/deploy.sh
 ```
 
-## 项目状态
+## 当前重构状态
 
-> ⚠️ **本项目处于早期开发阶段。以下内容反映当前已知状态，不完整且可能过时。**
+- `workspace_auv` 不依赖 `uv_sim` 或 `stonefish_ros2`，可以独立构建并启动
+  `uv_bringup/real.launch.py`。
+- 所有新接口统一使用 `/auv/...`；旧 `/task/*`、`/basic_motion*`、`/zit6/*`
+  仅作为兼容入口。
+- `/auv/state/odom`、`/auv/state/twist` 是控制、规划和任务的估计状态入口；
+  `/auv/sim/ground_truth/*` 只交给 `uv_sim_evaluation`。
+- 当前定位后端是可替换的 bootstrap estimator，不宣称已经实现 FGO、SLAM 或
+  Active SLAM；这些功能可在保持 canonical 接口的前提下继续接入。
+- real 端机械位置以
+  [`docs/auv元件说明和标定数据_第四版.pdf`](docs/auv元件说明和标定数据_第四版.pdf)
+  为准。PDF 未给出 DVL 安装外参，因此 real URDF 不发布未经测量的
+  `dvl_link`。
 
-### ✅ 已确认可用
-
-- **basic_motion 节点** — 运动控制核心逻辑已审查和修正（单位一致性、掩码系统清理），内部使用 Action Server 对外暴露接口
-
-### ❓ 待审查/待完善
-
-- **sim_bridge (uv_hm)** — 仿真桥接逻辑未审查
-- **hw_manager (uv_hm)** — STM32 MCU 通信仅占位
-- **PID 控制参数** — 参数未调优
-- **thrust_mixer** — 推力分配矩阵未验证
-- **uv_camera** — YOLO 检测与多帧单目射线交会 3D 定位，支持 sim/real 模式
-- **astar / navigator (uv_nav)** — 路径规划与避障未审查
-- **task_runner (uv_task)** — 竞赛任务执行器未审查
-- **stonefish 场景和物理参数** — 仿真场景（`underwater_xunyun.scn` 等）未验证
-- **坐标系单位一致性** — 除 basic_motion 外，其他节点的角度/坐标单位未审查
-- **测试** — 无单元测试或集成测试
+详细协议、坐标系、启动图和真值隔离见 [`docs/architecture/`](docs/architecture/)。
 
 ## 坐标系约定
 
 - **NED**（北-东-地）。偏航 0° = 北，顺时针为正
-- 角度内部存储单位：**度**；仅在与 ZIT6 协议交互的边界处转换弧度（`set_map` / `_pos_cb`）
+- 算法和 canonical 接口内部使用 **rad**；历史 `PoseInfo` 字段仍为度，
+  仅在兼容消息边界转换。距离为 m、速度为 m/s、角速度为 rad/s。
 
 ## 依赖
 

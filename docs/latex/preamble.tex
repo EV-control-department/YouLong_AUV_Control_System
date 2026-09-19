@@ -1,0 +1,111 @@
+% Shared style for the YouLong AUV technical manual.
+\usepackage[a4paper,margin=25mm,headheight=15pt]{geometry}
+\usepackage{fontspec}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,longtable,tabularx,array,multirow}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,shapes.geometric}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{siunitx}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{mdframed}
+\usepackage{needspace}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{etoolbox}
+\usepackage{biblatex}
+
+\addbibresource{references.bib}
+
+\definecolor{YoulongBlue}{HTML}{145A86}
+\definecolor{YoulongDark}{HTML}{17324D}
+\definecolor{YoulongLight}{HTML}{EAF3F8}
+\definecolor{CodeBackground}{HTML}{F5F7F9}
+\definecolor{CodeKeyword}{HTML}{7A1FA2}
+\definecolor{CodeComment}{HTML}{4F6B5A}
+\definecolor{CodeString}{HTML}{9A3412}
+\definecolor{WarningBackground}{HTML}{FFF5E6}
+\definecolor{WarningBorder}{HTML}{D97706}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=YoulongBlue,
+  citecolor=YoulongBlue,
+  urlcolor=YoulongBlue,
+  pdftitle={YouLong AUV 系统设计、实现与实验手册},
+  pdfauthor={YouLong AUV 控制系统团队}
+}
+
+\setlist{topsep=3pt,itemsep=2pt,parsep=2pt}
+\setlength{\emergencystretch}{3em}
+
+\sisetup{detect-all=true,per-mode=symbol,range-phrase={--}}
+
+\lstdefinestyle{youlongcode}{
+  backgroundcolor=\color{CodeBackground},
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{CodeKeyword}\bfseries,
+  commentstyle=\color{CodeComment}\itshape,
+  stringstyle=\color{CodeString},
+  frame=single,
+  rulecolor=\color{black!20},
+  numbers=left,
+  numberstyle=\tiny\color{black!50},
+  numbersep=8pt,
+  breaklines=true,
+  showstringspaces=false,
+  columns=fullflexible,
+  keepspaces=true,
+  tabsize=2
+}
+\lstset{style=youlongcode}
+
+% URL-style monospaced paths can break at slashes, which keeps interface tables
+% readable without manually duplicating line-break decisions in the prose.
+% Keep spaces visible in shell commands while allowing path-like macros to
+% remain breakable through \topic, \pkg and \pathref below.
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\topic}[1]{\path{#1}}
+\newcommand{\pkg}[1]{\path{#1}}
+\newcommand{\pathref}[1]{\path{#1}}
+\newcommand{\repo}{\texttt{YouLong\_AUV\_Control\_System}}
+\newcommand{\TODO}[1]{\textcolor{WarningBorder}{[待补充：#1]}}
+
+\newenvironment{infobox}{%
+  \begin{quote}\small\color{YoulongDark}%
+}{%
+  \end{quote}%
+}
+\newmdenv[
+  backgroundcolor=WarningBackground,
+  linecolor=WarningBorder,
+  linewidth=1pt,
+  roundcorner=4pt,
+  innerleftmargin=8pt,
+  innerrightmargin=8pt,
+  innertopmargin=6pt,
+  innerbottommargin=6pt,
+  skipabove=6pt,
+  skipbelow=6pt
+]{warningbox}
+
+\newcommand{\statuscurrent}{\textbf{当前实现}}
+\newcommand{\statusdesign}{\textbf{设计约束}}
+\newcommand{\statusfuture}{\textbf{后续工作}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{YoulongDark}YouLong AUV 系统手册}
+\fancyhead[R]{\small\color{YoulongDark}\nouppercase{\leftmark}}
+\fancyfoot[C]{\small\thepage\,/\,\pageref{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{2}

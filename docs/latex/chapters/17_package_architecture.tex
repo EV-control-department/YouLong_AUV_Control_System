@@ -1,0 +1,80 @@
+\chapter{包级架构与职责矩阵}
+\label{ch:package-architecture}
+
+\section{包级分层}
+仓库的包级结构不是按“一个大程序的目录”组织，而是按接口稳定性、运行介质和可替换边界分层。下表给出当前代码中最重要的职责归属。这里的“边界包”表示它主要提供契约、启动入口或兼容层；“实现包”表示它包含当前实际运行的算法或适配逻辑。
+
+\begin{longtable}{p{0.22\textwidth}p{0.24\textwidth}p{0.42\textwidth}}
+  \caption{包级职责矩阵}\label{tab:package-responsibility}\\
+  \toprule
+  层级 & 包 & 当前职责 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  层级 & 包 & 当前职责 \\
+  \midrule
+  \endhead
+  稳定契约 & \pkg{auv_protocol} & 注册 Canonical Topic、Service、Action 名称；业务节点从该包导入名称。 \\
+  稳定契约 & \pkg{uv_msgs}、\pkg{zit6_interfaces} & 分别保存应用层接口和 ZIT6 固件兼容接口；消息生成源是协议事实来源。 \\
+  车辆描述 & \pkg{auv_description}、\pkg{uv_sim_description} & 分别提供真实和仿真 URDF、传感器安装关系与静态 TF。 \\
+  仿真资源 & \pkg{uv_sim_assets} & YouLong vehicle、比赛 world、物体/纹理、YAML 基线、确定性生成器和资源校验。 \\
+  真机适配 & \pkg{uv_hm}、\pkg{uv_bringup} & 硬件状态/心跳边界、profile 解析、真机 launch 与 readiness/observability 入口。 \\
+  仿真适配 & \pkg{stonefish_ros2}、\pkg{uv_sim_bridge} & Stonefish 场景动力学、传感器转换、ZIT6 Host 控制核边界和执行器适配。 \\
+  状态估计 & \pkg{uv_localization} & 读取 canonical 传感器，输出当前 bootstrap 状态、健康状态和动态 TF。 \\
+  感知实现 & \pkg{uv_camera}、\pkg{uv_perception} & 相机输入、FrameGate、AI/几何处理和感知契约；后者目前主要是边界包。 \\
+  规划实现 & \pkg{uv_nav}、\pkg{uv_planning}、\pkg{uv_mapping} & A* 导航实现、规划启动边界，以及后续 mapping/planning 研究接口。 \\
+  执行层 & \pkg{uv_control}、\pkg{uv_task} & BasicMotion Action 执行和 Mission/Task 行为编排。 \\
+  记录评测 & \pkg{uv_log}、\pkg{uv_sim_evaluation} & session/rosbag/视频记录、Ground Truth 对比与实验指标输出。 \\
+  仿真编排 & \pkg{uv_sim_bringup}、\pkg{uv_sim_degradation} & SIL/HIL launch、场景准备、可控传感器退化和实验 profile。 \\
+  仿真入口 & \pkg{uv_sim} & public world/vehicle launch wrapper，并转发旧 scenario\_desc 入口。 \\
+  \bottomrule
+\end{longtable}
+
+\section{workspace\_auv 的依赖方向}
+\pkg{workspace_auv} 的原则是：通用接口和真机可用能力不能依赖 Stonefish。典型依赖方向如下：
+
+\begin{enumerate}
+  \item \pkg{auv_protocol}、\pkg{uv_msgs} 和 \pkg{zit6_interfaces} 提供名称与类型；它们不应反向依赖具体控制器或仿真器。
+  \item \pkg{auv_description} 提供机器人几何和固定坐标关系；\pkg{uv_hm}、\pkg{uv_localization}、\pkg{uv_camera} 和 \pkg{uv_control} 消费这些事实，但不直接修改 URDF。
+  \item \pkg{uv_localization}、\pkg{uv_camera} 和 \pkg{uv_nav} 发布稳定的状态、感知和规划契约；\pkg{uv_task} 通过 Action/Topic 使用它们，不直接调用算法类的私有方法。
+  \item \pkg{uv_bringup} 只负责将这些能力组合成启动图，不应成为新的业务算法容器。
+\end{enumerate}
+
+\section{workspace\_sim 的依赖方向}
+\pkg{workspace_sim} 在 overlay 中依赖 \pkg{workspace_auv}。它可以替换输入源和底层执行介质，但不应改变下游控制、任务和评测所依赖的 canonical 语义。
+
+\begin{table}[H]
+  \centering
+  \caption{仿真侧的替换边界}
+  \label{tab:sim-replacement-boundary}
+  \begin{tabularx}{\textwidth}{p{0.25\textwidth}p{0.30\textwidth}X}
+    \toprule
+    被替换对象 & 仿真实现 & 下游保持不变的接口 \\
+    \midrule
+    传感器 & Stonefish 原始消息经 \pkg{uv_sim_bridge} 转换 & \topic{/auv/sensors/*} \\
+    执行器 & Host 控制核、ThrusterMixer 和 Stonefish 推进器 & \topic{/auv/hardware/zit6/cmd/setpoint} 及执行状态 \\
+    车辆描述 & \pkg{uv_sim_description} & \topic{/auv/tf_static}、传感器 frame 和机体 frame \\
+    时间来源 & ROS simulation time & 消息 Header、同步和评测时间基准 \\
+    真值输出 & Stonefish Ground Truth & 仅 \topic{/auv/sim/ground_truth/*}，不进入运行闭环 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{变更应该落在哪个包}
+当需求跨越多个包时，先按下列规则选择主变更位置，再同步更新契约和启动文件：
+
+\begin{description}
+  \item[新增名称] 在 \pathref{workspace_auv/src/auv_protocol/auv_protocol/topics.py} 注册，并在接口测试中确认名称；不要在节点中直接散落字符串。
+  \item[新增消息字段] 修改应用或 ZIT6 接口源目录，重新构建接口包，再修改发布者和订阅者；具体入口见附录 A 和附录 E。
+  \item[新增真实传感器] 真机驱动/适配放在 \pkg{uv_hm} 或专用适配包，输出进入 \topic{/auv/sensors/*}；不要让定位器直接读取设备文件。
+  \item[新增仿真传感器] Stonefish 输入转换放在 \pkg{uv_sim_bridge}，退化放在 \pkg{uv_sim_degradation}，评测放在 \pkg{uv_sim_evaluation}。
+  \item[新增运动行为] 若是通用运动语义，扩展 \pkg{uv_control} 的 Action；若是任务编排，扩展 \pkg{uv_task} 的 YAML 与 runner。
+  \item[新增规划算法] 保持 \pkg{uv_planning} 的入口和 \pkg{uv_msgs} 的路径契约稳定，具体算法实现放在 \pkg{uv_nav} 或新的后端包。
+\end{description}
+
+\section{当前边界与后续演进}
+\pkg{uv_perception}、\pkg{uv_planning} 和 \pkg{uv_mapping} 已经提供了研究栈需要的边界，但当前主要实现仍分别位于 \pkg{uv_camera}、\pkg{uv_nav} 和现有定位/评测链中。将来替换实现时，优先保持 Topic 类型、时间戳、frame、单位、失败行为和 readiness 语义不变，再替换内部算法。
+
+\begin{warningbox}
+不要把“包已经存在”理解为“功能已经完成”。本手册中的边界包、预留 Topic 和设计矩阵只说明架构位置；能力是否可用仍需以节点入口、参数、测试和实际启动结果确认。
+\end{warningbox}

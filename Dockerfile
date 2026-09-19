@@ -91,14 +91,31 @@ RUN /bin/bash -lc 'set -eo pipefail && \
         --cmake-force-configure && \
     rm -rf /opt/youlong/src /opt/youlong/build'
 
-# The GUI renders Chinese labels and uses pygame for gamepad input.
-# Keep these runtime packages after the native build layers so dependency
-# changes do not trigger another Stonefish or ROS workspace rebuild.
+# The GUI renders Chinese labels and uses pygame for gamepad input.  Keep the
+# font packages after the native build layers so changing the GUI environment
+# does not trigger another Stonefish or ROS workspace rebuild.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        fontconfig \
+        fonts-dejavu-core \
+        fonts-liberation \
         fonts-noto-cjk \
+        fonts-noto-core \
+        fonts-noto-color-emoji \
+        fonts-noto-mono \
+        locales \
         python3-pygame \
+    && locale-gen en_US.UTF-8 zh_CN.UTF-8 \
+    && fc-cache -f -v \
+    && test "$(fc-match -f '%{family}' 'sans-serif:lang=zh-cn' | head -n 1)" = "Noto Sans CJK SC" \
     && rm -rf /var/lib/apt/lists/*
+
+# ROS's rqt is a Qt/X11 application.  Explicitly select the X11 backend and
+# add the CJK directory to Qt's font search path so it does not depend on the
+# host font configuration mounted into the container.
+ENV QT_QPA_PLATFORM=xcb \
+    QT_QPA_FONTDIR=/usr/share/fonts/opentype/noto \
+    QT_X11_NO_MITSHM=1
 
 ARG HOST_UID=1000
 ARG HOST_GID=1000

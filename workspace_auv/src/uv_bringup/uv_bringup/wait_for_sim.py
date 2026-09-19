@@ -9,11 +9,13 @@ from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from nav_msgs.msg import Odometry
 from sensor_msgs.msg import CameraInfo
-from std_msgs.msg import Float32MultiArray
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import DetectionArray, TargetPositionArray
+from uv_msgs.msg import DetectionArray, PoseInfo, TargetPositionArray
+from auv_protocol.topics import (
+    BASIC_MOTION, DETECTIONS, TARGETS, STATE_ODOM,
+    DOWN_LEFT_INFO, DOWN_RIGHT_INFO, FRONT_LEFT_INFO, FRONT_RIGHT_INFO,
+)
 
 
 class Readiness:
@@ -45,28 +47,31 @@ class SimReadyNode(Node):
             required.update('detections/' + c for c in self.cameras())
             required.add('target_positions')
         self.readiness = Readiness(required)
-        self.action = ActionClient(self, BasicMotion, 'basic_motion')
-        self.create_subscription(Odometry, '/auv/odometry', self._odom,
-                                 qos_profile_sensor_data)
-        self.create_subscription(Float32MultiArray, '/zit6/state/pos', self._pose,
+        self.action = ActionClient(self, BasicMotion, BASIC_MOTION)
+        self.create_subscription(PoseInfo, STATE_ODOM, self._odom,
                                  qos_profile_sensor_data)
         if require_ai:
             for camera in self.cameras():
                 if phase == 'sensors':
-                    group, side = camera.split('_')
+                    info_topics = {
+                        'front_left': FRONT_LEFT_INFO,
+                        'front_right': FRONT_RIGHT_INFO,
+                        'down_left': DOWN_LEFT_INFO,
+                        'down_right': DOWN_RIGHT_INFO,
+                    }
                     self.create_subscription(
-                        CameraInfo, f'/sim/{group}_cam/{side}/camera_info',
+                        CameraInfo, info_topics[camera],
                         lambda msg, c=camera: self._calibration(c, msg),
                         qos_profile_sensor_data)
                 else:
                     self.create_subscription(
-                        DetectionArray, f'/perception/detection/{camera}',
+                        DetectionArray, DETECTIONS(camera),
                         lambda msg, c=camera: self.readiness.observe(
                             'detections/' + c, time.monotonic()),
                         qos_profile_sensor_data)
             if phase == 'perception':
                 self.create_subscription(
-                    TargetPositionArray, '/perception/target_positions',
+                    TargetPositionArray, TARGETS,
                     lambda msg: self.readiness.observe('target_positions', time.monotonic()),
                     qos_profile_sensor_data)
 
@@ -75,13 +80,9 @@ class SimReadyNode(Node):
         return ('front_left', 'front_right', 'down_left', 'down_right')
 
     def _odom(self, msg):
-        p, q = msg.pose.pose.position, msg.pose.pose.orientation
-        values = (p.x, p.y, p.z, q.x, q.y, q.z, q.w)
-        if all(math.isfinite(v) for v in values) and sum(v*v for v in values[3:]) > 0.5:
+        values = (msg.robot_x, msg.robot_y, msg.robot_z, msg.robot_yaw)
+        if all(math.isfinite(v) for v in values):
             self.readiness.observe('odometry', time.monotonic())
-
-    def _pose(self, msg):
-        if len(msg.data) >= 4 and all(math.isfinite(v) for v in msg.data):
             self.readiness.observe('control_pose', time.monotonic())
 
     def _calibration(self, camera, msg):

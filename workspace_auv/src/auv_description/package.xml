@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>auv_description</name>
+  <version>0.1.0</version>
+  <description>Real AUV URDF, component geometry and fixed sensor transforms.</description>
+  <maintainer email="origin@example.com">origin</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -1,0 +1,23 @@
+vehicle: youlong
+source_model: youlong.scn (migrated from xunyun_fixed.scn)
+visual_meshes:
+  - xy_buoyancy_block.obj
+  - xy_top_plate.obj
+  - xy_right_sideplate.obj
+  - xy_left_sideplate.obj
+  - xy_forward_bracket.obj
+  - xy_aft_bracket.obj
+  - xy_core_enclosure.obj
+  - xy_ins_base_plate.obj
+  - battery_pod.obj
+  - duct.obj
+physical_meshes:
+  - youlong_collision_hydro.obj
+  - duct_hydro.obj
+coordinate_frame: NED
+units: metres
+physical_mesh:
+  path: vehicles/youlong/meshes/physical/youlong_collision_hydro.obj
+  collision: true
+  hydrodynamics: true
+  scale: 1.0

@@ -23,6 +23,13 @@ from std_msgs.msg import Float32, UInt8
 from std_srvs.srv import Trigger
 
 from zit6_interfaces.msg import ZitSetpoint, ZitStatus
+from auv_protocol.topics import (
+    BASIC_MOTION, DETECTIONS, OBJECTS, TARGETS, STATE_ODOM,
+    ZIT6_STATUS, ZIT6_LIGHT, ZIT6_SERVO, ZIT6_SETPOINT,
+    MISSION_RUN, MISSION_STOP, MISSION_EXECUTE, MISSION_STATUS,
+    LEGACY_TASK_RUN, LEGACY_TASK_STOP, LEGACY_TASK_EXECUTE,
+    LEGACY_TASK_STATUS,
+)
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import (
@@ -61,11 +68,11 @@ RB26DropBeaconTask = import_module(
     'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
 from uv_camera.camera_config import load_camera_config, profile_for_mode
-from uv_camera.model_classes import model_class_id, model_class_name
+from uv_camera.model_classes import model_class_id
 
 
 # object_localizer.py publishes these as canonical physical classes on
-# /perception/target_positions, while class_name can still contain the
+# /auv/perception/targets, while class_name can still contain the
 # detector suffix (for example ``collection_frame_front``).  Keep the task
 # tolerant of both forms because the localizer deliberately publishes front
 # and down estimates separately.
@@ -98,13 +105,13 @@ _LOCALIZER_TARGET_ALIASES = {
 class TaskRunnerNode(Node):
     """Task runner: YAML mission loader and sequential executor."""
 
-    # ── 灯光常量 (/zit6/cmd/light) ─────────────────────────────────
+    # ── 灯光常量 (/auv/hardware/zit6/cmd/light) ────────────────────
     LIGHT_OFF = 0
     LIGHT_YELLOW = 1
     LIGHT_GREEN = 2
     LIGHT_RED = 3
 
-    # ── 舵机角度 (/zit6/cmd/servo, rad) ────────────────────────────
+    # ── 舵机角度 (/auv/hardware/zit6/cmd/servo, rad) ───────────────
     ANGLE_DROP_BEACON = 90       #   投信标
     ANGLE_SAMPLE_WATER = 0.0               # 采水样
     ANGLE_RELEASE_SAMPLER = 0   #   释放取水器
@@ -135,6 +142,7 @@ class TaskRunnerNode(Node):
         self.running = False
         self.stopped = False
         self._active_goal_handle = None
+        self._motion_stop_sent = False
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
         self._last_failure_code = ''
@@ -249,42 +257,52 @@ class TaskRunnerNode(Node):
         }
 
         # Action client
-        self._action_client = ActionClient(self, BasicMotion, 'basic_motion')
+        self._action_client = ActionClient(self, BasicMotion, BASIC_MOTION)
         if not self._action_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('BasicMotion 动作服务器不可用！')
 
         # Subscribers
         self.create_subscription(
-            ObjectPositionArray, '/perception/objects', self._objects_cb, 10)
+            ObjectPositionArray, OBJECTS, self._objects_cb, 10)
         self.create_subscription(
-            TargetPositionArray, '/perception/target_positions',
+            TargetPositionArray, TARGETS,
             self._target_positions_cb, 10)
         for cam in ('down_left', 'down_right'):
             self.create_subscription(
-                DetectionArray, f'/perception/detection/{cam}',
+                DetectionArray, DETECTIONS(cam),
                 lambda msg, c=cam: self._det_cb(c, msg), 10)
         self.create_subscription(
-            PoseInfo, '/basic_motion/pose_info', self._pose_cb, 10)
+            PoseInfo, STATE_ODOM, self._pose_cb, 10)
 
         # ZIT6 MCU 状态 (status check 用)
         self._mcu_status = ZitStatus()
         self._mcu_status_rcvd = False
         self.create_subscription(
-            ZitStatus, '/zit6/state/status', self._mcu_status_cb, 10)
+            ZitStatus, ZIT6_STATUS, self._mcu_status_cb, 10)
 
         # Publishers
-        self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
-        self.pub_light = self.create_publisher(UInt8, '/zit6/cmd/light', 10)
-        self.pub_servo = self.create_publisher(Float32, '/zit6/cmd/servo', 10)
+        self.pub_status = self.create_publisher(TaskStatus, MISSION_STATUS, 10)
+        self.pub_status_legacy = self.create_publisher(
+            TaskStatus, LEGACY_TASK_STATUS, 10)
+        self.pub_light = self.create_publisher(UInt8, ZIT6_LIGHT, 10)
+        self.pub_servo = self.create_publisher(Float32, ZIT6_SERVO, 10)
         # The impact charge deliberately uses the existing ZIT6 velocity
         # setpoint wire format: mode=VEL (0x01) + body frame (0x10).
         self.pub_setpoint = self.create_publisher(
-            ZitSetpoint, '/zit6/cmd/setpoint', 10)
+            ZitSetpoint, ZIT6_SETPOINT, 10)
+        # A task runner can be interrupted while BasicMotion is still
+        # executing a goal.  Cancel the goal and send one neutral velocity
+        # command before this node's publishers are destroyed.
+        self.context.on_shutdown(self._stop_active_motion)
 
         # Services
-        self.create_service(RunTask, '/task/run', self._run_task_cb)
-        self.create_service(Trigger, '/task/stop', self._stop_task_cb)
-        self.create_service(ExecTask, '/task/exec', self._exec_task_cb)
+        self.create_service(RunTask, MISSION_RUN, self._run_task_cb)
+        self.create_service(Trigger, MISSION_STOP, self._stop_task_cb)
+        self.create_service(ExecTask, MISSION_EXECUTE, self._exec_task_cb)
+        # Thin compatibility aliases. New nodes use /auv/mission/*.
+        self.create_service(RunTask, LEGACY_TASK_RUN, self._run_task_cb)
+        self.create_service(Trigger, LEGACY_TASK_STOP, self._stop_task_cb)
+        self.create_service(ExecTask, LEGACY_TASK_EXECUTE, self._exec_task_cb)
 
         # Status timer
         self.create_timer(0.5, self._publish_status)
@@ -312,6 +330,30 @@ class TaskRunnerNode(Node):
     def _mcu_status_cb(self, msg: ZitStatus):
         self._mcu_status = msg
         self._mcu_status_rcvd = True
+
+    def _stop_active_motion(self):
+        """Cancel an in-flight BasicMotion goal and neutralize ZIT6."""
+        if self._motion_stop_sent:
+            return
+        self._motion_stop_sent = True
+        self.stopped = True
+        goal_handle = self._active_goal_handle
+        self._active_goal_handle = None
+        if goal_handle is not None:
+            try:
+                self._action_client.async_cancel_goal(goal_handle)
+                self.get_logger().warning(
+                    '任务执行器关闭：已请求取消当前 BasicMotion 目标')
+            except Exception as exc:
+                self.get_logger().warning(
+                    f'任务执行器关闭：取消 BasicMotion 目标失败：{exc}')
+        try:
+            self._publish_body_velocity()
+            self.get_logger().warning(
+                '任务执行器关闭：已发送零速度保护')
+        except Exception as exc:
+            self.get_logger().warning(
+                f'任务执行器关闭：发送零速度保护失败：{exc}')
 
     # ── 灯光 / 舵机控制 ────────────────────────────────────────────
 
@@ -1480,17 +1522,11 @@ class TaskRunnerNode(Node):
     @staticmethod
     def _normalize_impact_ball_name(value):
         """Accept only canonical impact-ball names from the model registry."""
-        if isinstance(value, (int, np.integer)):
-            class_id = int(value)
-            name = model_class_name(class_id)
-        else:
-            text = str(value).strip()
-            if text.isdigit():
-                name = model_class_name(int(text))
-            else:
-                class_id = model_class_id(text, required=False)
-                name = model_class_name(class_id) if class_id is not None else None
-        return name if name in {'impact_ball_blue', 'impact_ball_red'} else None
+        if not isinstance(value, str):
+            return None
+        name = value.strip()
+        return (name if name in {'impact_ball_blue', 'impact_ball_red'}
+                and model_class_id(name, required=False) is not None else None)
 
     def _impact_ball_order(self, params: dict) -> list[str]:
         """Read the requested canonical detector class-name order."""
@@ -1506,7 +1542,7 @@ class TaskRunnerNode(Node):
         if not result:
             self.get_logger().error(
                 'hit_balls：撞球顺序中没有有效目标；请使用 '
-                'robotcup20260901.yaml 中的 canonical class name 或 class_id')
+                'robotcup20260901.yaml 中的 canonical class name')
         return result
 
     def _best_impact_ball_target(self, name: str, params: dict):
@@ -1620,7 +1656,7 @@ class TaskRunnerNode(Node):
             'rz',
             timeout=timeout,
             quiet=True,
-            task_context=self._format_motion_context('主动旋转扫描红球'),
+            task_context=self._format_motion_context('主动旋转扫描撞球目标'),
         )
         if success:
             self._cmd_yaw = yaw
@@ -2262,7 +2298,7 @@ class TaskRunnerNode(Node):
         if request.start:
             path = self._resolve_mission_path(request.task_name)
 
-            self.get_logger().info(f'服务 /task/run：从 {path} 开始执行任务')
+            self.get_logger().info(f'服务 /auv/mission/run：从 {path} 开始执行任务')
             try:
                 self.tasks = self.load_tasks(path)
             except ConfigError as exc:
@@ -2271,6 +2307,8 @@ class TaskRunnerNode(Node):
                 self.get_logger().error(response.message)
                 return response
             if self.tasks:
+                self._motion_stop_sent = False
+                self.stopped = False
                 thread = threading.Thread(target=self.run_task_list, daemon=True)
                 thread.start()
                 response.success = True
@@ -2279,38 +2317,34 @@ class TaskRunnerNode(Node):
                 response.success = False
                 response.message = '未加载任何任务'
         else:
-            self.get_logger().info('服务 /task/run：收到停止请求')
+            self.get_logger().info('服务 /auv/mission/run：收到停止请求')
             self.stopped = True
             response.success = True
             response.message = '已停止'
         return response
 
     def _stop_task_cb(self, request, response):
-        self.get_logger().warn('服务 /task/stop：紧急停止')
-        self.stopped = True
-        if self._active_goal_handle is not None:
-            self.get_logger().info('正在取消当前动作目标')
-            self._action_client.async_cancel_goal(self._active_goal_handle)
-            self._active_goal_handle = None
+        self.get_logger().warn('服务 /auv/mission/stop：紧急停止')
+        self._stop_active_motion()
         response.success = True
         response.message = '任务已停止'
         return response
 
     def _exec_task_cb(self, request, response):
-        """Handle /task/exec: execute a single task (debug mode only)."""
+        """Handle /auv/mission/execute (debug mode only)."""
         if not self._debug_mode:
             response.success = False
             response.message = 'ExecTask 服务仅在调试模式下可用'
-            self.get_logger().warn('/task/exec 被调用，但调试模式未开启')
+            self.get_logger().warn('/auv/mission/execute 被调用，但调试模式未开启')
             return response
 
         if self._debug_executing:
             response.success = False
             response.message = (
                 f'任务“{self._debug_task_name}”已在运行。'
-                '请等待任务结束，或调用 /task/stop。'
+                '请等待任务结束，或调用 /auv/mission/stop。'
             )
-            self.get_logger().warn(f'拒绝并发 /task/exec：{self._debug_task_name}')
+            self.get_logger().warn(f'拒绝并发 /auv/mission/execute：{self._debug_task_name}')
             return response
 
         task_name = request.task_name
@@ -2353,6 +2387,7 @@ class TaskRunnerNode(Node):
     def _debug_exec_single(self, name: str, params: dict):
         """Run a single task in debug mode (runs in daemon thread)."""
         self._debug_executing = True
+        self._motion_stop_sent = False
         self._debug_task_name = name
         self._current_task_name = name
         self._current_task_step = 1
@@ -2410,9 +2445,10 @@ class TaskRunnerNode(Node):
         else:
             msg.status = TaskStatus.STATUS_IDLE
             if self._debug_mode:
-                msg.error_message = '[调试模式：空闲，等待 /task/exec]'
+                msg.error_message = '[调试模式：空闲，等待 /auv/mission/execute]'
 
         self.pub_status.publish(msg)
+        self.pub_status_legacy.publish(msg)
 
 
 def main(args=None):
@@ -2436,7 +2472,7 @@ def main(args=None):
     else:
         node.get_logger().info(
             '调试模式已开启：跳过自动启动。'
-            '请使用 /task/exec 服务执行单个任务。'
+            '请使用 /auv/mission/execute 服务执行单个任务。'
         )
 
     try:
@@ -2444,6 +2480,9 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # Run the motion stop while the action client and setpoint publisher
+        # are still alive; the context callback is an idempotent fallback.
+        node._stop_active_motion()
         node.destroy_node()
         rclpy.shutdown()
 

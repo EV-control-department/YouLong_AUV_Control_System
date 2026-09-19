@@ -1,0 +1,14 @@
+vehicle: youlong
+source_scene: youlong.scn
+sensors:
+  dynamics: /auv/sim/ground_truth/odom
+  pressure: /auv/sensors/pressure
+  dvl_velocity: /auv/sim/raw/dvl/velocity
+  dvl_altitude: /auv/sim/raw/dvl/altitude
+  imu: /auv/sensors/imu/data
+  cameras: /auv/sim/raw/camera
+camera_frames:
+  front_left: front_left_camera_optical_frame
+  front_right: front_right_camera_optical_frame
+  downward_left: downward_left_camera_optical_frame
+  downward_right: downward_right_camera_optical_frame

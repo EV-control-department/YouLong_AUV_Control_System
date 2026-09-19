@@ -18,7 +18,7 @@ on arrival.  Down estimates retain their known-height pool and filter.  A
 front estimate never gates, reanchors, or updates a down estimate, and vice
 versa.
 
-The public compatibility output is ObjectPositionArray on /perception/objects.
+The public output is ObjectPositionArray on /auv/perception/observations.
 TargetPositionArray additionally exposes covariance and observation provenance.
 """
 
@@ -42,6 +42,9 @@ from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo
+from auv_protocol.topics import (
+    DETECTIONS, OBJECTS, TARGETS, TARGET_OBSERVATIONS, STATE_ODOM,
+)
 
 from uv_msgs.msg import (
     Detection,
@@ -620,7 +623,8 @@ class StereoCalibration:
         rectification_left, rectification_right, projection_left, \
             projection_right, reprojection, _, _ = cv2.stereoRectify(
                 k_left, d_left, k_right, d_right, (width, height),
-                rotation, translation, flags=cv2.CALIB_ZERO_DISPARITY,
+                rotation, translation.reshape(3, 1),
+                flags=cv2.CALIB_ZERO_DISPARITY,
                 alpha=0.0,
             )
         arrays = (
@@ -786,6 +790,9 @@ class ObjectLocalizer(Node):
         self._next_observation_id = 1
         self._last_detection_stamp = 0.0
         self._last_summary_monotonic = time.monotonic()
+        self._ai_frame_counts = {}
+        self._ai_detection_counts = {}
+        self._front_rejection_counts = {}
 
         self._front_calibration: StereoCalibration | None = None
         self._down_calibration: StereoCalibration | None = None
@@ -802,11 +809,11 @@ class ObjectLocalizer(Node):
 
         self._create_subscriptions()
         self._pub_compat = self.create_publisher(
-            ObjectPositionArray, "/perception/objects", 10)
+            ObjectPositionArray, OBJECTS, 10)
         self._pub_targets = self.create_publisher(
-            TargetPositionArray, "/perception/target_positions", 10)
+            TargetPositionArray, TARGETS, 10)
         self._pub_observations = self.create_publisher(
-            TargetObservationArray, "/perception/target_observations", 10)
+            TargetObservationArray, TARGET_OBSERVATIONS, 10)
         self.create_timer(self.publish_period, self._publish)
         self.create_timer(0.05, self._flush_stale_pending)
         self.create_timer(self.front_bearing_rebuild_period,
@@ -817,6 +824,9 @@ class ObjectLocalizer(Node):
         if self.summary_period > 0.0:
             self._summary_timer = self.create_timer(
                 self.summary_period, self._summary)
+        if self.detection_report_period > 0.0:
+            self.create_timer(
+                self.detection_report_period, self._report_detection_flow)
 
         if self._calibration_ready or self._front_calibration_ready:
             self.get_logger().info(
@@ -995,6 +1005,7 @@ class ObjectLocalizer(Node):
         self.declare_parameter("max_instances_gate", 4)
         self.declare_parameter("publish_period_sec", 0.1)
         self.declare_parameter("summary_period_sec", 0.0)
+        self.declare_parameter("detection_report_period_sec", 0.0)
         self.declare_parameter("observation_history_size", 500)
         self.declare_parameter("class_names", list(DEFAULT_CLASS_NAMES))
 
@@ -1299,6 +1310,8 @@ class ObjectLocalizer(Node):
             1, int(get("max_instances_gate").value))
         self.publish_period = float(get("publish_period_sec").value)
         self.summary_period = max(0.0, float(get("summary_period_sec").value))
+        self.detection_report_period = max(
+            0.0, float(get("detection_report_period_sec").value))
         self.observation_history_size = max(
             1, int(get("observation_history_size").value))
 
@@ -1484,18 +1497,18 @@ class ObjectLocalizer(Node):
 
     def _create_subscriptions(self):
         self.create_subscription(
-            PoseInfo, "/basic_motion/pose_info", self._pose_callback, 20)
+            PoseInfo, STATE_ODOM, self._pose_callback, 20)
         self.create_subscription(
-            DetectionArray, "/perception/detection/front_left",
+            DetectionArray, DETECTIONS("front_left"),
             self._front_left_callback, 20)
         self.create_subscription(
-            DetectionArray, "/perception/detection/front_right",
+            DetectionArray, DETECTIONS("front_right"),
             self._front_right_callback, 20)
         self.create_subscription(
-            DetectionArray, "/perception/detection/down_left",
+            DetectionArray, DETECTIONS("down_left"),
             self._down_left_callback, 20)
         self.create_subscription(
-            DetectionArray, "/perception/detection/down_right",
+            DetectionArray, DETECTIONS("down_right"),
             self._down_right_callback, 20)
         if self.calibration_source == "sim_camera_info":
             for camera in ("front_left", "front_right", "down_left",
@@ -1547,6 +1560,11 @@ class ObjectLocalizer(Node):
         self._queue_detection("down_right", message)
 
     def _queue_detection(self, camera: str, message: DetectionArray):
+        self._ai_frame_counts[camera] = self._ai_frame_counts.get(camera, 0) + 1
+        for detection in message.detections:
+            key = f"{camera}/{self._class_name(int(detection.class_id))}"
+            self._ai_detection_counts[key] = (
+                self._ai_detection_counts.get(key, 0) + 1)
         # V2 front path: every camera/timestamp creates independent raw
         # observations.  It must not wait for, or be paired with, the other
         # eye.  Down-camera processing keeps the legacy synchronized path.
@@ -1619,6 +1637,8 @@ class ObjectLocalizer(Node):
 
     def _lookup_pose(self, stamp: float) -> PoseAt | None:
         if not self._pose_buffer:
+            self._front_rejection_counts["pose_missing"] = (
+                self._front_rejection_counts.get("pose_missing", 0) + 1)
             self._warn_once("pose_missing", "No PoseInfo received yet")
             return None
         values = list(self._pose_buffer)
@@ -1665,6 +1685,8 @@ class ObjectLocalizer(Node):
                 rotation_override = None
 
         if age > self.pose_max_age_sec:
+            self._front_rejection_counts["pose_age"] = (
+                self._front_rejection_counts.get("pose_age", 0) + 1)
             self._warn_once(
                 "pose_stale",
                 f"discarding detections with pose age>{self.pose_max_age_sec:.3f}s")
@@ -1853,7 +1875,11 @@ class ObjectLocalizer(Node):
     def _process_front_single(self, message: DetectionArray, side: str):
         stamp = self._message_stamp(message)
         pose = self._lookup_pose(stamp)
-        if pose is None or not self._front_calibration_ready:
+        if pose is None:
+            return
+        if not self._front_calibration_ready:
+            self._front_rejection_counts["calibration_missing"] = (
+                self._front_rejection_counts.get("calibration_missing", 0) + 1)
             return
         for detection in self._detections_for_camera("front", message.detections):
             self._process_front_mono_detection(detection, side, pose)
@@ -6923,6 +6949,25 @@ class ObjectLocalizer(Node):
         geometry_confidence = math.exp(-uncertainty / 0.25)
         return float(np.clip(
             max(track.last_confidence, 0.05) * geometry_confidence, 0.0, 1.0))
+
+    def _report_detection_flow(self):
+        frames = self._ai_frame_counts
+        detections = self._ai_detection_counts
+        self._ai_frame_counts = {}
+        self._ai_detection_counts = {}
+        rejected = self._front_rejection_counts
+        self._front_rejection_counts = {}
+        positioned = {}
+        for track in self._front_tracks.values():
+            if track.position is not None and track.covariance is not None:
+                name = track.physical_class_name
+                positioned[name] = positioned.get(name, 0) + 1
+        self.get_logger().info(
+            f"AI→localizer ({self.detection_report_period:g}s): "
+            f"frames={frames or {}} detections={detections or {}} "
+            f"rejected={rejected or {}} "
+            f"bbox_pool={ {name: len(items) for name, items in self._front_bbox_observation_pool.items()} } "
+            f"front_targets={positioned or {}}")
 
     def _summary(self):
         if time.monotonic() - self._last_summary_monotonic < 4.0:

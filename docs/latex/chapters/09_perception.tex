@@ -1,0 +1,58 @@
+\chapter{视觉感知与目标定位}
+\label{ch:perception}
+
+\section{处理链}
+\pkg{uv_camera} 当前将传感器和 AI 组合在同一个 ROS 进程中。传感器模块从真实 V4L2 或仿真 stitched Topic 获取 BGR 帧，通过内存中的 FrameGate 交给 AI 模块；AI 模块执行 YOLO 检测、线状态提取、ArUco 检测、可选数据集记录和标注视频缓存。传感器到 AI 之间不再经过 ROS 图像 Topic 或中间 JPEG 编码。
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    node distance=7mm and 10mm,
+    box/.style={draw=YoulongBlue, rounded corners, fill=YoulongLight,
+      minimum width=30mm, minimum height=9mm, align=center},
+    arr/.style={-{Latex[length=2mm]}, thick, color=YoulongBlue}
+  ]
+    \node[box] (src) {V4L2 / Stonefish\\图像源};
+    \node[box, right=of src] (gate) {FrameGate\\BGR 内存帧};
+    \node[box, right=of gate] (yolo) {YOLO\\检测/分割};
+    \node[box, below=of yolo] (line) {线/ArUco\\辅助检测};
+    \node[box, left=of line] (det) {DetectionArray\\按左右目发布};
+    \node[box, left=of det] (loc) {object\_localizer\\几何与跟踪};
+    \draw[arr] (src) -- (gate) -- (yolo);
+    \draw[arr] (yolo) -- (det);
+    \draw[arr] (yolo) -- (line);
+    \draw[arr] (det) -- (loc);
+    \draw[arr] (line) |- (loc);
+  \end{tikzpicture}
+  \caption{视觉感知与目标定位链路}
+  \label{fig:perception-pipeline}
+\end{figure}
+
+\section{感知接口}
+AI 对每个相机左右目发布 \code{DetectionArray}，包括类别、置信度、bbox、帧时间和 stereo pair id；同时发布线状态和 ArUco ID。目标定位节点订阅四个相机通道和 \topic{/auv/state/odom}，发布：
+\begin{itemize}
+  \item \topic{/auv/perception/observations}：最近的几何有效观测；
+  \item \topic{/auv/perception/targets}：按目标类别/实例维护的静态位置估计；
+  \item 兼容的 \code{ObjectPositionArray}：供当前任务和导航后端使用。
+\end{itemize}
+
+\section{三类几何观测}
+当前目标定位将观测形式显式区分为：前视双目直接三维点、前视多视角射线以及下视已知高度直接测量。对一条相机射线，像素去畸变并转换到机体坐标后，可写为
+\begin{equation}
+  \mathbf{r}^{n}(\lambda) = \mathbf{p}_{c}^{n} + \lambda\,\mathbf{d}^{n},
+  \qquad \lambda>0,
+\end{equation}
+其中 $\mathbf{p}_{c}^{n}$ 是相机中心，$\mathbf{d}^{n}$ 是在 odom/NED 中归一化的方向。两条不完全相交的射线使用最短连线中点作为候选点，并根据夹角、残差、边缘裁剪和时间一致性判断是否接受。
+
+\section{关联与实例}
+目标类别 ID、类别别名和物理类别需要分开：检测器输出保留原始类别，前视/下视别名可以绑定到同一个物理类别，但前视和下视估计可以独立保留，避免一次错误关联污染另一套估计。相同类别的多个目标通过实例 ID、空间距离、观测历史和支持数量进行管理；超过实例上限或几何约束失败的观测必须计数并丢弃。
+
+\section{误差与置信度}
+目标位置输出携带 $3\times3$ 协方差和观测形式计数。双目深度误差会随视差减小而快速增大，因此目标定位不应只依赖 bbox 置信度；应同时考虑视差、极线误差、bbox 是否贴边、姿态时间对齐、射线夹角和历史支持。置信度是工程质量分数，不能直接当作概率。
+
+\section{失败情况}
+相机无帧、左右目不同步、标定缺失、bbox 贴边、类别不一致、极线误差过大、射线近平行、目标过期和姿态过期都应有可观测的拒绝原因。视觉节点可以发布空检测结果以维持数据流和 readiness，但不能把“没有模型”伪装成“没有目标”。
+
+\section{模型和标定文件}
+模型权重与类别映射位于 \pathref{workspace_auv/src/uv_camera/weights/}，相机 profile 与 \code{*.npz} 位于 \pathref{workspace_auv/src/uv_camera/config/}。权重、内参和外参不应复制进 LaTeX；本手册只记录版本、来源、坐标转换和验证结果。
+

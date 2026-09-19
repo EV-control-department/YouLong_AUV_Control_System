@@ -33,6 +33,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp"
+#include "builtin_interfaces/msg/time.hpp"
 
 #include <Stonefish/entities/animation/ManualTrajectory.h>
 #include <Stonefish/entities/forcefields/Uniform.h>
@@ -218,6 +219,7 @@ void ROS2SimulationManager::DestroyScenario()
     subs_.clear();
     srvs_.clear();
     cameraMsgPrototypes_.clear();
+    cameraShmWriters_.clear();
     sonarMsgPrototypes_.clear();
     rosRobots_.clear();
 
@@ -851,18 +853,48 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
 
 void ROS2SimulationManager::ColorCameraImageReady(ColorCamera* cam)
 {
-    //Fill in the image message
-    sensor_msgs::msg::Image::SharedPtr img = cameraMsgPrototypes_[cam->getName()].first;
-    img->header.stamp = nh_->get_clock()->now();
-    memcpy(img->data.data(), (uint8_t*)cam->getImageDataPointer(), img->step * img->height);
+    auto prototype = cameraMsgPrototypes_.find(cam->getName());
+    if (prototype == cameraMsgPrototypes_.end()) {
+        return;
+    }
+    auto img = prototype->second.first;
+    auto info = prototype->second.second;
+    const rclcpp::Time now = nh_->get_clock()->now();
+    builtin_interfaces::msg::Time stamp;
+    const auto nanoseconds = now.nanoseconds();
+    stamp.sec = static_cast<std::int32_t>(nanoseconds / 1000000000LL);
+    stamp.nanosec = static_cast<std::uint32_t>(nanoseconds % 1000000000LL);
+    info->header.stamp = stamp;
 
-    //Fill in the info message
-    sensor_msgs::msg::CameraInfo::SharedPtr info = cameraMsgPrototypes_[cam->getName()].second;
-    info->header.stamp = img->header.stamp;
+    std::string channel = cam->getName();
+    const auto front_pos = channel.find("front_cam_");
+    const auto down_pos = channel.find("down_cam_");
+    if (front_pos != std::string::npos) {
+        channel = "front_" + channel.substr(
+            front_pos + std::string("front_cam_").size());
+    } else if (down_pos != std::string::npos) {
+        channel = "down_" + channel.substr(
+            down_pos + std::string("down_cam_").size());
+    }
+    auto& writer = cameraShmWriters_[cam->getName()];
+    if (!writer) {
+        writer = std::make_unique<SimCameraShmWriter>(channel);
+    }
+    if (!writer->write(cam->getImageDataPointer(), img->data.size(),
+                       img->width, img->height, img->step,
+                       stamp.sec, stamp.nanosec)) {
+        RCLCPP_ERROR_THROTTLE(
+            nh_->get_logger(), *nh_->get_clock(), 5000,
+            "Failed to write simulator camera %s to shared memory",
+            cam->getName().c_str());
+    }
 
-    //Publish messages
-    imgPubs_.at(cam->getName()).publish(img);
-    std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(cam->getName() + "/info"))->publish(*info);
+    // CameraInfo is tiny and remains on DDS for calibration consumers.
+    auto info_pub = pubs_.find(cam->getName() + "/info");
+    if (info_pub != pubs_.end()) {
+        std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(
+            info_pub->second)->publish(*info);
+    }
 }
 
 void ROS2SimulationManager::DepthCameraImageReady(DepthCamera* cam)

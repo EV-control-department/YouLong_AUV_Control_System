@@ -43,6 +43,7 @@
 #include "stonefish_ros2/srv/sonar_settings.hpp"
 #include "stonefish_ros2/srv/sonar_settings2.hpp"
 #include "stonefish_ros2/srv/respawn.hpp"
+#include "stonefish_ros2/SimCameraShm.h"
 
 #include <Stonefish/core/SimulationManager.h>
 #include <Stonefish/actuators/Servo.h>
@@ -189,6 +190,7 @@ namespace sf
             sensor_msgs::msg::CameraInfo::SharedPtr, sensor_msgs::msg::Image::SharedPtr>> dualImageCameraMsgPrototypes_;
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, 
             sensor_msgs::msg::Image::SharedPtr>> sonarMsgPrototypes_;
+        std::map<std::string, std::unique_ptr<SimCameraShmWriter>> cameraShmWriters_;
     };
 }
 

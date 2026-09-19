@@ -8,6 +8,7 @@ from launch.actions import (
     EmitEvent,
     IncludeLaunchDescription,
     LogInfo,
+    OpaqueFunction,
     RegisterEventHandler,
 )
 from launch.event_handlers import OnProcessExit
@@ -35,10 +36,21 @@ def _include(package, launch_file, arguments, *, condition=None):
     )
 
 
+def _profile_include(
+    package, launch_file, arguments, *, profile, profile_package,
+):
+    """Resolve a real profile path before entering a nested launch scope."""
+    def _create_include(context):
+        resolved_arguments = dict(arguments)
+        resolved_arguments['profile_params'] = profile_path(
+            profile, profile_package).perform(context)
+        return [_include(package, launch_file, resolved_arguments)]
+
+    return OpaqueFunction(function=_create_include)
+
+
 def generate_launch_description():
     profile = LaunchConfiguration("profile")
-    hardware_profile_params = profile_path(profile, "uv_hm")
-    camera_profile_params = profile_path(profile, "uv_camera")
     enable_ai = LaunchConfiguration("enable_ai")
     enable_motion = LaunchConfiguration("enable_motion")
     enable_nav = LaunchConfiguration("enable_nav")
@@ -46,15 +58,23 @@ def generate_launch_description():
     mission_file = LaunchConfiguration("mission_file")
     camera_config_dir = LaunchConfiguration("camera_config_dir")
 
-    hardware = _include("uv_hm", "hardware_launch.py", {
-        "enable_hardware": LaunchConfiguration("enable_hardware"),
-        "profile_params": hardware_profile_params,
+    description = _include("auv_description", "description.launch.py", {
+        "use_sim_time": "false",
     })
+    localization = _include("uv_localization", "localization_launch.py", {
+        "sim_mode": "false",
+        "publish_tf": "true",
+    })
+
+    hardware = _profile_include("uv_hm", "hardware_launch.py", {
+        "enable_hardware": LaunchConfiguration("enable_hardware"),
+    }, profile=profile, profile_package="uv_hm")
     control = _include("uv_control", "control_launch.py", {
         "enable_motion": enable_motion,
+        "sim_mode": "false",
         "profile_params": "",
     })
-    perception = _include("uv_camera", "perception_launch.py", {
+    perception = _profile_include("uv_camera", "perception_launch.py", {
         "enable_ai": enable_ai,
         "sim_mode": "false",
         "inference_fps": "5.0",
@@ -67,10 +87,9 @@ def generate_launch_description():
         "annotated_max_width": "0",
         "camera_config_profile": "real",
         "camera_config_dir": camera_config_dir,
-        "profile_params": camera_profile_params,
         "object_localizer_params": "",
-    })
-    navigation = _include("uv_nav", "navigation_launch.py", {
+    }, profile=profile, profile_package="uv_camera")
+    navigation = _include("uv_planning", "planning_launch.py", {
         "enable_nav": enable_nav,
         "profile_params": "",
     })
@@ -88,7 +107,7 @@ def generate_launch_description():
             return []
         name = str(getattr(event, "process_name", "") or "")
         if any(name == key or name.startswith(f"{key}-") for key in {
-            "hw_manager", "basic_motion",
+            "hw_manager", "basic_motion", "uv_localization",
         }):
             return [EmitEvent(event=Shutdown(
                 reason=f"critical real process exited: {name}"))]
@@ -110,6 +129,8 @@ def generate_launch_description():
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         validate_profile(profile, "real"),
         LogInfo(msg=["Real vehicle profile: ", profile]),
+        description,
+        localization,
         hardware,
         control,
         perception,

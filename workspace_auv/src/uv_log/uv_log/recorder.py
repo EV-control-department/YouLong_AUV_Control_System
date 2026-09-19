@@ -31,7 +31,7 @@ from .performance import ProcessSampler
 
 
 DEFAULT_TOPIC_REGEX = (
-    r'^/(clock|tf|tf_static|rosout|parameter_events|diagnostics|sim/.*|'
+    r'^/(clock|rosout|parameter_events|diagnostics|'
     r'auv/.*|zit6/.*|perception/.*|basic_motion/.*|task/.*|nav/.*|'
     r'cmd_vel.*)$'
 )
@@ -40,9 +40,10 @@ DEFAULT_TOPIC_REGEX = (
 # default narrow; image message types are excluded independently below even
 # when a caller supplies a broader custom topic regex.
 METADATA_TOPIC_REGEX = (
-    r'^/(clock|tf|tf_static|rosout|parameter_events|diagnostics|sim/performance|'
-    r'auv/thrusters_cmd|zit6/.*|perception/.*|basic_motion/.*|task/.*|'
-    r'nav/.*|cmd_vel.*)$'
+    r'^/(clock|rosout|parameter_events|diagnostics|'
+    r'auv/(sim/(performance|control_performance)|sim/actuators/.*|evaluation/.*|hardware/.*|'
+    r'perception/.*|mission/.*|state/.*|control/.*|planning/.*|mapping/.*)|'
+    r'zit6/.*|perception/.*|basic_motion/.*|task/.*|nav/.*|cmd_vel.*)$'
 )
 IMAGE_TOPIC_TYPES = (
     'sensor_msgs/msg/Image',

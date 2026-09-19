@@ -8,8 +8,6 @@ PACKAGE_ROOT = Path(__file__).parents[1]
 LAUNCH_ROOT = PACKAGE_ROOT / "launch"
 PROFILE_ROOT = PACKAGE_ROOT / "config" / "profiles"
 AUV_SOURCE_ROOT = PACKAGE_ROOT.parent
-REPOSITORY_ROOT = PACKAGE_ROOT.parents[2]
-SIM_SOURCE_ROOT = REPOSITORY_ROOT / "workspace_sim" / "src"
 
 
 def _source(name):
@@ -17,13 +15,15 @@ def _source(name):
 
 
 def test_formal_mode_entries_exist():
-    for name in ("sim.launch.py", "hil.launch.py", "real.launch.py"):
+    for name in ("real.launch.py", "readiness.launch.py"):
         assert (LAUNCH_ROOT / name).is_file()
+    assert not (AUV_SOURCE_ROOT / "auv_description" / "urdf" /
+                "auv_sim.urdf").exists()
 
 
 def test_mode_entries_do_not_define_component_nodes():
     """Mode files may orchestrate, but component Nodes belong to feature packages."""
-    for name in ("sim.launch.py", "hil.launch.py", "real.launch.py", "core_sim.launch.py"):
+    for name in ("real.launch.py",):
         tree = ast.parse(_source(name), filename=name)
         called_names = {
             node.func.id
@@ -36,7 +36,6 @@ def test_mode_entries_do_not_define_component_nodes():
 def test_bringup_uses_the_invoking_terminal():
     """Terminal multiplexing is deliberately outside the ROS launch layer."""
     launch_files = list(LAUNCH_ROOT.glob("*.py"))
-    launch_files.extend((SIM_SOURCE_ROOT / "stonefish_ros2" / "launch").glob("*.py"))
     forbidden = (
         "t" + "mux",
         "x" + "term",
@@ -51,7 +50,6 @@ def test_bringup_uses_the_invoking_terminal():
 
 def test_all_profiles_are_standard_ros_parameter_files():
     expected = {
-        "uv_sim": {"sim_dev.yaml", "sim_ci.yaml", "hil_lab.yaml"},
         "uv_camera": {
             "sim_dev.yaml", "sim_ci.yaml", "hil_lab.yaml",
             "real_default.yaml", "real_safe.yaml",
@@ -60,8 +58,7 @@ def test_all_profiles_are_standard_ros_parameter_files():
     }
     assert not list(PROFILE_ROOT.glob("*.yaml"))
     for package, names in expected.items():
-        source_root = SIM_SOURCE_ROOT if package == "uv_sim" else AUV_SOURCE_ROOT
-        root = source_root / package / "config" / "profiles"
+        root = AUV_SOURCE_ROOT / package / "config" / "profiles"
         assert {path.name for path in root.glob("*.yaml")} == names
         for path in root.glob("*.yaml"):
             text = path.read_text(encoding="utf-8")

@@ -1,0 +1,53 @@
+\chapter{包与入口索引}
+\label{app:package-index}
+
+\section{workspace\_auv 包索引}
+\begin{longtable}{p{0.24\textwidth}p{0.27\textwidth}p{0.37\textwidth}}
+  \caption{workspace\_auv 的包与入口}\label{tab:auv-package-index}\\
+  \toprule
+  包 & 入口/源码位置 & 维护关注点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  包 & 入口/源码位置 & 维护关注点 \\
+  \midrule
+  \endhead
+  \pkg{auv_protocol} & \pathref{workspace_auv/src/auv_protocol/auv_protocol/topics.py} & Topic 单一注册表与兼容名称。 \\
+  \pkg{uv_msgs} & \pathref{workspace_auv/src/uv_msgs/msg/}、srv、action & 应用消息、Service、BasicMotion Action 生成。 \\
+  \pkg{zit6_interfaces} & \pathref{workspace_auv/src/zit6_interfaces/} & 固件兼容命令、状态和参数服务。 \\
+  \pkg{auv_description} & \pathref{workspace_auv/src/auv_description/launch/}、urdf & 真机模型、组件和固定 TF。 \\
+  \pkg{uv_bringup} & \pathref{workspace_auv/src/uv_bringup/launch/real.launch.py} & 真机组合启动、readiness 和 observability。 \\
+  \pkg{uv_hm} & \pathref{workspace_auv/src/uv_hm/launch/}、config & heartbeat、状态适配、watchdog 和硬件 profile。 \\
+  \pkg{uv_localization} & \pathref{workspace_auv/src/uv_localization/launch/localization_launch.py} & bootstrap 状态、健康状态和动态 TF。 \\
+  \pkg{uv_camera} & \pathref{workspace_auv/src/uv_camera/launch/perception_launch.py}、config & 相机输入、FrameGate、AI、几何和 object localizer。 \\
+  \pkg{uv_nav}、\pkg{uv_planning} & nav/planning launch 和节点实现 & A* 后端与规划边界。 \\
+  \pkg{uv_control} & \pathref{workspace_auv/src/uv_control/launch/control_launch.py} & BasicMotion Action、坐标变换和设定值发布。 \\
+  \pkg{uv_task} & \pathref{workspace_auv/src/uv_task/config/missions/}、tasks & Mission/Task YAML 和任务执行器。 \\
+  \pkg{uv_log} & 包源码与 session 工具 & rosbag、视频、日志和恢复。 \\
+  \bottomrule
+\end{longtable}
+
+\section{workspace\_sim 包索引}
+\begin{longtable}{p{0.25\textwidth}p{0.27\textwidth}p{0.36\textwidth}}
+  \caption{workspace\_sim 的包与入口}\label{tab:sim-package-index}\\
+  \toprule
+  包 & 入口/源码位置 & 维护关注点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  包 & 入口/源码位置 & 维护关注点 \\
+  \midrule
+  \endhead
+  \pkg{stonefish_ros2} & simulator launch 与 Data & 场景、动力学、传感器和执行器模型。 \\
+  \pkg{uv_sim_description} & 仿真 URDF 与 description launch & 仿真几何、sensor frame 和 static TF。 \\
+  \pkg{uv_sim_bridge} & bridge launch、config、bridge/core & canonical 输入输出、Host 控制核、mixer 和 HIL 边界。 \\
+  \pkg{zit6_control_core} & CMake/C++ 控制核 & SIL Host PID/控制核，与固件算法保持契约一致。 \\
+  \pkg{uv_sim_bringup} & sim、hil、experiment launch & 场景准备、profile、退化、记录和评测编排。 \\
+  \pkg{uv_sim_degradation} & degradation launch/node & 显式退化 Topic、seed 和事件记录。 \\
+  \pkg{uv_sim_evaluation} & evaluator & Ground Truth 对齐、ATE/RPE、性能和事件指标。 \\
+  \pkg{uv_sim} & public world/vehicle launch、legacy bridge & 新入口选择场景并转发到 \pkg{uv_sim_bringup}；保留旧 scenario\_desc 兼容。 \\
+  \bottomrule
+\end{longtable}
+
+\section{索引维护规则}
+包索引只记录入口和职责，不复制所有类名。新增包时必须同时补充 package.xml、launch/entry point、依赖方向、接口契约、测试入口和本附录；删除或合并包时保留迁移说明，避免读者根据旧文档启动错误入口。

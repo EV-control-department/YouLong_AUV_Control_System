@@ -39,6 +39,7 @@ def generate_launch_description():
             exec_name="task_runner",
             output="both",
             parameters=parameters,
+            remappings=[('/tf', '/auv/tf'), ('/tf_static', '/auv/tf_static')],
             condition=IfCondition(enable_task),
         )]
 

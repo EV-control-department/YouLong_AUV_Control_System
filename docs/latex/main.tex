@@ -1,0 +1,125 @@
+\documentclass[UTF8,openany,oneside]{ctexbook}
+
+\input{preamble.tex}
+\IfFileExists{build/git-info.tex}{\input{build/git-info.tex}}{}
+\providecommand{\DocGitCommit}{unknown}
+\providecommand{\DocGitBranch}{unknown}
+\providecommand{\DocGitTag}{unknown}
+\providecommand{\DocBuildDate}{unknown}
+
+\title{\Huge YouLong AUV 系统设计、实现与实验手册}
+\author{YouLong AUV 控制系统团队}
+\date{\DocBuildDate}
+
+\begin{document}
+
+\frontmatter
+\begin{titlepage}
+  \centering
+  \vspace*{20mm}
+  {\color{YoulongBlue}\rule{\textwidth}{1.5pt}}\\[12mm]
+  {\Huge\bfseries YouLong AUV\\[4mm]系统设计、实现与实验手册}\par
+  \vspace{12mm}
+  {\Large Technical Design, Implementation and Experiment Manual}\par
+  \vfill
+  \begin{tabular}{ll}
+    文档版本 & V1.1（持续维护版）\\
+    Git commit & \texttt{\DocGitCommit}\\
+    Git 分支 & \texttt{\DocGitBranch}\\
+    Git 描述 & \texttt{\DocGitTag}\\
+    构建日期 & \texttt{\DocBuildDate}\\
+  \end{tabular}
+  \vfill
+  {\large \today}\par
+  \vspace{8mm}
+  {\color{YoulongBlue}\rule{\textwidth}{1.5pt}}
+\end{titlepage}
+
+\chapter*{文档定位}
+\addcontentsline{toc}{chapter}{文档定位}
+本手册是 \repo 的正式系统文档。它描述系统的目标、边界、接口、坐标系、
+实现现状、实验方法和运维流程。手册不替代代码和参数文件：Topic 名称、消息字段、
+标定数值和运行参数仍以仓库中的源码、ROS 接口和配置文件为事实来源。
+
+\begin{infobox}
+  阅读时请特别区分“当前实现”和“设计预留”。当前版本的定位后端是 bootstrap
+  估计器，规划包是对现有 A* 后端的边界封装；文档会明确标注尚未完成的 FGO、SLAM、
+  通用轨迹跟踪等能力。
+\end{infobox}
+
+\chapter*{修订记录}
+\addcontentsline{toc}{chapter}{修订记录}
+\begin{longtable}{p{0.16\textwidth}p{0.20\textwidth}p{0.53\textwidth}}
+  \toprule
+  版本 & 日期 & 变更摘要 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  版本 & 日期 & 变更摘要 \\
+  \midrule
+  \endhead
+  V1.1 & \DocBuildDate & 扩展包级架构、运行时数据流、安全状态模型、构建发布闭环及包/Topic 索引。 \\
+  V1.0 & \DocBuildDate & 建立 LaTeX 正式手册；记录双 workspace、/auv 接口、SIL/HIL、定位、视觉、控制、任务与实验边界。 \\
+  \bottomrule
+\end{longtable}
+
+\chapter*{缩略语}
+\addcontentsline{toc}{chapter}{缩略语}
+\begin{description}
+  \item[AUV] Autonomous Underwater Vehicle，自治水下航行器。
+  \item[DVL] Doppler Velocity Log，多普勒测速仪。
+  \item[USBL] Ultra-Short Baseline，超短基线定位。
+  \item[INS] Inertial Navigation System，惯性导航系统。
+  \item[ROS 2] Robot Operating System 2，机器人软件中间件。
+  \item[SIL] Software-in-the-Loop，软件在环仿真。
+  \item[HIL] Hardware-in-the-Loop，硬件在环仿真。
+  \item[MCU] Microcontroller Unit，微控制器。
+  \item[NED] North-East-Down，北-东-地坐标约定。
+  \item[FRD] Forward-Right-Down，前-右-下机体坐标约定。
+  \item[ATE/RPE] Absolute / Relative Trajectory Error，绝对/相对轨迹误差。
+\end{description}
+
+\chapter*{阅读指南}
+\addcontentsline{toc}{chapter}{阅读指南}
+初次接触项目时，建议先读第 1--2 章了解目标和架构，再读第 4--7 章掌握接口、
+启动和硬件边界；需要修改算法时阅读第 8--13 章；需要复现实验或下水部署时阅读
+第 14--20 章和附录。开发时可同时参考现有 Markdown 快速文档。
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+\mainmatter
+\input{chapters/01_overview.tex}
+\input{chapters/02_architecture.tex}
+\input{chapters/03_hardware.tex}
+\input{chapters/04_frames.tex}
+\input{chapters/05_interfaces.tex}
+\input{chapters/06_bringup.tex}
+\input{chapters/07_hardware_manager.tex}
+\input{chapters/08_localization.tex}
+\input{chapters/09_perception.tex}
+\input{chapters/10_navigation.tex}
+\input{chapters/11_control.tex}
+\input{chapters/12_task.tex}
+\input{chapters/13_simulation.tex}
+\input{chapters/14_calibration.tex}
+\input{chapters/15_experiments.tex}
+\input{chapters/16_operations.tex}
+\input{chapters/17_package_architecture.tex}
+\input{chapters/18_runtime_dataflow.tex}
+\input{chapters/19_safety_state.tex}
+\input{chapters/20_build_release.tex}
+
+\appendix
+\input{appendices/a_interfaces.tex}
+\input{appendices/b_parameters.tex}
+\input{appendices/c_diagnostics.tex}
+\input{appendices/d_development.tex}
+\input{appendices/e_package_index.tex}
+\input{appendices/f_runtime_contracts.tex}
+
+\backmatter
+\printbibliography[heading=bibintoc,title={参考文献与资料}]
+
+\end{document}

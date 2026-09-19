@@ -1,0 +1,80 @@
+\chapter{构建、发布与实验数据闭环}
+\label{ch:build-release}
+
+\section{从源码到运行时的四层产物}
+项目的可运行结果由源码、接口生成物、colcon 安装空间和 launch/profile 组合而成。发布或复现实验时不能只保存一个 Git commit，还要确认构建环境和参数入口。
+
+\begin{table}[H]
+  \centering
+  \caption{构建与运行时产物}
+  \label{tab:build-artifacts}
+  \begin{tabularx}{\textwidth}{p{0.22\textwidth}p{0.31\textwidth}X}
+    \toprule
+    层 & 典型位置/命令 & 审查重点 \\
+    \midrule
+    源码 & Git commit、\pathref{workspace_auv/src/}、\pathref{workspace_sim/src/} & 是否包含接口、参数、模型和文档的同一变更。 \\
+    接口生成 & \pkg{uv_msgs}、\pkg{zit6_interfaces} 的 build/install & 消息字段、Action/Service 版本和 overlay 顺序。 \\
+    工作区产物 & \pathref{workspace_auv/install/}、\pathref{workspace_sim/install/} & source 顺序、Python entry point、资源安装和旧构建残留。 \\
+    运行配置 & profile、Mission、Task、scenario、seed & real/sim/hil 是否混用，参数是否可追溯。 \\
+    实验结果 & session、rosbag、视频、日志、metrics & 是否包含 run id、时间、commit、profile 和失败原因。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{双 workspace 构建矩阵}
+\begin{enumerate}
+  \item 先构建并 source \pkg{workspace_auv}，验证接口、真实描述、硬件管理、定位、感知、控制、任务和日志入口。
+  \item 再构建并 source \pkg{workspace_sim}，让仿真包在前一个 overlay 上解析 \pkg{auv_protocol}、\pkg{uv_msgs} 和真机通用节点。
+  \item 运行时启动前检查当前 shell 的 \code{AMENT_PREFIX_PATH}、\code{ROS_DISTRO}、\code{ROS_DOMAIN_ID}、\code{ROS_USE_SIM_TIME} 和关键 package share 路径。
+  \item 修改 \code{.msg}、\code{.srv} 或 \code{.action} 后，优先清晰地重建相关接口包，再重建下游包；不要以旧的 install 空间掩盖接口不一致。
+\end{enumerate}
+
+\section{Profile 与运行模式矩阵}
+\begin{longtable}{p{0.14\textwidth}p{0.22\textwidth}p{0.26\textwidth}p{0.24\textwidth}}
+  \caption{运行 profile 的审查矩阵}\label{tab:profile-matrix}\\
+  \toprule
+  模式 & 主要入口 & 关键 profile & 主要风险 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  模式 & 主要入口 & 关键 profile & 主要风险 \\
+  \midrule
+  \endhead
+  real & \path{uv_bringup/real.launch.py} & \pkg{uv_hm}、\pkg{uv_camera} 的 real profile & 真机布防、设备路径、急停、通信和安全速度。 \\
+  sim & \path{uv_sim_bringup/sim.launch.py} & \pkg{uv_sim_bridge}、\pkg{uv_camera} 的 sim profile & 场景、GPU/CPU、simulation time、seed 和真值隔离。 \\
+  hil & \path{uv_sim_bringup/hil.launch.py} & \pkg{uv_sim_bridge} 的 HIL profile、Agent 参数 & 串口、真实 MCU 控制核、导航输入和执行器输出。 \\
+  experiment & \path{uv_sim_bringup/experiment.launch.py} & degradation profile、estimator、results dir & 记录、指标、退出时机和结果目录不完整。 \\
+  \bottomrule
+\end{longtable}
+
+\section{实验目录与元数据}
+实验启动器应将每次运行组织成可独立归档的目录。建议目录至少包含：
+
+\begin{lstlisting}[language=bash,caption={建议的实验结果目录}]
+results/<run_id>/
+  metadata.yaml       # commit, profile, world, seed, estimator, host
+  rosbag/             # ROS 2 bag and storage metadata
+  video/              # raw or annotated video, if enabled
+  logs/               # ROS logs and launch output
+  metrics/            # evaluation metrics and events
+  config/             # copied profile, mission, task and degradation config
+  README.md           # human-readable run summary and failure reason
+\end{lstlisting}
+
+\section{实验入口的当前约定}
+\pkg{uv_sim_bringup} 的 experiment 入口将 world、seed、degradation、estimator、duration、results dir 和 run id 作为显式参数；rosbag 重点记录状态、传感器、Ground Truth、感知观测、评测指标、退化事件和仿真性能。新增记录 Topic 时，应说明它服务于控制诊断、评测指标还是离线复盘，并避免无界地记录高带宽图像。
+
+\Needspace{12\baselineskip}
+\section{发布门禁}
+发布一个可供他人复现的版本前，至少满足：
+
+\begin{description}
+  \item[源码门禁] \code{git diff --check}、Python 编译检查、接口生成检查和相关单元/契约测试通过。
+  \item[启动门禁] real、sim 或 hil 中与本次变更相关的入口完成 smoke test；关键节点退出行为已检查。
+  \item[数据门禁] 至少一次运行包含 metadata、rosbag/日志、指标和退出状态，且能从结果目录反查 commit 和 profile。
+  \item[文档门禁] Topic、frame、单位、参数、失败行为、真值隔离和版本记录已同步到 Markdown 与本手册。
+  \item[安全门禁] 任何布防、最大速度、推力、watchdog 和急停相关变更，都完成台架或仿真故障注入后再进入水池验证。
+\end{description}
+
+\section{失败实验的保留原则}
+失败运行不是应该立即删除的垃圾。只要目录中存在足够的 commit、profile、seed、日志和事件，就可以用来分析 readiness、延迟、退化和安全退出。清理前先保留一份摘要，至少写清失败阶段、最后一个健康 Topic、最后一次控制命令和是否发生 Ground Truth/旧接口误用。

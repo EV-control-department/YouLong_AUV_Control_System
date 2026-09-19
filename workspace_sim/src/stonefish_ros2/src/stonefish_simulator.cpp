@@ -54,7 +54,7 @@ public:
             std::chrono::microseconds(static_cast<int64_t>(1e6 / renderFps)),
             std::bind(&sf::ROS2GraphicalSimulationApp::Tick, app_));
         RCLCPP_INFO(get_logger(), "Render limit %.1f FPS; physics %.1f Hz", renderFps, double(rate));
-        performancePub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/sim/performance", 1);
+        performancePub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/auv/sim/performance", 1);
         performanceLastWall_ = std::chrono::steady_clock::now();
         performanceTimer_ = create_wall_timer(5s, [this, manager]() {
             const auto now = std::chrono::steady_clock::now();

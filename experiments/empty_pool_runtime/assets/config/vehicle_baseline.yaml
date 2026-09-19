@@ -1,0 +1,29 @@
+vehicle: youlong
+mesh: vehicles/youlong/meshes/physical/youlong_collision_hydro.obj
+source_mesh: legacy_data/xunyun_collision_hydro.obj
+topology_repair:
+  method: weld_exact_duplicate_vertices_and_drop_degenerate_faces
+  source_vertices: 544
+  source_triangles: 1024
+  repaired_vertices: 482
+  repaired_triangles: 960
+  source_nonmanifold_edges: 64
+  repaired_nonmanifold_edges: 0
+  source_volume_m3: 0.03501296225895182
+  repaired_volume_m3: 0.03501296225895182
+  bounds_min_m: [-0.261477, -0.221249, -0.063329]
+  bounds_max_m: [0.261477, 0.221249, 0.230329]
+  source_volume_centroid_m: [0.0, 0.0, 0.0835]
+  repaired_volume_centroid_m: [0.0, 0.0, 0.0835]
+  # Exact duplicate-vertex welding leaves the signed triangle integral and
+  # Stonefish mass/volume inputs unchanged; these are geometric regression
+  # offsets, not a physical calibration claim.
+  volume_centroid_offset_m: [0.0, 0.0, 0.0]
+  center_of_mass_offset_m: [0.0, 0.0, 0.0]
+  center_of_buoyancy_offset_m: [0.0, 0.0, 0.0]
+  volume_relative_error: 0.0
+  calibration_status: uncalibrated
+runtime_regression:
+  status: pending_stonefish_run
+  zero_thrust: not_recorded
+  step_response: not_recorded

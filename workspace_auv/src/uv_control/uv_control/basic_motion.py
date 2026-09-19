@@ -10,12 +10,12 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
   Layer 1: ZIT6 底层 (map 坐标系 — _send_setpoint)
 
 坐标系说明：
-  map 系 — MCU/仿真器上报的原始位置，原点未知
+  map 系 — ZIT6 协议使用的绝对坐标；原点由 uv_localization 提供
   odom 系 — 以 AUV 启动位置为原点的世界坐标系（start() 时初始化）
   body 系 — 以 AUV 当前位置为原点的机体坐标系
 
 指令路径（保证 single source of truth）：
-  高级 API → set_world → set_map → _send_setpoint → /zit6/cmd/setpoint
+  高级 API → set_world → set_map → _send_setpoint → /auv/hardware/zit6/cmd/setpoint
   set_body/set_step → Coordinate 变换 → set_world → …
   set_map 是唯一的协议出口，迁移协议只需改此函数
 
@@ -33,7 +33,7 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
   │  uv_control (控制层)  ← 本文件所在层                   │
   │  basic_motion (本节点)                                │
   │    → set_world / set_body / set_step                 │
-  │    → _send_setpoint → /zit6/cmd/setpoint             │
+  │    → _send_setpoint → /auv/hardware/zit6/cmd/setpoint│
   ├─────────────────────────────────────────────────────┤
   │  uv_hm (硬件管理层)                                   │
   │  sim_bridge (仿真) / hw_manager (实车)                │
@@ -74,7 +74,14 @@ import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray
+from geometry_msgs.msg import TwistWithCovarianceStamped
+from std_msgs.msg import Empty
+from auv_protocol.topics import (
+    BASIC_MOTION, LEGACY_BASIC_MOTION, LEGACY_POSE_INFO,
+    LEGACY_ZIT6_SETPOINT, STATE_ODOM, STATE_RESET, STATE_TWIST,
+    ZIT6_SETPOINT,
+    ZIT6_STATUS,
+)
 
 from zit6_interfaces.msg import ZitSetpoint, ZitStatus
 from uv_msgs.action import BasicMotion
@@ -93,10 +100,19 @@ CK_POS = 0          # position mode (唯一的 control_key)
 AX_X = 0x01
 AX_Y = 0x02
 AX_Z = 0x04
-AX_RZ = 0x08
+# ZitSetpoint.type_mask follows the native six-axis order
+# [x, y, z, roll, pitch, yaw].  A set bit means "leave this axis
+# unchanged".  Keep the old AX_RZ spelling as a compatibility alias, but
+# point it at the yaw bit (bit 5), not roll (bit 3).
+AX_ROLL = 0x08
+AX_PITCH = 0x10
+AX_YAW = 0x20
+AX_RZ = AX_YAW
 AX_XY = AX_X | AX_Y
 AX_XYZ = AX_X | AX_Y | AX_Z
-AX_ALL = AX_X | AX_Y | AX_Z | AX_RZ
+# The controller is intentionally used as a four-DOF vehicle (x/y/z/yaw).
+AX_ALL = AX_X | AX_Y | AX_Z | AX_YAW
+AX_ALL_6DOF = AX_ALL | AX_ROLL | AX_PITCH
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 默认容差
@@ -115,6 +131,13 @@ STEP_PERIOD = 0.2        # 目标步进间隔/收敛时间阈值 (秒)
 LATERAL_LAMBDA = 2.0     # 横向误差指数衰减系数
 
 
+def _as_bool(value) -> bool:
+    """Parse launch/YAML booleans without treating ``'false'`` as true."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 class BasicMotionNode(Node):
     """运动控制节点：ZIT6 协议接口 + 高级运动 API，single source of truth。"""
 
@@ -125,28 +148,42 @@ class BasicMotionNode(Node):
         self.status = ZitStatus()
         self.pose = Coordinate()        # 当前位置 (odom 系)
         self._target = Coordinate()     # 当前目标 (odom 系)
-        self._map_pose = Coordinate()   # 原始 map 系位置（ZIT6 上报，未经 odom 转换）
-        self._origin = None             # odom 原点 (map 系 Coordinate)，start() 时设置
-        self._origin_warned = False     # 防止 _pos_cb 重复打印警告
+        self._state_origin = Coordinate()  # estimator-provided map origin
+        self._origin = None             # active odom origin (map Coordinate)
         self._state_lock = threading.Lock()
-        self.vel_body = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}   # 机体速度                     # 世界速度
-        self._pose_stamp = self.get_clock().now().to_msg()            # 位姿测量时间（_pos_cb 接收时刻）
+        self._shutdown_requested = False
+        self._timers = []
+        self.vel_body = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}   # 机体速度
+        self._pose_stamp = self.get_clock().now().to_msg()
+        self.declare_parameter('sim_mode', False)
+        self._sim_mode = _as_bool(self.get_parameter('sim_mode').value)
 
         # ─────────────────────────────────────────────────────────
         # Layer 1: ZIT6 协议发布/订阅
         # ─────────────────────────────────────────────────────────
         self.pub_setpoint = self.create_publisher(
-            ZitSetpoint, '/zit6/cmd/setpoint', 10)
+            ZitSetpoint, ZIT6_SETPOINT, 10)
+        # Compatibility output for the pre-V1 hardware adapter.  New nodes
+        # must use ZIT6_SETPOINT above.
+        self.pub_setpoint_legacy = self.create_publisher(
+            ZitSetpoint, LEGACY_ZIT6_SETPOINT, 10)
         self.create_subscription(
-            ZitStatus, '/zit6/state/status', self._status_cb, 10)
+            ZitStatus, ZIT6_STATUS, self._status_cb, 10)
         self.create_subscription(
-            Float32MultiArray, '/zit6/state/pos', self._pos_cb, 10)
+            PoseInfo, STATE_ODOM, self._state_odom_cb, 10)
         self.create_subscription(
-            Float32MultiArray, '/zit6/state/vel', self._vel_cb, 10)
+            TwistWithCovarianceStamped, STATE_TWIST,
+            self._state_twist_cb, 10)
 
         # ── Action Server ────────────────────────────────────────
         self._action_server = ActionServer(
-            self, BasicMotion, 'basic_motion',
+            self, BasicMotion, BASIC_MOTION,
+            goal_callback=self._action_goal_cb,
+            cancel_callback=self._action_cancel_cb,
+            execute_callback=self._action_execute_cb,
+        )
+        self._legacy_action_server = ActionServer(
+            self, BasicMotion, LEGACY_BASIC_MOTION,
             goal_callback=self._action_goal_cb,
             cancel_callback=self._action_cancel_cb,
             execute_callback=self._action_execute_cb,
@@ -154,13 +191,51 @@ class BasicMotionNode(Node):
         self._action_goal_handle = None
         self._action_target = None       # 绝对目标 {x, y, z, yaw}，用于反馈
         self._action_axes = None         # 当前 action 的生效轴，用于反馈
-        self.create_timer(0.5, self._action_feedback_cb)
+        self._timers.append(self.create_timer(0.5, self._action_feedback_cb))
 
-        # ── PoseInfo Publisher ─────────────────────────────────
-        self.pub_pose = self.create_publisher(PoseInfo, '/basic_motion/pose_info', 10)
-        self.create_timer(1.0 / 30.0, self._publish_pose_info)
+        # ``/auv/state/odom`` and ``/auv/tf`` belong exclusively to
+        # uv_localization.  BasicMotion keeps the old PoseInfo stream only as
+        # a compatibility output for tools that still consume it.
+        self.pub_pose_legacy = self.create_publisher(
+            PoseInfo, LEGACY_POSE_INFO, 10)
+        self.pub_state_reset = self.create_publisher(Empty, STATE_RESET, 10)
+        self._timers.append(self.create_timer(1.0 / 30.0, self._publish_pose_info))
+        self.context.on_shutdown(self._on_context_shutdown)
 
         self.get_logger().info('BasicMotion node started')
+
+    def _on_context_shutdown(self):
+        """Stop callbacks before the ROS context starts destroying handles.
+
+        ``MultiThreadedExecutor`` may still dispatch a timer callback during
+        SIGINT handling.  Marking the node as quiescing and cancelling the
+        timers prevents those callbacks from publishing through an already
+        destroyed DDS handle.
+        """
+        self._shutdown_requested = True
+        for timer in self._timers:
+            timer.cancel()
+
+    def _publish_while_running(self, publisher, message):
+        """Publish unless shutdown has started, tolerating its final race."""
+        if self._shutdown_requested:
+            return
+        try:
+            publisher.publish(message)
+        except Exception:
+            # A timer can pass the flag check immediately before rclpy tears
+            # down its publisher handle.  Do not turn that expected shutdown
+            # race into an un-retrieved task exception; surface all other
+            # publish failures normally.
+            if not self._shutdown_requested:
+                raise
+
+    def destroy_node(self):
+        """Destroy action servers and timers in a deterministic order."""
+        self._on_context_shutdown()
+        self._action_server.destroy()
+        self._legacy_action_server.destroy()
+        return super().destroy_node()
 
     # ═════════════════════════════════════════════════════════════════════════
     # Layer 1: ZIT6 底层 (map 坐标系)
@@ -181,6 +256,7 @@ class BasicMotionNode(Node):
         msg.seq = 0
         self._target = self._map_to_odom(Coordinate(x=x, y=y, z=z, rz=math.degrees(yaw_rad)))
         self.pub_setpoint.publish(msg)
+        self.pub_setpoint_legacy.publish(msg)
         odom_t = self._target
         self.get_logger().info(
             f'发往ZIT6: map=({x:.2f}, {y:.2f}, {z:.2f}, {math.degrees(yaw_rad):.1f}°), '
@@ -191,49 +267,42 @@ class BasicMotionNode(Node):
             self.status = msg
 
     def _vel_cb(self, msg: Float32MultiArray):
-        """ZIT6 速度回调。机体速度 6-DOF [vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad_s]。"""
-        with self._state_lock:
-            if len(msg.data) >= 6:
-                self.vel_body = {
-                    'x': msg.data[0], 'y': msg.data[1], 'z': msg.data[2],
-                    'rx': msg.data[3], 'ry': msg.data[4], 'rz': msg.data[5],
-                }
-            elif len(msg.data) >= 4:
-                self.vel_body = {
-                    'x': msg.data[0], 'y': msg.data[1],
-                    'z': msg.data[2], 'rz': msg.data[3],
-                }
+        """Deprecated raw velocity callback; control uses ``STATE_TWIST``."""
+        del msg
 
-    def _pos_cb(self, msg: Float32MultiArray):
-        """ZIT6 位置回调。原始数据是 map 系，内部转 odom 系后存为 self.pose。
-
-        支持 6 元素 [x, y, z, roll_rad, pitch_rad, yaw_rad] 和
-        旧 4 元素 [x, y, z, yaw_rad] 两种格式。
-        """
+    def _state_odom_cb(self, msg: PoseInfo):
+        """Consume the estimator state used by all higher-level control APIs."""
+        values = (msg.robot_x, msg.robot_y, msg.robot_z,
+                  msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
+        if not all(math.isfinite(float(value)) for value in values):
+            return
         with self._state_lock:
-            if len(msg.data) < 4:
-                return
-            self._pose_stamp = self.get_clock().now().to_msg()  # 记录接收时刻作为测量时间
-            if len(msg.data) >= 6:
-                map_pos = Coordinate(
-                    x=msg.data[0], y=msg.data[1], z=msg.data[2],
-                    rx=math.degrees(msg.data[3]),   # roll rad
-                    ry=math.degrees(msg.data[4]),   # pitch rad
-                    rz=math.degrees(msg.data[5]),   # yaw rad
-                )
-            else:
-                map_pos = Coordinate(
-                    x=msg.data[0], y=msg.data[1], z=msg.data[2],
-                    rz=math.degrees(msg.data[3]),   # 弧度→度
-                )
-            self._map_pose = map_pos   # 始终保存原始 map 坐标，供 start() 使用
-            if self._origin is not None:
-                self.pose = self._map_to_odom(map_pos)
-            else:
-                if not self._origin_warned:
-                    self._origin_warned = True
-                    self.get_logger().warning('里程计原点未设置，使用 map 坐标作为 odom 坐标')
-                self.pose = map_pos
+            # In SIL/HIL the estimator starts at a zero odom origin and there
+            # is no raw ZIT6 position stream.  Allow actions after START to use
+            # the formal state without manufacturing a second state publisher.
+            if self._sim_mode and self._origin is None:
+                self._origin = Coordinate()
+            self._state_origin = Coordinate(
+                x=float(msg.origin_x), y=float(msg.origin_y),
+                z=float(msg.origin_z), rz=float(msg.origin_yaw))
+            self.pose = Coordinate(
+                x=float(msg.robot_x), y=float(msg.robot_y),
+                z=float(msg.robot_z), rx=float(msg.robot_roll),
+                ry=float(msg.robot_pitch), rz=float(msg.robot_yaw))
+            self._pose_stamp = msg.stamp
+
+    def _state_twist_cb(self, msg: TwistWithCovarianceStamped):
+        """Consume estimator body velocity for feedback and step control."""
+        with self._state_lock:
+            twist = msg.twist.twist
+            values = (twist.linear.x, twist.linear.y, twist.linear.z,
+                      twist.angular.x, twist.angular.y, twist.angular.z)
+            if all(math.isfinite(float(value)) for value in values):
+                self.vel_body = {
+                    'x': float(twist.linear.x), 'y': float(twist.linear.y),
+                    'z': float(twist.linear.z), 'rx': float(twist.angular.x),
+                    'ry': float(twist.angular.y), 'rz': float(twist.angular.z),
+                }
 
 
     def set_map(self, x: float, y: float, z: float, yaw_deg: float):
@@ -261,18 +330,19 @@ class BasicMotionNode(Node):
                 self.get_logger().info(
                     'odom origin already set, updating to current map pose')
             self._origin = Coordinate(
-                x=self._map_pose.x, y=self._map_pose.y,
-                z=0.0, rz=self._map_pose.rz)
+                x=self._state_origin.x, y=self._state_origin.y,
+                z=self._state_origin.z, rz=self._state_origin.rz)
             self.get_logger().info(
-                f'DEBUG map pose: x={self._map_pose.x:.4f}, '
-                f'y={self._map_pose.y:.4f}, z={self._map_pose.z:.4f}, '
-                f'rz={self._map_pose.rz:.4f}')
+                f'DEBUG estimator origin: x={self._origin.x:.4f}, '
+                f'y={self._origin.y:.4f}, z={self._origin.z:.4f}, '
+                f'rz={self._origin.rz:.4f}')
             self.pose.x = 0.0
             self.pose.y = 0.0
             self.pose.z = 0.0
             self.pose.rz = 0.0
             # START 重新定义坐标系时，旧动作目标也必须一起清零。
             self._target = Coordinate()
+        self._publish_while_running(self.pub_state_reset, Empty())
         self.get_logger().info(
             f'odom origin set: map({self._origin.x:.2f}, '
             f'{self._origin.y:.2f}, {self._origin.z:.2f}), '
@@ -932,7 +1002,8 @@ class BasicMotionNode(Node):
         return result
 
     def _action_feedback_cb(self):
-        if self._action_goal_handle is None or self._action_target is None:
+        if (self._shutdown_requested or self._action_goal_handle is None
+                or self._action_target is None):
             return
         t = self._action_target
         with self._state_lock:
@@ -941,11 +1012,17 @@ class BasicMotionNode(Node):
             dz = t['z'] - self.pose.z
         feedback = BasicMotion.Feedback()
         feedback.distance_remaining = float(math.sqrt(dx**2 + dy**2 + dz**2))
-        self._action_goal_handle.publish_feedback(feedback)
+        try:
+            self._action_goal_handle.publish_feedback(feedback)
+        except Exception:
+            if not self._shutdown_requested:
+                raise
 
 
     def _publish_pose_info(self):
         """Publish origin, robot pose, and target pose at 30Hz."""
+        if self._shutdown_requested:
+            return
         msg = PoseInfo()
         msg.stamp = self._pose_stamp
         with self._state_lock:
@@ -964,7 +1041,7 @@ class BasicMotionNode(Node):
             msg.target_y = float(self._target.y)
             msg.target_z = float(self._target.z)
             msg.target_yaw = float(self._target.rz)
-        self.pub_pose.publish(msg)
+        self._publish_while_running(self.pub_pose_legacy, msg)
 
 
 def main(args=None):

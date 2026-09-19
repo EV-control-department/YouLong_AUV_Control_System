@@ -22,6 +22,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from uv_msgs.action import BasicMotion
 from uv_task.task_outcome import TaskOutcome
 from uv_msgs.msg import DetectionArray
+from auv_protocol.topics import DETECTIONS
 from uv_camera.camera_config import CameraConfig
 from uv_camera.model_classes import model_class_id
 
@@ -161,6 +162,26 @@ def _triangulate_rays(
 class RB26GateTask:
     """仅使用前视图像搜索、对准并通过四个门。"""
 
+    def _image_width(self) -> int:
+        """Return the configured eye width, with a test/offline fallback."""
+        width = getattr(self, '_front_width', None)
+        if width is not None:
+            return max(int(width), 1)
+        camera_k = getattr(self, '_camera_k', {}).get('left')
+        if camera_k is not None and np.asarray(camera_k).shape == (3, 3):
+            return max(int(round(2.0 * float(camera_k[0, 2]))), 1)
+        return 1
+
+    def _image_height(self) -> int:
+        """Return the configured eye height, with a test/offline fallback."""
+        height = getattr(self, '_front_height', None)
+        if height is not None:
+            return max(int(height), 1)
+        camera_k = getattr(self, '_camera_k', {}).get('left')
+        if camera_k is not None and np.asarray(camera_k).shape == (3, 3):
+            return max(int(round(2.0 * float(camera_k[1, 2]))), 1)
+        return 1
+
     def __init__(self, node, params: dict):
         self._node = node
         self._params = params
@@ -188,6 +209,13 @@ class RB26GateTask:
         front_left = front_config.side('left')
         front_right = front_config.side('right')
         self._front_width, self._front_height = front_config.eye_resolution
+        # Stonefish keeps image bytes in shared memory and intentionally does
+        # not publish sensor_msgs/Image. DetectionArray still carries the
+        # complete bbox geometry, so keep a shape-only frame for task geometry
+        # when the configured image topic has no publisher.
+        self._geometry_frame = np.empty(
+            (self._front_height, self._front_width, 3), dtype=np.uint8)
+        self._geometry_fallback_reported = False
         self._camera_k = {
             'left': front_left.matrix.copy(),
             'right': front_right.matrix.copy(),
@@ -222,18 +250,18 @@ class RB26GateTask:
 
         # 搜索阶段首先使用左目相机链路的检测结果作为视觉线索；锁定后
         # 还会订阅并校验右目结果。这仍然是纯相机方案：不消费
-        # /perception/objects 或 object_localizer 输出。
+        # /auv/perception/observations 或 object_localizer 输出。
         self._subs.append(node.create_subscription(
             DetectionArray,
             str(params.get(
                 'left_detection_topic',
-                '/perception/detection/front_left')),
+                DETECTIONS('front_left'))),
             self._left_detection_cb, qos))
         self._subs.append(node.create_subscription(
             DetectionArray,
             str(params.get(
                 'right_detection_topic',
-                '/perception/detection/front_right')),
+                DETECTIONS('front_right'))),
             self._right_detection_cb, qos))
 
         # CameraInfo 只能作为运行时校验/更新来源，配置 YAML 仍是默认真值。
@@ -245,7 +273,7 @@ class RB26GateTask:
                 CameraInfo, topic,
                 lambda msg, s=side: self._camera_info_cb(s, msg), qos))
         self._min_extent = _clamp(
-            float(params.get('min_gate_extent_fraction', 0.25)), 0.05, 0.95)
+            float(params.get('min_gate_extent_fraction', 0.1)), 0.05, 0.95)
         self._target_extent = _clamp(
             float(params.get('target_gate_extent_fraction', 0.75)), 0.20, 0.95)
         self._target_height_fraction = _clamp(
@@ -311,8 +339,12 @@ class RB26GateTask:
         self._right_yaw_sign = float(params.get('right_yaw_sign', 1.0))
         self._search_start_offset_deg = float(
             params.get('search_start_offset_deg', -30.0))
-        self._search_sweep_deg = abs(float(
-            params.get('search_sweep_deg', 60.0)))
+        self._search_sweep_deg = float(
+            params.get('search_sweep_deg', 60.0))
+        self._search_retry_sweep_deg = float(
+            params.get('search_retry_sweep_deg', 120.0))
+        self._search_final_sweep_deg = float(
+            params.get('search_final_sweep_deg', 180.0))
 
         self._alignment_timeout = max(
             5.0, float(params.get('alignment_timeout', 45.0)))
@@ -411,13 +443,18 @@ class RB26GateTask:
             0.2, float(params.get('pass_distance_m', 1.15)))
         self._pass_timeout = max(
             2.0, float(params.get('pass_timeout', 45.0)))
+        # BTRAVEL 的内部分步控制会在目标未收敛时按测量姿态重算
+        # 方向，穿门阶段可能因此产生横向/偏航漂移。任务层改用
+        # 固定绝对位姿的短段 SET；每段都在固定目标处收敛后才发下一段。
+        self._pass_segment_distance = _clamp(
+            float(params.get('pass_segment_distance_m', 0.4)), 0.1, 0.8)
         self._post_pass_pause = max(
             0.0, float(params.get('post_pass_pause', 0.5)))
 
         self._logger.info(
             '26rb_gate_task 已创建：搜索使用左目，锁定后使用双目视觉伺服，'
             f'输入={self._input_mode}，门数={self._gates_to_pass}，'
-            f'占比范围 {self._min_extent:.2f}->{self._target_extent:.2f}，'
+            f'目标门框占比={self._target_extent:.2f}，'
             f'前后距离按 bbox 高度={self._target_height_fraction:.3f}，'
             '跟踪当前视野中的最大门框，'
             f'图像中心误差<={self._image_center_tolerance:.2f}，'
@@ -426,14 +463,18 @@ class RB26GateTask:
             f'{self._max_lateral_speed:.2f}，'
             f'{self._max_vertical_speed:.2f}) 米/秒，'
             f'搜索偏航角速度={self._scan_yaw_rate:.1f}°/秒，'
+            f'扫描范围=({self._search_sweep_deg:.0f}°，'
+            f'{self._search_retry_sweep_deg:.0f}°，'
+            f'{self._search_final_sweep_deg:.0f}°)，'
             f'左目外参偏移={self._front_left_offset.tolist()}，'
             f'光轴到机体坐标变换={self._optical_to_body.tolist()}，'
             f'横向极值搜索={self._arc_lateral_speed:.2f}米/秒，'
             f'首段窗口={self._arc_probe_window_seconds:.1f}秒，'
             f'首段窗口速度={self._arc_probe_speed:.2f}米/秒，'
             f'固定分段窗口={self._arc_window_seconds:.1f}秒，'
+            f'穿门位置环分段={self._pass_segment_distance:.2f}米，'
             f'丢失指令保持={self._lost_command_hold_seconds:.1f} 秒，'
-            f'搜索高度阈值={self._search_stop_height_fraction:.3f}，'
+            '搜索完成后选择扫描范围内最大门框，'
             f'偏航 PID=({self._yaw_pid_kp:.2f}，'
             f'{self._yaw_pid_ki:.2f}，{self._yaw_pid_kd:.2f})')
 
@@ -480,7 +521,7 @@ class RB26GateTask:
     def _camera_info_cb(self, side: str, message: CameraInfo):
         try:
             if (int(message.width), int(message.height)) != (
-                    self._front_width, self._front_height):
+                    self._image_width(), self._image_height()):
                 return
             matrix = np.asarray(message.k, dtype=np.float64).reshape(3, 3)
             expected = self._camera_k[side]
@@ -499,6 +540,25 @@ class RB26GateTask:
 
     # ── 相机几何 ─────────────────────────────────────────────────────
 
+    def _detection_geometry_frame(self, require_right: bool = False):
+        """Return a configured-size frame when DDS image bytes are absent."""
+        now = time.monotonic()
+        with self._lock:
+            left_entry = self._latest_left_detections
+            right_entry = self._latest_right_detections
+        if (left_entry is None
+                or now - left_entry[0] > self._detection_timeout):
+            return None
+        if (require_right
+                and (right_entry is None
+                     or now - right_entry[0] > self._detection_timeout)):
+            return None
+        if not self._geometry_fallback_reported:
+            self._geometry_fallback_reported = True
+            self._logger.info(
+                '过门任务：未收到 DDS 图像，使用检测消息和配置分辨率进行门框几何计算')
+        return self._geometry_frame
+
     def _left_camera(self):
         """返回当前左目图像及其标定内参。
 
@@ -507,6 +567,20 @@ class RB26GateTask:
         """
 
         now = time.monotonic()
+        with self._lock:
+            image_entry = (self._latest_stitched
+                           if self._input_mode == 'stitched'
+                           else self._latest_left)
+        image_missing = image_entry is None or now - image_entry[0] > self._frame_timeout
+        image_invalid = False
+        if image_entry is not None and self._input_mode == 'stitched':
+            frame = image_entry[1]
+            image_invalid = (frame.ndim < 2
+                             or frame.shape[1] < 2 * frame.shape[0])
+        if image_missing or image_invalid:
+            fallback = self._detection_geometry_frame()
+            if fallback is not None:
+                return fallback, self._camera_k['left'].copy()
         with self._lock:
             if self._input_mode == 'stitched':
                 if self._latest_stitched is None:
@@ -537,6 +611,29 @@ class RB26GateTask:
     def _camera_pair(self):
         """返回一组满足时效/同步要求的双目图像。"""
         now = time.monotonic()
+        with self._lock:
+            image_entry = (self._latest_stitched
+                           if self._input_mode == 'stitched'
+                           else self._latest_left)
+            right_entry = self._latest_right
+        image_missing = image_entry is None or now - image_entry[0] > self._frame_timeout
+        image_invalid = False
+        if image_entry is not None and self._input_mode == 'stitched':
+            frame = image_entry[1]
+            image_invalid = frame.shape[1] < 2 * frame.shape[0]
+        pair_missing = (self._input_mode != 'stitched'
+                        and (right_entry is None
+                             or now - right_entry[0] > self._frame_timeout))
+        pair_unsynced = False
+        if (self._input_mode != 'stitched' and image_entry is not None
+                and right_entry is not None):
+            pair_unsynced = abs(image_entry[0] - right_entry[0]) > self._pair_slop
+        if image_missing or image_invalid or pair_missing or pair_unsynced:
+            fallback = self._detection_geometry_frame(require_right=True)
+            if fallback is not None:
+                return (fallback, fallback,
+                        self._camera_k['left'].copy(),
+                        self._camera_k['right'].copy())
         with self._lock:
             if self._input_mode == 'stitched':
                 if self._latest_stitched is None:
@@ -694,8 +791,6 @@ class RB26GateTask:
                     continue
                 extent = max(box_width / max(width, 1),
                              box_height / max(height, 1))
-                if extent < self._min_extent:
-                    continue
                 corners = np.array([
                     [x1, y1], [x2, y1], [x2, y2], [x1, y2],
                 ], dtype=np.float64)
@@ -803,7 +898,7 @@ class RB26GateTask:
 
         pixel = (candidate.bbox_center
                  if candidate.bbox_center is not None else candidate.center)
-        extent = max(float(candidate.extent_fraction), self._min_extent)
+        extent = max(float(candidate.extent_fraction), 1e-6)
         distance = self._monocular_reference_distance * (
             self._target_extent / max(extent, 1e-6))
         distance = _clamp(
@@ -873,12 +968,25 @@ class RB26GateTask:
 
         reference_center = self._candidate_pixel_center(reference)
         reference_extent = max(float(reference.extent_fraction), 1e-6)
+        image_width = self._image_width()
+        image_height = self._image_height()
+        if image_width == 1:
+            image_width = max(
+                [1.0, 2.0 * abs(float(reference_center[0]))] + [
+                    2.0 * abs(float(self._candidate_pixel_center(candidate)[0]))
+                    for candidate in candidates])
+        if image_height == 1:
+            image_height = max(
+                [1.0, 2.0 * abs(float(reference_center[1]))] + [
+                    2.0 * abs(float(self._candidate_pixel_center(candidate)[1]))
+                    for candidate in candidates])
         scored = []
         for candidate in candidates:
             center = self._candidate_pixel_center(candidate)
             center_delta = float(np.linalg.norm(
                 (center - reference_center)
-                / np.array([self._front_width, self._front_height], dtype=np.float64)))
+                / np.array([image_width, image_height],
+                            dtype=np.float64)))
             if center_delta > _LOCK_MAX_CENTER_DELTA_FRACTION:
                 continue
             extent_delta = abs(math.log(
@@ -994,7 +1102,7 @@ class RB26GateTask:
             else:
                 right_distance = float(np.linalg.norm(
                     (right_pixel - right_reference)
-                    / np.array([self._front_width, self._front_height],
+                    / np.array([self._image_width(), self._image_height()],
                                dtype=np.float64)))
                 if right_distance > _LOCK_MAX_CENTER_DELTA_FRACTION:
                     continue
@@ -1194,15 +1302,23 @@ class RB26GateTask:
         self._node._cmd_yaw = _wrap_degrees(self._node._cmd_yaw + dyaw)
         return True
 
-    def _sweep_for_largest(self, start_yaw: float):
-        """扫描航向区间，或在门框足够高时立即停止并锁定。"""
+    def _sweep_for_largest(
+            self, start_yaw: float, sweep_deg: float | None = None,
+            deadline: float | None = None):
+        """完整扫过一个航向区间，并返回区间内检测到的最大门框。"""
 
-        sweep = self._search_sweep_deg
+        sweep = (
+            self._search_sweep_deg
+            if sweep_deg is None else float(sweep_deg))
+        if abs(sweep) < 1e-6:
+            sweep = 60.0
         direction = 1.0 if sweep >= 0.0 else -1.0
         target_yaw = _wrap_degrees(start_yaw + sweep)
-        deadline = time.monotonic() + self._scan_timeout
+        deadline = (
+            time.monotonic() + self._scan_timeout
+            if deadline is None else float(deadline))
         best = None
-        best_heading = start_yaw
+        best_heading = _wrap_degrees(start_yaw)
         self._search_stopped_on_height = False
         last_publish = float('-inf')
         velocity_started = False
@@ -1218,29 +1334,13 @@ class RB26GateTask:
 
         self._logger.info(
             f'过门任务：扫描 {_wrap_degrees(start_yaw):.1f}° -> '
-            f'{target_yaw:.1f}°，速度为 {self._scan_yaw_rate:.1f}°/秒')
+            f'{target_yaw:.1f}°，速度为 {abs(sweep):.1f}°/秒')
         try:
             while (time.monotonic() < deadline and rclpy_ok()
                    and not self._node.stopped):
                 current_yaw = measured_yaw()
                 observation = self._observe()
-                if observation is not None:
-                    height_fraction = max(
-                        float(observation.left.height_px),
-                        float(observation.right.height_px),
-                    ) / max(self._front_height, 1)
-                    if height_fraction > self._search_stop_height_fraction:
-                        best = observation
-                        best_heading = current_yaw
-                        self._search_stopped_on_height = True
-                        self._logger.info(
-                            '过门任务：门框高度占图像高度为 '
-                            f'{height_fraction:.3f}，超过阈值 '
-                            f'{self._search_stop_height_fraction:.3f}；'
-                            '停止扫描并锁定当前门框')
-                        break
                 if (observation is not None
-                        and observation.extent_fraction >= self._min_extent
                         and (best is None
                              or observation.extent_fraction
                              > best.extent_fraction)):
@@ -1264,10 +1364,11 @@ class RB26GateTask:
             if velocity_started:
                 self._node._publish_body_velocity()
 
-        return best, best_heading
+        end_heading = measured_yaw()
+        return best, (best_heading if best is not None else end_heading)
 
     def _scan_headings(self, initial: bool) -> GateObservation | None:
-        """首次面向东方，然后转到 -30° 并扫描 +60°。"""
+        """按 60°、120°、180° 三轮扫描寻找最大门框。"""
 
         start_yaw = float(self._node._cmd_yaw)
         if initial:
@@ -1280,51 +1381,64 @@ class RB26GateTask:
                 time.sleep(self._scan_settle)
             start_yaw = float(self._node._cmd_yaw)
 
-        # -30° 的扫描起点相对于当前参考方向。因而第一次过门的默认扫描
-        # 范围是以东方为中心的 -30° 到 +30°。
+        # 保留原有的相对起始偏移，然后从这个航向开始执行三轮扫描。
         start_yaw += self._search_start_offset_deg
-        if not self._rotate_to(start_yaw, '位置环转到搜索起点-30度'):
+        if not self._rotate_to(start_yaw, '位置环转到搜索起点'):
             return None
         if self._scan_settle > 0.0:
             time.sleep(self._scan_settle)
         start_yaw = float(self._node._cmd_yaw)
 
-        best, best_heading = self._sweep_for_largest(start_yaw)
+        # 第一轮沿用配置的扫描角度；没有任何门框时，再从上一轮终点
+        # 继续扫描 120°，最后再扫描 180°。每轮都完整走完后才比较最大框。
+        sweep_degrees = (
+            self._search_sweep_deg,
+            self._search_retry_sweep_deg,
+            self._search_final_sweep_deg,
+        )
+        search_deadline = time.monotonic() + self._scan_timeout
+        best = None
+        best_heading = start_yaw
+        for attempt, sweep in enumerate(sweep_degrees, start=1):
+            if time.monotonic() >= search_deadline:
+                break
+            if attempt > 1:
+                self._logger.info(
+                    f'过门任务：前一轮扫描未找到门框，'
+                    f'继续扫描第 {attempt} 轮，范围={abs(sweep):.1f}°')
+            best, best_heading = self._sweep_for_largest(
+                start_yaw, sweep_deg=sweep, deadline=search_deadline)
+            if best is not None:
+                break
+            start_yaw = best_heading
+
         if best is None:
             self._logger.error(
-                '过门任务：扫描未找到占比不小于 '
-                f'{self._min_extent:.2f} 的左目门框')
+                '过门任务：完成 60°、120°和180°扫描后仍未找到门框')
             return None
 
-        if self._search_stopped_on_height:
-            # 已经在当前航向停止，保留触发阈值的观测，不能重新搜索。
-            # 这里仅等待同一门框的右目配对，不允许换成另一个更大的框。
-            self._logger.info(
-                '过门任务：保留高度阈值触发时的门框，'
-                f'航向={best_heading:.1f}°，不再重新搜索；等待双目锁定')
-        else:
-            if not self._rotate_to(best_heading, '位置环转到最大门视线'):
-                return None
-            if self._scan_settle > 0.0:
-                time.sleep(self._scan_settle)
+        if not self._rotate_to(best_heading, '位置环转到最大门视线'):
+            return None
+        if self._scan_settle > 0.0:
+            time.sleep(self._scan_settle)
+
         # 进入对准前必须完成一次双目锁定。位置环转向可能会短暂影响
         # 观测，因此给感知一段时间重新配对；等待期间不再改变目标。
         fresh_timeout = max(
             self._post_turn_observation_timeout,
             self._scan_settle * 3.0)
-        best = self._wait_stereo_observation(fresh_timeout, best)
+        # 扫描阶段的 best 是某一时刻的左目单目框；转到该航向后，
+        # 目标已经产生了新一帧双目框，不能再用旧单目像素位置做严格
+        # 锁定匹配。直接在当前新鲜双目帧中选最大门框，仍然遵守“扫描
+        # 完成后选择最大门框”的任务规则。
+        best = self._wait_stereo_observation(fresh_timeout, None)
         if best is None:
             self._logger.error(
                 '过门任务：未获得锁定门框的双目极线配对观测')
             return None
-        if self._search_stopped_on_height:
-            self._logger.info(
-                f'过门任务：已锁定高度阈值门框，'
-                f'占比={best.extent_fraction:.3f}')
-        else:
-            self._logger.info(
-                f'过门任务：已选择当前视野中的最大门框，'
-                f'占比={best.extent_fraction:.3f}')
+        self._logger.info(
+            f'过门任务：已选择扫描范围内的最大门框，'
+            f'占比={best.extent_fraction:.3f}')
         return best
 
     def _image_center_errors(self, observation: GateObservation):
@@ -1396,7 +1510,7 @@ class RB26GateTask:
         errors = self._image_center_errors(observation)
         bbox_height_fraction = max(
             float(observation.left.height_px),
-            float(observation.right.height_px)) / max(self._front_height, 1)
+            float(observation.right.height_px)) / self._image_height()
         return (
             max(abs(errors['left_v']), abs(errors['right_v']))
             <= self._image_center_tolerance
@@ -1416,7 +1530,7 @@ class RB26GateTask:
             self._distance_control_max_m)
         bbox_height_fraction = max(
             float(observation.left.height_px),
-            float(observation.right.height_px)) / max(self._front_height, 1)
+            float(observation.right.height_px)) / self._image_height()
         size_error = self._target_height_fraction - bbox_height_fraction
         vertical_error = errors['v'] * distance
 
@@ -1472,8 +1586,8 @@ class RB26GateTask:
             height_px=max(height_px, 1.0),
             center_z_m=float(observation.center_body[2]),
             extent_fraction=max(
-                width_px / max(self._front_width, 1),
-                height_px / max(self._front_height, 1)),
+                width_px / self._image_width(),
+                height_px / self._image_height()),
         )
         previous = getattr(self, '_filtered_gate', None)
         if previous is None:
@@ -1668,7 +1782,7 @@ class RB26GateTask:
         # 前后距离只看 bbox 高度，不再使用 max(width_fraction,
         # height_fraction) 的 extent 代理。这样门的横向姿态变化不会把
         # 宽度变化误当成距离误差。
-        height_fraction = filtered.height_px / max(self._front_height, 1)
+        height_fraction = filtered.height_px / self._image_height()
         size_error = self._target_height_fraction - height_fraction
         forward = self._distance_velocity_gain * size_error * distance
         if forward >= 0.0:
@@ -1731,7 +1845,7 @@ class RB26GateTask:
         vertical_error = image_errors['v'] * distance
         height_fraction = max(
             float(observation.left.height_px),
-            float(observation.right.height_px)) / max(self._front_height, 1)
+            float(observation.right.height_px)) / self._image_height()
         size_error = self._target_height_fraction - height_fraction
 
         dx = 0.0
@@ -1851,6 +1965,11 @@ class RB26GateTask:
         attitude_done = False
         height_done = False
         velocity_started = False
+        # _stop_observe_and_turn() hands control to a position SET before
+        # returning. Do not publish another velocity-mode message from the
+        # finally block after that handoff, or it can overwrite the position
+        # mode immediately before BTRAVEL starts.
+        position_handoff = False
         last_velocity_publish = float('-inf')
         last_bbox_log = float('-inf')
         last_velocity_command = None
@@ -2034,7 +2153,8 @@ class RB26GateTask:
                         '过门任务：姿态和高度均已完成；停止并根据边界框中心'
                         '进行位置环转向')
                     self._locked_observation = locked_observation
-                    return self._stop_observe_and_turn(observation)
+                    position_handoff = self._stop_observe_and_turn(observation)
+                    return position_handoff
 
                 if (not velocity_started
                         or now - last_velocity_publish >= self._velocity_period):
@@ -2067,9 +2187,11 @@ class RB26GateTask:
                         last_bbox_log = now
                 time.sleep(0.02)
         finally:
-            # 任务失败、取消或将控制权交给 BTRAVEL 时，绝不能让 ZIT6
-            # 控制器停留在非零速度模式。
-            if velocity_started:
+            # 任务失败、取消时，绝不能让 ZIT6 控制器停留在非零速度模式。
+            # 成功的位置环交接已经在 _stop_observe_and_turn() 中完成；
+            # 此处再发 0x11 会把位置模式改回速度模式，并与后续 BTRAVEL
+            # 的位置 setpoint 产生跨节点竞态。
+            if velocity_started and not position_handoff:
                 publish_velocity()
             # 速度控制会改变测量姿态，但不会改变 TaskRunner 的位置指令
             # 缓存。同步该缓存，使下一次搜索的绝对偏航 SET 基于 AUV 的
@@ -2087,30 +2209,108 @@ class RB26GateTask:
         return False
 
     def _pass_current_gate(self, index: int) -> bool:
+        """通过当前门框。
+
+        不使用 BTRAVEL：其内部步进器在单步未收敛时会根据变化中的
+        测量姿态重新计算机体步进，导致目标方向漂移。这里固定穿门
+        开始时的世界坐标和偏航，只发送几个短的绝对位置 SET；每个
+        SET 完成后才继续下一段。这样即使某段超时，控制器也只会停在
+        该段的固定目标，不会继续沿着一个失控的旧速度目标前进。
+        """
         self._logger.info(
             f'过门任务：[{index}/{self._gates_to_pass}] '
-            f'向前移动 {self._pass_distance:.2f} 米通过门框')
-        success, message = self._node._send_action_goal(
-            BasicMotion.Goal.BTRAVEL,
-            [self._pass_distance, 0.0, 0.0, 0.0],
-            'x', timeout=self._pass_timeout, quiet=False,
-            task_context=self._node._format_motion_context(
-                f'第{index}个门前进通过'),
-        )
-        if not success:
-            self._logger.error(f'过门任务：第 {index} 个门通过失败：{message}')
-            return False
-        # BTRAVEL 由 BasicMotion 根据测量姿态闭环执行。重新读取该姿态，
-        # 不要基于过期的速度控制前位置指令缓存进行积分。
+            f'使用固定位置环分段前进 {self._pass_distance:.2f} 米通过门框，'
+            f'每段 {self._pass_segment_distance:.2f} 米')
+
+        def recover_after_failure(reason: str) -> None:
+            # 先立即切到零速度，避免动作失败或任务退出后留下旧的
+            # 速度输出；再将 BasicMotion 的内部目标复位到当前位姿。
+            try:
+                self._node._publish_body_velocity()
+                pose = self._node._latest_robot_pose()
+                (self._node._cmd_x, self._node._cmd_y,
+                 self._node._cmd_z, self._node._cmd_yaw) = (
+                    pose[0], pose[1], pose[2], pose[5])
+                hold_success, hold_message = self._node._send_action_goal(
+                    BasicMotion.Goal.SET,
+                    [pose[0], pose[1], pose[2], pose[5]],
+                    'xyzrz', timeout=min(3.0, self._command_timeout),
+                    quiet=True,
+                    task_context=self._node._format_motion_context(
+                        '穿门分段失败安全复位当前位姿'),
+                )
+                if not hold_success:
+                    self._logger.warning(
+                        f'过门任务：分段失败后的当前位姿复位失败：'
+                        f'{hold_message}')
+                else:
+                    self._logger.info(
+                        '过门任务：分段失败后的当前位姿已复位')
+            except (AttributeError, TypeError, RuntimeError, IndexError,
+                    ValueError) as exc:
+                self._logger.warning(
+                    f'过门任务：分段失败后的安全复位失败：{exc}')
+            self._logger.error(
+                f'过门任务：第 {index} 个门通过失败：{reason}')
+
+        start_pose = self._node._latest_robot_pose()
+        start_x, start_y, start_z, start_yaw = (
+            float(start_pose[0]), float(start_pose[1]),
+            float(start_pose[2]), float(start_pose[5]))
+        yaw_rad = math.radians(start_yaw)
+        forward_x = math.cos(yaw_rad)
+        forward_y = math.sin(yaw_rad)
+        deadline = time.monotonic() + self._pass_timeout
+        completed = 0.0
+        segment_number = 0
+
+        while completed < self._pass_distance - 1e-6:
+            if self._node.stopped or not rclpy_ok():
+                recover_after_failure('任务被中止')
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.05:
+                recover_after_failure('穿门分段总超时')
+                return False
+
+            completed = min(
+                self._pass_distance,
+                completed + self._pass_segment_distance)
+            target_x = start_x + forward_x * completed
+            target_y = start_y + forward_y * completed
+            segment_number += 1
+            segment_timeout = max(
+                1.0, min(self._command_timeout, remaining))
+            self._logger.info(
+                f'过门任务：第 {segment_number} 段位置 SET，'
+                f'固定目标=({target_x:.2f}, {target_y:.2f}, '
+                f'{start_z:.2f}, {start_yaw:.1f}°)，'
+                f'累计前进={completed:.2f}/{self._pass_distance:.2f}米')
+            success, message = self._node._send_action_goal(
+                BasicMotion.Goal.SET,
+                [target_x, target_y, start_z, start_yaw],
+                'xyzrz', timeout=segment_timeout, quiet=False,
+                task_context=self._node._format_motion_context(
+                    f'第{index}个门分段前进 {completed:.2f}米'),
+            )
+            if not success:
+                recover_after_failure(message)
+                return False
+
+            # 给下一次绝对 SET 更新任务缓存；目标仍然基于 start_pose
+            # 计算，不读取可能暂时抖动的实测位置来积分。
+            self._node._cmd_x = target_x
+            self._node._cmd_y = target_y
+            self._node._cmd_z = start_z
+            self._node._cmd_yaw = start_yaw
+
         try:
             pose = self._node._latest_robot_pose()
             (self._node._cmd_x, self._node._cmd_y,
              self._node._cmd_z, self._node._cmd_yaw) = (
                 pose[0], pose[1], pose[2], pose[5])
         except (AttributeError, TypeError, IndexError):
-            yaw = math.radians(self._node._cmd_yaw)
-            self._node._cmd_x += math.cos(yaw) * self._pass_distance
-            self._node._cmd_y += math.sin(yaw) * self._pass_distance
+            pass
         if self._post_pass_pause > 0.0:
             time.sleep(self._post_pass_pause)
         return True

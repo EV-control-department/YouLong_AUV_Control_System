@@ -1,0 +1,71 @@
+\chapter{Bringup 与配置系统}
+\label{ch:bringup}
+
+\section{启动组织}
+启动文件只负责编排节点、声明参数、选择 profile、建立 remap 和处理关键进程退出；算法状态和业务逻辑留在节点实现中。真机启动由 \pkg{uv_bringup} 管理，仿真启动由 \pkg{uv_sim_bringup} 管理。
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    box/.style={draw=YoulongBlue, rounded corners, fill=YoulongLight,
+      minimum width=34mm, minimum height=8mm, align=center},
+    arr/.style={-{Latex[length=2mm]}, thick, color=YoulongBlue},
+    node distance=7mm
+  ]
+    \node[box] (real) {\code{real.launch.py}};
+    \node[box, below left=of real] (desc) {真实 URDF};
+    \node[box, below=of real] (hw) {\pkg{uv_hm}};
+    \node[box, below right=of real] (loc) {\pkg{uv_localization}};
+    \node[box, below=of hw] (ctrl) {控制 / 感知 / 规划 / 任务};
+    \draw[arr] (real) -- (desc);
+    \draw[arr] (real) -- (hw);
+    \draw[arr] (real) -- (loc);
+    \draw[arr] (desc) |- (ctrl);
+    \draw[arr] (hw) -- (ctrl);
+    \draw[arr] (loc) -- (ctrl);
+  \end{tikzpicture}
+  \caption{真机 bringup 组成}
+  \label{fig:real-bringup}
+\end{figure}
+
+仿真入口 \code{sim.launch.py} 额外启动仿真 URDF、Stonefish、\pkg{uv_sim_bridge}、可选退化节点、评测和观测工具；HIL 入口再启动 micro-ROS Agent 并将 \code{hil_mode} 传给 bridge。
+
+\section{Profile 机制}
+profile 是标准 ROS 2 YAML 参数文件，用于按模式选择保守或开发参数。当前可见 profile 包括：
+\begin{itemize}
+  \item real：\code{real_default}、\code{real_safe}；
+  \item sim：\code{sim_dev}、\code{sim_ci}；公开 \pkg{uv_sim} 入口另提供
+        \code{guoshui}、\code{guoshui_cruise}、\code{guoshui_cruise_seeded}、
+        \code{sauvc_finals} 和 \code{sauvc_qualification} world 预设；
+  \item hil：\code{hil_lab}。
+\end{itemize}
+启动文件在进入子 launch 前解析 profile 路径并校验 profile 与运行模式匹配，避免将仿真参数误用于真机。
+
+\Needspace{12\baselineskip}
+\section{常用启动命令}
+\begin{lstlisting}[language=bash,caption={标准运行入口}]
+# Real
+cd workspace_auv
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch uv_bringup real.launch.py profile:=real_default
+
+# SIL
+cd workspace_sim
+colcon build
+source install/setup.bash
+ros2 launch uv_sim_bringup sim.launch.py profile:=sim_dev
+
+# 公开场景预设；显式 world:= 会覆盖预设 world
+ros2 launch uv_sim sim.launch.py profile:=sauvc_finals
+
+# HIL
+ros2 launch uv_sim_bringup hil.launch.py profile:=hil_lab \
+  serial_dev:=/dev/ttyUSB0 serial_baud:=921600
+\end{lstlisting}
+
+\section{启动顺序与就绪}
+典型依赖顺序是：描述/固定 TF、硬件或仿真输入、定位、控制、相机/感知、规划、任务。任务默认关闭，避免节点刚启动时立即执行 Mission。\pkg{uv_bringup} 提供 readiness 检查，可按 backend、control、sensors、perception 阶段确认 Topic 和节点已达到运行条件。
+
+\section{参数事实来源}
+启动参数的默认值在 launch 中定义，模式参数在 profile 中覆盖，任务参数在 Mission/Task YAML 中维护，相机参数在相机 profile 和标定文件中维护。参数优先级和最终生效值应通过启动日志或 ROS 参数查询确认；LaTeX 不复制完整参数树，附录只列出入口和语义。

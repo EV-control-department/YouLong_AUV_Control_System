@@ -5,14 +5,14 @@ profiles:
   sim:
     capture_resolution: [2560, 960]
     eye_resolution: [1280, 960]
-    image_topic: /auv/down_cam/stitched
+    image_topic: /auv/sensors/camera/downward/image_stitched
     eye_image_topics:
-      left: /sim/down_cam/left/image_color
-      right: /sim/down_cam/right/image_color
-    stereo_info_topic: /auv/down_cam/stereo_info
+      left: /auv/sim/raw/camera/downward/left/image_raw
+      right: /auv/sim/raw/camera/downward/right/image_raw
+    stereo_info_topic: /auv/sensors/camera/downward/stereo_info
     camera_info_topics:
-      left: /sim/down_cam/left/camera_info
-      right: /sim/down_cam/right/camera_info
+      left: /auv/sim/raw/camera/downward/left/camera_info
+      right: /auv/sim/raw/camera/downward/right/camera_info
     device: null
     calibration_source: sim_camera_info
     calibration_npz: robotcup_down.npz
@@ -25,23 +25,23 @@ profiles:
         distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
     extrinsics:
       left:
-        translation: [-0.13, -0.05, 0.2645]
+        translation: [0.0, -0.05, 0.176]
         optical_to_body: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
       right:
-        translation: [-0.13, 0.05, 0.2645]
+        translation: [0.0, 0.05, 0.176]
         optical_to_body: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
 
   real:
-    capture_resolution: [3840, 1080]
+    capture_resolution: [2560, 960]
     eye_resolution: [1280, 960]
-    image_topic: /auv/down_cam/stitched
+    image_topic: /auv/sensors/camera/downward/image_stitched
     eye_image_topics:
       left: ""
       right: ""
-    stereo_info_topic: /auv/down_cam/stereo_info
+    stereo_info_topic: /auv/sensors/camera/downward/stereo_info
     camera_info_topics:
-      left: ""
-      right: ""
+      left: /auv/sensors/camera/downward/left/camera_info
+      right: /auv/sensors/camera/downward/right/camera_info
     device: /dev/video2
     calibration_source: npz
     calibration_npz: down.npz

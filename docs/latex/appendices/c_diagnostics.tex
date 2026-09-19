@@ -1,0 +1,37 @@
+\chapter{故障诊断与安全处置}
+\label{app:diagnostics}
+
+\section{症状到检查}
+\begin{longtable}{p{0.23\textwidth}p{0.30\textwidth}p{0.33\textwidth}}
+  \caption{现场诊断速查}\label{tab:diagnostics}\\
+  \toprule
+  症状 & 可能原因 & 检查方向 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  症状 & 可能原因 & 检查方向 \\
+  \midrule
+  \endhead
+  没有估计状态 & DVL/MCU 无数据、节点未启动、Topic 类型不匹配 & 检查 \topic{/auv/state/odom}、原始状态 Topic、节点日志和 readiness。 \\
+  相机无图像 & 设备路径、V4L2 打开失败、Stonefish 图像 Topic 不一致 & 检查设备、图像频率、相机 profile 和 stitched Topic。 \\
+  目标位置跳变 & 时间错配、外参错误、双目视差过小、实例关联错误 & 检查时间戳、标定、几何拒绝计数和观测历史。 \\
+  动作超时 & 控制器未 armed、目标不可达、状态过期或推进器饱和 & 检查 ZIT6 status、动作目标、状态误差、heartbeat 和 thruster。 \\
+  仿真不动 & Stonefish 未订阅命令、mixer 方向或控制核参数错误 & 检查 \topic{/auv/sim/actuators/thruster_command} 和控制频率。 \\
+  MCU 超时 & 串口、Agent、MCU heartbeat 或 DDS 通道故障 & 检查 Agent 输出、串口设备、heartbeat 时间和错误标志。 \\
+  \bottomrule
+\end{longtable}
+
+\section{安全处置顺序}
+出现无法解释的运动时，先停止 Mission，再取消或停止 BasicMotion，确认控制输出归零/进入安全模式，必要时执行急停；随后保存 ROS 日志、任务状态、ZIT6 状态和 rosbag。不要在车辆仍有运动可能时直接重启所有节点。
+
+\section{仿真隔离检查}
+仿真运行时可执行：
+\begin{lstlisting}[language=bash,caption={Ground Truth 订阅者检查}]
+ros2 topic info -v /auv/sim/ground_truth/odom
+ros2 topic echo /auv/state/odom
+ros2 topic hz /auv/state/odom
+\end{lstlisting}
+输出中不应出现定位、控制、规划、任务或 ZIT6 bridge 作为 Ground Truth 订阅者；正式运行节点必须通过估计状态工作。
+
+\section{启动失败恢复}
+如果关键进程退出，保存首个错误和退出码；检查 profile 文件是否存在、workspace overlay 是否按顺序 source、消息包是否重新编译、相机和串口设备是否有权限、Stonefish 场景是否存在。不要用删除 build/install 的方式掩盖未确认的依赖问题；只有在确认是构建缓存问题后再清理并重建。

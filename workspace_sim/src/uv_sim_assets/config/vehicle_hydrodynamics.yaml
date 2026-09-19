@@ -1,0 +1,9 @@
+vehicle: youlong
+physics_mode: submerged
+buoyancy: true
+added_mass: stonefish_submerged
+drag_geometry: physical_mesh
+collision_geometry: physical_mesh
+thrust_model: fluid_dynamics
+independent_drag_coefficients: false
+calibration_status: uncalibrated

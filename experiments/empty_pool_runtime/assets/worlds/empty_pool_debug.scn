@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<scenario>
+  <environment>
+    <ned latitude="31.23" longitude="121.47"/>
+    <ocean>
+      <water density="1000.0" jerlov="0.22"/>
+      <waves height="0.0"/>
+      <current type="uniform"><velocity xyz="0.0 0.0 0.0"/></current>
+    </ocean>
+    <atmosphere><sun azimuth="120.0" elevation="55.0"/></atmosphere>
+  </environment>
+  <materials>
+    <material name="Neutral" density="1000.0" restitution="0.2"/>
+    <material name="Fiberglass" density="1500.0" restitution="0.2"/>
+    <friction_table>
+      <friction material1="Neutral" material2="Neutral" static="0.4" dynamic="0.2"/>
+      <friction material1="Neutral" material2="Fiberglass" static="0.4" dynamic="0.2"/>
+      <friction material1="Fiberglass" material2="Fiberglass" static="0.5" dynamic="0.3"/>
+    </friction_table>
+  </materials>
+  <looks>
+    <look name="yellow" rgb="1.0 0.9 0.0" roughness="0.3"/>
+    <look name="gray" gray="0.3" roughness="0.4" metalness="0.5"/>
+    <look name="propeller" gray="1.0" roughness="0.3" texture="vehicles/youlong/meshes/visual/propeller_tex.png"/>
+    <look name="duct" gray="0.1" roughness="0.4" metalness="0.5"/>
+    <look name="dark" rgb="0.2 0.15 0.1" roughness="0.6" metalness="0.8"/>
+    <look name="white" rgb="0.9 0.9 0.9" roughness="0.4"/>
+  </looks>
+  <static name="Bottom" type="plane">
+    <material name="Neutral"/><look name="gray"/>
+    <world_transform rpy="0 0 0" xyz="0 0 5.0"/>
+  </static>
+  <include file="vehicles/youlong/model/youlong_nocam.scn">
+    <arg name="robot_name" value="YouLong"/>
+    <arg name="robot_position" value="0 0 1.0"/>
+    <arg name="robot_orientation" value="0 0 0"/>
+  </include>
+</scenario>

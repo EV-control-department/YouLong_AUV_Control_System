@@ -1,0 +1,75 @@
+\chapter{总体系统架构}
+\label{ch:architecture}
+
+\section{架构总览}
+系统采用 ROS 2 节点化、Topic/Service/Action 解耦的分布式结构。系统启动由 launch 编排，运行时不依赖一个中心控制进程。模块通过 \topic{/auv/...} 交换数据，便于将真实传感器替换为 Stonefish 传感器，或将真实 MCU 替换为 Host 控制核。
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    scale=0.82,
+    transform shape,
+    node distance=8mm and 12mm,
+    box/.style={draw=YoulongBlue, rounded corners, fill=YoulongLight,
+      minimum width=31mm, minimum height=9mm, align=center},
+    io/.style={draw=YoulongDark, rounded corners, fill=white,
+      minimum width=34mm, minimum height=9mm, align=center},
+    arr/.style={-{Latex[length=2mm]}, thick, color=YoulongBlue}
+  ]
+    \node[io] (source) {真实传感器\\Stonefish};
+    \node[box, right=of source] (adapter) {L1 适配器\\\pkg{uv_hm}/\pkg{uv_sim_bridge}};
+    \node[box, right=of adapter] (sensor) {标准传感器\\\topic{/auv/sensors/*}};
+    \node[box, below=of sensor] (perception) {感知\\\pkg{uv_camera}};
+    \node[box, left=of perception] (localization) {定位\\\pkg{uv_localization}};
+    \node[box, below=of localization] (control) {控制\\\pkg{uv_control}};
+    \node[box, right=of control] (task) {任务\\\pkg{uv_task}};
+    \node[box, right=of task] (actuator) {MCU / 仿真推进器};
+    \draw[arr] (source) -- (adapter);
+    \draw[arr] (adapter) -- (sensor);
+    \draw[arr] (sensor) -- (perception);
+    \draw[arr] (sensor) -- (localization);
+    \draw[arr] (perception) -- (localization);
+    \draw[arr] (localization) -- (control);
+    \draw[arr] (task) -- (control);
+    \draw[arr] (control) -- (actuator);
+    \draw[arr] (actuator.north) |- (source.south);
+  \end{tikzpicture}
+  \caption{YouLong AUV 的逻辑闭环}
+  \label{fig:system-loop}
+\end{figure}
+
+\section{双 Workspace 分治}
+\pkg{workspace_auv} 包含不依赖 Stonefish 的真机/通用控制栈；\pkg{workspace_sim} 依赖前者并提供 Stonefish、仿真描述、适配器、退化注入和评测。这样，Edge 真机环境可以单独构建控制栈，开发机可以在 overlay 中加入仿真能力。
+
+\begin{table}[H]
+  \centering
+  \caption{两个工作区的职责}
+  \label{tab:workspaces}
+  \begin{tabularx}{\textwidth}{p{0.25\textwidth}X}
+    \toprule
+    工作区 & 主要包与职责 \\
+    \midrule
+    \pkg{workspace_auv} & 接口、消息、真实 URDF、硬件管理、相机与感知、定位、控制、规划、任务、日志。 \\
+    \pkg{workspace_sim} & Stonefish、仿真 URDF、Stonefish 适配器、ZIT6 Host 控制核、传感器退化、评测和 SIL/HIL 启动。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{分层与依赖方向}
+依赖方向从稳定契约指向实现：\pkg{auv_protocol} 和 \pkg{uv_msgs} 不依赖具体算法；\pkg{uv_perception}、\pkg{uv_planning} 和 \pkg{uv_mapping} 提供接口边界；现阶段具体实现仍在 \pkg{uv_camera} 和 \pkg{uv_nav} 中。运行节点可以订阅多个上游 Topic，但不应跨越接口边界直接访问仿真器内部对象或另一个节点的私有状态。
+
+\section{运行模式}
+\begin{description}
+  \item[real] 使用真实 URDF、真实相机和真实 ZIT6/MCU 状态；启动入口为 \code{ros2 launch uv_bringup real.launch.py}。
+  \item[sim] 使用 Stonefish 和仿真描述，\pkg{uv_sim_bridge} 将仿真输入转换为标准接口；下游控制、感知、规划和任务节点与真机复用。
+  \item[hil] 使用仿真世界和真实 ZIT6 控制核/MCU，通过 micro-ROS Agent 传递状态和命令；启动入口为 \code{hil.launch.py}。
+\end{description}
+
+\section{关键不变量}
+\begin{enumerate}
+  \item 固定变换只由 \code{robot_state_publisher} 发布到 \topic{/auv/tf_static}。
+  \item 动态 \code{odom -> base_link} 只由 \pkg{uv_localization} 发布到 \topic{/auv/tf}。
+  \item \topic{/auv/state/odom} 和 \topic{/auv/state/twist} 是控制、规划、任务允许消费的正式估计状态入口。
+  \item \topic{/auv/sim/ground_truth/*} 不进入定位、规划、任务或控制闭环。
+  \item 新接口使用 \topic{/auv/...}；无前缀旧接口只出现在兼容桥或旧工具中。
+\end{enumerate}

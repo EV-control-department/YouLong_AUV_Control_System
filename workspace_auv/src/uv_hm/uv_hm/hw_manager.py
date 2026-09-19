@@ -1,8 +1,8 @@
 """Hardware manager node: heartbeat, state monitoring.
 
 Responsibilities:
-- 10Hz heartbeat on /zit6/cmd/agxhbt to keep MCU armed
-- Subscribe to /zit6/state/status, /zit6/state/zithbt, /zit6/state/thr
+- 10Hz heartbeat on /auv/hardware/zit6/cmd/heartbeat to keep MCU armed
+- Subscribe to /auv/hardware/zit6/state/status, heartbeat, and thruster state
 - Parse and log MCU state in human-readable format
 - Watchdog: heartbeat timeout (7s), battery low, error flags, thrust sat
 - INS startup sequence tracking
@@ -17,6 +17,17 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, UInt32
 
 from zit6_interfaces.msg import ZitStatus
+from zit6_interfaces.msg import ZitUsbl
+from uv_msgs.msg import UsblMeasurement
+from auv_protocol.topics import (
+    LEGACY_ZIT6_HEARTBEAT,
+    LEGACY_ZIT6_HEARTBEAT_STATE, LEGACY_ZIT6_POSITION,
+    LEGACY_ZIT6_STATUS, LEGACY_ZIT6_THRUSTER, LEGACY_ZIT6_USBL,
+    LEGACY_ZIT6_VELOCITY,
+    ZIT6_HEARTBEAT, ZIT6_STATUS, ZIT6_HEARTBEAT_STATE, ZIT6_THRUSTER,
+    ZIT6_POSITION, ZIT6_VELOCITY,
+    USBL_MEASUREMENT,
+)
 
 
 # ── INS state → human-readable name ─────────────────────────────
@@ -66,6 +77,9 @@ class HwManagerNode(Node):
         self.declare_parameter('arm_mode', 1)  # 1=normal, 3=force
         self.declare_parameter('battery_low_threshold', 14.0)
         self.declare_parameter('cycle_time_warn_threshold', 100.0)
+        self.declare_parameter(
+            'legacy_state_topics', True,
+            description='Bridge the current /zit6/state/* firmware topics')
 
         # ── Internal state ───────────────────────────────────────
         self._status_lock = threading.Lock()
@@ -80,17 +94,56 @@ class HwManagerNode(Node):
 
         # ── Heartbeat publisher ──────────────────────────────────
         self._heartbeat_pub = self.create_publisher(
-            UInt32, '/zit6/cmd/agxhbt', 10)
+            UInt32, ZIT6_HEARTBEAT, 10)
+        self._legacy_heartbeat_pub = self.create_publisher(
+            UInt32, LEGACY_ZIT6_HEARTBEAT, 10)
         hb_rate = self.get_parameter('heartbeat_rate').value
         self._hb_timer = self.create_timer(1.0 / hb_rate, self._heartbeat_cb)
 
         # ── MCU state subscriptions ──────────────────────────────
-        self._status_sub = self.create_subscription(
-            ZitStatus, '/zit6/state/status', self._status_cb, 10)
-        self._mcu_hb_sub = self.create_subscription(
-            UInt32, '/zit6/state/zithbt', self._mcu_hb_cb, 10)
-        self._thr_sub = self.create_subscription(
-            Float32MultiArray, '/zit6/state/thr', self._thr_cb, 10)
+        self._state_publishers = {
+            'status': self.create_publisher(ZitStatus, ZIT6_STATUS, 10),
+            'position': self.create_publisher(
+                Float32MultiArray, ZIT6_POSITION, 10),
+            'velocity': self.create_publisher(
+                Float32MultiArray, ZIT6_VELOCITY, 10),
+            'thruster': self.create_publisher(
+                Float32MultiArray, ZIT6_THRUSTER, 10),
+            'heartbeat': self.create_publisher(
+                UInt32, ZIT6_HEARTBEAT_STATE, 10),
+            'usbl': self.create_publisher(
+                UsblMeasurement, USBL_MEASUREMENT, 10),
+        }
+        if bool(self.get_parameter('legacy_state_topics').value):
+            self._status_sub = self.create_subscription(
+                ZitStatus, LEGACY_ZIT6_STATUS,
+                self._legacy_status_cb, 10)
+            self._mcu_hb_sub = self.create_subscription(
+                UInt32, LEGACY_ZIT6_HEARTBEAT_STATE,
+                self._legacy_mcu_hb_cb, 10)
+            self._thr_sub = self.create_subscription(
+                Float32MultiArray, LEGACY_ZIT6_THRUSTER,
+                self._legacy_thr_cb, 10)
+            self._position_sub = self.create_subscription(
+                Float32MultiArray, LEGACY_ZIT6_POSITION,
+                self._legacy_position_cb, 10)
+            self._velocity_sub = self.create_subscription(
+                Float32MultiArray, LEGACY_ZIT6_VELOCITY,
+                self._legacy_velocity_cb, 10)
+            self._usbl_sub = self.create_subscription(
+                ZitUsbl, LEGACY_ZIT6_USBL,
+                self._legacy_usbl_cb, 10)
+        else:
+            self._status_sub = self.create_subscription(
+                ZitStatus, ZIT6_STATUS, self._status_cb, 10)
+            self._mcu_hb_sub = self.create_subscription(
+                UInt32, ZIT6_HEARTBEAT_STATE, self._mcu_hb_cb, 10)
+            self._thr_sub = self.create_subscription(
+                Float32MultiArray, ZIT6_THRUSTER, self._thr_cb, 10)
+            self._position_sub = None
+            self._velocity_sub = None
+            self._usbl_sub = self.create_subscription(
+                UsblMeasurement, USBL_MEASUREMENT, lambda msg: None, 10)
 
         # ── Timers ───────────────────────────────────────────────
         self._summary_timer = self.create_timer(1.0, self._summary_cb)
@@ -112,6 +165,7 @@ class HwManagerNode(Node):
         arm_mode = self.get_parameter('arm_mode').value
         msg.data = arm_mode
         self._heartbeat_pub.publish(msg)
+        self._legacy_heartbeat_pub.publish(msg)
 
     # ── State callbacks ──────────────────────────────────────────
 
@@ -149,6 +203,11 @@ class HwManagerNode(Node):
                     self.get_logger().info(
                         f'MCU RUNNING: control_level={ctrl_name}')
 
+    def _legacy_status_cb(self, msg: ZitStatus):
+        """Adapt the current firmware status topic into the /auv contract."""
+        self._state_publishers['status'].publish(msg)
+        self._status_cb(msg)
+
     def _mcu_hb_cb(self, msg: UInt32):
         """Receive MCU heartbeat sequence number (1Hz)."""
         with self._status_lock:
@@ -162,6 +221,10 @@ class HwManagerNode(Node):
                 f'MCU heartbeat seq stalled at {msg.data}',
                 throttle_duration_sec=10.0)
 
+    def _legacy_mcu_hb_cb(self, msg: UInt32):
+        self._state_publishers['heartbeat'].publish(msg)
+        self._mcu_hb_cb(msg)
+
     def _thr_cb(self, msg: Float32MultiArray):
         """Monitor thruster forces (30Hz). Warn on saturation."""
         if len(msg.data) >= 6:
@@ -174,6 +237,28 @@ class HwManagerNode(Node):
                     f'Thruster saturation: max={max_thrust:.3f} '
                     f'thrusts=[{t_str}]',
                     throttle_duration_sec=5.0)
+
+    def _legacy_thr_cb(self, msg: Float32MultiArray):
+        self._state_publishers['thruster'].publish(msg)
+        self._thr_cb(msg)
+
+    def _legacy_position_cb(self, msg: Float32MultiArray):
+        self._state_publishers['position'].publish(msg)
+
+    def _legacy_velocity_cb(self, msg: Float32MultiArray):
+        self._state_publishers['velocity'].publish(msg)
+
+    def _legacy_usbl_cb(self, msg: ZitUsbl):
+        """Adapt the embedded USBL frame into the canonical measurement msg."""
+        measurement = UsblMeasurement()
+        measurement.header.stamp = self.get_clock().now().to_msg()
+        measurement.header.frame_id = 'usbl_link'
+        measurement.position.x = float(msg.beacon_north_m)
+        measurement.position.y = float(msg.beacon_east_m)
+        measurement.position.z = float(msg.beacon_depth_m)
+        measurement.position_covariance = [0.0] * 9
+        measurement.valid = bool(msg.sensor_status & (1 << 5))
+        self._state_publishers['usbl'].publish(measurement)
 
     # ── Periodic timers ──────────────────────────────────────────
 

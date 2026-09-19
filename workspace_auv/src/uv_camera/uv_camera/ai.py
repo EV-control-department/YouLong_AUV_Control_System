@@ -5,8 +5,8 @@ Runs in the SAME process as uv_sensor. uv_ai is the FrameGate consumer:
   no JPEG between the two);
 * runs YOLO detection (with optional segmentation-mask assistance for line
   visualization), line-state extraction and ArUco detection;
-* publishes /perception/detection/{cam}, /perception/line/{cam},
-  /perception/aruco/ids (unchanged transport contract for position/task/nav);
+* publishes /auv/perception/detections/{camera}/{side},
+  /auv/perception/lines/{camera}/{side}, and /auv/perception/aruco/ids;
 * updates the annotated MJPEG cache fed to go2rtc preview.
 """
 
@@ -20,6 +20,7 @@ import numpy as np
 
 from std_msgs.msg import Header, Int32MultiArray
 
+from auv_protocol.topics import ARUCO_IDS, DETECTIONS, LINES
 from uv_msgs.msg import Detection, DetectionArray, LineState
 
 from .common import (
@@ -144,9 +145,9 @@ class Ai:
         self._pub_line = {}
         for ch in sorted(self._active_channels):
             self._pub_det[ch] = node.create_publisher(
-                DetectionArray, f'/perception/detection/{ch}', 10)
+                DetectionArray, DETECTIONS(ch), 10)
             self._pub_line[ch] = node.create_publisher(
-                LineState, f'/perception/line/{ch}', 10)
+                LineState, LINES(ch), 10)
 
         # ArUco
         self._aruco_detector = None
@@ -246,7 +247,7 @@ class Ai:
             self.node.get_logger().warn(
                 f'OpenCV ArUco unavailable, marker detection disabled: {e}')
         self._aruco_pub = self.node.create_publisher(
-            Int32MultiArray, '/perception/aruco/ids', 10)
+            Int32MultiArray, ARUCO_IDS, 10)
         if self._aruco_detector is not None:
             self._aruco_thread = threading.Thread(
                 target=self._aruco_loop, daemon=True)
@@ -358,9 +359,22 @@ class Ai:
         if cv_img is None or cv_img.shape[0] < 2 or cv_img.shape[1] < 2:
             return None
 
-        calibration = self._calibration[camera]
-        left_K, left_D = calibration['left']
-        right_K, right_D = calibration['right']
+        calibration = getattr(self, '_calibration', {}).get(camera)
+        if calibration is None:
+            # Keep the frame splitter usable for lightweight/offline tests
+            # that construct Ai with ``__new__``.  Normal runtime instances
+            # always receive the validated camera registry above.
+            left_K = getattr(self, '_front_K', None)
+            right_K = left_K
+            left_D = getattr(self, '_front_D', None)
+            right_D = left_D
+            if left_K is None:
+                left_K = right_K = np.eye(3, dtype=np.float64)
+            if left_D is None:
+                left_D = right_D = np.zeros(5, dtype=np.float64)
+        else:
+            left_K, left_D = calibration['left']
+            right_K, right_D = calibration['right']
         mid = cv_img.shape[1] // 2
         if ENABLE_UNDISTORT and bool(np.any(np.abs(left_D) > 1e-12)):
             left_img = cv2.undistort(cv_img[:, :mid], left_K, left_D)

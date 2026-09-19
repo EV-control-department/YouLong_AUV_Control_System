@@ -1,0 +1,78 @@
+\chapter{运行时数据流与就绪协议}
+\label{ch:runtime-dataflow}
+
+\section{三条并行数据流}
+系统运行时可以拆成三条互相耦合但职责不同的数据流：控制闭环、感知/任务支路和观测/评测支路。
+
+\begin{table}[H]
+  \centering
+  \caption{运行时三条主要数据流}
+  \label{tab:runtime-dataflows}
+  \begin{tabularx}{\textwidth}{p{0.22\textwidth}p{0.31\textwidth}X}
+    \toprule
+    数据流 & 顺序 & 不能跨越的边界 \\
+    \midrule
+    控制闭环 & 传感器适配器 -> \pkg{uv_localization} -> \pkg{uv_control} -> ZIT6/仿真执行器 -> 车辆与传感器 & 控制只能消费估计状态；Ground Truth 不得成为状态输入。 \\
+    感知与任务 & 相机 -> \pkg{uv_camera} -> detection/observation/target -> \pkg{uv_nav} 或 \pkg{uv_task} -> BasicMotion & 任务层使用消息契约，不直接依赖相机线程或模型对象。 \\
+    观测与评测 & Topic、日志、视频、Ground Truth -> \pkg{uv_log}/\pkg{uv_sim_evaluation} -> session 目录与指标 & 评测可以读取真值，但评测输出不能回灌控制闭环。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{控制闭环的消息边界}
+控制闭环的最小路径是：
+
+\begin{enumerate}
+  \item 真机由设备适配器发布 IMU、DVL、压力、USBL 或 ZIT6 状态；仿真由 \pkg{uv_sim_bridge} 将 Stonefish 输入映射到相同的 canonical Topic。
+  \item \pkg{uv_localization} 根据可用输入产生 \topic{/auv/state/odom}、\topic{/auv/state/twist}、\topic{/auv/state/health} 和动态 \topic{/auv/tf}。
+  \item \pkg{uv_control} 通过 BasicMotion Action 接受绝对/相对运动目标，进行单位和坐标转换，并向 \topic{/auv/hardware/zit6/cmd/setpoint} 发布设定值。
+  \item 真机由 MCU/控制板执行底层控制；SIL 由 \pkg{zit6_control_core}、mixer 和 Stonefish 推进器执行；HIL 只替换这一段的执行介质。
+\end{enumerate}
+
+\section{感知、定位与任务支路}
+\pkg{uv_camera} 的传感器输入和 AI/几何输出在同一相机进程中通过 in-memory FrameGate 关联，但对外仍然通过 Topic 公开。\code{object_localizer} 从检测、线或 ArUco 观测产生目标观测和目标位置；\pkg{uv_nav} 消费状态和目标，输出 \topic{/auv/control/trajectory}；当前任务 runner 仍以 BasicMotion Action 为主要运动执行入口，因此规划路径和运动执行之间存在明确的后端边界。
+
+  \begin{table}[H]
+  \centering
+  \caption{感知到任务的契约链}
+  \label{tab:perception-task-chain}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabularx}{\textwidth}{p{0.25\textwidth}p{0.29\textwidth}X}
+    \toprule
+    阶段 & 主要输出 & 使用者与有效性 \\
+    \midrule
+    图像输入 & \topic{/auv/sensors/camera/*}、stitched 图像和 camera info & 相机时间戳匹配；失败时应产生可诊断的 health/日志信息。 \\
+    AI/几何感知 & \topic{/auv/perception/detections/*}、\topic{/auv/perception/lines/*}、\topic{/auv/perception/aruco/ids} & 表示“看到了什么”，不直接表示车辆坐标中的最终目标。 \\
+    目标定位 & \topic{/auv/perception/observations}、\topic{/auv/perception/targets} & 只有通过 frame、标定、深度/几何有效性检查的观测才可进入规划或任务。 \\
+    导航/任务 & \topic{/auv/control/trajectory}、\topic{/auv/mission/status}、BasicMotion Action & 必须同时检查状态 readiness、目标有效期、超时和取消路径。 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{就绪协议}
+当前启动系统通过 \pkg{uv_bringup} 的 readiness 入口执行分阶段检查。它不是一个取代各节点内部状态机的中央控制器，而是启动边界上的门禁。
+
+\begin{description}
+  \item[backend] 检查 ROS graph、仿真器/硬件后端和基础接口是否存在。
+  \item[control] 检查状态、控制节点和设定值链是否已建立，但不代表车辆已经允许运动。
+  \item[sensors] 检查 IMU、DVL、压力和相机等输入是否有新鲜数据，包含时间戳和 Topic 类型。
+  \item[perception] 在启用 AI 时检查模型、相机同步和感知输出；关闭 AI 的实验不应错误地要求 AI 就绪。
+\end{description}
+
+\section{时间、频率与延迟记录}
+文档不把某个开发机上的瞬时频率当作系统保证。每次实验至少记录下列测量值：
+
+\begin{equation}
+  T_{\mathrm{e2e}} = T_{\mathrm{sensor\ timestamp}} \rightarrow
+  T_{\mathrm{state}} \rightarrow T_{\mathrm{command}} \rightarrow
+  T_{\mathrm{actuator}},
+\end{equation}
+
+并分别报告平均值、P95/P99、最大值、周期抖动和 deadline miss。图像链还要单独报告左右目匹配延迟、FrameGate 丢帧数和 AI 推理耗时；控制链要报告 setpoint 发布频率、watchdog 事件和执行器饱和次数。
+
+\section{观测与评测隔离}
+观测节点可以读取运行状态和仿真真值，但只能将结果写入 \topic{/auv/evaluation/metrics}、\topic{/auv/evaluation/events} 或 session 目录。任何需要“修正状态”的逻辑必须明确属于估计器，而不是评测节点；否则会把离线信息偷偷引入在线控制。
+
+\begin{infobox}
+判断一条 Topic 是否属于控制闭环，不能只看名称。应沿 launch、publisher、subscriber 和参数 profile 追踪其真实数据路径，再确认它是否被 \pkg{uv_localization}、\pkg{uv_control}、\pkg{uv_nav} 或 \pkg{uv_task} 消费。
+\end{infobox}

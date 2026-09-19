@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 
@@ -28,11 +29,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TaskStatus.msg"
   "msg/PoseInfo.msg"
   "msg/LineState.msg"
+  "msg/DvlVelocity.msg"
+  "msg/DvlAltitude.msg"
+  "msg/UsblMeasurement.msg"
+  "msg/SensorHealth.msg"
   "srv/RunTask.srv"
   "srv/GetState.srv"
   "srv/ExecTask.srv"
   "action/BasicMotion.action"
-  DEPENDENCIES std_msgs sensor_msgs action_msgs builtin_interfaces
+  DEPENDENCIES std_msgs sensor_msgs geometry_msgs action_msgs builtin_interfaces
 )
 
 ament_package()

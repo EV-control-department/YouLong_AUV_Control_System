@@ -76,7 +76,7 @@ class Coordinate:
     
     # 序列化
     def to_dict(self) -> dict          # {'x','y','z','rx','ry','rz'}
-    def from_zit6_pos(data: list)      # 从 /zit6/state/pos Float32MultiArray
+    def from_zit6_pos(data: list)      # 从 /auv/hardware/zit6/state/position（兼容输入）
     
     # 变换
     def transform_to(self, target: Coordinate) -> Coordinate   # target 在 self 中的坐标
