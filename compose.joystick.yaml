@@ -12,3 +12,7 @@ services:
     # event/js nodes to be opened through the directory mount.
     device_cgroup_rules:
       - "c 13:* rwm"
+
+    # Only add the host input group when joystick support is enabled.
+    group_add:
+      - "${INPUT_GID:-995}"

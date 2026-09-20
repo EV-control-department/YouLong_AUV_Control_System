@@ -86,7 +86,6 @@ def generate_launch_description():
         ),
         declare_mission_file(),
         *declare_feature_arguments(),
-        *declare_observability_arguments(),
         *declare_simulation_arguments(
             scenario_default="",
             window_width_default="960",
@@ -94,6 +93,7 @@ def generate_launch_description():
             render_quality_default="low",
             camera_stitch_fps_default="5.0",
         ),
+        *declare_observability_arguments(),
         # Public scene selection.  ``scenario_desc`` is retained above as a
         # deprecated compatibility argument for old scripts.
         DeclareLaunchArgument(

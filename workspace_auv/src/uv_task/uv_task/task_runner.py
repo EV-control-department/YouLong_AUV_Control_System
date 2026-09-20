@@ -22,10 +22,10 @@ from rclpy.node import Node
 from std_msgs.msg import Float32, UInt8
 from std_srvs.srv import Trigger
 
-from zit6_interfaces.msg import ZitSetpoint, ZitStatus
+from zit6_interfaces.msg import ZitStatus
 from auv_protocol.topics import (
     BASIC_MOTION, DETECTIONS, OBJECTS, TARGETS, STATE_ODOM,
-    ZIT6_STATUS, ZIT6_LIGHT, ZIT6_SERVO, ZIT6_SETPOINT,
+    ZIT6_STATUS, ZIT6_LIGHT, ZIT6_SERVO,
     MISSION_RUN, MISSION_STOP, MISSION_EXECUTE, MISSION_STATUS,
     LEGACY_TASK_RUN, LEGACY_TASK_STOP, LEGACY_TASK_EXECUTE,
     LEGACY_TASK_STATUS,
@@ -286,13 +286,9 @@ class TaskRunnerNode(Node):
             TaskStatus, LEGACY_TASK_STATUS, 10)
         self.pub_light = self.create_publisher(UInt8, ZIT6_LIGHT, 10)
         self.pub_servo = self.create_publisher(Float32, ZIT6_SERVO, 10)
-        # The impact charge deliberately uses the existing ZIT6 velocity
-        # setpoint wire format: mode=VEL (0x01) + body frame (0x10).
-        self.pub_setpoint = self.create_publisher(
-            ZitSetpoint, ZIT6_SETPOINT, 10)
         # A task runner can be interrupted while BasicMotion is still
-        # executing a goal.  Cancel the goal and send one neutral velocity
-        # command before this node's publishers are destroyed.
+        # executing a goal.  Cancel the goal; BasicMotion owns the neutral
+        # velocity stop and its velocity lease watchdog.
         self.context.on_shutdown(self._stop_active_motion)
 
         # Services
@@ -347,13 +343,8 @@ class TaskRunnerNode(Node):
             except Exception as exc:
                 self.get_logger().warning(
                     f'任务执行器关闭：取消 BasicMotion 目标失败：{exc}')
-        try:
-            self._publish_body_velocity()
-            self.get_logger().warning(
-                '任务执行器关闭：已发送零速度保护')
-        except Exception as exc:
-            self.get_logger().warning(
-                f'任务执行器关闭：发送零速度保护失败：{exc}')
+        self.get_logger().warning(
+            '任务执行器关闭：由 BasicMotion 负责速度租约超时和零速度保护')
 
     # ── 灯光 / 舵机控制 ────────────────────────────────────────────
 
@@ -932,22 +923,25 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.BMOVE: '执行机体坐标步进移动',
             BasicMotion.Goal.WTRAVEL: '执行世界坐标直线移动',
             BasicMotion.Goal.BTRAVEL: '执行机体坐标直线移动',
+            BasicMotion.Goal.BODY_VELOCITY: '执行机体速度租约',
         }
         purpose = purposes.get(cmd_type, '执行运动指令')
         return f'{purpose}({axes or "all"})'
 
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
-                          quiet=False, task_context=''):
+                          quiet=False, task_context='', velocity_lease=0.0):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
         the main thread's SingleThreadedExecutor processes DDS events.
 
         Args:
-            cmd_type: BasicMotion.Goal.{START,SET,WMOVE,BMOVE,WTRAVEL,BTRAVEL}
+            cmd_type: BasicMotion.Goal.{START,SET,WMOVE,BMOVE,WTRAVEL,BTRAVEL,
+                BODY_VELOCITY}
             target: list of 4 floats [x, y, z, yaw] (yaw in degrees)
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
+            velocity_lease: lease duration for BODY_VELOCITY commands
             quiet: if True, suppress per-goal INFO logs (errors still logged)
             task_context: context shown by basic_motion; empty uses the standard
                 current-task/current-step/action context.
@@ -955,7 +949,10 @@ class TaskRunnerNode(Node):
         Returns:
             (success: bool, message: str)
         """
-        type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL', 6: 'START'}
+        type_names = {
+            1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
+            5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY',
+        }
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
@@ -985,6 +982,7 @@ class TaskRunnerNode(Node):
         goal.target = target
         goal.timeout = float(effective_timeout)
         goal.task_context = task_context
+        goal.velocity_lease = float(velocity_lease)
 
         send_future = self._action_client.send_goal_async(goal)
         while rclpy.ok() and not self.stopped and not send_future.done():
@@ -1043,6 +1041,25 @@ class TaskRunnerNode(Node):
         elif not quiet:
             self.get_logger().info('动作执行结果：成功')
         return result.success, result.message
+
+    def _send_body_velocity(self, forward_mps: float = 0.0,
+                            lateral_mps: float = 0.0,
+                            vertical_mps: float = 0.0,
+                            yaw_rate_deg_s: float = 0.0,
+                            *, lease_s: float = 0.25,
+                            quiet: bool = True,
+                            task_context: str = ''):
+        """Renew the BasicMotion body-velocity lease.
+
+        Tasks deliberately do not construct or publish ``ZitSetpoint``
+        messages.  BasicMotion owns the ZIT6 protocol and stops the command
+        if this lease is not renewed in time.
+        """
+        return self._send_action_goal(
+            BasicMotion.Goal.BODY_VELOCITY,
+            [forward_mps, lateral_mps, vertical_mps, yaw_rate_deg_s],
+            axes='xyzrz', timeout=0.0, quiet=quiet,
+            task_context=task_context, velocity_lease=lease_s)
 
     # ========================================================================
     # Task implementations
@@ -1854,41 +1871,27 @@ class TaskRunnerNode(Node):
 
         return rclpy.ok() and not self.stopped
 
-    def _publish_body_velocity(self, forward_mps: float = 0.0,
-                               lateral_mps: float = 0.0,
-                               vertical_mps: float = 0.0,
-                               yaw_rate_deg_s: float = 0.0):
-        """Publish one body-frame velocity-loop setpoint.
-
-        The wire protocol uses metres/second for the three linear axes and
-        radians/second for yaw.  Keeping this helper on TaskRunner lets
-        camera tasks use the same velocity path as the existing impact
-        charge, without opening a second motion controller.
-        """
-        msg = ZitSetpoint()
-        msg.control_key = 0x11  # VEL (0x01) | BODY (0x10)
-        msg.type_mask = 0
-        msg.x = float(forward_mps)
-        msg.y = float(lateral_mps)
-        msg.z = float(vertical_mps)
-        msg.roll = 0.0
-        msg.pitch = 0.0
-        msg.yaw = math.radians(float(yaw_rate_deg_s))
-        msg.seq = 0
-        self.pub_setpoint.publish(msg)
-
     def _charge_forward(self, params: dict) -> bool:
         """Run the body-X velocity loop for a fixed short impact charge."""
         duration = max(0.0, float(params.get('charge_duration', 5.0)))
         speed = max(0.0, float(params.get('charge_speed_mps', 0.15)))
         period = max(0.02, float(params.get('charge_publish_period', 0.05)))
+        lease = max(0.25, period * 4.0)
         deadline = time.monotonic() + duration
         while rclpy.ok() and not self.stopped and time.monotonic() < deadline:
-            self._publish_body_velocity(speed)
+            success, message = self._send_body_velocity(
+                forward_mps=speed, lease_s=lease,
+                task_context=self._format_motion_context('撞球持续前进'))
+            if not success:
+                self.get_logger().error(
+                    f'撞球速度指令发送失败：{message}')
+                return False
             time.sleep(min(period, max(0.0, deadline - time.monotonic())))
         # Leave velocity mode with a neutral command before switching back to
         # the position action for the return trip.
-        self._publish_body_velocity(0.0)
+        self._send_body_velocity(
+            lease_s=lease,
+            task_context=self._format_motion_context('结束撞球持续前进'))
         return rclpy.ok() and not self.stopped
 
     def _record_current_impact_pose(self):

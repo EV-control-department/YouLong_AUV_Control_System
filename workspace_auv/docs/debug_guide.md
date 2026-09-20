@@ -176,16 +176,16 @@ ros2 launch uv_sim_bringup sim.launch.py enable_preview:=false
 ```
 
 如果启动日志在 `Generating ocean waves...` 后出现两个
-`Failed to link program!`，先检查是否误用了集成显卡。bringup 默认
-`gpu_backend:=auto`：检测到 `/dev/nvidia0` 时会自动选择 NVIDIA PRIME
-offload；也可以显式指定：
+`Failed to link program!`，先检查 OpenGL provider。
+`gpu_backend:=auto` 会在容器存在 `/dev/nvidia0` 时启用 NVIDIA PRIME，
+否则使用当前 X server 的系统 OpenGL。也可以显式指定：
 
 ```bash
 ros2 launch uv_sim_bringup sim.launch.py gpu_backend:=nvidia
 ```
 
-强制 NVIDIA 但设备不可用时，启动会立即报出驱动检查提示。需要保留系统
-OpenGL 选择时使用 `gpu_backend:=system`。`gpu:=false` 是 Stonefish 的
+强制 NVIDIA 但设备不可用时，启动会立即报出驱动检查提示。系统
+OpenGL 使用 `gpu_backend:=system`。`gpu:=false` 是 Stonefish 的
 无 GPU 可执行项，不适用于包含相机的完整场景。
 
 ### 仿真桥（sim_bridge）状态输出

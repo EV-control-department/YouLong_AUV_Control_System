@@ -12,7 +12,7 @@
 | 协议 | `auv_protocol` | `/auv` canonical topic/service/action 注册表 |
 | 描述 | `auv_description` | real 车辆 URDF 与 PDF 机械几何、静态 TF |
 | 硬件管理 | `uv_hm` | ZIT6 adapter、heartbeat、状态监控与 watchdog |
-| 运动控制 | `uv_control` | BasicMotion：SET / WMOVE / BMOVE / TRAVEL |
+| 运动控制 | `uv_control` | BasicMotion：SET / WMOVE / BMOVE / TRAVEL / BODY_VELOCITY |
 | 相机/感知 | `uv_camera`, `uv_perception` | 相机采集、标定、YOLO 和目标观测 |
 | 定位 | `uv_localization` | `/auv/state/*` 估计状态边界（当前 bootstrap） |
 | 规划/导航 | `uv_planning`, `uv_nav` | planning 边界与 A* 兼容后端 |
@@ -121,8 +121,10 @@ ros2 launch uv_sim_bringup sim.launch.py profile:=sim_ci enable_preview:=false
 ros2 launch uv_sim sim.launch.py profile:=sauvc_finals
 ros2 launch uv_sim sim.launch.py profile:=guoshui_cruise_seeded
 
-# 混合显卡机器：auto 会在检测到 NVIDIA 设备时自动启用 PRIME offload
+# 混合显卡机器：默认自动使用容器中的 NVIDIA；需要系统 OpenGL 时显式指定
 ros2 launch uv_sim_bringup sim.launch.py gpu_backend:=auto
+ros2 launch uv_sim_bringup sim.launch.py gpu_backend:=nvidia
+ros2 launch uv_sim_bringup sim.launch.py gpu_backend:=system
 
 # HIL：串口参数直接传给 micro-ROS agent
 ros2 launch uv_sim_bringup hil.launch.py profile:=hil_lab \

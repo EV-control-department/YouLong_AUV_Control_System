@@ -46,25 +46,39 @@ PROFILE_PACKAGES = {
 
 
 def configure_simulator_gpu_environment(gpu, gpu_backend):
-    """Select the OpenGL provider used by the Stonefish process."""
+    """Select the OpenGL provider used by the Stonefish process.
+
+    ``auto`` uses the NVIDIA PRIME provider when the container has the NVIDIA
+    device node.  That is the useful default for the development image: when
+    the X server is backed by the integrated AMD adapter, leaving the choice
+    to the normal GLX provider can make Stonefish fall back to Mesa/software
+    rendering.  On machines without NVIDIA, ``auto`` keeps the system
+    provider.  The two providers remain available explicitly through
+    ``gpu_backend:=nvidia`` and ``gpu_backend:=system``.
+    """
 
     def _configure(context):
         use_gpu = gpu.perform(context).strip().lower() in {
             '1', 'true', 'yes', 'on'
         }
         backend = gpu_backend.perform(context).strip().lower()
-        if not use_gpu or backend == 'system':
+        if not use_gpu:
             return []
 
+        if backend == 'system':
+            return [LogInfo(
+                msg='Stonefish GPU backend: system OpenGL provider')]
+
         nvidia_device = Path('/dev/nvidia0').exists()
-        if backend == 'nvidia' and not nvidia_device:
+        if backend == 'auto' and not nvidia_device:
+            return [LogInfo(
+                msg='Stonefish GPU backend: system OpenGL provider '
+                    '(auto; no /dev/nvidia0)')]
+        if not nvidia_device:
             raise RuntimeError(
                 'gpu_backend:=nvidia requested, but /dev/nvidia0 is not '
                 'available; check the NVIDIA driver or use '
                 'gpu_backend:=system')
-        if backend == 'auto' and not nvidia_device:
-            return [LogInfo(
-                msg='Stonefish GPU backend: system OpenGL provider')]
 
         return [
             SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
@@ -159,7 +173,9 @@ def declare_simulation_arguments(
         DeclareLaunchArgument(
             'gpu_backend', default_value='auto',
             choices=['auto', 'nvidia', 'system'],
-            description='OpenGL provider for Stonefish GPU mode'),
+            description=(
+                'OpenGL provider for Stonefish GPU mode; auto uses NVIDIA '
+                'when its device is available')),
         DeclareLaunchArgument(
             'camera_stitch_fps', default_value=camera_stitch_fps_default,
             description='Legacy compatibility setting; simulator image rate is set by Stonefish'),

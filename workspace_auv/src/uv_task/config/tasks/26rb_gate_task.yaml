@@ -95,6 +95,7 @@ params:
     probe_seconds: 2.0 # 首段弧线探测窗口长度，单位：秒。
     probe_speed_mps: 0.1 # 首个弧线窗口探测速度，单位：米/秒。
     gradient_window_seconds: 5.0 # 固定分段窗口长度，单位：秒。
+    timeout_seconds: 30.0 # 左右横移调整最长时间，单位：秒；超时后进入后续对准流程。
     objective_deadband: 0.001 # J 变化死区。
     reverse_cooldown_seconds: 0.5 # 方向反转冷却时间，单位：秒。
     near_extremum_speed_scale: 0.5 # 接近极值时速度缩放比例。
@@ -103,6 +104,5 @@ params:
   # 穿门阶段。
   pass:
     distance_m: 1.6 # 穿过门框距离，单位：米。
-    segment_distance_m: 0.4 # 固定绝对位置环每段距离，单位：米。
-    timeout: 20.0 # 单个门穿越最长时间，单位：秒。
+    timeout: 20.0 # 单次 BTRAVEL 穿越最长时间，单位：秒。
     pause: 0.5 # 通过后停顿时间，单位：秒。

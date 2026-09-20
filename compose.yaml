@@ -2,14 +2,14 @@ name: youlong-auv
 
 services:
   auv:
-    # Defaults to Foxy for the Edge machine. Set ROS_DISTRO=jazzy for a
-    # Jazzy development image; both variants use the same Dockerfile.
-    image: youlong_auv:${ROS_DISTRO:-foxy}
+    # Defaults to Foxy. Set YOULONG_ROS_DISTRO=jazzy explicitly for Jazzy;
+    # the host's ROS_DISTRO variable is intentionally ignored.
+    image: youlong_auv:${YOULONG_ROS_DISTRO:-foxy}
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        ROS_DISTRO: "${ROS_DISTRO:-foxy}"
+        YOULONG_ROS_DISTRO: "${YOULONG_ROS_DISTRO:-foxy}"
         HOST_UID: "${HOST_UID:-1000}"
         HOST_GID: "${HOST_GID:-1000}"
         HOST_USER: "${HOST_USER:-${USER:-dev}}"
@@ -21,7 +21,30 @@ services:
     user: "${HOST_USER:-${USER:-dev}}"
     working_dir: /workspace
     entrypoint: ["/ros_entrypoint.sh"]
-    command: ["bash", "-lc", "exec tail -f /dev/null"]
+    # Build the bind-mounted development workspaces in place before keeping
+    # the container alive. The second workspace overlays the first one.
+    command:
+      - bash
+      - -lc
+      - |
+          set -e
+          source /opt/ros/$${ROS_DISTRO}/setup.bash
+          cd /workspace/workspace_auv
+          colcon build --symlink-install --parallel-workers 1
+          source install/setup.bash
+          # Keep the ZIT6 ROS packages in the same AUV install space.  The
+          # package sources live in the vendored third-party tree, while
+          # upper_examples depends on the interfaces built just before it.
+          colcon build --symlink-install --parallel-workers 1 \
+            --base-paths \
+              /workspace/third_party/AUV_zit6_cmake/upper_examples \
+              /workspace/third_party/AUV_zit6_cmake/zit6_interfaces \
+            --packages-select zit6_interfaces upper_examples
+          source install/setup.bash
+          cd /workspace/workspace_sim
+          colcon build --symlink-install --parallel-workers 1 --cmake-force-configure
+          source install/setup.bash
+          exec tail -f /dev/null
 
     # ROS 2 DDS and application HTTP services share the host network.
     network_mode: host
@@ -29,12 +52,6 @@ services:
     stdin_open: true
     tty: true
     shm_size: "64m"
-
-    # Joystick access is optional. scripts/compose_up.sh automatically adds
-    # compose.joystick.yaml when the host exposes /dev/input, so js0 may be
-    # plugged in after the container starts.
-    group_add:
-      - "${INPUT_GID:-995}"
 
     # Equivalent to `docker run --gpus all` for Compose v2.26.
     deploy:
@@ -46,16 +63,18 @@ services:
               capabilities: [gpu]
 
     environment:
-      ROS_DISTRO: "${ROS_DISTRO:-foxy}"
+      ROS_DISTRO: "${YOULONG_ROS_DISTRO:-foxy}"
       DISPLAY: "${DISPLAY:-:1}"
       XAUTHORITY: /tmp/.Xauthority
       HOME: "/home/${HOST_USER:-${USER:-dev}}"
-      ROS_HOME: "/workspace/.docker/ros/${ROS_DISTRO:-foxy}/ros"
-      ROS_LOG_DIR: "/workspace/.docker/ros/${ROS_DISTRO:-foxy}/log/ros"
+      ROS_HOME: "/workspace/.docker/ros/${YOULONG_ROS_DISTRO:-foxy}/ros"
+      ROS_LOG_DIR: "/workspace/.docker/ros/${YOULONG_ROS_DISTRO:-foxy}/log/ros"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
-      __NV_PRIME_RENDER_OFFLOAD: "1"
-      __GLX_VENDOR_LIBRARY_NAME: nvidia
+      # Stonefish uses SDL2 for its graphical window.  The container exposes
+      # the host X11 socket, so do not let SDL probe Wayland/other backends.
+      SDL_VIDEODRIVER: x11
+      SDL_VIDEO_X11_FORCE_EGL: "0"
       QT_QPA_PLATFORM: xcb
       QT_QPA_FONTDIR: /usr/share/fonts/opentype/noto
       QT_X11_NO_MITSHM: "1"

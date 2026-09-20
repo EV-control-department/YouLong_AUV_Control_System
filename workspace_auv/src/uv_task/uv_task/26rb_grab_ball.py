@@ -299,12 +299,22 @@ class RB26GrabBallTask:
         """以机体 z 方向速度下降，结束后发送中性速度。"""
         deadline = time.monotonic() + self._descent_duration
         while (not self._node.stopped and time.monotonic() < deadline):
-            self._node._publish_body_velocity(
-                vertical_mps=self._descent_speed)
+            success, message = self._node._send_body_velocity(
+                vertical_mps=self._descent_speed,
+                lease_s=max(0.25, self._descent_period * 4.0),
+                task_context=self._node._format_motion_context(
+                    f'抓球下潜速度控制'))
+            if not success:
+                self._logger.error(
+                    f'26rb_grab_ball：下潜速度指令发送失败：{message}')
+                return False
             time.sleep(min(
                 self._descent_period,
                 max(0.0, deadline - time.monotonic())))
-        self._node._publish_body_velocity()
+        self._node._send_body_velocity(
+            lease_s=max(0.25, self._descent_period * 4.0),
+            task_context=self._node._format_motion_context(
+                '结束抓球下潜'))
         return not self._node.stopped
 
     def _verify_ball_removed(self):

@@ -20,11 +20,14 @@ uint8 SET=3         # 绝对定位, target=[x, y, z, yaw]
 uint8 WTRAVEL=4     # 世界系直线, target=[dx, dy, dz]
 uint8 BTRAVEL=5     # 机体系直线, target=[dx, dy, dz]
 uint8 START=6       # 初始化里程计原点
+uint8 BODY_VELOCITY=7  # 机体速度租约, target=[vx, vy, vz, yaw_rate_deg_s]
 ---
 uint8 cmd_type
 string axes         # 生效轴: "x"/"y"/"z"/"rz" 任意组合, 空=全部
 float32[] target    # [x, y, z, yaw]
-float32 timeout     # 秒, ≤0=默认60s
+float32 timeout     # 普通动作最长时间（秒）, ≤0=默认60s
+string task_context
+float32 velocity_lease  # BODY_VELOCITY 的速度租约（秒）, ≤0=默认0.25s
 ---
 # Result
 bool success
@@ -183,6 +186,20 @@ goal.target = [3.0, 0.0, 0.0, 0.0]
 # 结果：AUV 先转向当前朝向方向，再向前走 3m
 ```
 
+### BODY_VELOCITY — 机体速度租约
+
+```python
+goal.cmd_type = BasicMotion.Goal.BODY_VELOCITY
+goal.target = [0.12, 0.0, 0.0, 0.0]
+goal.velocity_lease = 0.25
+# [vx, vy, vz, yaw_rate_deg_s]
+```
+
+- 速度单位为 `m/s, m/s, m/s, °/s`，全部在 body 坐标系中
+- Action 会立即返回；调用方必须在租约到期前重复发送下一条速度指令
+- 超过租约没有新指令时，`basic_motion` 自动发送零速度
+- 任务节点不能直接发布 `ZitSetpoint`，应通过这个 Action 使用速度控制
+
 ### 命令对比
 
 | 命令    | 坐标系 | 目标含义 | 运动模式           | 典型场景         |
@@ -192,6 +209,7 @@ goal.target = [3.0, 0.0, 0.0, 0.0]
 | BMOVE   | body   | 偏移量   | 旋转 + 动态步进    | 相对当前姿态移动 |
 | WTRAVEL | odom   | 偏移量   | 转向 + 直线        | 过门、直线轨迹   |
 | BTRAVEL | body   | 偏移量   | 旋转 + 转向 + 直线 | 沿当前方向直线   |
+| BODY_VELOCITY | body | 瞬时速度 | 租约 + 看门狗 | 视觉伺服、短时速度控制 |
 | START   | —     | —       | 初始化原点         | 开始作业         |
 
 ---

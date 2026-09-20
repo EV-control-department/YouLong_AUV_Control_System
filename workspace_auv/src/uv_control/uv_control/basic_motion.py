@@ -3,7 +3,7 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
 
 分层架构（从底到顶）：
 
-  Layer 5: 对外高级 API (SET / WMOVE / BMOVE / TRAVEL)
+  Layer 5: 对外高级 API (SET / WMOVE / BMOVE / TRAVEL / BODY_VELOCITY)
   Layer 4: 步进坐标系 (运动方向 along/lateral 分解 + 动态步长)
   Layer 3: 机器人坐标系 (body frame — set_body / set_step)
   Layer 2: 世界坐标系 (odom — start / set_world / get_state)
@@ -62,6 +62,11 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
    - BTRAVEL: 机体系直线移动
    - 先转向目标方向，再沿 body-X 轴前进
    - 适用于需要直线轨迹的任务（过门、巡线等）
+
+4. BODY_VELOCITY
+   - 机体系瞬时速度指令，通过短租约保持有效
+   - 租约未续期时自动发送零速度
+   - 视觉伺服等高频控制只通过 BasicMotion Action 进入本层
 """
 
 from __future__ import annotations
@@ -91,8 +96,12 @@ from uv_control.coordinate import Coordinate, wrap_deg, wrap_rad
 # ═════════════════════════════════════════════════════════════════════════════
 # ZIT6 control_key 常量
 # ═════════════════════════════════════════════════════════════════════════════
-# 只走 0x00 位置模式，body/增量转换在上层完成
+# Position and body-velocity modes are the only ZIT6 modes emitted here;
+# body/增量转换在上层完成。
 CK_POS = 0          # position mode (唯一的 control_key)
+CK_VEL_BODY = 0x11  # body-frame velocity mode (VEL | BODY)
+DEFAULT_VELOCITY_LEASE = 0.25
+VELOCITY_WATCHDOG_PERIOD = 0.05
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 轴掩码
@@ -151,8 +160,11 @@ class BasicMotionNode(Node):
         self._state_origin = Coordinate()  # estimator-provided map origin
         self._origin = None             # active odom origin (map Coordinate)
         self._state_lock = threading.Lock()
+        self._velocity_lock = threading.Lock()
         self._shutdown_requested = False
         self._timers = []
+        self._velocity_active = False
+        self._velocity_deadline = 0.0
         self.vel_body = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}   # 机体速度
         self._pose_stamp = self.get_clock().now().to_msg()
         self.declare_parameter('sim_mode', False)
@@ -192,6 +204,8 @@ class BasicMotionNode(Node):
         self._action_target = None       # 绝对目标 {x, y, z, yaw}，用于反馈
         self._action_axes = None         # 当前 action 的生效轴，用于反馈
         self._timers.append(self.create_timer(0.5, self._action_feedback_cb))
+        self._timers.append(self.create_timer(
+            VELOCITY_WATCHDOG_PERIOD, self._velocity_watchdog_cb))
 
         # ``/auv/state/odom`` and ``/auv/tf`` belong exclusively to
         # uv_localization.  BasicMotion keeps the old PoseInfo stream only as
@@ -212,9 +226,19 @@ class BasicMotionNode(Node):
         timers prevents those callbacks from publishing through an already
         destroyed DDS handle.
         """
+        if not self._shutdown_requested:
+            try:
+                self._publish_body_velocity()
+            except Exception:
+                pass
         self._shutdown_requested = True
         for timer in self._timers:
-            timer.cancel()
+            try:
+                timer.cancel()
+            except Exception:
+                # A late shutdown callback can observe a timer whose handle
+                # has already been destroyed by rclpy.
+                pass
 
     def _publish_while_running(self, publisher, message):
         """Publish unless shutdown has started, tolerating its final race."""
@@ -244,6 +268,10 @@ class BasicMotionNode(Node):
     def _send_setpoint(self, control_key: int, type_mask: int,
                        x: float, y: float, z: float, yaw_rad: float):
         """发送 ZitSetpoint。坐标是 map 系，yaw 是弧度，只走 CK_POS 位置模式。"""
+        # A position command supersedes any leased body-velocity command.
+        with self._velocity_lock:
+            self._velocity_active = False
+            self._velocity_deadline = 0.0
         msg = ZitSetpoint()
         msg.control_key = control_key
         msg.type_mask = type_mask
@@ -254,13 +282,69 @@ class BasicMotionNode(Node):
         msg.roll = 0.0         # roll/pitch 未使用，控制栈保持 4-DOF
         msg.pitch = 0.0
         msg.seq = 0
-        self._target = self._map_to_odom(Coordinate(x=x, y=y, z=z, rz=math.degrees(yaw_rad)))
+        odom_t = self._map_to_odom(
+            Coordinate(x=x, y=y, z=z, rz=math.degrees(yaw_rad)))
+        with self._state_lock:
+            self._target = odom_t
         self.pub_setpoint.publish(msg)
         self.pub_setpoint_legacy.publish(msg)
-        odom_t = self._target
         self.get_logger().info(
             f'发往ZIT6: map=({x:.2f}, {y:.2f}, {z:.2f}, {math.degrees(yaw_rad):.1f}°), '
             f'对应odom=({odom_t.x:.2f}, {odom_t.y:.2f}, {odom_t.z:.2f}, {odom_t.rz:.1f}°)')
+
+    def _publish_body_velocity(self, forward_mps: float = 0.0,
+                               lateral_mps: float = 0.0,
+                               vertical_mps: float = 0.0,
+                               yaw_rate_deg_s: float = 0.0,
+                               lease_s: float = DEFAULT_VELOCITY_LEASE):
+        """Publish a body velocity command and arm its expiry watchdog.
+
+        Higher-level tasks must use the ``BODY_VELOCITY`` BasicMotion action;
+        this method is the only place in the motion node that knows the ZIT6
+        velocity wire format.
+        """
+        values = (
+            float(forward_mps), float(lateral_mps), float(vertical_mps),
+            float(yaw_rate_deg_s),
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError('body velocity command must be finite')
+
+        is_zero = max(abs(value) for value in values) <= 1e-6
+        with self._velocity_lock:
+            if is_zero:
+                self._velocity_active = False
+                self._velocity_deadline = 0.0
+            else:
+                lease = (float(lease_s) if float(lease_s) > 0.0
+                         else DEFAULT_VELOCITY_LEASE)
+                self._velocity_active = True
+                self._velocity_deadline = time.monotonic() + lease
+
+        msg = ZitSetpoint()
+        msg.control_key = CK_VEL_BODY
+        msg.type_mask = 0
+        msg.x = values[0]
+        msg.y = values[1]
+        msg.z = values[2]
+        msg.roll = 0.0
+        msg.pitch = 0.0
+        msg.yaw = math.radians(values[3])
+        msg.seq = 0
+        self._publish_while_running(self.pub_setpoint, msg)
+        self._publish_while_running(self.pub_setpoint_legacy, msg)
+
+    def _velocity_watchdog_cb(self):
+        """Stop a velocity command when its action lease is not renewed."""
+        with self._velocity_lock:
+            expired = (
+                self._velocity_active
+                and time.monotonic() >= self._velocity_deadline
+            )
+        if expired:
+            self.get_logger().warning(
+                'BODY_VELOCITY command lease expired; sending zero velocity')
+            self._publish_body_velocity()
 
     def _status_cb(self, msg: ZitStatus):
         with self._state_lock:
@@ -398,8 +482,31 @@ class BasicMotionNode(Node):
         Returns:
             (pose: Coordinate, target: Coordinate, status: ZitStatus)
         """
+        # Action callbacks and estimator callbacks run concurrently.  Return
+        # snapshots instead of the mutable objects stored by the callbacks.
         with self._state_lock:
-            return self.pose, self._target, self.status
+            pose = Coordinate(
+                x=self.pose.x, y=self.pose.y, z=self.pose.z,
+                rx=self.pose.rx, ry=self.pose.ry, rz=self.pose.rz)
+            target = Coordinate(
+                x=self._target.x, y=self._target.y, z=self._target.z,
+                rx=self._target.rx, ry=self._target.ry, rz=self._target.rz)
+            status = self.status
+        return pose, target, status
+
+    def _target_error_snapshot(self):
+        """Return one consistent measured-pose/target/body-error snapshot."""
+        with self._state_lock:
+            pose = Coordinate(
+                x=self.pose.x, y=self.pose.y, z=self.pose.z,
+                rx=self.pose.rx, ry=self.pose.ry, rz=self.pose.rz)
+            target = Coordinate(
+                x=self._target.x, y=self._target.y, z=self._target.z,
+                rx=self._target.rx, ry=self._target.ry, rz=self._target.rz)
+        error = pose.world_to_body(
+            target.x - pose.x, target.y - pose.y, target.z - pose.z)
+        error.rz = wrap_deg(target.rz - pose.rz)
+        return pose, target, error
 
     # ═════════════════════════════════════════════════════════════════════════
     # Layer 3: 机器人坐标系 (body frame)
@@ -417,9 +524,11 @@ class BasicMotionNode(Node):
 
     def set_step(self, dx: float, dy: float, dz: float, dyaw_deg: float):
         """设置机体系增量步进。dyaw 单位为度。"""
-        _, t, _ = self.get_state()
+        # 增量必须从当前实测位姿开始；使用上一次目标会在上一段未完全
+        # 收敛时把下一段继续向前推，造成 BMOVE 的目标和误差看起来漂移。
+        p, _, _ = self.get_state()
         target_step = Coordinate(x=dx, y=dy, z=dz, rz=dyaw_deg)
-        map_target = t.to_world_frame(target_step)
+        map_target = p.to_world_frame(target_step)
 
         self.get_logger().info(
             f'set_step: 增量=({dx:.3f}, {dy:.3f}, {dz:.3f}, {dyaw_deg:.2f}°) '
@@ -464,7 +573,7 @@ class BasicMotionNode(Node):
                 self.get_logger().warning(f'等待到达超时 ({timeout:.0f}s)')
                 return False
 
-            body_target = self._odom_to_body(self._target)
+            pose, target, body_target = self._target_error_snapshot()
 
             err_x = abs(body_target.x)
             err_y = abs(body_target.y)
@@ -485,7 +594,13 @@ class BasicMotionNode(Node):
             self._wait_count += 1
             if self._wait_count % 10 == 0:
                 self.get_logger().info(
-                    f'等待到达: err=({err_x:.3f}, {err_y:.3f}, {err_z:.3f}, {err_yaw:.2f}°), '
+                    f'等待到达: pose=({pose.x:.3f}, {pose.y:.3f}, '
+                    f'{pose.z:.3f}, {pose.rz:.2f}°), '
+                    f'target=({target.x:.3f}, {target.y:.3f}, '
+                    f'{target.z:.3f}, {target.rz:.2f}°), '
+                    f'err_body_signed=({body_target.x:.3f}, '
+                    f'{body_target.y:.3f}, {body_target.z:.3f}, '
+                    f'{body_target.rz:.2f}°), '
                     f'容差=({tol_x}, {tol_y}, {tol_z}, {tol_rz}), '
                     f'已用{elapsed:.0f}s/{timeout:.0f}s')
 
@@ -541,7 +656,7 @@ class BasicMotionNode(Node):
                 continue
 
 
-            body_target = self._odom_to_body(self._target)
+            _, _, body_target = self._target_error_snapshot()
 
 
             # 机体坐标系误差 → 运动方向坐标系
@@ -592,15 +707,16 @@ class BasicMotionNode(Node):
                 return False
 
             target_world = Coordinate(x=target_x, y=target_y, z=target_z)
-            target_body = self._odom_to_body(target_world)
-
-            p, target_odom, _ = self.get_state()
-            target_target = target_odom.to_local_frame(target_world)
+            p, _, _ = self.get_state()
+            target_body = p.world_to_body(
+                target_world.x - p.x, target_world.y - p.y,
+                target_world.z - p.z)
 
             # 机体坐标系误差 → 运动方向坐标系
             ex_body = target_body.x
             ey_body = target_body.y
-            dist_xy = math.sqrt(target_target.x**2 + target_target.y**2)
+            dist_xy = math.hypot(target_world.x - p.x,
+                                 target_world.y - p.y)
             dist_3d = math.sqrt(dist_xy**2 + (target_z - p.z)**2)
 
             move_angle = math.atan2(ey_body, ex_body)
@@ -744,11 +860,11 @@ class BasicMotionNode(Node):
 
     def bmovexyzrz(self, dx: float, dy: float, dz: float, drz: float,
                    timeout: float = 60.0) -> bool:
-        _, t, _ = self.get_state()
-        off = t.body_to_world(dx, dy)
+        p, _, _ = self.get_state()
+        off = p.body_to_world(dx, dy)
         return self._step_move_world(
-            t.x + off.x, t.y + off.y, t.z + dz,
-            t.rz + drz, timeout)
+            p.x + off.x, p.y + off.y, p.z + dz,
+            p.rz + drz, timeout)
 
     def bmovexyz(self, dx: float, dy: float, dz: float,
                  timeout: float = 60.0) -> bool:
@@ -851,6 +967,13 @@ class BasicMotionNode(Node):
 
     def _action_cancel_cb(self, _goal_handle):
         self.get_logger().info('Action cancel requested, accepting')
+        # Cancelling a position goal must also leave the vehicle out of any
+        # previously leased velocity mode.
+        try:
+            self._publish_body_velocity()
+        except Exception:
+            if not self._shutdown_requested:
+                raise
         return CancelResponse.ACCEPT
 
     def _action_execute_cb(self, goal_handle):
@@ -871,6 +994,35 @@ class BasicMotionNode(Node):
             goal_handle.succeed()
             self._action_goal_handle = None
             self.get_logger().info('Action START: done')
+            return result
+
+        # BODY_VELOCITY is intentionally a short, immediately-completed
+        # action.  The task layer renews the lease at its control period; if
+        # it stops publishing, the watchdog above sends a neutral command.
+        # This keeps the ZIT6 wire format exclusively inside BasicMotion while
+        # retaining a responsive visual-servo loop.
+        if req.cmd_type == BasicMotion.Goal.BODY_VELOCITY:
+            if len(req.target) < 4:
+                result = BasicMotion.Result()
+                result.success = False
+                result.message = (
+                    'BODY_VELOCITY target needs 4 values '
+                    '[vx, vy, vz, yaw_rate_deg_s]')
+                goal_handle.abort()
+                self._action_goal_handle = None
+                return result
+            vx, vy, vz, yaw_rate_deg_s = req.target[:4]
+            self._publish_body_velocity(
+                vx, vy, vz, yaw_rate_deg_s,
+                lease_s=(req.velocity_lease
+                         if req.velocity_lease > 0.0
+                         else DEFAULT_VELOCITY_LEASE),
+            )
+            result = BasicMotion.Result()
+            result.success = True
+            result.message = ''
+            goal_handle.succeed()
+            self._action_goal_handle = None
             return result
 
         # ── 参数校验 ──────────────────────────────────────────
@@ -901,7 +1053,10 @@ class BasicMotionNode(Node):
         p, t, _ = self.get_state()
 
         # ── 派发运动类型 ──────────────────────────────────────
-        type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL'}
+        type_names = {
+            1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
+            5: 'BTRAVEL', 7: 'BODY_VELOCITY',
+        }
         type_name = type_names.get(req.cmd_type, f'UNKNOWN({req.cmd_type})')
         context_text = (
             f' task_context="{task_context}"' if task_context else '')

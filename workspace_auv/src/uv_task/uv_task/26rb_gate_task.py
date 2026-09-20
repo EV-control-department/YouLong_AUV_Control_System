@@ -428,6 +428,8 @@ class RB26GateTask:
             0.2, float(params.get(
                 'arc_gradient_window_seconds',
                 5.0)))
+        self._arc_timeout = max(
+            0.1, float(params.get('arc_timeout_seconds', 30.0)))
         self._arc_objective_deadband = max(
             0.0005, float(params.get('arc_objective_deadband', 0.01)))
         self._arc_reverse_cooldown = max(
@@ -443,11 +445,6 @@ class RB26GateTask:
             0.2, float(params.get('pass_distance_m', 1.15)))
         self._pass_timeout = max(
             2.0, float(params.get('pass_timeout', 45.0)))
-        # BTRAVEL 的内部分步控制会在目标未收敛时按测量姿态重算
-        # 方向，穿门阶段可能因此产生横向/偏航漂移。任务层改用
-        # 固定绝对位姿的短段 SET；每段都在固定目标处收敛后才发下一段。
-        self._pass_segment_distance = _clamp(
-            float(params.get('pass_segment_distance_m', 0.4)), 0.1, 0.8)
         self._post_pass_pause = max(
             0.0, float(params.get('post_pass_pause', 0.5)))
 
@@ -472,7 +469,8 @@ class RB26GateTask:
             f'首段窗口={self._arc_probe_window_seconds:.1f}秒，'
             f'首段窗口速度={self._arc_probe_speed:.2f}米/秒，'
             f'固定分段窗口={self._arc_window_seconds:.1f}秒，'
-            f'穿门位置环分段={self._pass_segment_distance:.2f}米，'
+            f'左右横移超时={self._arc_timeout:.1f}秒，'
+            f'穿门 BTRAVEL 距离={self._pass_distance:.2f}米，'
             f'丢失指令保持={self._lost_command_hold_seconds:.1f} 秒，'
             '搜索完成后选择扫描范围内最大门框，'
             f'偏航 PID=({self._yaw_pid_kp:.2f}，'
@@ -1256,14 +1254,24 @@ class RB26GateTask:
                 now = time.monotonic()
                 if now - last_publish >= self._scan_publish_period:
                     yaw_rate = math.copysign(self._scan_yaw_rate, error)
-                    self._node._publish_body_velocity(
-                        yaw_rate_deg_s=yaw_rate)
+                    success, message = self._node._send_body_velocity(
+                        yaw_rate_deg_s=yaw_rate,
+                        lease_s=max(0.25, self._scan_publish_period * 4.0),
+                        task_context=self._node._format_motion_context(label),
+                    )
+                    if not success:
+                        self._logger.warning(
+                            f'过门任务：{label}速度指令失败：{message}')
+                        break
                     velocity_started = True
                     last_publish = now
                 time.sleep(0.02)
         finally:
             if velocity_started:
-                self._node._publish_body_velocity()
+                self._node._send_body_velocity(
+                    lease_s=max(0.25, self._scan_publish_period * 4.0),
+                    task_context=self._node._format_motion_context(
+                        f'{label}结束'))
 
         try:
             measured_yaw = float(self._node._latest_robot_pose()[5])
@@ -1355,14 +1363,24 @@ class RB26GateTask:
                     break
                 now = time.monotonic()
                 if now - last_publish >= self._scan_publish_period:
-                    self._node._publish_body_velocity(
-                        yaw_rate_deg_s=direction * self._scan_yaw_rate)
+                    success, message = self._node._send_body_velocity(
+                        yaw_rate_deg_s=direction * self._scan_yaw_rate,
+                        lease_s=max(0.25, self._scan_publish_period * 4.0),
+                        task_context=self._node._format_motion_context(
+                            '门框扫描'))
+                    if not success:
+                        self._logger.warning(
+                            f'过门任务：扫描速度指令失败：{message}')
+                        break
                     velocity_started = True
                     last_publish = now
                 time.sleep(0.02)
         finally:
             if velocity_started:
-                self._node._publish_body_velocity()
+                self._node._send_body_velocity(
+                    lease_s=max(0.25, self._scan_publish_period * 4.0),
+                    task_context=self._node._format_motion_context(
+                        '门框扫描结束'))
 
         end_heading = measured_yaw()
         return best, (best_heading if best is not None else end_heading)
@@ -1889,7 +1907,9 @@ class RB26GateTask:
         位置环偏航指令不易受某个噪声边界框中心的影响。
         """
 
-        self._node._publish_body_velocity()
+        self._node._send_body_velocity(
+            lease_s=max(0.25, self._velocity_period * 4.0),
+            task_context=self._node._format_motion_context('停止视觉伺服'))
         center_yaw_samples = []
         deadline = time.monotonic() + self._heading_check_seconds
         locked_reference = getattr(self, '_locked_observation', None)
@@ -1982,14 +2002,22 @@ class RB26GateTask:
             last_velocity_command = (
                 float(forward), float(lateral),
                 float(vertical), float(yaw_rate))
-            self._node._publish_body_velocity(
+            success, message = self._node._send_body_velocity(
                 forward_mps=forward,
                 lateral_mps=lateral,
                 vertical_mps=vertical,
                 yaw_rate_deg_s=yaw_rate,
+                lease_s=max(0.25, self._velocity_period * 4.0),
+                task_context=self._node._format_motion_context(
+                    '门框视觉伺服'),
             )
+            if not success:
+                self._logger.warning(
+                    f'过门任务：视觉伺服速度指令失败：{message}')
+                return False
             velocity_started = True
             last_velocity_publish = time.monotonic()
+            return True
 
         try:
             while (time.monotonic() < deadline and rclpy_ok()
@@ -2118,6 +2146,20 @@ class RB26GateTask:
                 elif not attitude_done:
                     ratio_hold_since = None
 
+                # 横移目标长时间无法满足时，不让整个过门任务卡在弧线
+                # 搜索阶段。停止横移，继续完成高度稳定和后续的位置环
+                # 偏航对准，然后进入 BTRAVEL 前进阶段。
+                if (not attitude_done
+                        and attitude_correction_started is not None
+                        and now - attitude_correction_started
+                        >= self._arc_timeout):
+                    attitude_done = True
+                    ratio_hold_since = None
+                    self._logger.warning(
+                        '过门任务：左右横移调整在 '
+                        f'{self._arc_timeout:.1f} 秒内未满足目标；'
+                        '停止横移，进入后续对准流程')
+
                 height_output = 0.0
                 height_error = 0.0
                 height_derivative = 0.0
@@ -2165,7 +2207,9 @@ class RB26GateTask:
                         arc_probe=initial_window_active,
                         now=now,
                         yaw_pid_output=yaw_pid_output)
-                    publish_velocity(forward, lateral, vertical, yaw_rate)
+                    if not publish_velocity(
+                            forward, lateral, vertical, yaw_rate):
+                        return False
                     self._logger.debug(
                         f'过门任务：速度 vx={forward:.3f} '
                         f'vy={lateral:.3f} vz={vertical:.3f} '
@@ -2209,24 +2253,19 @@ class RB26GateTask:
         return False
 
     def _pass_current_gate(self, index: int) -> bool:
-        """通过当前门框。
-
-        不使用 BTRAVEL：其内部步进器在单步未收敛时会根据变化中的
-        测量姿态重新计算机体步进，导致目标方向漂移。这里固定穿门
-        开始时的世界坐标和偏航，只发送几个短的绝对位置 SET；每个
-        SET 完成后才继续下一段。这样即使某段超时，控制器也只会停在
-        该段的固定目标，不会继续沿着一个失控的旧速度目标前进。
-        """
+        """通过当前门框，沿对准后的机体 X 轴执行一次 BTRAVEL。"""
         self._logger.info(
             f'过门任务：[{index}/{self._gates_to_pass}] '
-            f'使用固定位置环分段前进 {self._pass_distance:.2f} 米通过门框，'
-            f'每段 {self._pass_segment_distance:.2f} 米')
+            f'使用 BTRAVEL 直线前进 {self._pass_distance:.2f} 米通过门框')
 
         def recover_after_failure(reason: str) -> None:
             # 先立即切到零速度，避免动作失败或任务退出后留下旧的
             # 速度输出；再将 BasicMotion 的内部目标复位到当前位姿。
             try:
-                self._node._publish_body_velocity()
+                self._node._send_body_velocity(
+                    lease_s=max(0.25, self._velocity_period * 4.0),
+                    task_context=self._node._format_motion_context(
+                        '穿门失败安全停车'))
                 pose = self._node._latest_robot_pose()
                 (self._node._cmd_x, self._node._cmd_y,
                  self._node._cmd_z, self._node._cmd_yaw) = (
@@ -2237,72 +2276,36 @@ class RB26GateTask:
                     'xyzrz', timeout=min(3.0, self._command_timeout),
                     quiet=True,
                     task_context=self._node._format_motion_context(
-                        '穿门分段失败安全复位当前位姿'),
+                        'BTRAVEL 失败安全复位当前位姿'),
                 )
                 if not hold_success:
                     self._logger.warning(
-                        f'过门任务：分段失败后的当前位姿复位失败：'
+                        f'过门任务：BTRAVEL 失败后的当前位姿复位失败：'
                         f'{hold_message}')
                 else:
                     self._logger.info(
-                        '过门任务：分段失败后的当前位姿已复位')
+                        '过门任务：BTRAVEL 失败后的当前位姿已复位')
             except (AttributeError, TypeError, RuntimeError, IndexError,
                     ValueError) as exc:
                 self._logger.warning(
-                    f'过门任务：分段失败后的安全复位失败：{exc}')
+                    f'过门任务：BTRAVEL 失败后的安全复位失败：{exc}')
             self._logger.error(
                 f'过门任务：第 {index} 个门通过失败：{reason}')
 
-        start_pose = self._node._latest_robot_pose()
-        start_x, start_y, start_z, start_yaw = (
-            float(start_pose[0]), float(start_pose[1]),
-            float(start_pose[2]), float(start_pose[5]))
-        yaw_rad = math.radians(start_yaw)
-        forward_x = math.cos(yaw_rad)
-        forward_y = math.sin(yaw_rad)
-        deadline = time.monotonic() + self._pass_timeout
-        completed = 0.0
-        segment_number = 0
+        if self._node.stopped or not rclpy_ok():
+            recover_after_failure('任务被中止')
+            return False
 
-        while completed < self._pass_distance - 1e-6:
-            if self._node.stopped or not rclpy_ok():
-                recover_after_failure('任务被中止')
-                return False
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.05:
-                recover_after_failure('穿门分段总超时')
-                return False
-
-            completed = min(
-                self._pass_distance,
-                completed + self._pass_segment_distance)
-            target_x = start_x + forward_x * completed
-            target_y = start_y + forward_y * completed
-            segment_number += 1
-            segment_timeout = max(
-                1.0, min(self._command_timeout, remaining))
-            self._logger.info(
-                f'过门任务：第 {segment_number} 段位置 SET，'
-                f'固定目标=({target_x:.2f}, {target_y:.2f}, '
-                f'{start_z:.2f}, {start_yaw:.1f}°)，'
-                f'累计前进={completed:.2f}/{self._pass_distance:.2f}米')
-            success, message = self._node._send_action_goal(
-                BasicMotion.Goal.SET,
-                [target_x, target_y, start_z, start_yaw],
-                'xyzrz', timeout=segment_timeout, quiet=False,
-                task_context=self._node._format_motion_context(
-                    f'第{index}个门分段前进 {completed:.2f}米'),
-            )
-            if not success:
-                recover_after_failure(message)
-                return False
-
-            # 给下一次绝对 SET 更新任务缓存；目标仍然基于 start_pose
-            # 计算，不读取可能暂时抖动的实测位置来积分。
-            self._node._cmd_x = target_x
-            self._node._cmd_y = target_y
-            self._node._cmd_z = start_z
-            self._node._cmd_yaw = start_yaw
+        success, message = self._node._send_action_goal(
+            BasicMotion.Goal.BTRAVEL,
+            [self._pass_distance, 0.0, 0.0, 0.0],
+            'xyz', timeout=self._pass_timeout, quiet=False,
+            task_context=self._node._format_motion_context(
+                f'第{index}个门 BTRAVEL 前进 {self._pass_distance:.2f}米'),
+        )
+        if not success:
+            recover_after_failure(message)
+            return False
 
         try:
             pose = self._node._latest_robot_pose()

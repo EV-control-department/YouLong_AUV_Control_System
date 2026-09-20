@@ -36,15 +36,11 @@ DEFAULT_TOPIC_REGEX = (
     r'cmd_vel.*)$'
 )
 # Recording image messages in rosbag duplicates the external video archive and
-# is usually the largest source of recorder overhead.  Keep this metadata-only
-# default narrow; image message types are excluded independently below even
-# when a caller supplies a broader custom topic regex.
-METADATA_TOPIC_REGEX = (
-    r'^/(clock|rosout|parameter_events|diagnostics|'
-    r'auv/(sim/(performance|control_performance)|sim/actuators/.*|evaluation/.*|hardware/.*|'
-    r'perception/.*|mission/.*|state/.*|control/.*|planning/.*|mapping/.*)|'
-    r'zit6/.*|perception/.*|basic_motion/.*|task/.*|nav/.*|cmd_vel.*)$'
-)
+# is usually the largest source of recorder overhead.  Record every ROS
+# telemetry/control topic by default, including simulator ground truth and
+# raw sensor feeds.  Image message types are excluded independently below, so
+# this broad filter still keeps camera video in the JPEG archive only.
+METADATA_TOPIC_REGEX = DEFAULT_TOPIC_REGEX
 IMAGE_TOPIC_TYPES = (
     'sensor_msgs/msg/Image',
     'sensor_msgs/msg/CompressedImage',

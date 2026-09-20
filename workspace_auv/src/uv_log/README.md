@@ -63,7 +63,8 @@ ros2 run uv_log player records/sessions/YYYYMMDD_HHMMSS
 位姿/里程计和四路相机标定连续到达，再等待四路检测消息连续到达，最后才启动导航
 和任务节点；等待过程和超时原因记录在 `logs/nodes/` 中。
 
-rosbag 只保存状态、控制、检测和其他元数据等小消息。录制器会无条件排除
+rosbag 只保存所有非图像的 ROS 话题，包括状态、控制、检测、原始传感器、
+仿真真值和其他元数据等小消息。录制器会无条件排除
 `sensor_msgs/msg/Image`、`sensor_msgs/msg/CompressedImage` 和
 `stereo_msgs/msg/DisparityImage`；旧参数 `record_image_topics` 仅为兼容保留，
 即使设为 `true` 也不会把图像写入 bag。播放器会将剩余的 rosbag 话题按同一

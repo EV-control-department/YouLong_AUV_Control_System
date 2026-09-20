@@ -78,10 +78,12 @@ wrapper) packages.
 
 ```
 # Goal
-uint8 cmd_type      # SET=3, WMOVE=1, BMOVE=2, WTRAVEL=4, BTRAVEL=5, START=6
+uint8 cmd_type      # SET=3, WMOVE=1, BMOVE=2, WTRAVEL=4, BTRAVEL=5, START=6, BODY_VELOCITY=7
 string axes          # 生效轴 "x"/"y"/"z"/"rz" 任意组合，空=全部
 float32[] target     # [x, y, z, yaw] — 含义取决于 cmd_type
 float32 timeout      # 超时秒数，≤0 默认 60s
+string task_context  # 任务上下文
+float32 velocity_lease # BODY_VELOCITY 的速度租约秒数，≤0 默认 0.25s
 ---
 # Result
 bool success
@@ -97,7 +99,7 @@ float32 distance_remaining   # 3D 欧氏距离
 - **yaw 单位**：度（°），NED 系顺时针为正
 - **NED 轴**：x=北(N), y=东(E), z=下(D, 正数更深)
 
-#### 6 种命令类型
+#### 7 种命令类型
 
 | 命令 | 值 | target 含义 | 运动模式 | 行为 |
 |---|---|---|---|---|
@@ -107,6 +109,7 @@ float32 distance_remaining   # 3D 欧氏距离
 | **BMOVE** | 2 | 机体系偏移 `[dx, dy, dz, dyaw]` | `body_to_world` + `step_move_world` | 先将 body 偏移旋转到世界系，再走 WMOVE |
 | **WTRAVEL** | 4 | 世界系偏移 `[dx, dy, dz]` | 转向 + 直线 step_move | 先转向目标方向 (atan2)，再沿 body-X 前进 |
 | **BTRAVEL** | 5 | 机体系偏移 `[dx, dy, dz]` | `body_to_world` + WTRAVEL | 先转 body→world，再走 WTRAVEL |
+| **BODY_VELOCITY** | 7 | 机体速度 `[vx, vy, vz, yaw_rate_deg_s]` | 瞬时速度 + 租约看门狗 | 视觉伺服、短时速度控制 |
 
 #### START 命令
 

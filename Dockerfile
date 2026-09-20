@@ -1,8 +1,8 @@
-ARG ROS_DISTRO=foxy
-FROM osrf/ros:${ROS_DISTRO}-desktop
+ARG YOULONG_ROS_DISTRO=foxy
+FROM osrf/ros:${YOULONG_ROS_DISTRO}-desktop
 
-ARG ROS_DISTRO
-ENV ROS_DISTRO=${ROS_DISTRO}
+ARG YOULONG_ROS_DISTRO
+ENV ROS_DISTRO=${YOULONG_ROS_DISTRO}
 ARG STONEFISH_COMMIT=b21eb8e194c570ff2f61e91aeffb38d73dc25f42
 ARG STONEFISH_BUILD_JOBS=1
 
@@ -68,28 +68,9 @@ RUN apt-get update \
 # concrete image, and this avoids a second distro-specific Dockerfile.
 ENV PYTHONPATH=/usr/local/lib/python3.8/dist-packages:/usr/local/lib/python3.12/dist-packages
 
-# Build both ROS overlays into the image. The repository is still bind-mounted
-# at /workspace at runtime, but the compiled overlays live outside that mount
-# so a fresh host needs no manual colcon step.
-COPY workspace_auv /opt/youlong/src/workspace_auv
-COPY workspace_sim /opt/youlong/src/workspace_sim
-COPY third_party/AUV_zit6_cmake /opt/youlong/src/third_party/AUV_zit6_cmake
-
-RUN /bin/bash -lc 'set -eo pipefail && \
-    source /opt/ros/${ROS_DISTRO}/setup.bash && \
-    cd /opt/youlong/src/workspace_auv && \
-    CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build \
-        --build-base /opt/youlong/build/auv \
-        --install-base /opt/youlong/install/auv \
-        --parallel-workers 1 && \
-    source /opt/youlong/install/auv/setup.bash && \
-    cd /opt/youlong/src/workspace_sim && \
-    CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build \
-        --build-base /opt/youlong/build/sim \
-        --install-base /opt/youlong/install/sim \
-        --parallel-workers 1 \
-        --cmake-force-configure && \
-    rm -rf /opt/youlong/src /opt/youlong/build'
+# Development image: the repository is bind-mounted at /workspace at runtime.
+# The mounted workspaces are built by compose.yaml so their build/install/log
+# directories stay in the actual development workspace.
 
 # The GUI renders Chinese labels and uses pygame for gamepad input.  Keep the
 # font packages after the native build layers so changing the GUI environment
@@ -115,7 +96,9 @@ RUN apt-get update \
 # host font configuration mounted into the container.
 ENV QT_QPA_PLATFORM=xcb \
     QT_QPA_FONTDIR=/usr/share/fonts/opentype/noto \
-    QT_X11_NO_MITSHM=1
+    QT_X11_NO_MITSHM=1 \
+    SDL_VIDEODRIVER=x11 \
+    SDL_VIDEO_X11_FORCE_EGL=0
 
 ARG HOST_UID=1000
 ARG HOST_GID=1000
@@ -139,10 +122,11 @@ RUN set -eux; \
     fi
 
 RUN printf '%s\n' \
+        'case $- in *i*) ;; *) return ;; esac' \
         'source /opt/ros/${ROS_DISTRO}/setup.bash' \
-        'source /opt/youlong/install/auv/setup.bash' \
-        'source /opt/youlong/install/sim/setup.bash' \
-        'alias uuv_src="source /workspace/install/setup.bash"' \
+        'if [ -f /workspace/workspace_auv/install/setup.bash ]; then source /workspace/workspace_auv/install/setup.bash; fi' \
+        'if [ -f /workspace/workspace_sim/install/setup.bash ]; then source /workspace/workspace_sim/install/setup.bash; fi' \
+        'alias uuv_src="source /workspace/workspace_auv/install/setup.bash && source /workspace/workspace_sim/install/setup.bash"' \
         'cd /workspace' \
         > "/home/${HOST_USER}/.bashrc" \
     && printf '%s\n' \
