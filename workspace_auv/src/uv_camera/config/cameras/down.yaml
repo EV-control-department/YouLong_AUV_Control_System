@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 camera: down
 
 profiles:
@@ -15,7 +15,6 @@ profiles:
       right: /auv/sim/raw/camera/downward/right/camera_info
     device: null
     calibration_source: sim_camera_info
-    calibration_npz: robotcup_down.npz
     intrinsics:
       left:
         matrix: [[672.183656, 0.0, 640.0], [0.0, 672.183656, 480.0], [0.0, 0.0, 1.0]]
@@ -23,13 +22,6 @@ profiles:
       right:
         matrix: [[672.183656, 0.0, 640.0], [0.0, 672.183656, 480.0], [0.0, 0.0, 1.0]]
         distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
-    extrinsics:
-      left:
-        translation: [0.0, -0.05, 0.176]
-        optical_to_body: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
-      right:
-        translation: [0.0, 0.05, 0.176]
-        optical_to_body: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
 
   real:
     capture_resolution: [2560, 960]
@@ -43,8 +35,7 @@ profiles:
       left: /auv/sensors/camera/downward/left/camera_info
       right: /auv/sensors/camera/downward/right/camera_info
     device: /dev/video2
-    calibration_source: npz
-    calibration_npz: down.npz
+    calibration_source: yaml
     intrinsics:
       left:
         matrix: [[1165.179590, 0.0, 567.743163], [0.0, 1151.337960, 448.695931], [0.0, 0.0, 1.0]]
@@ -52,10 +43,3 @@ profiles:
       right:
         matrix: [[1163.558743, 0.0, 590.388489], [0.0, 1147.198257, 423.883739], [0.0, 0.0, 1.0]]
         distortion: [-0.377426, 0.184757, 0.007024, 0.007769, 0.0]
-    extrinsics:
-      left:
-        translation: [-0.13, -0.05, 0.0645]
-        optical_to_body: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
-      right:
-        translation: [-0.13, 0.05, 0.0645]
-        optical_to_body: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]

@@ -13,8 +13,6 @@ data_files = [
         'weights/robotcup20260901.yaml',
     ]),
     ('share/' + package_name + '/config', [
-        'config/front.npz', 'config/down.npz',
-        'config/robotcup_front.npz', 'config/robotcup_down.npz',
         'config/object_localizer_sim.yaml',
     ]),
     ('share/' + package_name + '/config/profiles', [

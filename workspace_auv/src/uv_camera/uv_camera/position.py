@@ -20,6 +20,7 @@ from uv_msgs.msg import DetectionArray, ObjectPosition, ObjectPositionArray, Pos
 from auv_protocol.topics import DETECTIONS, OBJECTS, STATE_ODOM
 
 from .camera_config import load_camera_config, profile_for_mode
+from .camera_tf import CameraExtrinsicsProvider, CameraExtrinsicsUnavailable
 from .model_classes import (
     DEFAULT_CLASS_NAMES,
     model_class_name,
@@ -64,6 +65,9 @@ class PositionNode(Node):
         super().__init__('position')
 
         self.declare_parameter('camera_config_profile', 'auto')
+        self.declare_parameter('camera_base_frame', 'base_link')
+        self.declare_parameter('camera_tf_timeout_sec', 5.0)
+        self.declare_parameter('camera_tf_retry_period_sec', 0.1)
         self.declare_parameter('camera_config_dir', '')
         self.declare_parameter('max_history', 30)
         self._max_history = self.get_parameter('max_history').get_parameter_value().integer_value
@@ -111,6 +115,14 @@ class PositionNode(Node):
             for camera in ('front', 'down')
         }
 
+        self._camera_tf_provider = CameraExtrinsicsProvider(
+            self,
+            base_frame=self.get_parameter('camera_base_frame').value,
+            timeout_sec=float(self.get_parameter('camera_tf_timeout_sec').value),
+            retry_period_sec=float(self.get_parameter('camera_tf_retry_period_sec').value))
+        self._camera_tf_ready = False
+        self._camera_tf_warned = False
+
         # Precompute focal lengths and centers from the shared registry.
         self._cam_params = {}
         for camera, config in camera_configs.items():
@@ -123,11 +135,15 @@ class PositionNode(Node):
                     'fx': float(matrix[0, 0]), 'fy': float(matrix[1, 1]),
                     'cx': float(matrix[0, 2]), 'cy': float(matrix[1, 2]),
                     'width': width, 'height': height,
-                    'offset': camera_side.translation.copy(),
-                    'optical_to_body': camera_side.optical_to_body.copy(),
+                    'offset': np.zeros(3, dtype=np.float64),
+                    'optical_to_body': np.eye(3, dtype=np.float64),
                 }
 
-        # Subscribers
+        self._refresh_camera_extrinsics()
+        self.create_timer(
+            float(self.get_parameter('camera_tf_retry_period_sec').value),
+            self._refresh_camera_extrinsics)
+
         self.create_subscription(DetectionArray, DETECTIONS('front_left'), self._front_left_cb, 10)
         self.create_subscription(DetectionArray, DETECTIONS('front_right'), self._front_right_cb, 10)
         self.create_subscription(DetectionArray, DETECTIONS('down_left'), self._down_left_cb, 10)
@@ -168,6 +184,23 @@ class PositionNode(Node):
             self.get_logger().info(
                 f'First pose received: robot=({msg.robot_x:.2f}, {msg.robot_y:.2f}, '
                 f'{msg.robot_z:.2f}), roll={msg.robot_roll:.1f}°, pitch={msg.robot_pitch:.1f}°, yaw={msg.robot_yaw:.1f}°')
+
+    def _refresh_camera_extrinsics(self):
+        try:
+            snapshot = self._camera_tf_provider.snapshot()
+        except CameraExtrinsicsUnavailable as error:
+            if not self._camera_tf_warned:
+                self.get_logger().warning(
+                    f'等待完整相机 TF 树，position 暂停发布：{error}')
+                self._camera_tf_warned = True
+            self._camera_tf_ready = False
+            return
+        for name, extrinsic in snapshot.items():
+            self._cam_params[name]['offset'] = extrinsic.translation.copy()
+            self._cam_params[name]['optical_to_body'] = (
+                extrinsic.optical_to_body.copy())
+        self._camera_tf_ready = True
+        self._camera_tf_warned = False
 
     def _front_left_cb(self, msg: DetectionArray):
         self._on_detection(msg, 'front_left')
@@ -315,6 +348,8 @@ class PositionNode(Node):
         Rays are grouped by (class_id, camera_pair) where camera_pair is 'front' or 'down'
         so left and right channels of the same stereo pair contribute to the same queue.
         """
+        if not self._camera_tf_ready:
+            return
         cp = self._cam_params[camera]
         fx, fy = cp['fx'], cp['fy']
         cx, cy = cp['cx'], cp['cy']

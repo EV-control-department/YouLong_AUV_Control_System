@@ -1,8 +1,9 @@
 """Shared camera registry for the perception and task packages.
 
 The registry is deliberately independent of ROS.  Camera YAML files describe
-the logical camera (input/eye resolution, calibration and body mounting),
-while the NPZ file remains the source for stereo-only R/T/P/Q data.
+the logical camera (input/eye resolution and calibration), while the vehicle
+URDF/TF tree is the source for all camera mounting geometry.  Stereo
+rectification is generated at runtime from YAML K/D and the relative TF pose.
 """
 
 from __future__ import annotations
@@ -19,21 +20,14 @@ import yaml
 _CAMERAS = ("front", "down")
 _PROFILES = ("sim", "real")
 _SIDES = ("left", "right")
-_REQUIRED_NPZ_KEYS = (
-    "camera_matrix_left", "camera_matrix_right",
-    "dist_coeffs_left", "dist_coeffs_right",
-    "R", "T", "P1", "P2", "R1", "R2", "Q",
-)
 
 
 @dataclass(frozen=True)
 class CameraSideConfig:
-    """One eye's intrinsic and body-extrinsic configuration."""
+    """One eye's intrinsic configuration."""
 
     matrix: np.ndarray
     distortion: np.ndarray
-    translation: np.ndarray
-    optical_to_body: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -50,7 +44,6 @@ class CameraConfig:
     camera_info_topics: Mapping[str, str]
     device: str | None
     calibration_source: str
-    calibration_npz: Path
     sides: Mapping[str, CameraSideConfig]
 
     @property
@@ -152,70 +145,6 @@ def _find_config_dir(config_dir: str | os.PathLike | None, camera: str) -> Path:
     raise FileNotFoundError(f"camera config not found; searched: {searched}")
 
 
-def _resolve_npz(raw_path: Any, config_dir: Path) -> Path:
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        raise CameraConfigError("calibration_npz 必须是非空路径")
-    path = Path(os.path.expanduser(raw_path.strip()))
-    candidates = [path] if path.is_absolute() else [
-        config_dir.parent / path,
-        config_dir / path,
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate.resolve()
-    raise FileNotFoundError(
-        f"calibration_npz not found: {raw_path!r}; "
-        f"searched {', '.join(str(item) for item in candidates)}")
-
-
-def _validate_npz(npz_path: Path, sides: Mapping[str, CameraSideConfig], context: str):
-    try:
-        with np.load(npz_path, allow_pickle=False) as archive:
-            missing = [key for key in _REQUIRED_NPZ_KEYS if key not in archive]
-            if missing:
-                raise CameraConfigError(
-                    f"{context} NPZ 缺少标定字段：{', '.join(missing)}")
-
-            expected_shapes = {
-                "R": (3, 3), "P1": (3, 4), "P2": (3, 4),
-                "R1": (3, 3), "R2": (3, 3), "Q": (4, 4),
-            }
-            for key, shape in expected_shapes.items():
-                _as_finite_array(
-                    archive[key], shape, f"{context}.NPZ.{key}")
-            translation = np.asarray(archive["T"], dtype=np.float64).reshape(-1)
-            if translation.size != 3 or not np.all(np.isfinite(translation)):
-                raise CameraConfigError(
-                    f"{context}.NPZ.T 必须包含 3 个有限数值")
-
-            for side in _SIDES:
-                npz_matrix = _as_finite_array(
-                    archive[f"camera_matrix_{side}"], (3, 3),
-                    f"{context}.NPZ.camera_matrix_{side}")
-                npz_distortion = np.asarray(
-                    archive[f"dist_coeffs_{side}"], dtype=np.float64).reshape(-1)
-                if len(npz_distortion) not in (4, 5, 8, 12, 14):
-                    raise CameraConfigError(
-                        f"{context}.NPZ.dist_coeffs_{side} 长度无效："
-                        f"{len(npz_distortion)}")
-                if not np.all(np.isfinite(npz_distortion)):
-                    raise CameraConfigError(
-                        f"{context}.NPZ.dist_coeffs_{side} 必须全部为有限数值")
-                yaml_side = sides[side]
-                if not np.allclose(
-                        npz_matrix, yaml_side.matrix, rtol=1e-5, atol=1e-3):
-                    raise CameraConfigError(
-                        f"{context} 的 YAML/NPZ {side} camera matrix 不一致")
-                if not np.allclose(
-                        npz_distortion, yaml_side.distortion,
-                        rtol=1e-5, atol=1e-5):
-                    raise CameraConfigError(
-                        f"{context} 的 YAML/NPZ {side} distortion 不一致")
-    except CameraConfigError:
-        raise
-    except (OSError, ValueError) as error:
-        raise CameraConfigError(
-            f"无法读取 {context} NPZ：{error}") from error
 
 
 def _load_yaml(path: Path) -> Mapping[str, Any]:
@@ -223,8 +152,10 @@ def _load_yaml(path: Path) -> Mapping[str, Any]:
         document = yaml.safe_load(stream) or {}
     if not isinstance(document, Mapping):
         raise CameraConfigError(f"{path} 必须包含 YAML 映射")
-    if document.get("schema_version") != 1:
-        raise CameraConfigError(f"{path} schema_version 必须为 1")
+    if document.get("schema_version") != 2:
+        raise CameraConfigError(
+            f"{path} schema_version 必须为 2；旧配置包含相机外参，"
+            "请删除 extrinsics/calibration_npz 并迁移到 URDF/TF")
     return document
 
 
@@ -237,21 +168,15 @@ def _parse_side(raw: Any, context: str) -> CameraSideConfig:
     distortion = np.asarray(distortion_raw, dtype=np.float64).reshape(-1)
     if len(distortion) not in (4, 5, 8, 12, 14) or not np.all(np.isfinite(distortion)):
         raise CameraConfigError(f"{context}.distortion 长度或数值无效")
-    translation = _as_finite_array(
-        entry.get("translation"), (3,), f"{context}.translation")
-    optical_to_body = _as_finite_array(
-        entry.get("optical_to_body"), (3, 3), f"{context}.optical_to_body")
-    if not np.allclose(
-            optical_to_body @ optical_to_body.T, np.eye(3), atol=2e-6):
-        raise CameraConfigError(
-            f"{context}.optical_to_body 必须是正交旋转矩阵")
-    if not np.isclose(np.linalg.det(optical_to_body), 1.0, atol=2e-6):
-        raise CameraConfigError(
-            f"{context}.optical_to_body 行列式必须为 1")
     if matrix[0, 0] <= 0.0 or matrix[1, 1] <= 0.0 or abs(matrix[2, 2]) <= 1e-12:
         raise CameraConfigError(
             f"{context}.matrix 必须包含有效的正焦距和齐次项")
-    return CameraSideConfig(matrix, distortion, translation, optical_to_body)
+    forbidden = {"translation", "optical_to_body"}.intersection(entry)
+    if forbidden:
+        fields = ", ".join(sorted(forbidden))
+        raise CameraConfigError(
+            f"{context} 仍包含外参字段 {fields}；请迁移到 URDF/TF")
+    return CameraSideConfig(matrix, distortion)
 
 
 def load_camera_config(
@@ -326,8 +251,14 @@ def load_camera_config(
     if device is not None and (not isinstance(device, str) or not device.strip()):
         raise CameraConfigError("device 必须是字符串或 null")
 
-    source = str(raw_profile.get("calibration_source", "npz")).strip().lower()
-    if source not in {"npz", "sim_camera_info"}:
+    if "calibration_npz" in raw_profile:
+        raise CameraConfigError(
+            f"{context}.calibration_npz 已废弃；双目标定矩阵由 K、D 和 URDF/TF 运行时生成")
+    source = str(raw_profile.get("calibration_source", "yaml")).strip().lower()
+    if source not in {"yaml", "sim_camera_info"}:
+        if source == "npz":
+            raise CameraConfigError(
+                f"{context}.calibration_source=npz 已废弃；请迁移到 YAML K/D 和 URDF/TF")
         raise CameraConfigError(f"不支持的 calibration_source：{source!r}")
     if selected_profile == "real" and not isinstance(device, str):
         raise CameraConfigError("real profile 必须提供 device")
@@ -335,28 +266,20 @@ def load_camera_config(
             not camera_info_topics[side] for side in _SIDES):
         raise CameraConfigError(
             "sim_camera_info 必须为左右目提供 camera_info_topics")
-    npz_path = _resolve_npz(raw_profile.get("calibration_npz"), directory)
     raw_intrinsics = _mapping(
         raw_profile.get("intrinsics"), f"{context}.intrinsics")
-    raw_extrinsics = _mapping(
-        raw_profile.get("extrinsics"), f"{context}.extrinsics")
-    for section_name, section in (
-            ("intrinsics", raw_intrinsics), ("extrinsics", raw_extrinsics)):
-        if set(section) != set(_SIDES):
-            raise CameraConfigError(
-                f"{context}.{section_name} 必须且只能包含 left、right")
+    if set(raw_intrinsics) != set(_SIDES):
+        raise CameraConfigError(
+            f"{context}.intrinsics 必须且只能包含 left、right")
+    if "extrinsics" in raw_profile:
+        raise CameraConfigError(
+            f"{context}.extrinsics 已废弃；相机安装外参必须统一从 URDF/TF 获取")
     sides = {}
     for side in _SIDES:
         intrinsics = _mapping(
             raw_intrinsics.get(side), f"{path}.profiles.{selected_profile}.intrinsics.{side}")
-        extrinsics = _mapping(
-            raw_extrinsics.get(side), f"{path}.profiles.{selected_profile}.extrinsics.{side}")
-        merged = dict(intrinsics)
-        merged.update(extrinsics)
         sides[side] = _parse_side(
-            merged, f"{context}.{side}")
-
-    _validate_npz(npz_path, sides, context)
+            intrinsics, f"{context}.intrinsics.{side}")
     return CameraConfig(
         name=camera,
         profile=selected_profile,
@@ -368,7 +291,6 @@ def load_camera_config(
         camera_info_topics=camera_info_topics,
         device=device.strip() if isinstance(device, str) else None,
         calibration_source=source,
-        calibration_npz=npz_path,
         sides=sides,
     )
 

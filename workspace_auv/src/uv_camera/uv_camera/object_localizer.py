@@ -27,18 +27,15 @@ from __future__ import annotations
 import bisect
 import json
 import math
-import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
 import cv2
 import numpy as np
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo
@@ -65,6 +62,9 @@ from .model_classes import (
     physical_class_name,
 )
 from .camera_config import CameraConfigError, load_camera_config, profile_for_mode
+from .camera_tf import (
+    CameraExtrinsicsProvider, CameraExtrinsicsUnavailable,
+)
 
 from .bbox_geometry import (
     CameraContext,
@@ -498,71 +498,6 @@ class StereoCalibration:
     reprojection: np.ndarray
     baseline_m: float
 
-    @classmethod
-    def load(cls, name: str, path: str) -> "StereoCalibration":
-        required = (
-            "camera_matrix_left", "camera_matrix_right",
-            "dist_coeffs_left", "dist_coeffs_right",
-            "R", "T", "P1", "P2", "R1", "R2", "Q",
-        )
-        with np.load(path, allow_pickle=False) as archive:
-            missing = [key for key in required if key not in archive.files]
-            if missing:
-                raise ValueError(f"missing arrays: {', '.join(missing)}")
-            arrays = {
-                key: np.asarray(archive[key], dtype=np.float64)
-                for key in required
-            }
-
-        def require_shape(key: str, shape: tuple[int, ...]) -> np.ndarray:
-            value = arrays[key]
-            if value.shape != shape or not np.all(np.isfinite(value)):
-                raise ValueError(
-                    f"{key} has shape {value.shape}, expected {shape}")
-            return value
-
-        k_left = require_shape("camera_matrix_left", (3, 3))
-        k_right = require_shape("camera_matrix_right", (3, 3))
-        rotation = require_shape("R", (3, 3))
-        projection_left = require_shape("P1", (3, 4))
-        projection_right = require_shape("P2", (3, 4))
-        rectification_left = require_shape("R1", (3, 3))
-        rectification_right = require_shape("R2", (3, 3))
-        reprojection = require_shape("Q", (4, 4))
-        translation = arrays["T"].reshape(-1)
-        if translation.size != 3 or not np.all(np.isfinite(translation)):
-            raise ValueError(f"T has shape {arrays['T'].shape}, expected 3 values")
-
-        dist_left = arrays["dist_coeffs_left"].reshape(-1)
-        dist_right = arrays["dist_coeffs_right"].reshape(-1)
-        if dist_left.size not in (4, 5, 8, 12, 14):
-            raise ValueError("unsupported left distortion coefficient count")
-        if dist_right.size not in (4, 5, 8, 12, 14):
-            raise ValueError("unsupported right distortion coefficient count")
-
-        fx = float(projection_right[0, 0])
-        if abs(fx) < 1e-9:
-            raise ValueError("P2 has zero focal length")
-        baseline = abs(float(projection_right[0, 3] / fx))
-        if not np.isfinite(baseline) or baseline <= 1e-6:
-            raise ValueError("P2 does not contain a usable stereo baseline")
-
-        return cls(
-            name=name,
-            path=path,
-            camera_matrix_left=k_left,
-            camera_matrix_right=k_right,
-            dist_left=dist_left,
-            dist_right=dist_right,
-            rotation=rotation,
-            translation=translation,
-            projection_left=projection_left,
-            projection_right=projection_right,
-            rectification_left=rectification_left,
-            rectification_right=rectification_right,
-            reprojection=reprojection,
-            baseline_m=baseline,
-        )
 
     @classmethod
     def from_camera_info(cls, name: str, left_info: CameraInfo,
@@ -652,6 +587,78 @@ class StereoCalibration:
             baseline_m=baseline,
         )
 
+    @classmethod
+    def from_intrinsics(
+            cls, name: str, left_matrix: np.ndarray,
+            left_distortion: np.ndarray, right_matrix: np.ndarray,
+            right_distortion: np.ndarray, image_size: tuple[int, int],
+            left_translation: np.ndarray, left_body_rotation: np.ndarray,
+            right_translation: np.ndarray,
+            right_body_rotation: np.ndarray) -> "StereoCalibration":
+        """Build rectification from YAML K/D and the TF relative pose."""
+        width, height = (int(image_size[0]), int(image_size[1]))
+        if width <= 1 or height <= 1:
+            raise ValueError(f"{name} has an invalid image size")
+        matrices = [
+            np.asarray(left_matrix, dtype=np.float64).reshape(3, 3),
+            np.asarray(right_matrix, dtype=np.float64).reshape(3, 3),
+        ]
+        distortions = [
+            np.asarray(left_distortion, dtype=np.float64).reshape(-1),
+            np.asarray(right_distortion, dtype=np.float64).reshape(-1),
+        ]
+        for side, matrix in zip(("left", "right"), matrices):
+            if (not np.all(np.isfinite(matrix)) or matrix[0, 0] <= 1e-6
+                    or matrix[1, 1] <= 1e-6 or matrix[2, 2] <= 1e-6):
+                raise ValueError(f"{name} {side} intrinsics has an invalid K")
+        for side, distortion in zip(("left", "right"), distortions):
+            if (distortion.size not in (4, 5, 8, 12, 14)
+                    or not np.all(np.isfinite(distortion))):
+                raise ValueError(
+                    f"{name} {side} intrinsics has invalid distortion")
+        r_body_left = np.asarray(
+            left_body_rotation, dtype=np.float64).reshape(3, 3)
+        r_body_right = np.asarray(
+            right_body_rotation, dtype=np.float64).reshape(3, 3)
+        t_body_left = np.asarray(
+            left_translation, dtype=np.float64).reshape(3)
+        t_body_right = np.asarray(
+            right_translation, dtype=np.float64).reshape(3)
+        if not all(np.all(np.isfinite(value)) for value in (
+                r_body_left, r_body_right, t_body_left, t_body_right)):
+            raise ValueError(f"{name} TF extrinsics contain non-finite values")
+        rotation = r_body_right.T @ r_body_left
+        translation = r_body_right.T @ (t_body_left - t_body_right)
+        baseline = float(np.linalg.norm(translation))
+        if not np.isfinite(baseline) or baseline <= 1e-6:
+            raise ValueError(f"{name} TF stereo profile has a zero baseline")
+        rectification_left, rectification_right, projection_left, \
+            projection_right, reprojection, _, _ = cv2.stereoRectify(
+                matrices[0], distortions[0], matrices[1], distortions[1],
+                (width, height), rotation, translation.reshape(3, 1),
+                flags=cv2.CALIB_ZERO_DISPARITY, alpha=0.0)
+        arrays = (
+            rectification_left, rectification_right, projection_left,
+            projection_right, reprojection)
+        if not all(np.all(np.isfinite(array)) for array in arrays):
+            raise ValueError(f"{name} TF rectification is non-finite")
+        return cls(
+            name=name,
+            path=f"TF:{name}",
+            camera_matrix_left=matrices[0],
+            camera_matrix_right=matrices[1],
+            dist_left=distortions[0],
+            dist_right=distortions[1],
+            rotation=rotation,
+            translation=translation,
+            projection_left=projection_left,
+            projection_right=projection_right,
+            rectification_left=rectification_left,
+            rectification_right=rectification_right,
+            reprojection=reprojection,
+            baseline_m=baseline,
+        )
+
     def rectified_pixel(self, side: str, pixel: np.ndarray) -> np.ndarray:
         pixel = np.asarray(pixel, dtype=np.float64).reshape(2)
         if side == "left":
@@ -667,7 +674,6 @@ class StereoCalibration:
         result = cv2.undistortPoints(
             pixel.reshape(1, 1, 2), k, d, R=r, P=p[:, :3])
         return result.reshape(2)
-
     def ray_in_left_optical(self, side: str, pixel: np.ndarray) -> np.ndarray:
         rectified = self.rectified_pixel(side, pixel)
         if side == "left":
@@ -806,6 +812,9 @@ class ObjectLocalizer(Node):
             camera: None for camera in self._camera_info_messages
         }
         self._initialise_calibrations()
+        self._refresh_camera_tf()
+        self._camera_tf_timer = self.create_timer(
+            self.camera_tf_retry_period_sec, self._refresh_camera_tf)
 
         self._create_subscriptions()
         self._pub_compat = self.create_publisher(
@@ -832,6 +841,9 @@ class ObjectLocalizer(Node):
             self.get_logger().info(
                 "object_localizer started with independent front/down stereo "
                 "estimation")
+        elif not self._camera_tf_ready:
+            self.get_logger().info(
+                "object_localizer waiting for complete camera TF tree")
         elif self.calibration_source == "sim_camera_info":
             self.get_logger().info(
                 "object_localizer waiting for Stonefish CameraInfo calibration")
@@ -843,6 +855,9 @@ class ObjectLocalizer(Node):
         self.declare_parameter("sim_mode", False)
         self.declare_parameter("camera_config_profile", "auto")
         self.declare_parameter("camera_config_dir", "")
+        self.declare_parameter("camera_base_frame", "base_link")
+        self.declare_parameter("camera_tf_timeout_sec", 5.0)
+        self.declare_parameter("camera_tf_retry_period_sec", 0.1)
 
         self.declare_parameter("stereo_sync_slop_sec", 0.04)
         self.declare_parameter("stereo_pending_timeout_sec", 0.15)
@@ -1027,10 +1042,6 @@ class ObjectLocalizer(Node):
         if len(sources) != 1:
             raise ValueError("front/down camera profiles must use one calibration source")
         self.calibration_source = next(iter(sources))
-        self.front_calibration_file = str(
-            self.camera_configs["front"].calibration_npz)
-        self.down_calibration_file = str(
-            self.camera_configs["down"].calibration_npz)
         self.camera_info_topics = {
             "front_left": self.camera_configs["front"].camera_info_topics["left"],
             "front_right": self.camera_configs["front"].camera_info_topics["right"],
@@ -1041,7 +1052,16 @@ class ObjectLocalizer(Node):
             "front"].eye_resolution
         self.down_width, self.down_height = self.camera_configs[
             "down"].eye_resolution
-
+        self.camera_base_frame = str(get("camera_base_frame").value).strip()
+        self.camera_tf_timeout_sec = float(
+            get("camera_tf_timeout_sec").value)
+        self.camera_tf_retry_period_sec = float(
+            get("camera_tf_retry_period_sec").value)
+        self.camera_extrinsics_provider = CameraExtrinsicsProvider(
+            self, base_frame=self.camera_base_frame,
+            timeout_sec=self.camera_tf_timeout_sec,
+            retry_period_sec=self.camera_tf_retry_period_sec)
+        self._camera_tf_ready = False
         self.stereo_sync_slop = float(get("stereo_sync_slop_sec").value)
         self.pending_timeout = float(get("stereo_pending_timeout_sec").value)
         self.pose_max_age_sec = float(get("pose_max_age_sec").value)
@@ -1329,13 +1349,6 @@ class ObjectLocalizer(Node):
 
         self.body_translation = {}
         self.body_rotation = {}
-        for camera in ("front", "down"):
-            config = self.camera_configs[camera]
-            for side in ("left", "right"):
-                camera_side = config.side(side)
-                key = f"{camera}_{side}"
-                self.body_translation[key] = camera_side.translation.copy()
-                self.body_rotation[key] = camera_side.optical_to_body.copy()
 
         self.pose_position_covariance = np.eye(3) * self.pose_position_sigma**2
         self.pose_angle_covariance = np.eye(3) * self.pose_angle_sigma_rad**2
@@ -1344,56 +1357,74 @@ class ObjectLocalizer(Node):
         self.extrinsic_angle_covariance = (
             np.eye(3) * self.extrinsic_angle_sigma_rad**2)
 
-    def _resolve_calibration_path(self, name: str, configured: str) -> str:
-        if configured.strip():
-            path = Path(os.path.expanduser(configured.strip()))
-            if path.is_file():
-                return str(path)
-            raise FileNotFoundError(f"{name} calibration not found: {path}")
-
-        candidates = []
-        try:
-            candidates.append(
-                Path(get_package_share_directory("uv_camera"))
-                / "config" / f"{name}.npz")
-        except Exception:
-            pass
-        module_path = Path(__file__).resolve()
-        candidates.append(module_path.parents[1] / "config" / f"{name}.npz")
-        for candidate in candidates:
-            if candidate.is_file():
-                return str(candidate)
-        raise FileNotFoundError(
-            f"cannot find {name}.npz; checked "
-            + ", ".join(str(candidate) for candidate in candidates))
-
-    def _load_calibration(self, name: str,
-                          configured: str) -> StereoCalibration | None:
-        try:
-            path = self._resolve_calibration_path(name, configured)
-            calibration = StereoCalibration.load(name, path)
-            ratio = np.linalg.norm(calibration.translation) / calibration.baseline_m
-            if ratio > 10.0:
-                self.get_logger().warn(
-                    f"{name}.npz T norm={np.linalg.norm(calibration.translation):.3f} "
-                    f"differs from P2 baseline={calibration.baseline_m:.5f} m; "
-                    "using P1/P2 baseline for triangulation")
-            self.get_logger().info(
-                f"Loaded {name} calibration: {path}, "
-                f"baseline={calibration.baseline_m:.5f} m")
-            return calibration
-        except (OSError, ValueError, FileNotFoundError) as error:
-            self.get_logger().error(f"Failed to load {name} calibration: {error}")
-            return None
 
     def _initialise_calibrations(self):
-        if self.calibration_source == "npz":
-            self._front_calibration = self._load_calibration(
-                "front", self.front_calibration_file)
-            self._down_calibration = self._load_calibration(
-                "down", self.down_calibration_file)
-        # In sim_camera_info mode these are completed after both CameraInfo
-        # messages of each pair arrive.  Never silently fall back to an NPZ.
+        self._front_calibration = None
+        self._down_calibration = None
+        self._front_calibration_ready = False
+        self._calibration_ready = False
+
+    def _build_yaml_calibration(self, camera_pair: str) -> StereoCalibration:
+        config = self.camera_configs[camera_pair]
+        left_key = f"{camera_pair}_left"
+        right_key = f"{camera_pair}_right"
+        return StereoCalibration.from_intrinsics(
+            camera_pair,
+            config.side("left").matrix,
+            config.side("left").distortion,
+            config.side("right").matrix,
+            config.side("right").distortion,
+            config.eye_resolution,
+            self.body_translation[left_key],
+            self.body_rotation[left_key],
+            self.body_translation[right_key],
+            self.body_rotation[right_key],
+        )
+
+    def _refresh_camera_tf(self):
+        try:
+            snapshot = self.camera_extrinsics_provider.snapshot()
+        except CameraExtrinsicsUnavailable as error:
+            self._camera_tf_ready = False
+            self._front_calibration = None
+            self._down_calibration = None
+            self._front_calibration_ready = False
+            self._calibration_ready = False
+            self._warn_once(
+                "camera_tf_unavailable",
+                f"waiting for complete camera TF tree: {error}")
+            return
+
+        changed = not self._camera_tf_ready
+        for name, extrinsic in snapshot.items():
+            key_translation = extrinsic.translation
+            key_rotation = extrinsic.optical_to_body
+            changed = changed or name not in self.body_translation
+            if name in self.body_translation:
+                changed = changed or not np.allclose(
+                    self.body_translation[name], key_translation)
+                changed = changed or not np.allclose(
+                    self.body_rotation[name], key_rotation)
+            self.body_translation[name] = key_translation.copy()
+            self.body_rotation[name] = key_rotation.copy()
+        self._camera_tf_ready = True
+        if not changed:
+            return
+
+        if self.calibration_source == "yaml":
+            try:
+                self._front_calibration = self._build_yaml_calibration("front")
+                self._down_calibration = self._build_yaml_calibration("down")
+                self.get_logger().info(
+                    "Loaded YAML stereo intrinsics with URDF/TF camera geometry")
+            except (ValueError, cv2.error, np.linalg.LinAlgError) as error:
+                self._front_calibration = None
+                self._down_calibration = None
+                self.get_logger().error(
+                    f"Failed to build TF stereo calibration: {error}")
+        else:
+            self._refresh_sim_calibration("front")
+            self._refresh_sim_calibration("down")
         self._front_calibration_ready = self._front_calibration is not None
         self._calibration_ready = self._down_calibration is not None
 
@@ -1423,6 +1454,8 @@ class ObjectLocalizer(Node):
             "front" if camera.startswith("front") else "down")
 
     def _refresh_sim_calibration(self, camera_pair: str):
+        if not self._camera_tf_ready:
+            return
         was_ready = self._calibration_ready or self._front_calibration_ready
         left_key = f"{camera_pair}_left"
         right_key = f"{camera_pair}_right"

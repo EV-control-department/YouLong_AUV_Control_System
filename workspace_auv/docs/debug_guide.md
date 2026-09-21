@@ -392,8 +392,14 @@ Docker 镜像已包含 rqt 所需的 CJK 字体、字体缓存和 Qt/X11 环境�
 ./scripts/compose_up.sh exec auv bash -lc \
   "fc-match -f '%{family}\n' 'sans-serif:lang=zh-cn'"
 
-# 启动 rqt（先 source 容器内的 ROS 工作区）
-./scripts/compose_up.sh exec auv bash -lc 'rqt'
+# 启动完整 rqt：Compose 会让 rqt 使用 NVIDIA PRIME offload，并已修补
+# Foxy rqt_py_common 对 Action feedback 类型的加载问题。
+./scripts/compose_up.sh exec auv bash
+rqt
+
+# 需要其它插件时显式传给 rqt，例如：
+./scripts/compose_up.sh exec auv bash -lc \
+  'rqt --standalone rqt_graph'
 ```
 
 如果在容器外运行 rqt，先安装对应 ROS 发行版的插件包，例如：

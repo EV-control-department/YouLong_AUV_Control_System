@@ -220,9 +220,18 @@ class RB26GateTask:
             'left': front_left.matrix.copy(),
             'right': front_right.matrix.copy(),
         }
-        self._front_left_offset = front_left.translation.copy()
-        self._front_right_offset = front_right.translation.copy()
-        self._optical_to_body = front_left.optical_to_body.copy()
+        camera_extrinsics = getattr(node, 'camera_extrinsics', {})
+        if not {'front_left', 'front_right'}.issubset(camera_extrinsics):
+            raise ValueError(
+                '26rb_gate_task requires front camera TF extrinsics')
+        front_left_extrinsic = camera_extrinsics['front_left']
+        front_right_extrinsic = camera_extrinsics['front_right']
+        self._front_left_offset = front_left_extrinsic.translation.copy()
+        self._front_right_offset = front_right_extrinsic.translation.copy()
+        self._optical_to_body_left = (
+            front_left_extrinsic.optical_to_body.copy())
+        self._optical_to_body_right = (
+            front_right_extrinsic.optical_to_body.copy())
         self._subs = []
 
         qos = QoSProfile(
@@ -464,7 +473,7 @@ class RB26GateTask:
             f'{self._search_retry_sweep_deg:.0f}°，'
             f'{self._search_final_sweep_deg:.0f}°)，'
             f'左目外参偏移={self._front_left_offset.tolist()}，'
-            f'光轴到机体坐标变换={self._optical_to_body.tolist()}，'
+            f'左目光轴到机体坐标变换={self._optical_to_body_left.tolist()}，'
             f'横向极值搜索={self._arc_lateral_speed:.2f}米/秒，'
             f'首段窗口={self._arc_probe_window_seconds:.1f}秒，'
             f'首段窗口速度={self._arc_probe_speed:.2f}米/秒，'
@@ -815,7 +824,8 @@ class RB26GateTask:
         return candidates
 
     def _ray_in_body(self, pixel: np.ndarray, matrix: np.ndarray,
-                     offset: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+                     offset: np.ndarray,
+                     optical_to_body: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         fx = max(1.0, float(matrix[0, 0]))
         fy = max(1.0, float(matrix[1, 1]))
         cx = float(matrix[0, 2])
@@ -825,7 +835,7 @@ class RB26GateTask:
             (float(pixel[1]) - cy) / fy,
             1.0,
         ], dtype=np.float64)
-        body_ray = self._optical_to_body @ camera_ray
+        body_ray = optical_to_body @ camera_ray
         body_ray /= max(np.linalg.norm(body_ray), 1e-12)
         return offset.copy(), body_ray
 
@@ -834,9 +844,11 @@ class RB26GateTask:
                            left_k: np.ndarray,
                            right_k: np.ndarray) -> np.ndarray | None:
         left_origin, left_ray = self._ray_in_body(
-            left_pixel, left_k, self._front_left_offset)
+            left_pixel, left_k, self._front_left_offset,
+            self._optical_to_body_left)
         right_origin, right_ray = self._ray_in_body(
-            right_pixel, right_k, self._front_right_offset)
+            right_pixel, right_k, self._front_right_offset,
+            self._optical_to_body_right)
         return _triangulate_rays(
             left_origin, left_ray, right_origin, right_ray)
 
@@ -904,7 +916,8 @@ class RB26GateTask:
             self._distance_control_max_m)
         origin, ray = self._ray_in_body(
             np.asarray(pixel, dtype=np.float64), left_k,
-            self._front_left_offset)
+            self._front_left_offset,
+            self._optical_to_body_left)
         center = origin + ray * distance
         normal = center / max(float(np.linalg.norm(center)), 1e-12)
         # 将左目候选复用到右目槽位，使现有数据对象保持不可变，并兼容

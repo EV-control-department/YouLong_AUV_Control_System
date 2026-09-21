@@ -67,6 +67,7 @@ RB26FindCollectionFrameTask = import_module(
 RB26DropBeaconTask = import_module(
     'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
+from uv_camera.camera_tf import CameraExtrinsicsProvider, CameraExtrinsicsUnavailable
 from uv_camera.camera_config import load_camera_config, profile_for_mode
 from uv_camera.model_classes import model_class_id
 
@@ -177,6 +178,9 @@ class TaskRunnerNode(Node):
 
         self.declare_parameter('camera_config_profile', 'auto')
         self.declare_parameter('camera_config_dir', '')
+        self.declare_parameter('camera_base_frame', 'base_link')
+        self.declare_parameter('camera_tf_timeout_sec', 5.0)
+        self.declare_parameter('camera_tf_retry_period_sec', 0.1)
         camera_profile = profile_for_mode(
             False, self.get_parameter('camera_config_profile').value)
         camera_config_dir = str(
@@ -185,6 +189,14 @@ class TaskRunnerNode(Node):
             camera: load_camera_config(camera, camera_profile, camera_config_dir)
             for camera in ('front', 'down')
         }
+        self.camera_extrinsics_provider = CameraExtrinsicsProvider(
+            self,
+            base_frame=self.get_parameter('camera_base_frame').value,
+            timeout_sec=float(self.get_parameter('camera_tf_timeout_sec').value),
+            retry_period_sec=float(self.get_parameter('camera_tf_retry_period_sec').value))
+        self.camera_extrinsics = {}
+        self._camera_tf_warned = False
+        self._camera_tf_timer = None
         down = self.camera_configs['down']
         down_left = down.side('left')
         down_right = down.side('right')
@@ -192,9 +204,10 @@ class TaskRunnerNode(Node):
         self._down_fy = float(down_left.matrix[1, 1])
         self._down_cx = float(down_left.matrix[0, 2])
         self._down_cy = float(down_left.matrix[1, 2])
-        self._down_offset_left = down_left.translation.copy()
-        self._down_offset_right = down_right.translation.copy()
-        self._down_optical_to_body = down_left.optical_to_body.copy()
+        self._down_offset_left = np.zeros(3, dtype=np.float64)
+        self._down_offset_right = np.zeros(3, dtype=np.float64)
+        self._down_optical_to_body = np.eye(3, dtype=np.float64)
+        self._down_optical_to_body_right = np.eye(3, dtype=np.float64)
 
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {
@@ -514,6 +527,11 @@ class TaskRunnerNode(Node):
         command_timeout = max(
             0.2, float(p.get('down_visual_command_timeout',
                              p.get('horizontal_command_timeout', 10.0))))
+        if not self.camera_extrinsics:
+            self.get_logger().error(
+                '26rb_drop_ball_target_rack：下视相机 TF 未就绪，'
+                '拒绝启动双目视觉伺服')
+            return False
 
         deadline = time.monotonic() + servo_timeout
         stable_since = None
@@ -532,7 +550,10 @@ class TaskRunnerNode(Node):
                 detection_timeout,
                 epipolar_tolerance,
             )
-            if pair is None:
+            # Validate the same detection with TF-derived stereo rays before
+            # allowing the pixel servo to command motion.
+            stereo_target = self._triangulate(_TARGET_RACK_DOWN_CLASS_ID)
+            if pair is None or stereo_target is None:
                 stable_since = None
                 if now - last_log >= 1.0:
                     self.get_logger().warning(
@@ -608,26 +629,79 @@ class TaskRunnerNode(Node):
             '26rb_drop_ball_target_rack：下视视觉伺服超时，未打开指示灯')
         return False
 
+    def _refresh_camera_extrinsics(self):
+        try:
+            snapshot = self.camera_extrinsics_provider.snapshot()
+        except CameraExtrinsicsUnavailable as error:
+            self.camera_extrinsics = {}
+            self._down_offset_left = np.zeros(3, dtype=np.float64)
+            self._down_offset_right = np.zeros(3, dtype=np.float64)
+            self._down_optical_to_body = np.eye(3, dtype=np.float64)
+            self._down_optical_to_body_right = np.eye(3, dtype=np.float64)
+            if not self._camera_tf_warned:
+                self.get_logger().warning(
+                    f'等待完整相机 TF 树，视觉任务暂不可用：{error}')
+                self._camera_tf_warned = True
+            return
+
+        self.camera_extrinsics = snapshot
+        left = snapshot['down_left']
+        right = snapshot['down_right']
+        self._down_offset_left = left.translation.copy()
+        self._down_offset_right = right.translation.copy()
+        self._down_optical_to_body = left.optical_to_body.copy()
+        self._down_optical_to_body_right = right.optical_to_body.copy()
+        self._camera_tf_warned = False
+
+    def _ensure_camera_extrinsics(self) -> bool:
+        """Lazily start TF retries when a camera task actually needs them."""
+        if self.camera_extrinsics:
+            return True
+        if self._camera_tf_timer is None:
+            self._camera_tf_timer = self.create_timer(
+                float(self.get_parameter('camera_tf_retry_period_sec').value),
+                self._refresh_camera_extrinsics)
+        self._refresh_camera_extrinsics()
+        return bool(self.camera_extrinsics)
+
     def _triangulate(self, class_id: int):
+        if not self.camera_extrinsics:
+            return None
         pair = self._stereo_pair(class_id)
-        with self._perception_lock: pose = self._robot_pose
-        if pair is None or pose is None: return None
+        with self._perception_lock:
+            pose = self._robot_pose
+        if pair is None or pose is None:
+            return None
         ld, rd = pair
         rx, ry, rz, roll, pitch, yaw = pose
         R = _euler_to_rotation_matrix(roll, pitch, yaw)
         rp = np.array([rx, ry, rz])
-        def _ray(px, py, off):
-            vc = np.array([(px - self._down_cx) / self._down_fx, (py - self._down_cy) / self._down_fy, 1.0])
+
+        def _ray(px, py, off, optical_to_body):
+            vc = np.array([
+                (px - self._down_cx) / self._down_fx,
+                (py - self._down_cy) / self._down_fy,
+                1.0,
+            ])
             vc /= np.linalg.norm(vc)
-            vb = self._down_optical_to_body @ vc
-            vw = R @ vb; vw /= np.linalg.norm(vw)
+            vb = optical_to_body @ vc
+            vw = R @ vb
+            vw /= np.linalg.norm(vw)
             return rp + R @ off, vw
-        lo, ld_ray = _ray(ld.pixel_x, ld.pixel_y, self._down_offset_left)
-        ro, rd_ray = _ray(rd.pixel_x, rd.pixel_y, self._down_offset_right)
+
+        lo, ld_ray = _ray(
+            ld.pixel_x, ld.pixel_y, self._down_offset_left,
+            self._down_optical_to_body)
+        ro, rd_ray = _ray(
+            rd.pixel_x, rd.pixel_y, self._down_offset_right,
+            self._down_optical_to_body_right)
         pos = _ray_intersection_midpoint(lo, ld_ray, ro, rd_ray)
-        return (float(pos[0]), float(pos[1]), float(pos[2])) if pos is not None else None
+        return (float(pos[0]), float(pos[1]), float(pos[2])) \
+            if pos is not None else None
 
     def _search_for_class(self, class_id: int, label: str) -> bool:
+        if not self.camera_extrinsics:
+            return None
         sd = 0; ss = 0.08; sm = 3.0; sp = 0.30; mi = 0.01
         while ss <= sm:
             if self.stopped: return False
@@ -651,6 +725,8 @@ class TaskRunnerNode(Node):
         return False
 
     def _align_to_class(self, class_id: int, label: str) -> bool:
+        if not self._ensure_camera_extrinsics():
+            return False
         if self._best_down_detection(class_id) is None:
             self.get_logger().info(f'对准 [{label}]：正在搜索……')
             if not self._search_for_class(class_id, label):
@@ -1520,6 +1596,8 @@ class TaskRunnerNode(Node):
 
     def _task_follow_line(self, p: dict) -> bool:
         """执行管道巡线任务 — 创建 LineFollower 子对象并运行。"""
+        if not self._ensure_camera_extrinsics():
+            return False
         follower = LineFollower(self, p)
         try:
             return follower.execute()
@@ -1528,6 +1606,8 @@ class TaskRunnerNode(Node):
 
     def _task_arrow_surface(self, p: dict) -> bool:
         """执行箭头对准+出水任务 — 创建 ArrowSurfacer 子对象并运行。"""
+        if not self._ensure_camera_extrinsics():
+            return False
         surfacer = ArrowSurfacer(self, p)
         try:
             return surfacer.execute()
@@ -1901,6 +1981,9 @@ class TaskRunnerNode(Node):
 
     def _task_pass_gates(self, p: dict) -> TaskOutcome:
         """仅用前视相机图像搜索、对准并连续通过多个门。"""
+        if not self._ensure_camera_extrinsics():
+            return TaskOutcome.failed(
+                '26rb_pass_gates.camera_tf', '前视相机 TF 未就绪')
         gate_task = RB26GateTask(self, p)
         try:
             return gate_task.execute()
@@ -2134,6 +2217,9 @@ class TaskRunnerNode(Node):
         ``target_rack_down`` detections from both down cameras, so the light
         command is issued only after the rack is visually centred and stable.
         """
+        if not self._ensure_camera_extrinsics():
+            return TaskOutcome.failed(
+                '26rb_drop_ball_target_rack.camera_tf', '下视相机 TF 未就绪')
         target_name = self._normalize_localizer_target_name(
             p.get('frame_name', p.get('target_name', 'target_rack')))
         if target_name is None:

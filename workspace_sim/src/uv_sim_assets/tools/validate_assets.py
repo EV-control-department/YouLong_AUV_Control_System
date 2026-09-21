@@ -56,6 +56,143 @@ def mesh_closed(path: Path) -> bool:
     return all(count == 2 for count in edges.values())
 
 
+
+_CAMERA_SCENE_FRAMES = {
+    "front_cam_left": "front_left_camera_optical_frame",
+    "front_cam_right": "front_right_camera_optical_frame",
+    "down_cam_left": "downward_left_camera_optical_frame",
+    "down_cam_right": "downward_right_camera_optical_frame",
+}
+
+
+def _identity_rotation():
+    return ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+
+
+def _matmul(first, second):
+    return tuple(
+        tuple(sum(first[row][index] * second[index][column]
+                  for index in range(3)) for column in range(3))
+        for row in range(3)
+    )
+
+
+def _matvec(matrix, vector):
+    return tuple(
+        sum(matrix[row][index] * vector[index] for index in range(3))
+        for row in range(3))
+
+
+def _rotation_from_rpy(roll, pitch, yaw):
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return (
+        (cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr),
+        (sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr),
+        (-sp, cp * sr, cp * cr),
+    )
+
+
+def _parse_float_vector(value, count, context):
+    if value is None:
+        raise ValueError(f"{context} is missing")
+    values = [float(item) for item in value.split()]
+    if len(values) != count:
+        raise ValueError(f"{context} must contain {count} values")
+    return tuple(values)
+
+
+def _urdf_camera_transforms(urdf: Path):
+    root = ET.parse(urdf).getroot()
+    joints = {}
+    for joint in root.findall("joint"):
+        origin = joint.find("origin")
+        xyz = _parse_float_vector(
+            origin.get("xyz", "0 0 0") if origin is not None else "0 0 0",
+            3, f"{urdf}:{joint.get('name')}.xyz")
+        rpy = _parse_float_vector(
+            origin.get("rpy", "0 0 0") if origin is not None else "0 0 0",
+            3, f"{urdf}:{joint.get('name')}.rpy")
+        parent = joint.find("parent")
+        child = joint.find("child")
+        if parent is None or child is None:
+            raise ValueError(f"{urdf}:{joint.get('name')} has no parent/child")
+        joints[child.get("link")] = (
+            parent.get("link"), xyz, _rotation_from_rpy(*rpy))
+    cache = {"base_link": ((0.0, 0.0, 0.0), _identity_rotation())}
+
+    def resolve(link, visiting=()):
+        if link in cache:
+            return cache[link]
+        if link in visiting or link not in joints:
+            raise ValueError(f"{urdf}: cannot resolve link {link!r}")
+        parent, translation, rotation = joints[link]
+        parent_translation, parent_rotation = resolve(parent, visiting + (link,))
+        offset = _matvec(parent_rotation, translation)
+        resolved_translation = tuple(
+            parent_translation[index] + offset[index] for index in range(3))
+        resolved_rotation = _matmul(parent_rotation, rotation)
+        cache[link] = (resolved_translation, resolved_rotation)
+        return cache[link]
+
+    return {
+        frame: resolve(frame)
+        for frame in _CAMERA_SCENE_FRAMES.values()
+    }
+
+
+def _rotation_distance(first, second):
+    relative = _matmul(tuple(zip(*first)), second)
+    trace = max(-1.0, min(3.0, sum(
+        relative[index][index] for index in range(3))))
+    return math.acos(max(-1.0, min(1.0, (trace - 1.0) * 0.5)))
+
+
+def validate_camera_scene_origins(
+        urdf: Path, scene: Path, translation_tolerance=1.0e-5,
+        rotation_tolerance=2.0e-4) -> list[str]:
+    """Ensure Stonefish camera origins match the authoritative simulation URDF."""
+    errors = []
+    try:
+        urdf_transforms = _urdf_camera_transforms(urdf)
+        scene_root = ET.parse(scene).getroot()
+    except (ET.ParseError, OSError, ValueError) as error:
+        return [f"{scene}: camera origin validation failed: {error}"]
+
+    sensors = {
+        sensor.get("name"): sensor
+        for sensor in scene_root.iter("sensor")
+        if sensor.get("type") == "camera"
+    }
+    for sensor_name, frame in _CAMERA_SCENE_FRAMES.items():
+        sensor = sensors.get(sensor_name)
+        if sensor is None:
+            errors.append(f"{scene}: missing camera sensor {sensor_name}")
+            continue
+        origin = sensor.find("origin")
+        try:
+            scene_translation = _parse_float_vector(
+                origin.get("xyz") if origin is not None else None,
+                3, f"{scene}:{sensor_name}.xyz")
+            scene_rpy = _parse_float_vector(
+                origin.get("rpy") if origin is not None else None,
+                3, f"{scene}:{sensor_name}.rpy")
+            scene_rotation = _rotation_from_rpy(*scene_rpy)
+        except (AttributeError, ValueError) as error:
+            errors.append(str(error))
+            continue
+        expected_translation, expected_rotation = urdf_transforms[frame]
+        delta = math.sqrt(sum(
+            (scene_translation[index] - expected_translation[index]) ** 2
+            for index in range(3)))
+        angle = _rotation_distance(expected_rotation, scene_rotation)
+        if delta > translation_tolerance or angle > rotation_tolerance:
+            errors.append(
+                f"{scene}: {sensor_name} origin disagrees with {urdf}:{frame}; "
+                f"translation_error={delta:.6g}, rotation_error={angle:.6g}")
+    return errors
+
 def validate(root: Path) -> list[str]:
     errors: list[str] = []
     # ``legacy`` is intentionally preserved as a migration fixture with its
@@ -102,6 +239,12 @@ def validate(root: Path) -> list[str]:
     if not mesh_closed(physical):
         errors.append(f"{physical}: physical mesh is not closed")
     vehicle = root / "vehicles/youlong/model/youlong.scn"
+    simulation_urdf = root.parent / "uv_sim_description/urdf/auv_sim.urdf"
+    if simulation_urdf.is_file():
+        errors.extend(validate_camera_scene_origins(
+            simulation_urdf, vehicle))
+    else:
+        errors.append(f"{simulation_urdf}: simulation URDF is missing")
     try:
         robot = ET.parse(vehicle).getroot().find("robot")
     except (ET.ParseError, OSError):

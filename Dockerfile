@@ -15,6 +15,9 @@ RUN apt-get update \
         git \
         libfreetype6-dev \
         libgl1-mesa-dev \
+        libgl1-mesa-dri \
+        mesa-utils \
+        mesa-vulkan-drivers \
         libglu1-mesa-dev \
         libglm-dev \
         libeigen3-dev \
@@ -90,6 +93,59 @@ RUN apt-get update \
     && fc-cache -f -v \
     && test "$(fc-match -f '%{family}' 'sans-serif:lang=zh-cn' | head -n 1)" = "Noto Sans CJK SC" \
     && rm -rf /var/lib/apt/lists/*
+
+# ROS 2 Foxy rqt_py_common only accepts `pkg/msg/Type` in get_message_class.
+# Action feedback topics use `pkg/action/Action_FeedbackMessage`; the generated
+# wrapper class exists in the action module, but Foxy's loader rejects the
+# valid type string as malformed. Patch the loader in the image so the normal
+# rqt Topic Monitor can inspect action feedback topics too.
+RUN python3 - <<'PY'
+from pathlib import Path
+
+helper = '''\
+\ndef _get_action_feedback_class(message_type, logger):
+    parts = message_type.split('/')
+    if (len(parts) != 3 or parts[1] != 'action' or
+            not parts[2].endswith('_FeedbackMessage')):
+        return None
+
+    package, _, wrapper_name = parts
+    action_name = wrapper_name[:-len('_FeedbackMessage')]
+    try:
+        action_package = importlib.import_module('%s.action' % package)
+        action_class = getattr(action_package, action_name)
+        action_module = importlib.import_module(action_class.__module__)
+        return getattr(action_module, wrapper_name)
+    except (ImportError, AttributeError):
+        logger.info('Failed to load action feedback class: {}'.format(message_type))
+        return None
+'''
+
+needle = '_message_class_cache = {}\n\n\ndef get_message_class(message_type):'
+replacement = helper + '\n\n_message_class_cache = {}\n\n\ndef get_message_class(message_type):'
+paths = list(Path('/opt/ros').glob('*/lib/python*/site-packages/rqt_py_common/message_helpers.py'))
+if not paths:
+    raise SystemExit('rqt_py_common/message_helpers.py not found')
+for path in paths:
+    text = path.read_text()
+    if '_get_action_feedback_class' not in text:
+        if needle not in text:
+            raise SystemExit('unexpected rqt_py_common layout: %s' % path)
+        text = text.replace(needle, replacement, 1)
+    old = '    class_val = _get_rosidl_class_helper(message_type, MSG_MODE, logger)\n'
+    new = '''    class_val = _get_action_feedback_class(message_type, logger)
+    if class_val is not None:
+        _message_class_cache[message_type] = class_val
+        return class_val
+
+''' + old
+    if '    class_val = _get_action_feedback_class(message_type, logger)' not in text:
+        if old not in text:
+            raise SystemExit('get_message_class layout not found: %s' % path)
+        text = text.replace(old, new, 1)
+    path.write_text(text)
+    print('patched', path)
+PY
 
 # ROS's rqt is a Qt/X11 application.  Explicitly select the X11 backend and
 # add the CJK directory to Qt's font search path so it does not depend on the

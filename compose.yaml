@@ -18,7 +18,9 @@ services:
     container_name: youlong_auv
     # HOST_USER defaults to the host's $USER. On hosts whose UID/GID is not
     # 1000, start with HOST_USER/HOST_UID/HOST_GID set together.
-    user: "${HOST_USER:-${USER:-dev}}"
+    # Keep the normal container non-root so bind-mounted build artifacts stay
+    # owned by the host user. For maintenance, use CONTAINER_USER=root.
+    user: "${CONTAINER_USER:-${HOST_USER:-${USER:-dev}}}"
     working_dir: /workspace
     entrypoint: ["/ros_entrypoint.sh"]
     # Build the bind-mounted development workspaces in place before keeping
@@ -28,6 +30,44 @@ services:
       - -lc
       - |
           set -e
+          mkdir -p "$${XDG_RUNTIME_DIR}"
+          chmod 700 "$${XDG_RUNTIME_DIR}"
+
+          # Keep rqt usable on Foxy without an extra wrapper script. The
+          # default rqt perspective loads rqt_topic, which cannot parse
+          # ROS 2 action feedback types and may abort with std::bad_alloc. A
+          # plain `rqt` command opens the normal default perspective. Explicit
+          # rqt arguments keep their normal meaning and use NVIDIA PRIME offload.
+          if ! grep -q 'youlong-compose-nvidia-rqt-wrapper-v4' "$${HOME}/.bashrc" 2>/dev/null; then
+            printf '%s\n' \
+              '# youlong-compose-nvidia-rqt-wrapper-v4' \
+              'rqt() {' \
+              '  if [ "$$#" -eq 0 ]; then' \
+              '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt' \
+              '  else' \
+              '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt "$$@"' \
+              '  fi' \
+              '}' >> "$${HOME}/.bashrc"
+          fi
+
+          # docker compose exec starts a fresh shell and does not replay the
+          # ROS environment exported by the container entrypoint.  Generate
+          # a login profile so `bash -lc "rqt"` also finds ROS and the local
+          # workspace packages.
+          printf '%s\n' \
+            "source /opt/ros/$${ROS_DISTRO}/setup.bash" \
+            '[ -f /workspace/workspace_auv/install/setup.bash ] && source /workspace/workspace_auv/install/setup.bash' \
+            '[ -f /workspace/workspace_sim/install/setup.bash ] && source /workspace/workspace_sim/install/setup.bash' \
+            '# youlong-compose-nvidia-rqt-login-v4' \
+            'rqt() {' \
+            '  if [ "$$#" -eq 0 ]; then' \
+            '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt' \
+            '  else' \
+            '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt "$$@"' \
+            '  fi' \
+            '}' \
+            '[ -f ~/.bashrc ] && . ~/.bashrc' > "$${HOME}/.bash_profile"
+
           source /opt/ros/$${ROS_DISTRO}/setup.bash
           cd /workspace/workspace_auv
           colcon build --symlink-install --parallel-workers 1
@@ -53,7 +93,9 @@ services:
     tty: true
     shm_size: "64m"
 
-    # Equivalent to `docker run --gpus all` for Compose v2.26.
+    # NVIDIA Container Toolkit injects /dev/nvidia* and the matching driver
+    # libraries. Do not manually map /dev/dri here: on hybrid AMD/NVIDIA
+    # laptops that can make Mesa select the AMD radeonsi driver instead.
     deploy:
       resources:
         reservations:
@@ -69,8 +111,12 @@ services:
       HOME: "/home/${HOST_USER:-${USER:-dev}}"
       ROS_HOME: "/workspace/.docker/ros/${YOULONG_ROS_DISTRO:-foxy}/ros"
       ROS_LOG_DIR: "/workspace/.docker/ros/${YOULONG_ROS_DISTRO:-foxy}/log/ros"
+      XDG_RUNTIME_DIR: "/tmp/runtime-${HOST_UID:-1000}"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
+      __NV_PRIME_RENDER_OFFLOAD: "1"
+      __GLX_VENDOR_LIBRARY_NAME: nvidia
+      __VK_LAYER_NV_optimus: NVIDIA_only
       # Stonefish uses SDL2 for its graphical window.  The container exposes
       # the host X11 socket, so do not let SDL probe Wayland/other backends.
       SDL_VIDEODRIVER: x11
@@ -78,8 +124,12 @@ services:
       QT_QPA_PLATFORM: xcb
       QT_QPA_FONTDIR: /usr/share/fonts/opentype/noto
       QT_X11_NO_MITSHM: "1"
+      # Keep the previously working Qt scale.  Font installation and scaling
+      # are intentionally kept separate from the ROS/DDS runtime diagnosis.
+      # Override with QT_SCALE_FACTOR=1.0 or 1.5 when starting Compose.
+      QT_SCALE_FACTOR: "${QT_SCALE_FACTOR:-1.25}"
       LANG: C.UTF-8
-      LC_ALL: C.UTF-8
+      LC_ALL: zh_CN.UTF-8
 
     volumes:
       # Run this file from the checked-out repository directory.

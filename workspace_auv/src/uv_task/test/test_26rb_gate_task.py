@@ -15,9 +15,9 @@ GateCandidate = _gate.GateCandidate
 GateObservation = _gate.GateObservation
 _FRONT_CONFIG = load_camera_config('front', 'sim')
 _DEFAULT_K = _FRONT_CONFIG.side('left').matrix
-_FRONT_OFFSET_LEFT = _FRONT_CONFIG.side('left').translation
-_FRONT_OFFSET_RIGHT = _FRONT_CONFIG.side('right').translation
-_OPTICAL_TO_BODY = _FRONT_CONFIG.side('left').optical_to_body
+_FRONT_OFFSET_LEFT = np.array([0.19, -0.05, 0.176], dtype=np.float64)
+_FRONT_OFFSET_RIGHT = np.array([0.19, 0.05, 0.176], dtype=np.float64)
+_OPTICAL_TO_BODY = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 def _project(point, offset):
     camera = _OPTICAL_TO_BODY.T @ (np.asarray(point) - offset)
     return np.array([
@@ -48,7 +48,8 @@ def test_stereo_gate_uses_front_extrinsics_for_body_geometry():
     task = GateTask.__new__(GateTask)
     task._front_left_offset = _FRONT_OFFSET_LEFT
     task._front_right_offset = _FRONT_OFFSET_RIGHT
-    task._optical_to_body = _OPTICAL_TO_BODY
+    task._optical_to_body_left = _OPTICAL_TO_BODY
+    task._optical_to_body_right = _OPTICAL_TO_BODY
     observation = task._make_observation(
         candidate(left_pixels), candidate(right_pixels),
         _DEFAULT_K, _DEFAULT_K)
@@ -81,7 +82,8 @@ def test_detection_candidates_accept_small_gate_without_extent_rejection():
 def test_left_eye_observation_uses_left_camera_extrinsics():
     task = GateTask.__new__(GateTask)
     task._front_left_offset = _FRONT_OFFSET_LEFT
-    task._optical_to_body = _OPTICAL_TO_BODY
+    task._optical_to_body_left = _OPTICAL_TO_BODY
+    task._optical_to_body_right = _OPTICAL_TO_BODY
     task._min_extent = 0.25
     task._target_extent = 0.75
     task._monocular_reference_distance = 1.5
@@ -99,7 +101,8 @@ def test_left_eye_observation_uses_left_camera_extrinsics():
     assert observation.left is observation.right
     assert np.allclose(observation.center_px, candidate.bbox_center)
     origin, ray = task._ray_in_body(
-        candidate.bbox_center, _DEFAULT_K, _FRONT_OFFSET_LEFT)
+        candidate.bbox_center, _DEFAULT_K, _FRONT_OFFSET_LEFT,
+        _OPTICAL_TO_BODY)
     assert np.allclose(
         observation.center_body,
         origin + ray * (1.5 * 0.75 / 0.5),
@@ -324,7 +327,8 @@ def test_clipped_gate_does_not_claim_a_reliable_plane_normal():
     task = GateTask.__new__(GateTask)
     task._front_left_offset = _FRONT_OFFSET_LEFT
     task._front_right_offset = _FRONT_OFFSET_RIGHT
-    task._optical_to_body = _OPTICAL_TO_BODY
+    task._optical_to_body_left = _OPTICAL_TO_BODY
+    task._optical_to_body_right = _OPTICAL_TO_BODY
 
     def candidate(center):
         return GateCandidate(

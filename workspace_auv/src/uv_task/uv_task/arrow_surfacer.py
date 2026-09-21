@@ -88,14 +88,20 @@ class ArrowSurfacer:
         self._stopped = False
         down_config = node.camera_configs['down']
         left = down_config.side('left')
-        right = down_config.side('right')
+        camera_extrinsics = getattr(node, 'camera_extrinsics', {})
+        if not {'down_left', 'down_right'}.issubset(camera_extrinsics):
+            raise ValueError('arrow_surfacer requires down camera TF extrinsics')
+        left_extrinsic = camera_extrinsics['down_left']
+        right_extrinsic = camera_extrinsics['down_right']
         self._down_fx = float(left.matrix[0, 0])
         self._down_fy = float(left.matrix[1, 1])
         self._down_cx = float(left.matrix[0, 2])
         self._down_cy = float(left.matrix[1, 2])
-        self._down_offset_left = left.translation.copy()
-        self._down_offset_right = right.translation.copy()
-        self._down_optical_to_body = left.optical_to_body.copy()
+        self._down_optical_to_body_right = (
+            right_extrinsic.optical_to_body.copy())
+        self._down_offset_left = left_extrinsic.translation.copy()
+        self._down_offset_right = right_extrinsic.translation.copy()
+        self._down_optical_to_body = left_extrinsic.optical_to_body.copy()
 
         # 默认从统一模型元数据读取。当前 robotcup 模型没有箭头/彩色扇区
         # 类别，因此不会再误用旧模型的 0/1/2/3；旧场景可显式传入覆盖值。
@@ -212,12 +218,13 @@ class ArrowSurfacer:
 
     def _pixel_to_world_ray(self, px: float, py: float,
                              offset: np.ndarray, R_robot: np.ndarray,
-                             robot_pos: np.ndarray):
+                             robot_pos: np.ndarray,
+                             optical_to_body: np.ndarray):
         """像素坐标 → 世界系射线 (origin, direction)。"""
         v_cam = np.array([(px - self._down_cx) / self._down_fx,
                           (py - self._down_cy) / self._down_fy, 1.0])
         v_cam = v_cam / np.linalg.norm(v_cam)
-        v_body = self._down_optical_to_body @ v_cam
+        v_body = optical_to_body @ v_cam
         v_world = R_robot @ v_body
         v_world = v_world / np.linalg.norm(v_world)
         origin = robot_pos + R_robot @ offset
@@ -237,10 +244,12 @@ class ArrowSurfacer:
 
         l_origin, l_dir = self._pixel_to_world_ray(
             left_det.pixel_x, left_det.pixel_y,
-            self._down_offset_left, R_robot, robot_pos)
+            self._down_offset_left, R_robot, robot_pos,
+            self._down_optical_to_body)
         r_origin, r_dir = self._pixel_to_world_ray(
             right_det.pixel_x, right_det.pixel_y,
-            self._down_offset_right, R_robot, robot_pos)
+            self._down_offset_right, R_robot, robot_pos,
+            self._down_optical_to_body_right)
 
         pos = _ray_intersection_midpoint(l_origin, l_dir, r_origin, r_dir)
         if pos is None:
