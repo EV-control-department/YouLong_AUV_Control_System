@@ -75,6 +75,7 @@ class Ai:
         inference_threads=2,
         gate_feature_mode='auto',
         confidence=CONFIDENCE,
+        device='auto',
     ):
         self.node = node                     # composed uv_camera rclpy Node
         self._update_annotated = update_annotated_fn  # node.update_annotated_stream
@@ -96,6 +97,8 @@ class Ai:
         self._dataset_debug_last_capture_s = {}
         self._dataset_debug_last_log_s = {}
         self._inference_threads = max(1, int(inference_threads))
+        self._requested_device = str(device).strip().lower() or 'auto'
+        self._device = 'cpu'
         self._gate_feature_mode = str(gate_feature_mode).strip().lower()
         if self._gate_feature_mode not in {
                 'auto', 'bbox', 'centerline', 'segmentation'}:
@@ -139,6 +142,7 @@ class Ai:
         self._confidence = min(1.0, max(0.05, float(confidence)))
         self._model_loaded = False
         self._inference_lock = threading.Lock()
+        self._last_inference_diagnostic = {}
 
         self._front_K, self._front_D = self._load_calib('front')
         self._down_K, self._down_D = self._load_calib('down')
@@ -189,10 +193,31 @@ class Ai:
             # ROS and the control path retain CPU time.
             try:
                 import torch
-                torch.set_num_threads(self._inference_threads)
-                torch.set_num_interop_threads(1)
-            except (ImportError, RuntimeError):
-                pass
+            except ImportError:
+                self._device = 'cpu'
+                torch = None
+            if torch is not None:
+                # These calls can raise after another library has initialized
+                # PyTorch; that should not disable CUDA selection.
+                try:
+                    torch.set_num_threads(self._inference_threads)
+                    torch.set_num_interop_threads(1)
+                except RuntimeError:
+                    pass
+                requested = self._requested_device
+                if requested == 'auto':
+                    self._device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+                elif requested.startswith('cuda') and not torch.cuda.is_available():
+                    self._device = 'cpu'
+                    self.node.get_logger().warn(
+                        f'YOLO requested device={requested}, but CUDA is unavailable; '
+                        'falling back to CPU')
+                else:
+                    self._device = requested
+                if self._device.startswith('cuda'):
+                    self.node.get_logger().info(
+                        f'YOLO CUDA enabled: {torch.cuda.get_device_name(0)} '
+                        f'({self._device})')
             from ultralytics import YOLO
             if model_path:
                 model_path = os.path.expanduser(str(model_path))
@@ -241,6 +266,10 @@ class Ai:
 
             if model_path and os.path.isfile(model_path):
                 self._model = YOLO(str(model_path))
+                # Move the model explicitly so the first inference cannot
+                # silently initialize on CPU.  The call site also passes the
+                # device because Ultralytics may recreate its predictor.
+                self._model.to(self._device)
                 self._model_loaded = True
                 self.node.get_logger().info(
                     f'YOLO class mapping loaded: {MODEL_MAPPING_PATH}')
@@ -517,8 +546,21 @@ class Ai:
         debug_info = {}
 
         try:
+            queued_at = time.monotonic()
             with self._inference_lock:
-                results = self._model(cv_img, conf=self._confidence, verbose=False)
+                started_at = time.monotonic()
+                results = self._model(
+                    cv_img, conf=self._confidence, device=self._device,
+                    verbose=False)
+                finished_at = time.monotonic()
+            if finished_at - self._last_inference_diagnostic.get(camera_name, float('-inf')) >= 5.0:
+                self._last_inference_diagnostic[camera_name] = finished_at
+                device = getattr(getattr(self._model, 'predictor', None), 'device', 'unknown')
+                self.node.get_logger().info(
+                    f'YOLO管线[{camera_name}] device={device}，'
+                    f'等待模型锁={(started_at-queued_at)*1000:.1f}ms，'
+                    f'推理调用={(finished_at-started_at)*1000:.1f}ms，'
+                    f'输入={cv_img.shape[1]}x{cv_img.shape[0]}')
         except Exception as e:
             self.node.get_logger().error(
                 f'YOLO inference failed ({camera_name}): {e}')

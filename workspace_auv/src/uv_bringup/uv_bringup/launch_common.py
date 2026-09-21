@@ -77,6 +77,8 @@ def configure_simulator_gpu_environment(gpu, gpu_backend):
             return software_environment
 
         return [
+            SetEnvironmentVariable("LIBGL_ALWAYS_SOFTWARE", "0"),
+            SetEnvironmentVariable("MESA_LOADER_DRIVER_OVERRIDE", ""),
             SetEnvironmentVariable("__NV_PRIME_RENDER_OFFLOAD", "1"),
             SetEnvironmentVariable("__GLX_VENDOR_LIBRARY_NAME", "nvidia"),
             LogInfo(msg="Stonefish GPU backend: NVIDIA PRIME offload"),
@@ -253,6 +255,10 @@ def declare_simulation_arguments(
         DeclareLaunchArgument(
             "ai_inference_fps", default_value="3.0",
             description="Maximum AI inference rate per camera",
+        ),
+        DeclareLaunchArgument(
+            "ai_device", default_value="cuda:0",
+            description="YOLO inference device: auto, cpu, or cuda:0",
         ),
         DeclareLaunchArgument(
             "inference_threads", default_value="2",

@@ -30,6 +30,7 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib import font_manager
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -51,6 +52,12 @@ CLASS_NAMES = {0: "方形锥桶", 1: "圆形锥桶"}
 CLASS_COLORS = {0: "#ff9f43", 1: "#4dabf7"}
 BG, PANEL, PANEL_2 = "#0d1117", "#151c27", "#1c2633"
 TEXT, MUTED, ACCENT = "#e6edf3", "#8b98a8", "#4dd0e1"
+
+for font_path in font_manager.findSystemFonts():
+    if 'CJK' in font_path or 'cjk' in font_path:
+        font_manager.fontManager.addfont(font_path)
+matplotlib.rcParams['font.family'] = ['Noto Sans CJK JP', 'Noto Sans CJK SC', 'DejaVu Sans']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 
 def stamp_seconds(stamp) -> float:
@@ -95,6 +102,8 @@ class RosSnapshot(Node):
         self.pose = None
         self.image = None
         self.image_stamp = 0.0
+        self.images = deque(maxlen=24)
+        self.trajectory = deque(maxlen=1500)
         self.down_left = None
         self.camera_info = None
         self.events = deque(maxlen=200)
@@ -147,6 +156,8 @@ class RosSnapshot(Node):
         with self.lock:
             self.pose = (float(message.robot_x), float(message.robot_y),
                          float(message.robot_z), float(message.robot_yaw))
+            if not self.trajectory or np.linalg.norm(np.subtract(self.pose[:3], self.trajectory[-1])) > 0.02:
+                self.trajectory.append(self.pose[:3])
 
     def _image_cb(self, message):
         image = image_to_array(message)
@@ -154,6 +165,7 @@ class RosSnapshot(Node):
             with self.lock:
                 self.image = image
                 self.image_stamp = stamp_seconds(message.header.stamp)
+                self.images.append((self.image_stamp, image))
 
     def _detection_cb(self, message):
         detections = []
@@ -180,6 +192,9 @@ class RosSnapshot(Node):
             return {
                 "map": copy.deepcopy(self.map_payload),
                 "pose": self.pose,
+                "trajectory": list(self.trajectory),
+                "matched_image": next((im for stamp, im in reversed(self.images)
+                                       if self.down_left and abs(stamp - self.down_left[0]) < 1e-6), None),
                 "image": None if self.image is None else self.image.copy(),
                 "image_stamp": self.image_stamp,
                 "detections": copy.deepcopy(self.down_left),
@@ -306,7 +321,7 @@ class SgbmWorker:
 
 
 class MplCanvas(QFrame):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, projection="3d"):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         self.display = QLabel("等待图形…")
@@ -314,7 +329,7 @@ class MplCanvas(QFrame):
         self.display.setMinimumSize(320, 180)
         layout.addWidget(self.display)
         self.figure = Figure(facecolor=BG, tight_layout=True)
-        self.axis = self.figure.add_subplot(111, projection="3d")
+        self.axis = self.figure.add_subplot(111, projection=projection)
         self.canvas = FigureCanvasAgg(self.figure)
 
     def draw_idle(self):
@@ -416,7 +431,7 @@ class MappingDashboard(QMainWindow):
             vision_grid.addWidget(box, index // 2, index % 2)
         right_layout.addWidget(vision, 3)
 
-        self.hist_canvas = MplCanvas(right)
+        self.hist_canvas = MplCanvas(right, projection=None)
         self.hist_canvas.setMinimumHeight(180)
         hist_group = QGroupBox("深度频率 · 掩膜内合理峰值")
         hist_layout = QVBoxLayout(hist_group)
@@ -459,15 +474,19 @@ class MappingDashboard(QMainWindow):
             self.metrics["accepted"].setText(str(accepted))
         if snapshot["image"] is not None:
             self.image_labels["input"].setPixmap(pixmap_from_bgr(snapshot["image"]))
-            if snapshot["image_stamp"] != self.last_image_stamp:
-                self.last_image_stamp = snapshot["image_stamp"]
-                detections = snapshot["detections"][1] if snapshot["detections"] else []
-                self.sgbm.submit(snapshot["image"], detections, snapshot["camera_info"])
-        if self.sgbm_result is not None:
-            self._update_vision(self.sgbm_result)
+            if (snapshot["matched_image"] is not None
+                    and snapshot["camera_info"] is not None
+                    and snapshot["detections"][0] != self.last_image_stamp):
+                self.last_image_stamp = snapshot["detections"][0]
+                self.sgbm.submit(snapshot["matched_image"], snapshot["detections"][1], snapshot["camera_info"])
+        result = self.sgbm_result
+        if result is not None and result is not getattr(self, '_drawn_result', None):
+            self._update_vision(result)
+            self._drawn_result = result
         if snapshot["detections"]:
             delta = abs(snapshot["image_stamp"] - snapshot["detections"][0])
-            self.metrics["sync"].setText(f"{delta:.2f}s")
+            self.metrics["sync"].setText(
+                f"检测落后 {delta:.2f}s" if snapshot['matched_image'] is not None else "等待同帧图像")
         events = snapshot["events"]
         if events:
             self.log_view.setPlainText("\n".join(self._event_text(item) for item in events[-8:]))
@@ -504,6 +523,25 @@ class MappingDashboard(QMainWindow):
         grid = payload.get("grid", {})
         center = np.asarray(grid.get("center", [2, -4, 1.994]), dtype=float)
         side = float(grid.get("side_m", 2.0))
+        floor = float(grid.get("floor_z", center[2]))
+        angle = math.radians(float(grid.get('yaw_deg', 0)))
+        rotation = np.array([[math.cos(angle), -math.sin(angle)],
+                             [math.sin(angle), math.cos(angle)]])
+        for offset in np.linspace(-side / 2, side / 2, 4):
+            for segment in (np.array([[offset, -side/2], [offset, side/2]]),
+                            np.array([[-side/2, offset], [side/2, offset]])):
+                line = segment @ rotation.T + center[:2]
+                axis.plot(line[:, 0], line[:, 1], [-floor, -floor], color=MUTED, alpha=0.6)
+        trajectory = np.asarray(snapshot['trajectory'])
+        planned = np.asarray(payload.get('traversal_path', []))
+        if planned.size:
+            height = -snapshot['pose'][2] if snapshot['pose'] else -0.1
+            axis.plot(planned[:, 0], planned[:, 1], np.full(len(planned), height),
+                      '--o', color='#ffd43b', linewidth=1.5, markersize=3, label='遍历规划')
+        if trajectory.size:
+            axis.plot(trajectory[:, 0], trajectory[:, 1], -trajectory[:, 2], color=ACCENT, alpha=0.6, linewidth=1)
+        for pane in (axis.xaxis, axis.yaxis, axis.zaxis):
+            pane.set_pane_color((0.08, 0.11, 0.15, 1))
         for cell in payload.get("cells", []):
             x, y, z = cell.get("center", center)
             color = CLASS_COLORS.get(cell.get("class_id"), "#718096")
@@ -511,15 +549,14 @@ class MappingDashboard(QMainWindow):
                 axis.scatter([x], [y], [-z], marker="s", s=90, facecolors="none",
                              edgecolors=color, linewidths=1.8)
             axis.text(x, y, -z, f" {cell.get('id')}", color=MUTED, fontsize=9)
-            for point in self._cell_points(cell, snapshot):
-                position = point.get("position")
-                if not position:
-                    continue
-                px, py, pz = position
-                if point.get("accepted", False):
-                    axis.scatter([px], [py], [-pz], s=22, color=color, alpha=0.78)
-                else:
-                    axis.scatter([px], [py], [-pz], s=18, color="#657080", alpha=0.28, marker="x")
+            points = self._cell_points(cell, snapshot)
+            for accepted in (True, False):
+                positions = np.asarray([p['position'] for p in points
+                                        if p.get('position') and bool(p.get('accepted')) == accepted])
+                if positions.size:
+                    axis.scatter(positions[:, 0], positions[:, 1], -positions[:, 2],
+                                 s=16 if accepted else 10, color=color if accepted else '#657080',
+                                 alpha=0.65 if accepted else 0.2, marker='o' if accepted else 'x')
             position = cell.get("position")
             if position:
                 px, py, pz = position
@@ -532,13 +569,19 @@ class MappingDashboard(QMainWindow):
                          edgecolors="white", linewidths=0.7, label="AprilTag")
         if snapshot["pose"]:
             px, py, pz, yaw = snapshot["pose"]
+            yaw = math.radians(yaw)
             axis.scatter([px], [py], [-pz], marker="^", s=130, color=ACCENT, label="AUV")
             axis.quiver(px, py, -pz, 0.35 * math.cos(yaw), 0.35 * math.sin(yaw), 0,
                         color=ACCENT, linewidth=2)
         floor = float(grid.get("floor_z", center[2]))
         axis.set_xlim(center[0] - side * 0.75, center[0] + side * 0.75)
         axis.set_ylim(center[1] - side * 0.75, center[1] + side * 0.75)
-        axis.set_zlim(-floor - 0.45, -floor + 0.45)
+        if snapshot['pose']:
+            px, py, pz, _ = snapshot['pose']
+            axis.set_xlim(min(center[0] - side*.75, px-.4), max(center[0] + side*.75, px+.4))
+            axis.set_ylim(min(center[1] - side*.75, py-.4), max(center[1] + side*.75, py+.4))
+        axis.set_zlim(-max(floor + .45, snapshot['pose'][2] + .3 if snapshot['pose'] else floor), .2)
+        axis.set_box_aspect((np.ptp(axis.get_xlim()), np.ptp(axis.get_ylim()), np.ptp(axis.get_zlim())))
         axis.set_title(f"{payload.get('state', 'unknown')} · 三维原始点集 + 卡尔曼结果",
                        color=TEXT, pad=12)
         handles, labels = axis.get_legend_handles_labels()

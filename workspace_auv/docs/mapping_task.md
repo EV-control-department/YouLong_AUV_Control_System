@@ -257,6 +257,22 @@ ros2 launch uv_bringup sim.launch.py \
   scenario_desc:=water_embodied_intelligence_random.scn \
   mission_file:="$PWD/workspace_auv/src/uv_task/config/missions/mapping_grid.json"
 ```
+ros2 launch uv_bringup sim.launch.py
+  \
+    profile:=sim_dev \
+    gpu:=true \
+    gpu_backend:=nvidia \
+    ai_device:=cuda:0 \
+    enable_ai:=true \
+    enable_nav:=false \
+    enable_task:=true \
+    enable_preview:=true \
+    stream_annotated:=true \
+    scenario_desc:=water_embodied_intel
+    ligence_random.scn \
+    mission_file:="$PWD/workspace_auv/
+    src/uv_task/config/missions/
+    mapping_grid.json"
 
 这里明确使用 `workspace_sim/src/stonefish_ros2/Data/water_embodied_intelligence_random.scn` 作为 Stonefish 场景；`scenario_desc` 传入文件名后，由仿真启动流程从 Stonefish `Data` 目录解析该文件。
 
@@ -274,6 +290,45 @@ ros2 topic echo /task/status
 
 本任务不使用 `yellow_golf`、`pink_golf` 等旧竞赛目标元数据；默认 `target_id` 为
 `mapping_grid`。旧任务若需要使用旧目标，必须在启动命令中显式传入对应的 `target_id`。
+
+### 格点纠错与上位机诊断（2026-09-21）
+
+### 建图后的锥桶遍历
+
+九格巡检结束后冻结最终建图结果，先返回已识别 AprilTag 的融合位置上方，
+再遍历圆形锥桶（类别 1），最后遍历方形锥桶（类别 0）；同类内按格点编号升序。
+这里的遍历指 WTRAVEL 到目标上方，不是绕桩，xy 使用融合位置，z 仍为 `survey_z=0.1`。
+每个最终格点只规划一次，到达成功后才写入 `traversal_order`；该字段与建图巡检的
+`visit_order` 独立，并通过地图和事件 DDS 消息发布。运动失败立即中止，不自动重试。
+地图证据不足时只遍历已有目标，不补造未知锥桶；`result_complete=false` 表示未完成四目标结果。
+只有遍历阶段结束才发送任务 `completed`，此前建图结束发送 `mapping_completed`。
+默认总超时增加为 1800 秒（包含建图和遍历，不重置计时），单次移动仍为 150 秒；
+这是调试预算，正式比赛应按规则另行设置。
+
+遍历阶段的 AprilTag 和锥桶 xy 必须来自观测融合结果，不允许用 JSON 坐标回退；
+JSON 的 tag_x/tag_y 仅用于初次寻找标记，格点中心仅用于建图巡检。
+返程及锥桶间移动采用圆形禁入区可见图最短折线，避让所有其他已确认锥桶，
+只允许从当前所在锥桶区向外退出，以及在最后一段进入目标锥桶区。
+`traversal_clearance_m=0.30` 为锥桶中心禁入半径，另加
+`traversal_tracking_margin_m=0.15` 作为规划余量；应按艇体尺寸和实测控制误差调整。
+每个航点前按实时艇位复核线段，无安全直连路径则停止，不强行穿越。
+规划航点通过地图 `traversal_path` 和事件 `traversal_path_planned` 发布，上位机用黄色虚线显示。
+这保证的是规划折线的避让约束，并非对实际航迹的绝对保证：持续运动中的超调、未知障碍和
+池壁尚未纳入该局部规划器，需在仿真中核对真实轨迹及场地边界后使用。
+
+### 首帧纠错与界面同步
+
+首帧位置不再是不可撤销的锚点：马氏门限拒绝新观测时，检查最近 12 条测量。
+若新位置附近的一致簇占多数、通过格点距离门限，且包含至少
+`max(3, min(8, 原滤波接受数 + 1))` 个不同时间戳，则以簇的中位数重建位置滤波和类别投票。
+历史点仍保留，但不属于新簇的点取消接受标志；孤立离群点不会触发纠错。
+该机制允许持续一致的新证据替换错误初值，并非无条件放宽位置门限。
+
+Mapping Lab 显示完整水深、AUV 轨迹与朝向（PoseInfo 的角度单位为度），
+绘制九宫格边界并批量渲染测量点。中文使用系统 Noto CJK 字体，深度频率图使用二维轴。
+原始预览独立更新；分割/SGBM 诊断只使用缓存中与检测采集时间戳一致的图像，
+不会把旧掩膜贴到最新画面。无匹配帧时显示等待状态，保留上一份诊断结果。
+因此同步修正消除的是错帧叠加，并不等于提高上游图像发布帧率。
 
 相机延迟排查时应区分两类视频：`/front`、`/down` 是低延迟原始 MJPEG；
 `/front_annotated`、`/down_annotated` 需要等待 YOLO 分割推理，CPU 仿真下可能明显滞后，不能用它们判断原始图像传输是否正常。当前仿真默认不以四路 detection 作为全局启动门控；建图任务只在逐格观察时等待新鲜检测，因此首次模型推理不会阻塞 AUV 发车。

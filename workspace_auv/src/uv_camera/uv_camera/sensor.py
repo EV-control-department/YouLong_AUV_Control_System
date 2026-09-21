@@ -232,7 +232,7 @@ class Sensor:
             pending = self._pending_sim_images.pop((camera, key), None)
         if pending is not None:
             self.node.submit_image(
-                camera, pending, right_stamp=right_stamp,
+                camera, pending[0], right_stamp=right_stamp,
                 stereo_pair_id=pair_id)
 
     def _front_stereo_info_cb(self, message):

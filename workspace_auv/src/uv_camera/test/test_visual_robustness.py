@@ -21,6 +21,20 @@ from uv_camera.object_localizer import (
 from uv_msgs.msg import DetectionArray, LineState
 
 
+def test_image_encoding_uses_native_byte_array_and_preserves_pixels():
+    from array import array
+
+    pixels = np.arange(72, dtype=np.uint8).reshape(4, 6, 3)[:, ::2]
+    header = Header()
+    header.stamp.sec = 12
+    message = bgr_to_image_msg(pixels, header)
+    assert isinstance(message.data, array)
+    assert message.data.typecode == 'B'
+    assert message.header.stamp.sec == 12
+    assert message.step == 9
+    np.testing.assert_array_equal(image_msg_to_bgr(message), pixels)
+
+
 def _node():
     node = ObjectLocalizer.__new__(ObjectLocalizer)
     node.class_names = ["target"]

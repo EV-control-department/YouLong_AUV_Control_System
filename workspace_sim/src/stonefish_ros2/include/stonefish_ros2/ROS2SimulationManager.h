@@ -47,6 +47,8 @@
 #include <Stonefish/core/SimulationManager.h>
 #include <Stonefish/actuators/Servo.h>
 
+#include <chrono>
+
 namespace sf
 {
     class ROS2Interface;
@@ -173,6 +175,15 @@ namespace sf
         void CommCallback(const std_msgs::msg::String::SharedPtr msg, Comm* comm);
 
     protected:
+        struct CameraDiagnostic
+        {
+            uint64_t callbacks = 0;
+            uint64_t published = 0;
+            double lastPublishMs = 0.0;
+            double maxPublishMs = 0.0;
+        };
+
+        void ReportCameraDiagnostics();
         std::string scenarioPath_;
         std::vector<std::shared_ptr<ROS2Robot>> rosRobots_;
         std::shared_ptr<rclcpp::Node> nh_;
@@ -189,6 +200,8 @@ namespace sf
             sensor_msgs::msg::CameraInfo::SharedPtr, sensor_msgs::msg::Image::SharedPtr>> dualImageCameraMsgPrototypes_;
         std::map<std::string, std::pair<sensor_msgs::msg::Image::SharedPtr, 
             sensor_msgs::msg::Image::SharedPtr>> sonarMsgPrototypes_;
+        std::map<std::string, CameraDiagnostic> cameraDiagnostics_;
+        std::chrono::steady_clock::time_point cameraDiagnosticsLast_;
     };
 }
 

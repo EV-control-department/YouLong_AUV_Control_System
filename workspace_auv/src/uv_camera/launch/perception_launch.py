@@ -23,6 +23,7 @@ def generate_launch_description():
     camera_startup_timeout_sec = LaunchConfiguration("camera_startup_timeout_sec")
     inference_threads = LaunchConfiguration("inference_threads")
     confidence = LaunchConfiguration("confidence")
+    device = LaunchConfiguration("device")
     gate_feature_mode = LaunchConfiguration("gate_feature_mode")
     enable_gortc = LaunchConfiguration("enable_gortc")
     stream_annotated = LaunchConfiguration("stream_annotated")
@@ -58,6 +59,7 @@ def generate_launch_description():
             "camera_startup_timeout_sec": camera_startup_timeout_sec,
             "inference_threads": inference_threads,
             "confidence": confidence,
+            "device": device,
             "gate_feature_mode": gate_feature_mode,
             "enable_gortc": enable_gortc,
             "stream_annotated": stream_annotated,
@@ -116,6 +118,10 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_startup_timeout_sec", default_value="5.0"),
         DeclareLaunchArgument("inference_threads", default_value="2"),
         DeclareLaunchArgument("confidence", default_value="0.8"),
+        DeclareLaunchArgument(
+            "device", default_value="auto",
+            description="YOLO inference device: auto, cpu, or cuda:0",
+        ),
         DeclareLaunchArgument("gate_feature_mode", default_value="auto"),
         DeclareLaunchArgument("enable_gortc", default_value="true"),
         DeclareLaunchArgument("stream_annotated", default_value="true"),

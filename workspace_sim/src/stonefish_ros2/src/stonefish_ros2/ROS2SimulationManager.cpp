@@ -74,6 +74,7 @@
 #include <Stonefish/core/Robot.h>
 
 #include <chrono>
+#include <algorithm>
 #include <cstdlib>
 #include <thread>
 
@@ -85,6 +86,7 @@ namespace sf
 ROS2SimulationManager::ROS2SimulationManager(Scalar stepsPerSecond, std::string scenarioFilePath, const std::shared_ptr<rclcpp::Node>& nh)
 	: SimulationManager(stepsPerSecond, Solver::SI, CollisionFilter::EXCLUSIVE), scenarioPath_(scenarioFilePath), nh_(nh)
 {
+    cameraDiagnosticsLast_ = std::chrono::steady_clock::now();
     it_ = std::make_shared<image_transport::ImageTransport>(nh_);
     interface_ = std::make_shared<ROS2Interface>(nh_);
     tf_ = std::make_unique<tf2_ros::TransformBroadcaster>(nh_);
@@ -851,6 +853,9 @@ void ROS2SimulationManager::SimulationStepCompleted(Scalar timeStep)
 
 void ROS2SimulationManager::ColorCameraImageReady(ColorCamera* cam)
 {
+    const auto started = std::chrono::steady_clock::now();
+    auto& diagnostic = cameraDiagnostics_[cam->getName()];
+    diagnostic.callbacks++;
     //Fill in the image message
     sensor_msgs::msg::Image::SharedPtr img = cameraMsgPrototypes_[cam->getName()].first;
     img->header.stamp = nh_->get_clock()->now();
@@ -863,6 +868,37 @@ void ROS2SimulationManager::ColorCameraImageReady(ColorCamera* cam)
     //Publish messages
     imgPubs_.at(cam->getName()).publish(img);
     std::static_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>>(pubs_.at(cam->getName() + "/info"))->publish(*info);
+
+    const auto finished = std::chrono::steady_clock::now();
+    diagnostic.published++;
+    diagnostic.lastPublishMs = std::chrono::duration<double, std::milli>(
+        finished - started).count();
+    diagnostic.maxPublishMs = std::max(diagnostic.maxPublishMs,
+                                        diagnostic.lastPublishMs);
+    ReportCameraDiagnostics();
+}
+
+void ROS2SimulationManager::ReportCameraDiagnostics()
+{
+    const auto now = std::chrono::steady_clock::now();
+    const double elapsed = std::chrono::duration<double>(
+        now - cameraDiagnosticsLast_).count();
+    if (elapsed < 5.0)
+        return;
+
+    std::string report = "Stonefish相机回调/发布：";
+    for (const auto& entry : cameraDiagnostics_)
+    {
+        const auto& diagnostic = entry.second;
+        report += entry.first + "=" +
+            std::to_string(diagnostic.callbacks / elapsed) + "Hz," +
+            "publish=" + std::to_string(diagnostic.lastPublishMs) +
+            "ms(max=" + std::to_string(diagnostic.maxPublishMs) + ") ";
+    }
+    RCLCPP_INFO(nh_->get_logger(), "%s", report.c_str());
+    for (auto& entry : cameraDiagnostics_)
+        entry.second = CameraDiagnostic{};
+    cameraDiagnosticsLast_ = now;
 }
 
 void ROS2SimulationManager::DepthCameraImageReady(DepthCamera* cam)

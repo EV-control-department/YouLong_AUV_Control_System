@@ -63,6 +63,9 @@ class CameraPassthrough:
         self._raw_counts = {'Front': 0, 'Down': 0}
         self._stitched_counts = {'Front': 0, 'Down': 0}
         self._diagnostic_timer = None
+        self._diagnostic_time = time.monotonic()
+        self._diagnostic_previous = (0, 0, 0, 0)
+        self._stitch_ms = {'Front': 0.0, 'Down': 0.0}
         self.front_left_img = None
         self.front_right_img = None
         self.down_left_img = None
@@ -148,11 +151,19 @@ class CameraPassthrough:
 
     def _report_diagnostics(self):
         """Make a silent DDS/topic failure visible without logging every frame."""
+        now = time.monotonic()
+        elapsed = max(now - self._diagnostic_time, 1e-6)
+        counts = (self._raw_counts['Front'], self._raw_counts['Down'],
+                  self._stitched_counts['Front'], self._stitched_counts['Down'])
+        rates = [(value - previous) / elapsed for value, previous in
+                 zip(counts, self._diagnostic_previous)]
+        self._diagnostic_previous = counts
+        self._diagnostic_time = now
         self.node.get_logger().info(
-            'camera passthrough: raw callbacks '
-            f"front={self._raw_counts['Front']} down={self._raw_counts['Down']}; "
-            f"stitched={self._stitched_counts['Front']}/"
-            f"{self._stitched_counts['Down']}"
+            '相机管线：原图接收Hz(左右合计) 前/下='
+            f'{rates[0]:.2f}/{rates[1]:.2f}，拼接发布Hz='
+            f'{rates[2]:.2f}/{rates[3]:.2f}，最近拼接及发布ms='
+            f"{self._stitch_ms['Front']:.1f}/{self._stitch_ms['Down']:.1f}"
         )
 
     def _publish_stitched_front(self):
@@ -223,6 +234,7 @@ class CameraPassthrough:
                 # latest-only frame gate.
                 info_publisher.publish(info)
             publisher.publish(out)
+            self._stitch_ms[camera_name] = (time.monotonic() - now) * 1000.0
             self._last_stitch_time[camera_name] = now
             self._stitched_counts[camera_name] += 1
             return pair_key

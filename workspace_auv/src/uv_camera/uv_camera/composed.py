@@ -114,7 +114,8 @@ class CameraAiNode(Node):
             dataset_webp_method=params['dataset_webp_method'],
             inference_threads=params['inference_threads'],
             gate_feature_mode=params['gate_feature_mode'],
-            confidence=params['confidence'])
+            confidence=params['confidence'],
+            device=params['device'])
         self._gate = FrameGate(self.ai.process, cameras=active,
                                max_workers=2, log_warn=self._warn)
         if params['enable_ai']:
@@ -170,6 +171,7 @@ class CameraAiNode(Node):
         self.declare_parameter('camera_startup_timeout_sec', 5.0)
         self.declare_parameter('inference_threads', 2)
         self.declare_parameter('confidence', 0.8)
+        self.declare_parameter('device', 'auto')
         self.declare_parameter('gate_feature_mode', 'auto')
         self.declare_parameter('enable_gortc', ENABLE_GORTC)
         self.declare_parameter('gortc_executable', GORTC_EXECUTABLE)
@@ -218,6 +220,7 @@ class CameraAiNode(Node):
                 1.0, float(g('camera_startup_timeout_sec').value)),
             'inference_threads': max(1, int(g('inference_threads').value)),
             'confidence': min(1.0, max(0.05, float(g('confidence').value))),
+            'device': str(g('device').value).strip().lower() or 'auto',
             'gate_feature_mode': str(g('gate_feature_mode').value).strip().lower(),
             'enable_gortc': _as_bool(g('enable_gortc').value),
             'gortc_port': g('gortc_http_port').value,
@@ -301,6 +304,12 @@ class CameraAiNode(Node):
         stereo metadata keeps the two eye detections tied to their original
         capture stamps without changing the stitched image transport.
         """
+        received_at = time.monotonic()
+        if not hasattr(self, '_input_diagnostics'):
+            self._input_diagnostics = {}
+        previous_at, count = self._input_diagnostics.get(camera, (received_at, 0))
+        count += 1
+        self._input_diagnostics[camera] = (previous_at, count)
         try:
             cv_img = image_msg_to_bgr(msg)
         except Exception as e:
@@ -326,6 +335,14 @@ class CameraAiNode(Node):
             ('opencv', cv_img, msg.header.stamp, False,
              right_stamp, int(stereo_pair_id or 0)),
         )
+        elapsed = received_at - previous_at
+        if elapsed >= 5.0:
+            self._input_diagnostics[camera] = (received_at, 0)
+            self.get_logger().info(
+                f'camera输入[{camera}] {count / elapsed:.2f}Hz，'
+                f'解码/预览/入队={(time.monotonic()-received_at)*1000:.1f}ms，'
+                f'图像字节={len(msg.data)}，'
+                f'采集戳={msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}')
 
     def submit_frame(self, camera, frame, stamp=None):
         """Called from uv_sensor when a V4L2 frame arrives (real mode)."""

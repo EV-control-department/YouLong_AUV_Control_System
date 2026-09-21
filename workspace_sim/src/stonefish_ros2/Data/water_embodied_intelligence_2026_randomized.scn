@@ -3,14 +3,14 @@
 	<environment>
 		<ned latitude="31.2304" longitude="121.4737" />
 		<ocean>
-			<water density="1000.0" jerlov="0.2212" />
+			<water density="1000.0" jerlov="0.1621" />
 			<waves height="0.0" />
 			<current type="uniform">
 				<velocity xyz="0.0 0.0 0.0" />
 			</current>
 		</ocean>
 		<atmosphere>
-			<sun azimuth="197.758" elevation="72.162" gain="1.301" />
+			<sun azimuth="25.468" elevation="51.797" gain="1.205" />
 		</atmosphere>
 	</environment>
 	<materials>
@@ -48,7 +48,7 @@
 		<look name="starfish" rgb="0.85 0.24 0.06" roughness="0.65" />
 		<look name="turntable" rgb="0.55 0.55 0.58" roughness="0.48" />
 		<look name="traffic_cone" rgb="1.0 1.0 1.0" roughness="0.32" texture="traffic_cone.png" />
-		<look name="aruco_tag" rgb="1.0 1.0 1.0" roughness="0.3" texture="aruco_4x4_id5.png" />
+		<look name="aruco_tag" rgb="1.0 1.0 1.0" roughness="0.3" texture="apriltag_36h11_id4.png" />
 	</looks>
 	<!-- NED pool bounds: south-west (-1.25,-9.0), north-east (5.0,1.25). -->
 +	<!-- 13 x 20 floor mosaic; each tile is about 0.5 m x 0.5 m. -->
@@ -1944,7 +1944,7 @@
 		</physical>
 		<material name="Plastic" />
 		<look name="traffic_cone" />
-		<world_transform xyz="2.6307 -3.9699 2.0000" rpy="3.1416 0.0 1.09881" />
+		<world_transform xyz="1.3480 -4.0459 2.0000" rpy="3.1416 0.0 -2.64097" />
 	</static>
 	<static name="TrafficConeRound01" type="model">
 		<physical>
@@ -1953,7 +1953,7 @@
 		</physical>
 		<material name="Plastic" />
 		<look name="traffic_cone" />
-		<world_transform xyz="1.3074 -4.6364 2.0000" rpy="3.1416 0.0 1.51716" />
+		<world_transform xyz="1.3487 -3.3109 2.0000" rpy="3.1416 0.0 1.55737" />
 	</static>
 	<static name="TrafficConeSquare00" type="model">
 		<physical>
@@ -1962,7 +1962,7 @@
 		</physical>
 		<material name="Plastic" />
 		<look name="traffic_cone" />
-		<world_transform xyz="2.0356 -3.3265 2.0000" rpy="3.1416 0.0 -1.64937" />
+		<world_transform xyz="2.0281 -4.6967 2.0000" rpy="3.1416 0.0 -1.38967" />
 	</static>
 	<static name="TrafficConeSquare01" type="model">
 		<physical>
@@ -1971,31 +1971,31 @@
 		</physical>
 		<material name="Plastic" />
 		<look name="traffic_cone" />
-		<world_transform xyz="2.6421 -4.7048 2.0000" rpy="3.1416 0.0 -1.57345" />
+		<world_transform xyz="2.7069 -4.6817 2.0000" rpy="3.1416 0.0 -2.82288" />
 	</static>
 	<static name="TrafficConeRoundBand00" type="cylinder">
 		<dimensions radius="0.105" height="0.035" />
 		<material name="Plastic" />
 		<look name="black" />
-		<world_transform xyz="2.6307 -3.9699 1.9825" rpy="0.0 0.0 1.09881" />
+		<world_transform xyz="1.3480 -4.0459 1.9825" rpy="0.0 0.0 -2.64097" />
 	</static>
 	<static name="TrafficConeRoundBand01" type="cylinder">
 		<dimensions radius="0.105" height="0.035" />
 		<material name="Plastic" />
 		<look name="black" />
-		<world_transform xyz="1.3074 -4.6364 1.9825" rpy="0.0 0.0 1.51716" />
+		<world_transform xyz="1.3487 -3.3109 1.9825" rpy="0.0 0.0 1.55737" />
 	</static>
 	<static name="TrafficConeSquareBand00" type="box">
 		<dimensions xyz="0.235 0.235 0.035" />
 		<material name="Plastic" />
 		<look name="black" />
-		<world_transform xyz="2.0356 -3.3265 1.9825" rpy="0.0 0.0 -1.64937" />
+		<world_transform xyz="2.0281 -4.6967 1.9825" rpy="0.0 0.0 -1.38967" />
 	</static>
 	<static name="TrafficConeSquareBand01" type="box">
 		<dimensions xyz="0.235 0.235 0.035" />
 		<material name="Plastic" />
 		<look name="black" />
-		<world_transform xyz="2.6421 -4.7048 1.9825" rpy="0.0 0.0 -1.57345" />
+		<world_transform xyz="2.7069 -4.6817 1.9825" rpy="0.0 0.0 -2.82288" />
 	</static>
 	<!-- Collection area: assumed center (-0.50,-7.25), dimensions 1.0 m by 1.5 m because the prompt omitted its center. -->
 	<static name="CollectionNorth" type="box">

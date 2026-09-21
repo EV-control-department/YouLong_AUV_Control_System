@@ -54,6 +54,8 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     "mapping_grid": {
         "timeout": float,
         "move_timeout": float,
+        "traversal_clearance_m": float,
+        "traversal_tracking_margin_m": float,
         "observe_seconds": float,
         "min_observations": int,
         "min_confidence": float,

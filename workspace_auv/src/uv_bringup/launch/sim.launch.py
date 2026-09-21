@@ -166,6 +166,7 @@ def generate_launch_description():
     camera_stitch_fps = LaunchConfiguration("camera_stitch_fps")
     publish_raw = LaunchConfiguration("publish_raw_camera_topics")
     ai_inference_fps = LaunchConfiguration("ai_inference_fps")
+    ai_device = LaunchConfiguration("ai_device")
     inference_threads = LaunchConfiguration("inference_threads")
     ai_confidence = LaunchConfiguration("ai_confidence")
     gate_feature_mode = LaunchConfiguration("gate_feature_mode")
@@ -209,6 +210,7 @@ def generate_launch_description():
         "enable_ai": enable_ai,
         "sim_mode": "true",
         "inference_fps": ai_inference_fps,
+        "device": ai_device,
         "inference_threads": inference_threads,
         "confidence": ai_confidence,
         "gate_feature_mode": gate_feature_mode,

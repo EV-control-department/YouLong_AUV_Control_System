@@ -236,6 +236,7 @@ def image_msg_to_bgr(message):
 
 def bgr_to_image_msg(frame, header=None):
     """Encode a BGR NumPy frame into ``sensor_msgs/Image`` without cv_bridge."""
+    from array import array
     from sensor_msgs.msg import Image
 
     image = normalize_frame(np.asarray(frame))
@@ -250,7 +251,9 @@ def bgr_to_image_msg(frame, header=None):
     message.encoding = "bgr8"
     message.is_bigendian = 0
     message.step = int(image.shape[1] * 3)
-    message.data = image.tobytes()
+    # ROS accepts array('B') directly; bytes triggers per-element Python
+    # validation on millions of pixels in debug-enabled Python builds.
+    message.data = array('B', image.tobytes())
     return message
 
 
