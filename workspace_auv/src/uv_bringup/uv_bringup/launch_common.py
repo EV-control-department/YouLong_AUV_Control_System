@@ -121,25 +121,25 @@ def declare_feature_arguments(
 
 
 def declare_observability_arguments():
-    """Declare MJPEG/go2rtc and session recording arguments."""
+    """Declare go2rtc:1984 and session recording arguments."""
     from uv_log.session import default_output_root
 
     return [
         DeclareLaunchArgument(
             "stream_annotated", default_value="true",
-            description="Generate annotated MJPEG streams",
+            description="Generate annotated go2rtc streams",
         ),
         DeclareLaunchArgument(
             "enable_preview", default_value="true",
-            description="Enable MJPEG/go2rtc preview and video capture",
+            description="Enable go2rtc preview and video capture",
         ),
         DeclareLaunchArgument(
             "annotated_max_width", default_value="1280",
-            description="Annotated MJPEG width limit; 0 means full size",
+            description="Annotated display width limit; 0 means full size",
         ),
         DeclareLaunchArgument(
-            "preview_port", default_value="8090",
-            description="uv_camera MJPEG port",
+            "preview_port", default_value="1984",
+            description="go2rtc HTTP/WebRTC port",
         ),
         DeclareLaunchArgument(
             "gortc_http_port", default_value="1984",

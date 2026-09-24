@@ -47,12 +47,12 @@ IMAGE_TOPIC_TYPES = (
     'stereo_msgs/msg/DisparityImage',
 )
 VIDEO_STREAMS = {
-    'front_annotated': '/front_annotated',
-    'down_annotated': '/down_annotated',
+    'front_annotated': '/api/stream.mjpeg?src=front_annotated',
+    'down_annotated': '/api/stream.mjpeg?src=down_annotated',
 }
 RAW_STREAMS = {
-    'front': '/front',
-    'down': '/down',
+    'front': '/api/stream.mjpeg?src=front',
+    'down': '/api/stream.mjpeg?src=down',
 }
 
 
@@ -671,7 +671,7 @@ def _parse_args():
     parser.add_argument('--session-dir')
     parser.add_argument('--output-root', default=str(default_output_root()))
     parser.add_argument('--host', default='127.0.0.1')
-    parser.add_argument('--port', type=int, default=8090)
+    parser.add_argument('--port', type=int, default=1984)
     parser.add_argument('--enable-video', default='true',
                         help='false records ROS/logs only, without reconnecting video workers')
     parser.add_argument('--segment-duration', type=float, default=2.0)

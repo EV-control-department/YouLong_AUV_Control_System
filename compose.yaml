@@ -22,69 +22,10 @@ services:
     # owned by the host user. For maintenance, use CONTAINER_USER=root.
     user: "${CONTAINER_USER:-${HOST_USER:-${USER:-dev}}}"
     working_dir: /workspace
-    entrypoint: ["/ros_entrypoint.sh"]
-    # Build the bind-mounted development workspaces in place before keeping
-    # the container alive. The second workspace overlays the first one.
-    command:
-      - bash
-      - -lc
-      - |
-          set -e
-          mkdir -p "$${XDG_RUNTIME_DIR}"
-          chmod 700 "$${XDG_RUNTIME_DIR}"
-
-          # Keep rqt usable on Foxy without an extra wrapper script. The
-          # default rqt perspective loads rqt_topic, which cannot parse
-          # ROS 2 action feedback types and may abort with std::bad_alloc. A
-          # plain `rqt` command opens the normal default perspective. Explicit
-          # rqt arguments keep their normal meaning and use NVIDIA PRIME offload.
-          if ! grep -q 'youlong-compose-nvidia-rqt-wrapper-v4' "$${HOME}/.bashrc" 2>/dev/null; then
-            printf '%s\n' \
-              '# youlong-compose-nvidia-rqt-wrapper-v4' \
-              'rqt() {' \
-              '  if [ "$$#" -eq 0 ]; then' \
-              '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt' \
-              '  else' \
-              '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt "$$@"' \
-              '  fi' \
-              '}' >> "$${HOME}/.bashrc"
-          fi
-
-          # docker compose exec starts a fresh shell and does not replay the
-          # ROS environment exported by the container entrypoint.  Generate
-          # a login profile so `bash -lc "rqt"` also finds ROS and the local
-          # workspace packages.
-          printf '%s\n' \
-            "source /opt/ros/$${ROS_DISTRO}/setup.bash" \
-            '[ -f /workspace/workspace_auv/install/setup.bash ] && source /workspace/workspace_auv/install/setup.bash' \
-            '[ -f /workspace/workspace_sim/install/setup.bash ] && source /workspace/workspace_sim/install/setup.bash' \
-            '# youlong-compose-nvidia-rqt-login-v4' \
-            'rqt() {' \
-            '  if [ "$$#" -eq 0 ]; then' \
-            '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt' \
-            '  else' \
-            '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt "$$@"' \
-            '  fi' \
-            '}' \
-            '[ -f ~/.bashrc ] && . ~/.bashrc' > "$${HOME}/.bash_profile"
-
-          source /opt/ros/$${ROS_DISTRO}/setup.bash
-          cd /workspace/workspace_auv
-          colcon build --symlink-install --parallel-workers 1
-          source install/setup.bash
-          # Keep the ZIT6 ROS packages in the same AUV install space.  The
-          # package sources live in the vendored third-party tree, while
-          # upper_examples depends on the interfaces built just before it.
-          colcon build --symlink-install --parallel-workers 1 \
-            --base-paths \
-              /workspace/third_party/AUV_zit6_cmake/upper_examples \
-              /workspace/third_party/AUV_zit6_cmake/zit6_interfaces \
-            --packages-select zit6_interfaces upper_examples
-          source install/setup.bash
-          cd /workspace/workspace_sim
-          colcon build --symlink-install --parallel-workers 1 --cmake-force-configure
-          source install/setup.bash
-          exec tail -f /dev/null
+    entrypoint: ["/workspace/scripts/docker_entrypoint.sh"]
+    # The entrypoint prepares both workspaces, then keeps the service alive.
+    # Use `docker compose run --rm auv sim ...` or `real ...` to launch a mode.
+    command: ["idle"]
 
     # ROS 2 DDS and application HTTP services share the host network.
     network_mode: host
@@ -130,6 +71,15 @@ services:
       QT_SCALE_FACTOR: "${QT_SCALE_FACTOR:-1.25}"
       LANG: C.UTF-8
       LC_ALL: zh_CN.UTF-8
+      # The ROS console scripts are generated with /usr/bin/python3. Expose
+      # the workspace venv to that interpreter so iceoryx2 and ultralytics
+      # are available without changing the ROS image's Python installation.
+      PYTHONPATH: "/workspace/workspace_auv/.venv/lib/python3.8/site-packages:/workspace/workspace_auv/.venv/lib/python3.12/site-packages:/usr/local/lib/python3.8/dist-packages:/usr/local/lib/python3.12/dist-packages"
+      # Set false for a lightweight container that only needs raw camera and
+      # streaming. It defaults to true so object_detector works immediately.
+      INSTALL_WORKSPACE_AI: "${INSTALL_WORKSPACE_AI:-true}"
+      FORCE_ICEORYX2_BUILD: "${FORCE_ICEORYX2_BUILD:-false}"
+      YOLO_CONFIG_DIR: "/workspace/.docker/ultralytics"
 
     volumes:
       # Run this file from the checked-out repository directory.

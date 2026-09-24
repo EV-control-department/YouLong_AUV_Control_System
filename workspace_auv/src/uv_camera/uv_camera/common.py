@@ -20,7 +20,9 @@ CONFIDENCE = 0.8
 ENABLE_UNDISTORT = True
 ENABLE_GORTC = True
 GORTC_HTTP_PORT = 1984
-VISION_MJPEG_PORT = 8090
+# Legacy composed-node compatibility constant. New launches do not start the
+# MJPEG server; go2rtc owns the only external video listener on 1984.
+VISION_MJPEG_PORT = 1984
 GORTC_EXECUTABLE = 'go2rtc'
 STREAM_ANNOTATED = True
 

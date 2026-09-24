@@ -1,0 +1,15 @@
+api:
+  listen: ":1984"
+
+# The browser page can use go2rtc's HTTP transports on 1984. No RTSP or
+# separate WebRTC listener is needed for this deployment.
+rtsp:
+  listen: ""
+webrtc:
+  listen: ""
+
+streams:
+  front: "exec:camera_streamer --camera front --mode raw"
+  down: "exec:camera_streamer --camera down --mode raw"
+  front_annotated: "exec:camera_streamer --camera front --mode annotated"
+  down_annotated: "exec:camera_streamer --camera down --mode annotated"

@@ -163,7 +163,7 @@ def generate_launch_description():
     bridge = _profile_include('uv_sim_bridge', 'bridge.launch.py', {
         'hil_mode': 'false',
         'camera_stitch_fps': LaunchConfiguration('camera_stitch_fps'),
-        'publish_raw_camera_topics': LaunchConfiguration('publish_raw_camera_topics'),
+        'publish_raw_camera_topics': 'false',
     }, profile=sim_profile, profile_package='uv_sim_bridge')
     localization = _include('uv_localization', 'localization_launch.py', {
         'sim_mode': 'true', 'publish_tf': 'true',
@@ -194,21 +194,14 @@ def generate_launch_description():
         'enable_motion': enable_motion, 'sim_mode': 'true',
         'profile_params': '',
     })
-    perception = _profile_include('uv_camera', 'perception_launch.py', {
-        'enable_ai': enable_ai, 'sim_mode': 'true',
-        'inference_fps': LaunchConfiguration('ai_inference_fps'),
-        'inference_threads': LaunchConfiguration('inference_threads'),
+    camera = _include('uv_camera', 'camera_launch.py', {
+        'sim_mode': 'true', 'camera_config_profile': 'sim',
+        'camera_config_dir': camera_dir,
+    })
+    perception = _include('uv_perception', 'perception_launch.py', {
         'confidence': LaunchConfiguration('ai_confidence'),
-        'gate_feature_mode': LaunchConfiguration('gate_feature_mode'),
-        'enable_gortc': LaunchConfiguration('enable_preview'),
-        'stream_annotated': LaunchConfiguration('stream_annotated'),
-        'camera_config_profile': 'sim', 'camera_config_dir': camera_dir,
-        'front_image_topic': front_image_input,
-        'down_image_topic': down_image_input,
-        'object_localizer_params': PathJoinSubstitution([
-            FindPackageShare('uv_camera'), 'config', 'object_localizer_sim.yaml',
-        ]),
-    }, profile=sim_profile, profile_package='uv_camera')
+    }, condition=IfCondition(enable_ai))
+    stream = _include('uv_stream', 'stream_launch.py', {})
     planning = _include('uv_planning', 'planning_launch.py', {
         'enable_nav': enable_nav, 'profile_params': '',
     })
@@ -274,6 +267,6 @@ def generate_launch_description():
             scenario_desc=scenario, scene_seed=seed, launch_file=__file__,
             start_actions=[description, localization, stonefish_gpu,
                            stonefish_nogpu, bridge, degradation,
-                           control, perception, planning, task,
+                           control, camera, perception, stream, planning, task,
                            observability, evaluation]),
     ])

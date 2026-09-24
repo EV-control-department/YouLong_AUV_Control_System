@@ -104,16 +104,19 @@ def generate_launch_description():
     bridge = _profile_include('uv_sim_bridge', 'bridge.launch.py', {
         'hil_mode': 'true',
         'camera_stitch_fps': LaunchConfiguration('camera_stitch_fps'),
-        'publish_raw_camera_topics': LaunchConfiguration('publish_raw_camera_topics'),
+        'publish_raw_camera_topics': 'false',
     }, profile=hil_profile, profile_package='uv_sim_bridge')
     control = _include('uv_control', 'control_launch.py', {
         'enable_motion': LaunchConfiguration('enable_motion'),
         'sim_mode': 'true', 'profile_params': '',
     })
-    perception = _profile_include('uv_camera', 'perception_launch.py', {
-        'enable_ai': LaunchConfiguration('enable_ai'), 'sim_mode': 'true',
-        'camera_config_profile': 'sim', 'camera_config_dir': camera_dir,
-    }, profile=hil_profile, profile_package='uv_camera')
+    camera = _include('uv_camera', 'camera_launch.py', {
+        'sim_mode': 'true', 'camera_config_profile': 'sim',
+        'camera_config_dir': camera_dir,
+    })
+    perception = _include('uv_perception', 'perception_launch.py', {},
+                          condition=IfCondition(LaunchConfiguration('enable_ai')))
+    stream = _include('uv_stream', 'stream_launch.py', {})
     planning = _include('uv_planning', 'planning_launch.py', {
         'enable_nav': LaunchConfiguration('enable_nav'), 'profile_params': '',
     })
@@ -151,5 +154,6 @@ def generate_launch_description():
             scenario_desc=scenario, scene_seed=seed, launch_file=__file__,
             start_actions=[description, localization, stonefish_gpu,
                            stonefish_nogpu, bridge,
-                           agent, control, perception, planning, task]),
+                           agent, control, camera, perception, stream,
+                           planning, task]),
     ])

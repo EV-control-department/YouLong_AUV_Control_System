@@ -9,8 +9,12 @@
 | `sim_bridge` | `uv_sim` | workspace_sim | 仿真硬件桥接 |
 | `hw_manager` | `uv_hm` | workspace_auv | 实车硬件管理 |
 | `basic_motion` | `uv_control` | workspace_auv | 运动控制 |
-| `uv_camera` | `uv_camera` | workspace_auv | YOLO 目标检测 |
-| `object_localizer` | `uv_camera` | workspace_auv | 3D 目标定位 |
+| `uv_camera` | `uv_camera` | workspace_auv | 采集、CameraInfo、iceoryx2 原图发布 |
+| `object_detector` | `uv_perception` | workspace_auv | YOLO 检测 |
+| `object_localizer` | `uv_perception` | workspace_auv | 双目/射线几何定位 |
+| `object_estimator` | `uv_perception` | workspace_auv | 多帧关联与跟踪 |
+| `camera_streamer` | `uv_stream` | workspace_auv | raw/annotated H264 推流适配 |
+| `dataset_recorder` | `uv_dataset` | workspace_auv | iceoryx2 原图数据集记录 |
 | `navigator` | `uv_nav` | workspace_auv | A* 路径规划 + 避障 |
 | `task_runner` | `uv_task` | workspace_auv | YAML 任务执行器 |
 
@@ -22,18 +26,22 @@
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `sim_mode` | bool | `false` | `true`: 订阅 `/auv/*/stitched` ROS 话题<br>`false`: 使用 V4L2 设备直接采集 |
+| `sim_mode` | bool | `false` | `true`: Stonefish POSIX 共享内存<br>`false`: 使用 V4L2 设备直接采集 |
 | `front_cam_path` | str | `/dev/video0` | 前视摄像头 V4L2 设备路径（仅 real 模式） |
 | `down_cam_path` | str | `/dev/video2` | 下视摄像头 V4L2 设备路径（仅 real 模式） |
 
-### 图像发布
+### 图像数据面
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `enable_gortc` | bool | `true` | 启用本地 MJPEG 源和 go2rtc 子进程 |
-| `mjpeg_port` | int | `8090` | uv_camera 本地 MJPEG 服务端口 |
-| `gortc_http_port` | int | `1984` | go2rtc HTTP/WebRTC 服务端口 |
-| `stream_annotated` | bool | `true` | 通过 go2rtc 提供带检测框的视频流 `front_annotated/down_annotated` |
+| `camera_config_profile` | str | `auto` | `real` 或 `sim` 相机配置 |
+| `camera_config_dir` | str | `""` | 可选的相机配置目录 |
+| `camera_info_version` | int | `1` | 写入 iceoryx2 FrameHeader 的标定版本 |
+固定服务为 `youlong/camera/front` 和 `youlong/camera/down`；系统只对外提供
+go2rtc `:1984`，不再配置本地 MJPEG 或 RTSP 端口。
+
+iceoryx2 Python binding 不是节点参数。启动前从仓库的
+`third_party/iceoryx2/iceoryx2-ffi/python` 构建并安装 `iceoryx2` 包。
 
 ### 模型与数据集
 
@@ -56,11 +64,15 @@
 | `down_camera_matrix` | float[9] | 单位矩阵 | 下视相机内参 3x3 |
 | `down_dist_coeffs` | float[5] | 全零 | 下视相机畸变系数 (k1,k2,p1,p2,k3) |
 
-## object_localizer 节点参数
+## uv_perception 节点参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `observation_history_size` | int | `500` | 定位观测历史最大保留数量 |
+| `confidence` | float | `0.5` | YOLO 最低置信度 |
+| `model_path` | str | 自动搜索 | YOLO 权重路径 |
+| `stereo_baseline_m` | float | `0.10` | 双目基线，米 |
+| `world_frame` | str | `odom` | 几何结果转换到的 TF 坐标系 |
+| `association_distance_m` | float | `2.0` | estimator 最近邻关联距离 |
 
 ---
 

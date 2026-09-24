@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Record uv_camera MJPEG streams as short MPEG-TS segments.
+# Record go2rtc streams as short MPEG-TS segments.
 
 set -Eeuo pipefail
 
@@ -7,7 +7,7 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 GORTC_HOST="${GORTC_HOST:-192.168.16.10}"
-GORTC_PORT="${GORTC_PORT:-8090}"
+GORTC_PORT="${GORTC_PORT:-1984}"
 GORTC_STREAMS="${GORTC_STREAMS:-front front_annotated down down_annotated}"
 OUTPUT_ROOT="${OUT_DIR:-${PROJECT_ROOT}/video_record}"
 RECORD_DIR="${RECORD_DIR:-}"
@@ -21,7 +21,7 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
     exit 1
 fi
 
-# MJPEG is a long-lived HTTP response. Only inspect headers here. Streams that
+# The go2rtc HTTP stream is a long-lived response. Only inspect headers here. Streams that
 # are unavailable are skipped; recording starts as long as at least one
 # requested stream is available.
 probe_stream() {
@@ -29,7 +29,7 @@ probe_stream() {
     local probe_headers
     probe_headers="$(
         curl -sS --max-time 2 -D - \
-            "http://${GORTC_HOST}:${GORTC_PORT}/${stream}" \
+            "http://${GORTC_HOST}:${GORTC_PORT}/api/stream.mjpeg?src=${stream}" \
             -o /dev/null 2>/dev/null || true
     )"
     if grep -Eiq '^HTTP/[0-9.]+[[:space:]]+200([[:space:]]|$)' <<<"$probe_headers" \
@@ -102,7 +102,7 @@ sync_loop() {
 
 record_one() {
     local stream="$1"
-    local url="http://${GORTC_HOST}:${GORTC_PORT}/${stream}"
+    local url="http://${GORTC_HOST}:${GORTC_PORT}/api/stream.mjpeg?src=${stream}"
     local pattern="$OUT_DIR/${stream}_${TIMESTAMP}_%06d.ts"
     local playlist="$OUT_DIR/${stream}_${TIMESTAMP}.m3u8"
 

@@ -1,3 +1,7 @@
 [submodule "third_party/AUV_zit6_cmake"]
 	path = third_party/AUV_zit6_cmake
 	url = https://github.com/exp-049/AUV_zit6_cmake.git
+
+[submodule "third_party/iceoryx2"]
+	path = third_party/iceoryx2
+	url = https://github.com/eclipse-iceoryx/iceoryx2.git

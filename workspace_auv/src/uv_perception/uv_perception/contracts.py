@@ -1,20 +1,23 @@
 """Canonical perception topic helpers.
 
-This module deliberately has no ROS node implementation.  It is the stable
-import surface for perception publishers and consumers while the existing
-``uv_camera`` process is migrated incrementally.
+This module is the stable semantic interface for the perception graph. Image
+payloads are intentionally not represented here: raw pixels use iceoryx2
+services and only metadata/semantic results use ROS 2.
 """
 
 from auv_protocol.topics import (
     ARUCO_IDS,
     DETECTIONS,
     LINES,
+    MEASUREMENTS,
     OBJECTS,
+    PERCEPTION_DETECTIONS,
     TARGET_OBSERVATIONS,
     TARGETS,
+    TRACKS,
 )
 
 __all__ = [
-    'ARUCO_IDS', 'DETECTIONS', 'LINES', 'OBJECTS', 'TARGETS',
-    'TARGET_OBSERVATIONS',
+    'ARUCO_IDS', 'DETECTIONS', 'LINES', 'MEASUREMENTS', 'OBJECTS',
+    'PERCEPTION_DETECTIONS', 'TARGETS', 'TARGET_OBSERVATIONS', 'TRACKS',
 ]

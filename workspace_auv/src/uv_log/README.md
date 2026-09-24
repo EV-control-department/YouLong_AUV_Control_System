@@ -77,7 +77,7 @@ rosbag 只保存所有非图像的 ROS 话题，包括状态、控制、检测�
 如果只需要快速录制原始 MJPEG，不需要 ROS session，可以使用：
 
 ```bash
-GORTC_HOST=127.0.0.1 GORTC_PORT=8090 \
+GORTC_HOST=127.0.0.1 GORTC_PORT=1984 \
 GORTC_STREAMS="front down" VIDEO_FPS=10 \
 ./scripts/record_go2rtc.sh
 ```

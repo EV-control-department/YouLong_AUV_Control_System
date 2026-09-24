@@ -1,10 +1,10 @@
-"""uv_sensor: frame source (Stonefish sim OR real V4L2 camera) + go2rtc preview.
+"""Camera frame source (Stonefish sim OR real V4L2 camera).
 
 In the SAME process as uv_ai. uv_sensor:
   * picks the source via params (sim_mode: POSIX shared-memory rings  OR  V4L2 /dev/video*);
-  * on each frame, updates the raw MJPEG preview cache (fed to go2rtc :1984)
-    and hands the BGR frame to uv_ai through an in-memory FrameGate (A3: no ROS
-    image topic, no JPEG between sensor and ai).
+  * hands each stitched BGR frame to an injected callback.  The legacy composed
+    node still uses its FrameGate, while the standalone camera driver publishes
+    the frame to the iceoryx2 data plane.
 """
 
 import threading
@@ -19,12 +19,14 @@ from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import Header
 
 class Sensor:
-    """Frame producer: chooses source, updates raw preview, feeds FrameGate."""
+    """Frame producer with a callback-compatible output boundary."""
 
-    def __init__(self, node, gate, sim_mode, enable_front, enable_down,
-                 startup_timeout_s=5.0, camera_configs=None):
+    def __init__(self, node, gate=None, sim_mode=False, enable_front=True,
+                 enable_down=True, startup_timeout_s=5.0, camera_configs=None,
+                 frame_callback=None):
         self.node = node                 # composed uv_camera rclpy Node
         self.gate = gate                 # common.FrameGate -> ai consumer
+        self._frame_callback = frame_callback
         self._sim_mode = sim_mode
         self._enable_front = enable_front
         self._enable_down = enable_down
@@ -63,6 +65,7 @@ class Sensor:
             enable_front=self._enable_front,
             enable_down=self._enable_down,
         )
+        self._create_real_sensor_publishers()
         self._sim_shm_timer = self.node.create_timer(
             0.005, self._poll_sim_shm)
         self.node.get_logger().info(
@@ -92,7 +95,8 @@ class Sensor:
             right = type(stamp)()
             right.sec = int(right_stamp[0])
             right.nanosec = int(right_stamp[1])
-            self.node.submit_frame(
+            self._publish_real_sensor_frame(camera, frame, stamp)
+            self._submit_frame(
                 camera, frame, stamp, right_stamp=right,
                 stereo_pair_id=pair_id)
 
@@ -306,7 +310,7 @@ class Sensor:
                 # raw preview at capture rate, then hand to ai via gate
                 stamp = self.node.get_clock().now().to_msg()
                 self._publish_real_sensor_frame(camera, normalized, stamp)
-                self.node.submit_frame(camera, normalized, stamp)
+                self._submit_frame(camera, normalized, stamp)
         except Exception as error:
             self._report_camera_failure(
                 camera, f'capture loop stopped unexpectedly: {error} (path={path})')
@@ -317,6 +321,18 @@ class Sensor:
             report(camera, reason)
         else:
             self.node.get_logger().error(f'{camera} camera failure: {reason}')
+
+    def _submit_frame(self, camera, frame, stamp, right_stamp=None,
+                      stereo_pair_id=0):
+        if self._frame_callback is not None:
+            self._frame_callback(
+                camera, frame, stamp, right_stamp=right_stamp,
+                stereo_pair_id=stereo_pair_id)
+            return
+        submit = getattr(self.node, 'submit_frame', None)
+        if submit is not None:
+            submit(camera, frame, stamp, right_stamp=right_stamp,
+                   stereo_pair_id=stereo_pair_id)
 
     # ── shutdown ────────────────────────────────────────────────────────
     def shutdown(self):

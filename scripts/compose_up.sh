@@ -31,6 +31,13 @@ else
     echo "未检测到 /dev/input，跳过手柄设备映射。" >&2
 fi
 
+if [[ "${YOULONG_RUNTIME:-sim}" == "real" ]]; then
+    compose_files+=(
+        -f "${PROJECT_ROOT}/compose.real.yaml"
+    )
+    echo "YOULONG_RUNTIME=real，启用 V4L2/硬件设备映射。" >&2
+fi
+
 if [[ "$#" -eq 0 ]]; then
     set -- up
 fi

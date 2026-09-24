@@ -73,7 +73,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_preview", default_value="true"),
-        DeclareLaunchArgument("preview_port", default_value="8090"),
+        DeclareLaunchArgument("preview_port", default_value="1984"),
         DeclareLaunchArgument("record_session", default_value="false"),
         DeclareLaunchArgument("record_root", default_value=str(default_output_root())),
         DeclareLaunchArgument("record_raw_video", default_value="false"),

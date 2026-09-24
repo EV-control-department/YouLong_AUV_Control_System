@@ -7,7 +7,9 @@ package_name = 'uv_camera'
 data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml', 'GO2RTC.md']),
-    ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
+    ('share/' + package_name + '/launch', [
+        'launch/perception_launch.py', 'launch/camera_launch.py',
+    ]),
     ('share/' + package_name + '/weights', [
         'weights/robotcup20260901.pt',
         'weights/robotcup20260901.yaml',
@@ -43,13 +45,12 @@ setup(
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',
-    description='Camera + AI perception package for YouLong AUV (uv_sensor + uv_ai + object_localizer)',
+    description='Pure camera acquisition, CameraInfo, and iceoryx2 raw image publisher',
     license='GPL-3.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'uv_camera = uv_camera.composed:main',
-            'object_localizer = uv_camera.object_localizer:main',
+            'uv_camera = uv_camera.driver:main',
             'target_position_gui = uv_camera.target_position_gui:main',
             # Kept as a compatibility entry point; bringup no longer starts it.
             'position = uv_camera.position:main',

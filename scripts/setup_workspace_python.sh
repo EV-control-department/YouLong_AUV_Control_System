@@ -6,6 +6,17 @@ venv_dir="${repo_root}/workspace_auv/.venv"
 requirements_file="${repo_root}/workspace_sim/requirements.txt"
 ai_requirements_file="${repo_root}/requirements-ai.txt"
 
+system_python_version="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [[ -x "${venv_dir}/bin/python" ]]; then
+    venv_python_version="$(${venv_dir}/bin/python -c \
+        'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' \
+        2>/dev/null || true)"
+    if [[ "${venv_python_version}" != "${system_python_version}" ]]; then
+        echo "Removing incompatible workspace venv ${venv_python_version:-unknown} (container uses ${system_python_version})" >&2
+        rm -rf -- "${venv_dir}"
+    fi
+fi
+
 if [[ ! -x "${venv_dir}/bin/python" ]]; then
     python3 -m venv --system-site-packages "${venv_dir}"
 fi

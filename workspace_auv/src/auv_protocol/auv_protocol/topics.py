@@ -45,6 +45,19 @@ def DETECTIONS(camera_channel):
     return f'{ROOT}/perception/detections/{_camera_channel_path(camera_channel)}'
 
 
+# Aggregate semantic interfaces.  New perception nodes use these topics;
+# DETECTIONS(camera_channel) remains available for the legacy consumers until
+# their launch files have moved to uv_perception.
+PERCEPTION_DETECTIONS = f'{ROOT}/perception/detections'
+MEASUREMENTS = f'{ROOT}/perception/measurements'
+TRACKS = f'{ROOT}/perception/tracks'
+
+
+# iceoryx2 service names are deliberately kept outside the ROS graph.
+ICEORYX_CAMERA_FRONT = 'youlong/camera/front'
+ICEORYX_CAMERA_DOWN = 'youlong/camera/down'
+
+
 def LINES(camera_channel):
     return f'{ROOT}/perception/lines/{_camera_channel_path(camera_channel)}'
 

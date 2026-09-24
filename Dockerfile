@@ -11,7 +11,9 @@ ARG STONEFISH_BUILD_JOBS=1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
+        ca-certificates \
         cmake \
+        curl \
         git \
         libfreetype6-dev \
         libgl1-mesa-dev \
@@ -32,7 +34,9 @@ RUN apt-get update \
         python3-opencv \
         python3-pil \
         python3-tk \
+        python3-venv \
         python3-yaml \
+        pkg-config \
     && git clone https://github.com/patrykcieslak/stonefish.git /opt/stonefish \
     && git -C /opt/stonefish checkout --detach "${STONEFISH_COMMIT}" \
     && cmake -S /opt/stonefish -B /opt/stonefish/build \
@@ -44,6 +48,19 @@ RUN apt-get update \
     && cmake --install /opt/stonefish/build \
     && ldconfig \
     && rm -rf /opt/stonefish/.git /var/lib/apt/lists/*
+
+# iceoryx2 v0.10 uses Rust 1.89 and the Python binding is built from the
+# checked-out submodule at container preparation time.  Keep the toolchain in
+# the image, while keeping the source and the generated wheel in /workspace so
+# Compose can reuse them across container recreations.
+RUN mkdir -p /opt/rust \
+    && CARGO_HOME=/opt/rust/cargo RUSTUP_HOME=/opt/rust/rustup \
+       sh -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | \
+              sh -s -- -y --profile minimal --default-toolchain 1.89.0 --no-modify-path' \
+    && chmod -R a+rX /opt/rust
+
+ENV RUSTUP_HOME=/opt/rust/rustup \
+    PATH=/opt/rust/cargo/bin:${PATH}
 
 # Ubuntu 20.04 ships Pillow 7, while uv_camera requires Pillow >= 9.  The
 # same image also needs PySide6 for the uv_log player and visualization tools.

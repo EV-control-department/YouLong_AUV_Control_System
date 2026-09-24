@@ -12,6 +12,7 @@ from launch.actions import (
     RegisterEventHandler,
 )
 from launch.event_handlers import OnProcessExit
+from launch.conditions import IfCondition
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -74,21 +75,14 @@ def generate_launch_description():
         "sim_mode": "false",
         "profile_params": "",
     })
-    perception = _profile_include("uv_camera", "perception_launch.py", {
-        "enable_ai": enable_ai,
-        "sim_mode": "false",
-        "inference_fps": "5.0",
-        "inference_threads": "2",
-        "confidence": "0.8",
-        "gate_feature_mode": "auto",
-        "enable_gortc": "true",
-        "stream_annotated": "true",
-        "mjpeg_port": "8090",
-        "annotated_max_width": "0",
-        "camera_config_profile": "real",
+    camera = _include("uv_camera", "camera_launch.py", {
+        "sim_mode": "false", "camera_config_profile": "real",
         "camera_config_dir": camera_config_dir,
-        "object_localizer_params": "",
-    }, profile=profile, profile_package="uv_camera")
+    })
+    perception = _include("uv_perception", "perception_launch.py", {
+        "confidence": "0.8",
+    }, condition=IfCondition(enable_ai))
+    stream = _include("uv_stream", "stream_launch.py", {})
     navigation = _include("uv_planning", "planning_launch.py", {
         "enable_nav": enable_nav,
         "profile_params": "",
@@ -133,7 +127,9 @@ def generate_launch_description():
         localization,
         hardware,
         control,
+        camera,
         perception,
+        stream,
         navigation,
         task,
     ])

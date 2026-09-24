@@ -3,7 +3,7 @@
 <package format="3">
   <name>uv_camera</name>
   <version>0.1.0</version>
-  <description>Camera + AI perception package for YouLong AUV - uv_sensor (source+preview), uv_ai (YOLO detection), object_localizer (calibrated static target positioning)</description>
+  <description>Pure camera acquisition, CameraInfo, and iceoryx2 raw image publisher.</description>
   <maintainer email="origin@example.com">origin</maintainer>
   <license>GPL-3.0</license>
 
@@ -18,6 +18,8 @@
   <depend>sensor_msgs</depend>
   <depend>uv_msgs</depend>
   <depend>auv_protocol</depend>
+  <depend>uv_perception</depend>
+  <exec_depend>uv_stream</exec_depend>
   <depend>cv_bridge</depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-pil</exec_depend>

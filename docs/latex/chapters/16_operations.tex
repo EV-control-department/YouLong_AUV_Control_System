@@ -26,7 +26,7 @@ source install/setup.bash
 \end{enumerate}
 
 \section{运行观测}
-核心观测包括 Topic 是否存在、消息频率、节点列表、任务状态、估计状态、ZIT6 状态、控制周期、相机 MJPEG/annotated 流和日志目录。\pkg{uv_log} 可以同时记录 rosbag、视频片段和节点日志；停止时应允许 recorder 完成索引和尾部恢复。
+核心观测包括 Topic 是否存在、消息频率、节点列表、任务状态、估计状态、ZIT6 状态、控制周期、go2rtc raw/annotated 流和日志目录。\pkg{uv_log} 可以同时记录 rosbag、视频片段和节点日志；停止时应允许 recorder 完成索引和尾部恢复。
 
 \section{部署}
 仓库提供基于 rsync 的部署脚本，默认目标为 AUV 电脑上的项目目录。首次部署推荐使用 \code{--dry-run}，确认后再同步；选择性部署修改文件时使用 checksum 或 Git changed 文件列表。\code{--delete} 会删除远端多余文件，只能在确认本地和远端目录边界后使用。
@@ -40,4 +40,3 @@ source install/setup.bash
 \begin{warningbox}
 真机 profile 与仿真 profile 不可混用。任何会改变布防、最大速度、推力或 watchdog 的配置变更，都必须经过静态检查、台架测试和有急停条件的水池测试。
 \end{warningbox}
-
