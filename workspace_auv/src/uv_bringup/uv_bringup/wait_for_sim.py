@@ -8,12 +8,15 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import CameraInfo
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import DetectionArray, PoseInfo, TargetPositionArray
+from uv_msgs.msg import DetectionArray, ObjectTrackArray, PoseInfo
 from auv_protocol.topics import (
-    BASIC_MOTION, DETECTIONS, TARGETS, STATE_ODOM,
+    BASIC_MOTION, PERCEPTION_DETECTIONS, TRACKS, STATE_ODOM,
     DOWN_LEFT_INFO, DOWN_RIGHT_INFO, FRONT_LEFT_INFO, FRONT_RIGHT_INFO,
 )
 
@@ -32,7 +35,8 @@ class Readiness:
 
     def missing(self, now):
         return sorted(key for key in self.required
-                      if self.samples.get(key, (0, 0))[0] < 2
+                      if self.samples.get(key, (0, 0))[0] < (
+                          1 if key.startswith('calibration/') else 2)
                       or now - self.samples[key][1] > self.max_age)
 
 
@@ -45,34 +49,36 @@ class SimReadyNode(Node):
             required.update('calibration/' + c for c in self.cameras())
         elif require_ai and phase == 'perception':
             required.update('detections/' + c for c in self.cameras())
-            required.add('target_positions')
+            required.add('tracks')
         self.readiness = Readiness(required)
         self.action = ActionClient(self, BasicMotion, BASIC_MOTION)
         self.create_subscription(PoseInfo, STATE_ODOM, self._odom,
                                  qos_profile_sensor_data)
+        info_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
         if require_ai:
-            for camera in self.cameras():
-                if phase == 'sensors':
-                    info_topics = {
-                        'front_left': FRONT_LEFT_INFO,
-                        'front_right': FRONT_RIGHT_INFO,
-                        'down_left': DOWN_LEFT_INFO,
-                        'down_right': DOWN_RIGHT_INFO,
-                    }
+            if phase == 'sensors':
+                info_topics = {
+                    'front_left': FRONT_LEFT_INFO,
+                    'front_right': FRONT_RIGHT_INFO,
+                    'down_left': DOWN_LEFT_INFO,
+                    'down_right': DOWN_RIGHT_INFO,
+                }
+                for camera in self.cameras():
                     self.create_subscription(
                         CameraInfo, info_topics[camera],
                         lambda msg, c=camera: self._calibration(c, msg),
-                        qos_profile_sensor_data)
-                else:
-                    self.create_subscription(
-                        DetectionArray, DETECTIONS(camera),
-                        lambda msg, c=camera: self.readiness.observe(
-                            'detections/' + c, time.monotonic()),
-                        qos_profile_sensor_data)
+                        info_qos)
+            else:
+                self.create_subscription(
+                    DetectionArray, PERCEPTION_DETECTIONS, self._detection,
+                    qos_profile_sensor_data)
             if phase == 'perception':
                 self.create_subscription(
-                    TargetPositionArray, TARGETS,
-                    lambda msg: self.readiness.observe('target_positions', time.monotonic()),
+                    ObjectTrackArray, TRACKS,
+                    lambda msg: self.readiness.observe('tracks', time.monotonic()),
                     qos_profile_sensor_data)
 
     @staticmethod
@@ -88,6 +94,11 @@ class SimReadyNode(Node):
     def _calibration(self, camera, msg):
         if msg.width > 0 and msg.height > 0 and msg.k[0] > 0 and msg.k[4] > 0:
             self.readiness.observe('calibration/' + camera, time.monotonic())
+
+    def _detection(self, msg):
+        camera_name = str(msg.camera_name).strip().lower()
+        if camera_name in self.cameras():
+            self.readiness.observe('detections/' + camera_name, time.monotonic())
 
     def missing(self):
         missing = self.readiness.missing(time.monotonic())

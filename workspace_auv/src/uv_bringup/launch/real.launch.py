@@ -56,6 +56,7 @@ def generate_launch_description():
     enable_motion = LaunchConfiguration("enable_motion")
     enable_nav = LaunchConfiguration("enable_nav")
     enable_task = LaunchConfiguration("enable_task")
+    enable_perception_gui = LaunchConfiguration('enable_perception_gui')
     mission_file = LaunchConfiguration("mission_file")
     camera_config_dir = LaunchConfiguration("camera_config_dir")
 
@@ -81,6 +82,7 @@ def generate_launch_description():
     })
     perception = _include("uv_perception", "perception_launch.py", {
         "confidence": "0.8",
+        "enable_gui": enable_perception_gui,
     }, condition=IfCondition(enable_ai))
     stream = _include("uv_stream", "stream_launch.py", {})
     navigation = _include("uv_planning", "planning_launch.py", {
@@ -114,6 +116,7 @@ def generate_launch_description():
             enable_ai="true", enable_nav="true", enable_task="false",
             enable_motion="true",
         ),
+        DeclareLaunchArgument("enable_perception_gui", default_value="false"),
         DeclareLaunchArgument("enable_hardware", default_value="true"),
         DeclareLaunchArgument("target_id", default_value="yellow_golf"),
         DeclareLaunchArgument(

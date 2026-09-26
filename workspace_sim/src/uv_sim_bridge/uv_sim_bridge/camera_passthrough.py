@@ -8,7 +8,9 @@ any ``sensor_msgs/Image`` topic.
 
 from __future__ import annotations
 
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import (
+    QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy,
+)
 from sensor_msgs.msg import CameraInfo, Image
 
 from auv_protocol.topics import (
@@ -34,10 +36,16 @@ class CameraPassthrough:
             publish_raw_views if isinstance(publish_raw_views, bool) else
             str(publish_raw_views).strip().lower()
             in ('1', 'true', 'yes', 'on'))
-        self._image_qos = QoSProfile(
+        self._source_info_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT,
+        )
+        self._output_info_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
 
     def bind(self, node):
@@ -51,9 +59,9 @@ class CameraPassthrough:
         )
         for source, target in info_pairs:
             publisher = node.create_publisher(
-                CameraInfo, target, self._image_qos)
+                CameraInfo, target, self._output_info_qos)
             node.create_subscription(
-                CameraInfo, source, publisher.publish, self._image_qos)
+                CameraInfo, source, publisher.publish, self._source_info_qos)
 
     @staticmethod
     def _stamp_seconds(message: Image) -> float:
