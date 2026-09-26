@@ -11,7 +11,9 @@ from dataclasses import dataclass, field
 import threading
 import time
 
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy,
+)
 from auv_protocol.topics import (
     DOWN_LEFT_INFO, DOWN_RIGHT_INFO, FRONT_LEFT_INFO, FRONT_RIGHT_INFO,
     MEASUREMENTS, PERCEPTION_DETECTIONS,
@@ -51,12 +53,16 @@ class ObjectLocalizer:
         self._lock = threading.Lock()
         self._pending: dict[tuple[str, int, int], PendingPair] = {}
         self._infos = {}
-        qos = qos_profile_sensor_data
+        info_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
         for name, topic in (
                 ('front_left', FRONT_LEFT_INFO), ('front_right', FRONT_RIGHT_INFO),
                 ('down_left', DOWN_LEFT_INFO), ('down_right', DOWN_RIGHT_INFO)):
             node.create_subscription(CameraInfo, topic,
-                                     lambda message, key=name: self._info(key, message), qos)
+                                     lambda message, key=name: self._info(key, message),
+                                     info_qos)
         node.create_subscription(DetectionArray, PERCEPTION_DETECTIONS,
                                  self._detections, 10)
         self.timer = node.create_timer(0.02, self._flush)
@@ -141,7 +147,7 @@ class ObjectLocalizer:
         measurement.source_camera = str(message.camera_name)
         measurement.class_id = int(detection.class_id)
         try:
-            from uv_camera.model_classes import model_class_name, physical_class_name
+            from uv_perception.model_classes import model_class_name, physical_class_name
             measurement.class_name = model_class_name(measurement.class_id)
             measurement.physical_class_name = physical_class_name(measurement.class_id)
         except Exception:
@@ -252,3 +258,7 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+
+# Keep the established module/console entrypoint while using the static,
+# odom-frame implementation.
+from .object_localizer_static import ObjectLocalizer, main

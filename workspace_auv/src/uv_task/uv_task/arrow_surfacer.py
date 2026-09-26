@@ -13,13 +13,13 @@ import numpy as np
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, PoseInfo
-from auv_protocol.topics import ARUCO_IDS, DETECTIONS, STATE_ODOM
+from auv_protocol.topics import ARUCO_IDS, PERCEPTION_DETECTIONS, STATE_ODOM
 from std_msgs.msg import Int32MultiArray
-from uv_camera.model_classes import configured_class_id
+from uv_perception.model_classes import configured_class_id
 
 
 # ==========================================================================
-# 下视双目相机参数（与 position.py / line_follower.py 保持一致）
+# 下视双目相机参数（参数由 uv_camera 的相机配置和 TF 提供）
 # ==========================================================================
 
 
@@ -36,7 +36,7 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def _euler_to_rotation_matrix(rx_deg: float, ry_deg: float,
                                rz_deg: float) -> np.ndarray:
-    """ZYX 欧拉角 (度) → 旋转矩阵（与 position.py 一致）。"""
+    """ZYX 欧拉角 (度) → 旋转矩阵（使用任务中的 ZYX 欧拉角转换约定）。"""
     rx, ry, rz = math.radians(rx_deg), math.radians(ry_deg), math.radians(rz_deg)
     cx, sx = math.cos(rx), math.sin(rx)
     cy, sy = math.cos(ry), math.sin(ry)
@@ -138,10 +138,8 @@ class ArrowSurfacer:
         self._aruco_ids = set()      # 累积收集的 ArUco marker ID
         self._subs = []
 
-        for cam in ('down_left', 'down_right'):
-            self._subs.append(node.create_subscription(
-                DetectionArray, DETECTIONS(cam),
-                lambda msg, c=cam: self._det_cb(c, msg), 10))
+        self._subs.append(node.create_subscription(
+            DetectionArray, PERCEPTION_DETECTIONS, self._det_cb, 10))
         self._subs.append(node.create_subscription(
             PoseInfo, STATE_ODOM, self._pose_cb, 10))
         self._subs.append(node.create_subscription(
@@ -151,7 +149,10 @@ class ArrowSurfacer:
 
     # ── 感知回调 ──────────────────────────────────────────────────────
 
-    def _det_cb(self, camera_name: str, msg: DetectionArray):
+    def _det_cb(self, msg: DetectionArray):
+        camera_name = str(msg.camera_name).strip().lower()
+        if camera_name not in ('down_left', 'down_right'):
+            return
         with self._lock:
             self._down_detections[camera_name] = (time.monotonic(), msg)
 

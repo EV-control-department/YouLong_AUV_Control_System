@@ -11,7 +11,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from auv_protocol.topics import ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT
-from uv_perception.transport.iceoryx2 import (
+from uv_image_transport.iceoryx2 import (
     CAMERA_DOWN, CAMERA_FRONT, FrameHeader, Iceoryx2Publisher,
 )
 
@@ -57,7 +57,7 @@ class CameraDriver(Node):
         self._lock = threading.Lock()
         self._status = self.create_publisher(String, '/auv/camera/status', 10)
         self._sensor = Sensor(
-            self, None, sim_mode=sim_mode, enable_front=enable_front,
+            self, sim_mode=sim_mode, enable_front=enable_front,
             enable_down=enable_down,
             startup_timeout_s=float(self.get_parameter(
                 'camera_startup_timeout_sec').value),

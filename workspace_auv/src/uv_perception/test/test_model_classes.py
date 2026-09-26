@@ -1,9 +1,10 @@
-"""Tests for the detector mapping shared by all uv packages."""
+"""Tests for the detector mapping owned by uv_perception and shared by uv packages."""
 
-from uv_camera.model_classes import (
+from uv_perception.model_classes import (
     CLASS_IDS,
     DEFAULT_CLASS_NAMES,
     MODEL_MAPPING,
+    MODEL_MAPPING_PATH,
     camera_hint,
     model_class_id,
     multi_instance_class_ids,
@@ -39,3 +40,9 @@ def test_semantic_colour_aliases_are_not_in_the_shared_mapping():
         model_class_id("blue")
     with pytest.raises(ValueError):
         model_class_id("red")
+
+
+def test_mapping_and_weights_are_owned_by_uv_perception():
+    assert MODEL_MAPPING_PATH.name == "robotcup20260901.yaml"
+    assert MODEL_MAPPING_PATH.is_file()
+    assert (MODEL_MAPPING_PATH.parent / "robotcup20260901.pt").is_file()

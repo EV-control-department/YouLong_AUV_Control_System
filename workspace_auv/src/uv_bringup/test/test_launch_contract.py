@@ -63,9 +63,3 @@ def test_all_profiles_are_standard_ros_parameter_files():
         for path in root.glob("*.yaml"):
             text = path.read_text(encoding="utf-8")
             assert "ros__parameters:" in text
-
-
-def test_sim_localizer_parameters_live_in_camera_package():
-    config = AUV_SOURCE_ROOT / "uv_camera" / "config" / "object_localizer_sim.yaml"
-    assert config.is_file()
-    assert "ros__parameters:" in config.read_text(encoding="utf-8")

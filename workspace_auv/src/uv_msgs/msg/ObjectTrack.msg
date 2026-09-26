@@ -6,6 +6,7 @@ uint8 STATUS_STALE=2
 uint8 STATUS_LOST=3
 
 uint64 track_id
+uint64 last_observation_id
 uint16 class_id
 string class_name
 string physical_class_name

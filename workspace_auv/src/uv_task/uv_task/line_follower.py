@@ -13,8 +13,8 @@ import numpy as np
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, LineState, PoseInfo
-from auv_protocol.topics import DETECTIONS, LINES, STATE_ODOM
-from uv_camera.model_classes import configured_class_id
+from auv_protocol.topics import PERCEPTION_DETECTIONS, LINES, STATE_ODOM
+from uv_perception.model_classes import configured_class_id
 
 
 # ==========================================================================
@@ -113,7 +113,7 @@ def _wrap_degrees(angle: float) -> float:
 
 def _euler_to_rotation_matrix(rx_deg: float, ry_deg: float,
                                rz_deg: float) -> 'np.ndarray':
-    """ZYX 欧拉角 (度) → 旋转矩阵（与 position.py 一致）。"""
+    """ZYX 欧拉角 (度) → 旋转矩阵（使用任务中的 ZYX 欧拉角转换约定）。"""
     rx, ry, rz = math.radians(rx_deg), math.radians(ry_deg), math.radians(rz_deg)
     cx, sx = math.cos(rx), math.sin(rx)
     cy, sy = math.cos(ry), math.sin(ry)
@@ -196,12 +196,11 @@ class LineFollower:
             self._subs.append(node.create_subscription(
                 LineState, LINES(cam),
                 lambda msg, c=cam: self._line_cb(c, msg), 10))
-            self._subs.append(node.create_subscription(
-                DetectionArray, DETECTIONS(cam),
-                lambda msg, c=cam: self._det_cb(c, msg), 10))
         self._subs.append(node.create_subscription(
             PoseInfo, STATE_ODOM, self._pose_cb, 10))
 
+        self._subs.append(node.create_subscription(
+            DetectionArray, PERCEPTION_DETECTIONS, self._det_cb, 10))
         # ── PID 状态（横向和偏航独立控制）──
         self._lat_prev_err = None
         self._lat_integral = 0.0
@@ -301,7 +300,10 @@ class LineFollower:
         with self._lock:
             self._line_states[camera_name] = (time.monotonic(), msg)
 
-    def _det_cb(self, camera_name: str, msg: DetectionArray):
+    def _det_cb(self, msg: DetectionArray):
+        camera_name = str(msg.camera_name).strip().lower()
+        if camera_name not in ('down_left', 'down_right'):
+            return
         with self._lock:
             self._down_detections[camera_name] = (time.monotonic(), msg)
 

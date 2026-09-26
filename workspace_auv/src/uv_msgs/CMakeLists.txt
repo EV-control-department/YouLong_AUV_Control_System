@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ObjectTrack.msg"
   "msg/ObjectTrackArray.msg"
   "msg/StereoFrameInfo.msg"
+  "msg/CameraStreamFrameInfo.msg"
   "msg/ObjectPosition.msg"
   "msg/ObjectPositionArray.msg"
   "msg/TargetPosition.msg"

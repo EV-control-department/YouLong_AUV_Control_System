@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from uv_camera.model_classes import CLASS_METADATA
+from uv_perception.model_classes import CLASS_METADATA
 
 
 class ConfigError(ValueError):

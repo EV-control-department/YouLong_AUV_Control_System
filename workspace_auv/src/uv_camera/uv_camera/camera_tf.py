@@ -47,8 +47,8 @@ def quaternion_to_rotation(quaternion) -> np.ndarray:
         [2.0 * (x * y + z * w),
          1.0 - 2.0 * (x * x + z * z),
          2.0 * (y * z - x * w)],
-        [2.0 * (x * z + y * w),
-         2.0 * (y * z - x * w),
+        [2.0 * (x * z - y * w),
+         2.0 * (y * z + x * w),
          1.0 - 2.0 * (x * x + y * y)],
     ], dtype=np.float64)
     if not np.all(np.isfinite(rotation)):

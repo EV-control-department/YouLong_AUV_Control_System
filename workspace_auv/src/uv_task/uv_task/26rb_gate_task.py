@@ -16,15 +16,15 @@ import time
 
 import cv2
 import numpy as np
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 
 from uv_msgs.action import BasicMotion
 from uv_task.task_outcome import TaskOutcome
 from uv_msgs.msg import DetectionArray
-from auv_protocol.topics import DETECTIONS
+from auv_protocol.topics import PERCEPTION_DETECTIONS
 from uv_camera.camera_config import CameraConfig
-from uv_camera.model_classes import model_class_id
+from uv_perception.model_classes import model_class_id
 
 
 # 锁定后允许同一门框在连续图像中的中心变化范围。超过这个范围时视为
@@ -239,6 +239,12 @@ class RB26GateTask:
             depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT,
         )
+        info_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self._input_mode = str(params.get('image_input', 'stitched')).strip().lower()
         if self._input_mode not in {'stitched', 'separate'}:
             self._input_mode = 'stitched'
@@ -257,21 +263,9 @@ class RB26GateTask:
             self._subs.append(node.create_subscription(
                 Image, front_config.image_topic, self._stitched_image_cb, qos))
 
-        # 搜索阶段首先使用左目相机链路的检测结果作为视觉线索；锁定后
-        # 还会订阅并校验右目结果。这仍然是纯相机方案：不消费
-        # /auv/perception/observations 或 object_localizer 输出。
+        # Aggregate DetectionArray carries camera_name for each frame.
         self._subs.append(node.create_subscription(
-            DetectionArray,
-            str(params.get(
-                'left_detection_topic',
-                DETECTIONS('front_left'))),
-            self._left_detection_cb, qos))
-        self._subs.append(node.create_subscription(
-            DetectionArray,
-            str(params.get(
-                'right_detection_topic',
-                DETECTIONS('front_right'))),
-            self._right_detection_cb, qos))
+            DetectionArray, PERCEPTION_DETECTIONS, self._detection_cb, qos))
 
         # CameraInfo 只能作为运行时校验/更新来源，配置 YAML 仍是默认真值。
         for side in ('left', 'right'):
@@ -280,7 +274,7 @@ class RB26GateTask:
                 continue
             self._subs.append(node.create_subscription(
                 CameraInfo, topic,
-                lambda msg, s=side: self._camera_info_cb(s, msg), qos))
+                lambda msg, s=side: self._camera_info_cb(s, msg), info_qos))
         self._min_extent = _clamp(
             float(params.get('min_gate_extent_fraction', 0.1)), 0.05, 0.95)
         self._target_extent = _clamp(
@@ -512,6 +506,13 @@ class RB26GateTask:
         if image is not None:
             with self._lock:
                 self._latest_stitched = (time.monotonic(), image)
+
+    def _detection_cb(self, message: DetectionArray):
+        camera_name = str(message.camera_name).strip().lower()
+        if camera_name == 'front_left':
+            self._left_detection_cb(message)
+        elif camera_name == 'front_right':
+            self._right_detection_cb(message)
 
     def _left_detection_cb(self, message: DetectionArray):
         received = time.monotonic()

@@ -16,6 +16,7 @@ from .tracking.filter import exponential
 @dataclass
 class TrackState:
     track_id: int
+    last_observation_id: int
     class_id: int
     source: str
     position: tuple | None
@@ -57,6 +58,7 @@ class ObjectEstimator:
                     self._next_id += 1
                     self._tracks[track_id] = TrackState(
                         track_id=track_id,
+                        last_observation_id=int(measurement.observation_id),
                         class_id=int(measurement.class_id),
                         source=str(measurement.source_camera),
                         position=position,
@@ -66,6 +68,7 @@ class ObjectEstimator:
                         last_stamp=measurement.observation_stamp)
                     continue
                 state = self._tracks[track_id]
+                state.last_observation_id = int(measurement.observation_id)
                 state.position = exponential(state.position, position, 0.5)
                 state.covariance = list(measurement.position_covariance)
                 state.confidence = max(state.confidence * 0.8,
@@ -85,9 +88,10 @@ class ObjectEstimator:
             age = (now - state.last_ns) / 1e9
             track = ObjectTrack()
             track.track_id = state.track_id
+            track.last_observation_id = state.last_observation_id
             track.class_id = state.class_id
             try:
-                from uv_camera.model_classes import model_class_name, physical_class_name
+                from uv_perception.model_classes import model_class_name, physical_class_name
                 track.class_name = model_class_name(state.class_id)
                 track.physical_class_name = physical_class_name(state.class_id)
             except Exception:
@@ -127,3 +131,7 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+
+# Keep the established module/console entrypoint while using the static,
+# robust landmark estimator.
+from .object_estimator_static import ObjectEstimator, main

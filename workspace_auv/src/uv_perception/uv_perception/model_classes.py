@@ -1,8 +1,7 @@
-"""Load the shared detector class-ID mapping for all ``uv_*`` packages.
+"""Load the shared detector class-ID mapping for all ``uv_*`` packages from the perception package.
 
-The mapping is deliberately kept next to the weight file instead of being
-duplicated in Python modules.  ``uv_task`` and the legacy ``position`` node
-both import this module, so a changed model mapping has one source of truth.
+The mapping is installed with the detector weights in ``uv_perception``.
+Task and perception code import this module so model IDs have one source of truth.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ try:
     import yaml
 except ImportError as error:  # pragma: no cover - exercised in bad installs
     raise ImportError(
-        "uv_camera requires PyYAML to load the shared model mapping") from error
+        "uv_perception requires PyYAML to load the shared model mapping") from error
 
 
 DEFAULT_MAPPING_FILENAME = "robotcup20260901.yaml"
@@ -38,14 +37,14 @@ def _mapping_candidates():
     # and source-tree tools work without a sourced ROS environment.
     try:
         from ament_index_python.packages import get_package_share_directory
-        yield (Path(get_package_share_directory("uv_camera")) / "weights" /
+        yield (Path(get_package_share_directory("uv_perception")) / "weights" /
                DEFAULT_MAPPING_FILENAME)
     except Exception:
         pass
 
     # Useful for running directly from the workspace without colcon.
     cwd = Path.cwd()
-    yield cwd / "workspace_auv" / "src" / "uv_camera" / "weights" / DEFAULT_MAPPING_FILENAME
+    yield cwd / "workspace_auv" / "src" / "uv_perception" / "weights" / DEFAULT_MAPPING_FILENAME
 
 
 def _load_mapping():

@@ -24,7 +24,7 @@ from std_srvs.srv import Trigger
 
 from zit6_interfaces.msg import ZitStatus
 from auv_protocol.topics import (
-    BASIC_MOTION, DETECTIONS, OBJECTS, TARGETS, STATE_ODOM,
+    BASIC_MOTION, PERCEPTION_DETECTIONS, TRACKS, STATE_ODOM,
     ZIT6_STATUS, ZIT6_LIGHT, ZIT6_SERVO,
     MISSION_RUN, MISSION_STOP, MISSION_EXECUTE, MISSION_STATUS,
     LEGACY_TASK_RUN, LEGACY_TASK_STOP, LEGACY_TASK_EXECUTE,
@@ -34,10 +34,9 @@ from auv_protocol.topics import (
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import (
     DetectionArray,
-    ObjectPositionArray,
+    ObjectTrack,
+    ObjectTrackArray,
     PoseInfo,
-    TargetPosition,
-    TargetPositionArray,
     TaskStatus,
 )
 from uv_msgs.srv import ExecTask, RunTask
@@ -69,14 +68,13 @@ RB26DropBeaconTask = import_module(
 from uv_task.line_follower import LineFollower
 from uv_camera.camera_tf import CameraExtrinsicsProvider, CameraExtrinsicsUnavailable
 from uv_camera.camera_config import load_camera_config, profile_for_mode
-from uv_camera.model_classes import model_class_id
+from uv_perception.model_classes import model_class_id
 
 
-# object_localizer.py publishes these as canonical physical classes on
-# /auv/perception/targets, while class_name can still contain the
-# detector suffix (for example ``collection_frame_front``).  Keep the task
-# tolerant of both forms because the localizer deliberately publishes front
-# and down estimates separately.
+# object_estimator publishes one persistent track per physical class on
+# /auv/perception/tracks, while class_name remains the detector label
+# including a view suffix (for example ``collection_frame_front``);
+# physical_class_name is the canonical class when available.
 _LOCALIZER_TARGET_CLASS_IDS = {
     model_class_id('collection_frame_down'): 'collection_frame',
     model_class_id('collection_frame_front'): 'collection_frame',
@@ -128,8 +126,7 @@ class TaskRunnerNode(Node):
         self._cmd_y = 0.0
         self._cmd_z = 0.0
         self._cmd_yaw = 0.0
-        self.objects = ObjectPositionArray()
-        self.target_positions = TargetPositionArray()
+        self.object_tracks = ObjectTrackArray()
 
         # ── 下视感知（release_sampler 对齐用）──
         self._perception_lock = threading.RLock()
@@ -276,14 +273,9 @@ class TaskRunnerNode(Node):
 
         # Subscribers
         self.create_subscription(
-            ObjectPositionArray, OBJECTS, self._objects_cb, 10)
+            ObjectTrackArray, TRACKS, self._tracks_cb, 10)
         self.create_subscription(
-            TargetPositionArray, TARGETS,
-            self._target_positions_cb, 10)
-        for cam in ('down_left', 'down_right'):
-            self.create_subscription(
-                DetectionArray, DETECTIONS(cam),
-                lambda msg, c=cam: self._det_cb(c, msg), 10)
+            DetectionArray, PERCEPTION_DETECTIONS, self._det_cb, 10)
         self.create_subscription(
             PoseInfo, STATE_ODOM, self._pose_cb, 10)
 
@@ -319,15 +311,14 @@ class TaskRunnerNode(Node):
         self.get_logger().info('TaskRunner 节点已启动')
         self.get_logger().info(f'调试模式：{self._debug_mode}')
 
-    def _objects_cb(self, msg: ObjectPositionArray):
+    def _tracks_cb(self, msg: ObjectTrackArray):
         with self._perception_lock:
-            self.objects = msg
+            self.object_tracks = msg
 
-    def _target_positions_cb(self, msg: TargetPositionArray):
-        with self._perception_lock:
-            self.target_positions = msg
-
-    def _det_cb(self, camera_name: str, msg: DetectionArray):
+    def _det_cb(self, msg: DetectionArray):
+        camera_name = str(msg.camera_name).strip().lower()
+        if camera_name not in ('down_left', 'down_right'):
+            return
         with self._perception_lock:
             self._down_detections[camera_name] = (time.monotonic(), msg)
 
@@ -1541,13 +1532,18 @@ class TaskRunnerNode(Node):
     def _move_to_nearest_object_xy(self, class_id: int) -> bool:
         """SET 绝对定位到 class_id 最近物体的 XY 坐标。
 
-        使用 self.objects (ObjectPositionArray) 获取 3D 位置，
+        使用 /auv/perception/tracks 中的有效 track 获取 3D 位置，
         成功后更新 self._cmd_x/_cmd_y。
         """
         nearest = None
         min_dist = float('inf')
-        for obj in self.objects.objects:
-            if obj.class_id == class_id:
+        with self._perception_lock:
+            tracks = list(self.object_tracks.tracks)
+        for obj in tracks:
+            if (obj.class_id == class_id
+                    and int(obj.status) != int(ObjectTrack.STATUS_LOST)
+                    and all(math.isfinite(float(value)) for value in
+                            (obj.world_x, obj.world_y, obj.world_z))):
                 dx = obj.world_x - self._cmd_x
                 dy = obj.world_y - self._cmd_y
                 dist = math.sqrt(dx * dx + dy * dy)
@@ -1653,11 +1649,10 @@ class TaskRunnerNode(Node):
         min_confidence = float(params.get('min_confidence', 0.05))
         min_observations = int(params.get('min_observations', 1))
         with self._perception_lock:
-            target_positions = list(self.target_positions.targets)
-            compatibility_objects = list(self.objects.objects)
+            tracks = list(self.object_tracks.tracks)
 
         candidates = []
-        for target in target_positions:
+        for target in tracks:
             target_name = str(
                 getattr(target, 'physical_class_name', '') or
                 getattr(target, 'class_name', '')).strip().lower()
@@ -1667,13 +1662,11 @@ class TaskRunnerNode(Node):
             # A front estimate is the normal source for suspended balls.  The
             # empty-source case keeps this task compatible with older bags.
             source = str(getattr(target, 'estimate_source', '')).strip().lower()
-            if source not in ('', 'front'):
+            if source and not source.startswith('front'):
                 continue
-            status = int(getattr(target, 'status', TargetPosition.STATUS_STABLE))
-            if status == TargetPosition.STATUS_UNINITIALIZED:
-                continue
+            status = int(getattr(target, 'status', ObjectTrack.STATUS_TENTATIVE))
             confidence = float(getattr(target, 'confidence', 0.0))
-            observations = int(getattr(target, 'num_observations', 0))
+            observations = int(getattr(target, 'measurement_count', 0))
             if (not math.isfinite(confidence)
                     or confidence < min_confidence
                     or observations < min_observations):
@@ -1687,36 +1680,12 @@ class TaskRunnerNode(Node):
             # Prefer stable estimates, then the estimate nearest to the
             # current commanded position when duplicate tracks exist.
             candidates.append((
-                status != TargetPosition.STATUS_STABLE,
+                status != ObjectTrack.STATUS_STABLE,
                 distance,
                 -confidence,
                 {'name': name, 'x': x, 'y': y, 'z': z,
                  'confidence': confidence, 'observations': observations,
-                 'source': source or 'target_positions'},
-            ))
-
-        # Fallback for the legacy ObjectPositionArray producer.  The current
-        # object_localizer publishes front targets on TargetPositionArray, but
-        # this keeps hit_balls usable with old position-node recordings.
-        for obj in compatibility_objects:
-            if int(getattr(obj, 'class_id', -1)) != class_id:
-                continue
-            confidence = float(getattr(obj, 'confidence', 0.0))
-            observations = int(getattr(obj, 'num_observations', 0))
-            x = float(obj.world_x)
-            y = float(obj.world_y)
-            z = float(obj.world_z)
-            if (not all(math.isfinite(value) for value in (x, y, z))
-                    or confidence < min_confidence
-                    or observations < min_observations):
-                continue
-            candidates.append((
-                False,
-                math.hypot(x - self._cmd_x, y - self._cmd_y),
-                -confidence,
-                {'name': name, 'x': x, 'y': y, 'z': z,
-                 'confidence': confidence, 'observations': observations,
-                 'source': 'objects'},
+                 'source': source or 'tracks'},
             ))
 
         if not candidates:
@@ -2017,7 +1986,7 @@ class TaskRunnerNode(Node):
 
     @classmethod
     def _localizer_target_name(cls, target):
-        """Return a canonical name for one TargetPosition message."""
+        """Return a canonical name for one ObjectTrack message."""
         physical_name = cls._normalize_localizer_target_name(
             getattr(target, 'physical_class_name', ''))
         if physical_name is not None:
@@ -2029,13 +1998,22 @@ class TaskRunnerNode(Node):
         return cls._normalize_localizer_target_name(
             getattr(target, 'class_id', -1))
 
+    def _track_measurement_age(self, track):
+        stamp = track.last_measurement_stamp
+        stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+        if stamp_ns <= 0:
+            return 0.0
+        now_ns = int(self.get_clock().now().nanoseconds)
+        if now_ns <= 0:
+            return 0.0
+        return max(0.0, (now_ns - stamp_ns) / 1e9)
+
     def _best_localizer_target(self, target_name: str, p: dict):
         """Get the best current world estimate from object_localizer.
 
-        The localizer publishes independent ``front`` and ``down`` estimates
-        for one physical target.  This task needs one usable world position,
-        so it selects the freshest/highest-quality estimate rather than
-        treating those two records as two different targets.
+        The estimator publishes one persistent track per physical target.
+        Select its best current world estimate using status, confidence,
+        observation count, and the age of its last measurement.
         """
         wanted = self._normalize_localizer_target_name(target_name)
         if wanted is None:
@@ -2043,30 +2021,27 @@ class TaskRunnerNode(Node):
 
         min_confidence = float(p.get('min_confidence', 0.02))
         min_observations = max(1, int(p.get('min_observations', 1)))
-        stale_status = int(getattr(TargetPosition, 'STATUS_STALE', 3))
-        uninitialized_status = int(
-            getattr(TargetPosition, 'STATUS_UNINITIALIZED', 0))
-        stable_status = int(getattr(TargetPosition, 'STATUS_STABLE', 2))
+        stale_statuses = (ObjectTrack.STATUS_STALE, ObjectTrack.STATUS_LOST)
+        tentative_status = ObjectTrack.STATUS_TENTATIVE
+        stable_status = ObjectTrack.STATUS_STABLE
         allow_stale = bool(p.get('allow_stale_targets', True))
 
         with self._perception_lock:
-            candidates = list(self.target_positions.targets)
+            candidates = list(self.object_tracks.tracks)
 
         valid = []
         for target in candidates:
             if self._localizer_target_name(target) != wanted:
                 continue
-            status = int(getattr(target, 'status', uninitialized_status))
-            if status == uninitialized_status:
-                continue
-            if status == stale_status and not allow_stale:
+            status = int(getattr(target, 'status', tentative_status))
+            if status in stale_statuses and not allow_stale:
                 continue
             confidence = float(getattr(target, 'confidence', 0.0))
-            observations = int(getattr(target, 'num_observations', 0))
+            observations = int(getattr(target, 'measurement_count', 0))
             x = float(getattr(target, 'world_x', float('nan')))
             y = float(getattr(target, 'world_y', float('nan')))
             z = float(getattr(target, 'world_z', float('nan')))
-            age = float(getattr(target, 'age_sec', 0.0))
+            age = self._track_measurement_age(target)
             if (confidence < min_confidence or observations < min_observations
                     or not all(math.isfinite(value) for value in (x, y, z))):
                 continue
@@ -2078,7 +2053,8 @@ class TaskRunnerNode(Node):
                 confidence,
                 observations,
                 -age if math.isfinite(age) else float('-inf'),
-                1 if str(getattr(target, 'estimate_source', '')) == 'down' else 0,
+                1 if 'down' in str(getattr(
+                    target, 'estimate_source', '')).strip().lower().split('+') else 0,
                 target,
             ))
 
@@ -2092,11 +2068,11 @@ class TaskRunnerNode(Node):
             'y': float(target.world_y),
             'z': float(target.world_z),
             'confidence': float(target.confidence),
-            'observations': int(target.num_observations),
+            'observations': int(target.measurement_count),
             'status': int(target.status),
-            'age': float(getattr(target, 'age_sec', 0.0)),
+            'age': self._track_measurement_age(target),
             'source': str(getattr(target, 'estimate_source', 'unknown')),
-            'instance_id': int(getattr(target, 'instance_id', 0)),
+            'instance_id': int(target.track_id),
         }
 
     def _current_localizer_targets(self, p: dict):
@@ -2284,7 +2260,7 @@ class TaskRunnerNode(Node):
         self._cmd_yaw = target_yaw
 
         # 世界坐标只负责把目标送入下视相机视场，最终位置不再由
-        # target_positions 的世界坐标闭环决定。
+        # object_tracks 的世界坐标闭环决定。
         if not self._down_visual_servo_target_rack(p, target_z):
             return self._fallback_failure_outcome(
                 '26rb_drop_ball_target_rack', 'visual_servo')

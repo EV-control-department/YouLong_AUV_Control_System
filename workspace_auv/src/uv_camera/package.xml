@@ -11,20 +11,15 @@
 
   <depend>rclpy</depend>
   <depend>tf2_ros</depend>
-  <depend>geometry_msgs</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>uv_msgs</depend>
   <depend>auv_protocol</depend>
-  <depend>uv_perception</depend>
-  <exec_depend>uv_stream</exec_depend>
-  <depend>cv_bridge</depend>
+  <exec_depend>uv_image_transport</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-pil</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>python3-tk</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

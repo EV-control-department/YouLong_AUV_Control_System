@@ -6,7 +6,6 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from uv_camera.camera_config import CameraConfigError, load_camera_config
-from uv_camera.model_classes import model_class_id
 
 
 def test_all_camera_profiles_load_intrinsics_without_npz_or_extrinsics():
@@ -82,12 +81,3 @@ def test_extrinsics_are_rejected_even_with_new_schema(tmp_path):
     (config_dir / "front.yaml").write_text(source, encoding="utf-8")
     with pytest.raises(CameraConfigError, match="extrinsics"):
         load_camera_config("front", "real", config_dir)
-
-
-def test_task_class_selection_has_no_semantic_colour_aliases():
-    assert model_class_id("impact_ball_blue") == 5
-    assert model_class_id("pink_golf") == 7
-    with pytest.raises(ValueError):
-        model_class_id("blue")
-    with pytest.raises(ValueError):
-        model_class_id("red")

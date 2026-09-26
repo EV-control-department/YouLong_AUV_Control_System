@@ -59,6 +59,17 @@ def test_quaternion_to_rotation_matrix():
                    [0.0, 0.0, 1.0]], atol=1e-8)
 
 
+def test_quaternion_to_rotation_handles_sim_front_optical_extrinsic():
+    # rpy=(pi/2, 0, pi/2) from auv_sim.urdf; camera +Z maps to body +X.
+    rotation = quaternion_to_rotation((0.5, 0.5, 0.5, 0.5))
+    expected = [[0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0]]
+    np.testing.assert_allclose(rotation, expected, atol=1e-8)
+    np.testing.assert_allclose(rotation @ rotation.T, np.eye(3), atol=1e-8)
+    assert np.isclose(np.linalg.det(rotation), 1.0, atol=1e-8)
+
+
 def test_missing_camera_tf_is_explicit():
     buffer = FakeBuffer({})
     provider = CameraExtrinsicsProvider(

@@ -9,13 +9,19 @@
 
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>auv_protocol</exec_depend>
+  <exec_depend>uv_image_transport</exec_depend>
   <exec_depend>uv_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-tk</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

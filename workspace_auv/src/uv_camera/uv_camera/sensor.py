@@ -1,31 +1,43 @@
-"""Camera frame source (Stonefish sim OR real V4L2 camera).
+"""Camera frame source for Stonefish simulation or real V4L2 cameras.
 
-In the SAME process as uv_ai. uv_sensor:
-  * picks the source via params (sim_mode: POSIX shared-memory rings  OR  V4L2 /dev/video*);
-  * hands each stitched BGR frame to an injected callback.  The legacy composed
-    node still uses its FrameGate, while the standalone camera driver publishes
-    the frame to the iceoryx2 data plane.
+The camera driver selects a source through parameters, then hands each
+stitched BGR frame to its acquisition callback.
 """
 
 import threading
 import time
 
 import cv2
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+import numpy as np
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
-from .common import normalize_frame
 from .sim_shm import SimStereoShmSource
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import Header
 
+
+def normalize_frame(frame):
+    """Return a non-empty frame as BGR, converting grayscale or BGRA input."""
+    if not isinstance(frame, np.ndarray) or frame.size == 0:
+        return None
+    if frame.ndim == 2:
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if frame.ndim != 3 or frame.shape[2] not in (3, 4):
+        return None
+    if frame.shape[2] == 4:
+        return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+    return frame
+
+
 class Sensor:
     """Frame producer with a callback-compatible output boundary."""
 
-    def __init__(self, node, gate=None, sim_mode=False, enable_front=True,
+    def __init__(self, node, sim_mode=False, enable_front=True,
                  enable_down=True, startup_timeout_s=5.0, camera_configs=None,
                  frame_callback=None):
-        self.node = node                 # composed uv_camera rclpy Node
-        self.gate = gate                 # common.FrameGate -> ai consumer
+        if not callable(frame_callback):
+            raise ValueError("frame_callback must be callable")
+        self.node = node                 # uv_camera driver rclpy Node
         self._frame_callback = frame_callback
         self._sim_mode = sim_mode
         self._enable_front = enable_front
@@ -44,8 +56,10 @@ class Sensor:
         self._image_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
+        self._published_info_cameras = set()
         self._real_info_publishers = {}
         self._sim_shm_source = None
         self._sim_shm_timer = None
@@ -65,11 +79,10 @@ class Sensor:
             enable_front=self._enable_front,
             enable_down=self._enable_down,
         )
-        self._create_real_sensor_publishers()
         self._sim_shm_timer = self.node.create_timer(
             0.005, self._poll_sim_shm)
         self.node.get_logger().info(
-            'uv_sensor started (sim mode: shared-memory camera rings; '
+            'uv_camera started (sim mode: shared-memory camera rings; '
             'no DDS Image topics)')
 
     def _poll_sim_shm(self):
@@ -95,7 +108,6 @@ class Sensor:
             right = type(stamp)()
             right.sec = int(right_stamp[0])
             right.nanosec = int(right_stamp[1])
-            self._publish_real_sensor_frame(camera, frame, stamp)
             self._submit_frame(
                 camera, frame, stamp, right_stamp=right,
                 stereo_pair_id=pair_id)
@@ -161,9 +173,9 @@ class Sensor:
         summary = ', '.join(
             f'{camera}={path} shape={frame.shape}'
             for camera, path, _, frame in probed)
-        self.node.get_logger().info(f'uv_sensor preflight passed: {summary}')
+        self.node.get_logger().info(f'uv_camera preflight passed: {summary}')
         self.node.get_logger().info(
-            'uv_sensor started (real mode: '
+            'uv_camera started (real mode: '
             f"front={self._camera_configs['front'].device}, "
             f"down={self._camera_configs['down'].device})")
 
@@ -187,6 +199,8 @@ class Sensor:
     def _publish_real_sensor_frame(self, camera, frame, stamp):
         """Publish only small calibration metadata for a local V4L2 frame."""
         del frame
+        if camera in self._published_info_cameras:
+            return
         config = self._camera_configs[camera]
         for side, info_publisher in self._real_info_publishers.get(
                 camera, {}).items():
@@ -201,6 +215,7 @@ class Sensor:
             info.k = side_config.matrix.reshape(-1).tolist()
             info.d = side_config.distortion.tolist()
             info_publisher.publish(info)
+        self._published_info_cameras.add(camera)
 
     @staticmethod
     def _open_cap(path, res):
@@ -307,7 +322,7 @@ class Sensor:
                     failure_reported = False
                     last_failure_log = 0.0
                 read_failures = 0
-                # raw preview at capture rate, then hand to ai via gate
+                # hand the latest normalized capture directly to the camera driver
                 stamp = self.node.get_clock().now().to_msg()
                 self._publish_real_sensor_frame(camera, normalized, stamp)
                 self._submit_frame(camera, normalized, stamp)
@@ -324,15 +339,9 @@ class Sensor:
 
     def _submit_frame(self, camera, frame, stamp, right_stamp=None,
                       stereo_pair_id=0):
-        if self._frame_callback is not None:
-            self._frame_callback(
-                camera, frame, stamp, right_stamp=right_stamp,
-                stereo_pair_id=stereo_pair_id)
-            return
-        submit = getattr(self.node, 'submit_frame', None)
-        if submit is not None:
-            submit(camera, frame, stamp, right_stamp=right_stamp,
-                   stereo_pair_id=stereo_pair_id)
+        self._frame_callback(
+            camera, frame, stamp, right_stamp=right_stamp,
+            stereo_pair_id=stereo_pair_id)
 
     # ── shutdown ────────────────────────────────────────────────────────
     def shutdown(self):

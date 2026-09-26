@@ -6,7 +6,7 @@ import math
 import time
 
 from uv_msgs.action import BasicMotion
-from uv_camera.model_classes import model_class_id
+from uv_perception.model_classes import model_class_id
 from uv_task.task_outcome import TaskOutcome
 
 
@@ -165,7 +165,7 @@ class RB26GrabBallTask:
         last_status_log = float('-inf')
         self._logger.info(
             f'26rb_grab_ball：水平视觉伺服已启动；'
-            f'话题=/auv/perception/detections/downward/left，'
+            f'话题=/auv/perception/detections (camera_name=down_left)，'
             f'class_id={self._class_id}，容差={self._pixel_tolerance:.3f}，'
             f'投影深度={self._projection_depth:.2f}m')
         while (not self._node.stopped and time.monotonic() < deadline):

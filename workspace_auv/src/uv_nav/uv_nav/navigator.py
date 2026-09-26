@@ -10,9 +10,9 @@ import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
-from uv_msgs.msg import ObjectPositionArray, PoseInfo, Waypoint, WaypointPath
+from uv_msgs.msg import ObjectTrack, ObjectTrackArray, PoseInfo, Waypoint, WaypointPath
 from uv_msgs.srv import RunTask
-from auv_protocol.topics import OBJECTS, STATE_ODOM, TRAJECTORY
+from auv_protocol.topics import TRACKS, STATE_ODOM, TRAJECTORY
 
 from uv_nav.astar import AStarPlanner
 
@@ -36,7 +36,7 @@ class NavigatorNode(Node):
 
         # Subscribers
         self.create_subscription(PoseInfo, STATE_ODOM, self._state_cb, 10)
-        self.create_subscription(ObjectPositionArray, OBJECTS, self._objects_cb, 10)
+        self.create_subscription(ObjectTrackArray, TRACKS, self._tracks_cb, 10)
 
         # Publishers
         self.pub_path = self.create_publisher(WaypointPath, TRAJECTORY, 10)
@@ -50,11 +50,15 @@ class NavigatorNode(Node):
         with self._state_lock:
             self.state = msg
 
-    def _objects_cb(self, msg: ObjectPositionArray):
+    def _tracks_cb(self, msg: ObjectTrackArray):
         """Update obstacle list from perception."""
         self.obstacles = []
-        for obj in msg.objects:
-            self.obstacles.append((obj.world_x, obj.world_y))
+        for track in msg.tracks:
+            if int(track.status) == int(ObjectTrack.STATUS_LOST):
+                continue
+            x, y = float(track.world_x), float(track.world_y)
+            if math.isfinite(x) and math.isfinite(y):
+                self.obstacles.append((x, y))
 
     def navigate_to(self, goal_x: float, goal_y: float,
                     goal_z: float = None, goal_yaw: float = None) -> bool:

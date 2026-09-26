@@ -14,17 +14,31 @@ class YoloDetector:
         self.device = str(device or '')
 
     def detect(self, image):
+        """Return the legacy box tuples while preserving the simple API."""
+        return self.detect_with_masks(image)[0]
+
+    def detect_with_masks(self, image):
+        """Return (box detections, aligned optional segmentation polygons)."""
         kwargs = {'source': image, 'conf': self.confidence, 'verbose': False}
         if self.device:
             kwargs['device'] = self.device
         results = self.model.predict(**kwargs)
         if not results:
-            return ()
+            return (), ()
         boxes = getattr(results[0], 'boxes', None)
         if boxes is None:
-            return ()
+            return (), ()
         xyxy = boxes.xyxy.cpu().numpy().tolist()
         confidences = boxes.conf.cpu().numpy().tolist()
         classes = boxes.cls.cpu().numpy().tolist()
-        return tuple((int(class_id), float(confidence), tuple(map(float, box)))
-                     for class_id, confidence, box in zip(classes, confidences, xyxy))
+        mask_result = getattr(results[0], 'masks', None)
+        polygons = getattr(mask_result, 'xy', ()) if mask_result is not None else ()
+        detections = []
+        aligned_polygons = []
+        for index, (class_id, confidence, box) in enumerate(
+                zip(classes, confidences, xyxy)):
+            detections.append((
+                int(class_id), float(confidence), tuple(map(float, box))))
+            polygon = polygons[index] if index < len(polygons) else None
+            aligned_polygons.append(polygon)
+        return tuple(detections), tuple(aligned_polygons)
