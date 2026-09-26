@@ -63,7 +63,7 @@ ENV RUSTUP_HOME=/opt/rust/rustup \
     PATH=/opt/rust/cargo/bin:${PATH}
 
 # Ubuntu 20.04 ships Pillow 7, while uv_camera requires Pillow >= 9.  The
-# same image also needs PySide6 for the uv_log player and visualization tools.
+# same image also needs PySide6 for the uv_record player and visualization tools.
 # PySide6 6.5 dropped Python 3.8 support, so Foxy must use the last compatible
 # 6.2.x release while Jazzy can use the newer series.
 # Keep this in a separate layer so changing the Python dependency does not
@@ -106,6 +106,7 @@ RUN apt-get update \
         fonts-noto-mono \
         locales \
         python3-pygame \
+        python3-pyqt5.qtwebengine \
     && locale-gen en_US.UTF-8 zh_CN.UTF-8 \
     && fc-cache -f -v \
     && test "$(fc-match -f '%{family}' 'sans-serif:lang=zh-cn' | head -n 1)" = "Noto Sans CJK SC" \

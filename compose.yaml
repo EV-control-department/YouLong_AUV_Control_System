@@ -16,6 +16,7 @@ services:
         STONEFISH_BUILD_JOBS: "${STONEFISH_BUILD_JOBS:-1}"
 
     container_name: youlong_auv
+    init: true
     # HOST_USER defaults to the host's $USER. On hosts whose UID/GID is not
     # 1000, start with HOST_USER/HOST_UID/HOST_GID set together.
     # Keep the normal container non-root so bind-mounted build artifacts stay
@@ -32,7 +33,10 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: true
-    shm_size: "64m"
+    # Four Stonefish camera-eye rings already reserve about 56 MiB at
+    # 2560x960 RGB8 with two slots per eye. iceoryx2 and DDS need additional
+    # shared memory, so Docker's 64 MiB is not sufficient.
+    shm_size: "1g"
 
     # NVIDIA Container Toolkit injects /dev/nvidia* and the matching driver
     # libraries. Do not manually map /dev/dri here: on hybrid AMD/NVIDIA
@@ -80,6 +84,11 @@ services:
       INSTALL_WORKSPACE_AI: "${INSTALL_WORKSPACE_AI:-true}"
       FORCE_ICEORYX2_BUILD: "${FORCE_ICEORYX2_BUILD:-false}"
       YOLO_CONFIG_DIR: "/workspace/.docker/ultralytics"
+      # Image bytes use the dedicated iceoryx2/POSIX rings. Keep ROS 2 control
+      # and metadata traffic on UDPv4 so Fast DDS cannot consume the same
+      # scarce SHM pool or fail while creating an RTPS segment. Override with
+      # FASTDDS_BUILTIN_TRANSPORTS=DEFAULT when DDS SHM is explicitly needed.
+      FASTDDS_BUILTIN_TRANSPORTS: "${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}"
 
     volumes:
       # Run this file from the checked-out repository directory.
