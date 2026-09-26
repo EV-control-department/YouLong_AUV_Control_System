@@ -1,7 +1,7 @@
 """Hardware manager node: heartbeat, state monitoring.
 
 Responsibilities:
-- 10Hz heartbeat on /auv/hardware/zit6/cmd/heartbeat to keep MCU armed
+- Configurable heartbeat (15Hz default) on /auv/hardware/zit6/cmd/heartbeat
 - Subscribe to /auv/hardware/zit6/state/status, heartbeat, and thruster state
 - Parse and log MCU state in human-readable format
 - Watchdog: heartbeat timeout (7s), battery low, error flags, thrust sat
@@ -160,7 +160,7 @@ class HwManagerNode(Node):
     # ── Heartbeat ────────────────────────────────────────────────
 
     def _heartbeat_cb(self):
-        """10Hz: send heartbeat to MCU."""
+        """Send heartbeat to MCU at the configured rate."""
         msg = UInt32()
         arm_mode = self.get_parameter('arm_mode').value
         msg.data = arm_mode

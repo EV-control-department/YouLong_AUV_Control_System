@@ -3,7 +3,7 @@
 <package format="3">
   <name>uv_mapping</name>
   <version>0.1.0</version>
-  <description>Mapping and localization-opportunity-map contract for the AUV stack.</description>
+  <description>[DEPRECATED] Dormant mapping-topic shim; import topic constants directly from auv_protocol.</description>
   <maintainer email="origin@example.com">origin</maintainer>
   <license>GPL-3.0</license>
 

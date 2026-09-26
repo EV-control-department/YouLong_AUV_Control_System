@@ -48,9 +48,9 @@ src/
 ├── uv_control/        # 运动控制 (ament_python)
 │   ├── minimal_control.py  # 最小封装（直接与硬件通信）
 │   └── basic_motion.py     # 基础运动（set/wmove/bmove 矩阵）
-├── uv_perception/     # 感知 (ament_python)
-│   ├── vision.py      # YOLO 检测 + 图像预处理
-│   └── position.py    # 单目射线交汇定位
+├── uv_camera/        # 相机采集、CameraInfo、相机配置与 TF 工具
+├── uv_image_transport/ # iceoryx2 BGR8 图像帧读写
+├── uv_perception/    # 检测、几何测量、目标关联与 GUI (ament_python)
 ├── uv_nav/            # 导航 (ament_python)
 │   ├── navigator.py   # A* 导航执行
 │   └── astar.py       # 纯 A* 算法

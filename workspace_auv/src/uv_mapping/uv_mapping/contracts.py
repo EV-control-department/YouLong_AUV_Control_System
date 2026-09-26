@@ -1,4 +1,4 @@
-"""Canonical mapping topic contract."""
+"""Deprecated compatibility re-exports; import from auv_protocol.topics."""
 
 from auv_protocol.topics import (
     MAPPING_KEYFRAMES,

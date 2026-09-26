@@ -3,7 +3,7 @@
 <package format="3">
   <name>uv_hm</name>
   <version>0.1.0</version>
-  <description>Hardware management package for YouLong AUV - sim bridge and MCU interface</description>
+  <description>ZIT6 heartbeat, state adaptation, and hardware health monitoring for YouLong AUV</description>
   <maintainer email="origin@example.com">origin</maintainer>
   <license>GPL-3.0</license>
 

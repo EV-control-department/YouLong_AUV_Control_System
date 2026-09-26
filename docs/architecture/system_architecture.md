@@ -22,9 +22,12 @@ Stonefish 的 `/auv/sim/ground_truth/*` 与估计状态严格分离，只可被
 `uv_sim_evaluation`、调试可视化和离线记录器使用。它不是
 定位、规划、任务或控制的输入。
 
-当前增量重构保留 `uv_nav` 作为规划兼容包、`uv_camera` 作为相机与感知兼容
-包。仿真 bridge 的实现归属 `uv_sim_bridge`；`uv_sim` 提供稳定的
-`world`/`vehicle` public launch wrapper，`uv_sim_bringup` 保留实现编排和旧
+当前 `uv_planning` 是对外规划启动边界；`uv_nav` 已弃用但仍作为过渡后端被它启动。
+`uv_camera` 负责相机采集，`uv_image_transport` 负责 iceoryx2 图像帧传输；
+`uv_mapping` 已弃用，目前只有 topic 常量兼容 shim，没有运行节点。具体实现状态和启动默认值见
+[`package_ownership.md`](package_ownership.md)。仿真 bridge 的实现归属
+`workspace_sim/src/uv_sim_bridge`；`uv_sim` 提供稳定的 `world`/`vehicle`
+public launch wrapper，`uv_sim_bringup` 保留实现编排和旧
 `scenario_desc` 兼容入口。
 新边界已经通过
 `auv_protocol`、`uv_localization`、`uv_sim_evaluation` 和

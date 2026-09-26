@@ -3,7 +3,7 @@
 <package format="3">
   <name>uv_nav</name>
   <version>0.1.0</version>
-  <description>Navigation package for YouLong AUV - A* path planning with obstacle avoidance</description>
+  <description>[DEPRECATED] A* backend retained as a transition implementation for uv_planning; new integrations should use uv_planning.</description>
   <maintainer email="origin@example.com">origin</maintainer>
   <license>GPL-3.0</license>
 
@@ -16,6 +16,7 @@
   <depend>std_srvs</depend>
   <depend>uv_msgs</depend>
   <depend>auv_protocol</depend>
+  <depend>uv_perception</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

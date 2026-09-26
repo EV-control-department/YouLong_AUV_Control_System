@@ -8,14 +8,14 @@ setup(
     packages=[package_name],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name, ['package.xml', 'README.md']),
         ('share/' + package_name + '/launch', ['launch/nav_launch.py', 'launch/navigation_launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',
-    description='Navigation package for YouLong AUV',
+    description='[DEPRECATED] A* backend retained for uv_planning; use uv_planning for new integrations',
     license='GPL-3.0',
     tests_require=['pytest'],
     entry_points={

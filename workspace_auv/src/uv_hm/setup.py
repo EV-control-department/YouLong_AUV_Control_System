@@ -22,7 +22,7 @@ setup(
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',
-    description='Hardware management package for YouLong AUV',
+    description='ZIT6 state adapter and hardware health monitor for YouLong AUV',
     license='GPL-3.0',
     tests_require=['pytest'],
     entry_points={

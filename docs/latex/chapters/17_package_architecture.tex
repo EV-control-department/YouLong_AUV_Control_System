@@ -24,7 +24,7 @@
   感知实现 & \pkg{uv_camera}、\pkg{uv_perception} & 相机输入、FrameGate、AI/几何处理和感知契约；后者目前主要是边界包。 \\
   规划实现 & \pkg{uv_nav}、\pkg{uv_planning}、\pkg{uv_mapping} & A* 导航实现、规划启动边界，以及后续 mapping/planning 研究接口。 \\
   执行层 & \pkg{uv_control}、\pkg{uv_task} & BasicMotion Action 执行和 Mission/Task 行为编排。 \\
-  记录评测 & \pkg{uv_log}、\pkg{uv_sim_evaluation} & session/rosbag/视频记录、Ground Truth 对比与实验指标输出。 \\
+  记录评测 & \pkg{uv_record}、\pkg{uv_sim_evaluation} & session/rosbag/视频记录、Ground Truth 对比与实验指标输出。 \\
   仿真编排 & \pkg{uv_sim_bringup}、\pkg{uv_sim_degradation} & SIL/HIL launch、场景准备、可控传感器退化和实验 profile。 \\
   仿真入口 & \pkg{uv_sim} & public world/vehicle launch wrapper，并转发旧 scenario\_desc 入口。 \\
   \bottomrule
