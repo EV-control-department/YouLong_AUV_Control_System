@@ -55,15 +55,19 @@ ros2 topic echo /auv/mission/status
 ros2 topic echo /auv/sim/ground_truth/odom
 
 # 感知系统
-ros2 topic echo /auv/perception/observations
-ros2 topic echo /auv/perception/detections/front/left
-ros2 topic echo /auv/perception/detections/front/right
-ros2 topic echo /auv/perception/detections/downward/left
-ros2 topic echo /auv/perception/detections/downward/right
+# 启动带桌面 GUI 的仿真：
+ros2 launch uv_sim_bringup sim.launch.py enable_perception_gui:=true
+ros2 topic echo /auv/perception/detections
+ros2 topic echo /auv/perception/measurements
+ros2 topic echo /auv/perception/tracks
+ros2 topic echo /auv/perception/lines/downward/left
+ros2 topic echo /auv/perception/lines/downward/right
+ros2 topic echo /auv/perception/aruco/ids
 
 # 查看话题频率
 ros2 topic hz /auv/state/odom
-ros2 topic hz /auv/perception/observations
+ros2 topic hz /auv/perception/detections
+ros2 topic hz /auv/perception/tracks
 ros2 topic hz /auv/hardware/zit6/cmd/setpoint
 ros2 topic hz /auv/sim/ground_truth/odom
 ```

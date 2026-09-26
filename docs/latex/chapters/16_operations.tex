@@ -26,13 +26,13 @@ source install/setup.bash
 \end{enumerate}
 
 \section{运行观测}
-核心观测包括 Topic 是否存在、消息频率、节点列表、任务状态、估计状态、ZIT6 状态、控制周期、go2rtc raw/annotated 流和日志目录。\pkg{uv_log} 可以同时记录 rosbag、视频片段和节点日志；停止时应允许 recorder 完成索引和尾部恢复。
+核心观测包括 Topic 是否存在、消息频率、节点列表、任务状态、估计状态、ZIT6 状态、控制周期、go2rtc raw/annotated 流和日志目录。\pkg{uv_record} 可以同时记录 rosbag、视频片段和节点日志；停止时应允许 recorder 完成索引和尾部恢复。
 
 \section{部署}
 仓库提供基于 rsync 的部署脚本，默认目标为 AUV 电脑上的项目目录。首次部署推荐使用 \code{--dry-run}，确认后再同步；选择性部署修改文件时使用 checksum 或 Git changed 文件列表。\code{--delete} 会删除远端多余文件，只能在确认本地和远端目录边界后使用。
 
 \section{关闭流程}
-先停止任务和运动，再关闭预览/记录，确认控制器发送安全状态，最后关闭 launch 和 ROS 2。若发生异常退出，优先保存日志和 rosbag，使用 \pkg{uv_log recover} 恢复完整片段后再清理结果目录。
+先停止任务和运动，再关闭预览/记录，确认控制器发送安全状态，最后关闭 launch 和 ROS 2。若发生异常退出，优先保存日志和 rosbag，使用 \pkg{uv_record recover} 恢复完整片段后再清理结果目录。
 
 \section{长期维护}
 代码、接口、参数和文档应在同一提交中变更；每个正式实验绑定 Git commit；每次 protocol 或坐标系变更都要更新契约测试；新算法必须说明输入 Topic、输出 Topic、频率、延迟、失败行为和真值隔离情况。发布前执行 \code{git diff --check}、Python 编译检查、接口测试和对应模式的启动 smoke test。

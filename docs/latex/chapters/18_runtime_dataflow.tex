@@ -14,7 +14,7 @@
     \midrule
     控制闭环 & 传感器适配器 -> \pkg{uv_localization} -> \pkg{uv_control} -> ZIT6/仿真执行器 -> 车辆与传感器 & 控制只能消费估计状态；Ground Truth 不得成为状态输入。 \\
     感知与任务 & 相机 -> \pkg{uv_camera} -> detection/observation/target -> \pkg{uv_nav} 或 \pkg{uv_task} -> BasicMotion & 任务层使用消息契约，不直接依赖相机线程或模型对象。 \\
-    观测与评测 & Topic、日志、视频、Ground Truth -> \pkg{uv_log}/\pkg{uv_sim_evaluation} -> session 目录与指标 & 评测可以读取真值，但评测输出不能回灌控制闭环。 \\
+    观测与评测 & Topic、日志、视频、Ground Truth -> \pkg{uv_record}/\pkg{uv_sim_evaluation} -> session 目录与指标 & 评测可以读取真值，但评测输出不能回灌控制闭环。 \\
     \bottomrule
   \end{tabularx}
 \end{table}

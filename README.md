@@ -13,7 +13,7 @@
 | 描述 | `auv_description` | real 车辆 URDF 与 PDF 机械几何、静态 TF |
 | 硬件管理 | `uv_hm` | ZIT6 adapter、heartbeat、状态监控与 watchdog |
 | 运动控制 | `uv_control` | BasicMotion：SET / WMOVE / BMOVE / TRAVEL / BODY_VELOCITY |
-| 相机/感知 | `uv_camera`, `uv_perception` | 相机采集、标定、YOLO 和目标观测 |
+| 相机/感知/视频 | `uv_camera`, `uv_image_transport`, `uv_perception`, `uv_stream`, `uv_record` | 相机采集、iceoryx2 图像传输、YOLO、H.264 推流及统一 raw/go2rtc 会话录制 |
 | 定位 | `uv_localization` | `/auv/state/*` 估计状态边界（当前 bootstrap） |
 | 规划/导航 | `uv_planning`, `uv_nav` | planning 边界与 A* 兼容后端 |
 | 任务 | `uv_task` | YAML mission 与竞赛任务顺序执行 |
@@ -33,8 +33,11 @@ YouLong_AUV_Control_System/
 │       ├── uv_msgs/        # canonical 消息、服务和 Action
 │       ├── uv_control/     # 运动控制
 │       ├── uv_hm/          # 真机硬件 adapter
-│       ├── uv_camera/      # 相机 IO、标定和视觉兼容层
-│       ├── uv_perception/  # 感知接口边界
+│       ├── uv_camera/      # 相机采集、标定和 CameraInfo
+│       ├── uv_image_transport/ # iceoryx2 图像帧读写库
+│       ├── uv_perception/  # 检测、定位、跟踪和模型资源
+│       ├── uv_stream/      # iceoryx2 到 go2rtc 的 H.264 显示流
+│       ├── uv_record/     # raw/go2rtc、rosbag、日志统一会话录制
 │       ├── uv_localization/# 状态估计边界
 │       ├── uv_planning/    # 规划接口边界
 │       ├── uv_nav/         # A* 过渡后端
@@ -155,6 +158,11 @@ chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
 
+当前视频链路由 `uv_camera` 经 `uv_image_transport` 在 iceoryx2 发布原图，`uv_stream/camera_streamer`
+编码 H.264 后交给 go2rtc；采集、感知和视频流由独立包运行。
+go2rtc 网页播放器、WebRTC 信令和 HTTP MP4 编码流使用 1984，WebRTC 媒体使用
+8555；当前 H.264 源不提供 MJPEG，RTSP 输出 8554 在应用配置中关闭。
+
 为了真正做到一键执行，建议先配置 SSH 公钥登录；部署脚本不会保存 SSH 密码：
 
 ```bash
@@ -172,16 +180,16 @@ ssh nvidia@192.168.16.10
 
 ```bash
 ./scripts/deploy.sh --checksum --dry-run \
-  workspace_auv/src/uv_camera/uv_camera/composed.py
+  workspace_auv/src/uv_stream/uv_stream/camera_streamer.py
 ./scripts/deploy.sh --checksum \
-  workspace_auv/src/uv_camera/uv_camera/composed.py
+  workspace_auv/src/uv_stream/uv_stream/camera_streamer.py
 ```
 
 也可以同时指定多个文件或目录：
 
 ```bash
 ./scripts/deploy.sh --checksum \
-  workspace_auv/src/uv_camera/uv_camera/composed.py \
+  workspace_auv/src/uv_stream \
   workspace_auv/src/uv_camera/config
 ```
 
@@ -255,5 +263,5 @@ SSH_KEY=~/.ssh/auv \
 INSTALL_WORKSPACE_AI=true bash scripts/setup_workspace_python.sh
 ```
 
-对应依赖记录在 `requirements-ai.txt`。不安装它时，`uv_camera` 会保留相机
-和 ROS 控制功能，但 AI 检测会按代码设计自动禁用。
+对应依赖记录在 `requirements-ai.txt`。不安装它时，`uv_camera` 和 `uv_stream`
+仍可提供相机采集与原始画面推流；`uv_perception/object_detector` 会因没有模型而发布空检测结果。

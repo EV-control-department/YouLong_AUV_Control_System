@@ -19,11 +19,14 @@
   \pkg{uv_bringup} & \pathref{workspace_auv/src/uv_bringup/launch/real.launch.py} & 真机组合启动、readiness 和 observability。 \\
   \pkg{uv_hm} & \pathref{workspace_auv/src/uv_hm/launch/}、config & heartbeat、状态适配、watchdog 和硬件 profile。 \\
   \pkg{uv_localization} & \pathref{workspace_auv/src/uv_localization/launch/localization_launch.py} & bootstrap 状态、健康状态和动态 TF。 \\
-  \pkg{uv_camera} & \pathref{workspace_auv/src/uv_camera/launch/perception_launch.py}、config & 相机输入、FrameGate、AI、几何和 object localizer。 \\
-  \pkg{uv_nav}、\pkg{uv_planning} & nav/planning launch 和节点实现 & A* 后端与规划边界。 \\
+  \pkg{uv_camera} & \pathref{workspace_auv/src/uv_camera/launch/camera_launch.py}、config & 真机/仿真图像采集、相机参数、CameraInfo 和 TF 工具。 \\
+  \pkg{uv_image_transport} & 包源码 & Iceoryx2 图像帧读写接口。 \\
+  \pkg{uv_perception} & perception launch、detector/localization & 检测、定位、跟踪和类别/权重资源。 \\
+  \pkg{uv_nav}、\pkg{uv_planning} & nav/planning launch 和节点实现 & 规划入口与 A* 后端迁移实现。 \\
   \pkg{uv_control} & \pathref{workspace_auv/src/uv_control/launch/control_launch.py} & BasicMotion Action、坐标变换和设定值发布。 \\
   \pkg{uv_task} & \pathref{workspace_auv/src/uv_task/config/missions/}、tasks & Mission/Task YAML 和任务执行器。 \\
-  \pkg{uv_log} & 包源码与 session 工具 & rosbag、视频、日志和恢复。 \\
+  \pkg{uv_stream} & \pathref{workspace_auv/src/uv_stream/launch/stream_launch.py} & go2rtc 相机流与可选标注。 \\
+  \pkg{uv_record} & record/recover/player & raw 或 go2rtc 单模式图像录制、非图像 rosbag、运行日志、恢复和回放。 \\
   \bottomrule
 \end{longtable}
 

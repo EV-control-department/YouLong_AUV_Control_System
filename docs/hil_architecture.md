@@ -28,7 +28,7 @@ SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_camera` → `u
 │  ┌─────────────┐  ┌─────────────┐     │              │            │
 │  │ micro-ROS   │  │  sim_bridge │     │              │            │
 │  │ Agent       │  │  HIL 模式   │     │              │            │
-│  │MicroXRCEAgent│ │  仅相机转发  │     │              │            │
+│  │MicroXRCEAgent│ │CameraInfo转发│     │              │            │
 │  └──────┬──────┘  └──────┬──────┘     │              │            │
 │         │                │            │              │            │
 │         │ serial (UART)  │            │              │            │
@@ -43,10 +43,8 @@ SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_camera` → `u
 │  │    /auv/sensors/imu/data            (Imu, 20Hz)                        │    │
 │  │    /auv/sensors/dvl/velocity            (DVL, 20Hz)                        │    │
 │  │    /auv/sensors/pressure       (FluidPressure, 5Hz)               │    │
-│  │    /auv/sim/raw/camera/front/left/image_raw  (Image)                     │    │
-│  │    /auv/sim/raw/camera/front/right/image_raw (Image)                     │    │
-│  │    /auv/sim/raw/camera/downward/left/image_raw   (Image)                 │    │
-│  │    /auv/sim/raw/camera/downward/right/image_raw  (Image)                 │    │
+│  │    图像像素 → POSIX shared-memory rings → uv_camera                  │    │
+│  │    CameraInfo 与状态等小型元数据仍通过 ROS 2/DDS 发布                 │    │
 │  │                                                           │    │
 │  │  订阅:                                                    │    │
 │  │    /auv/sim/actuators/thruster_command (Float64MultiArray[6], 60Hz)       │    │
@@ -87,6 +85,12 @@ SIL 和 HIL 共享同一套上层控制栈（`uv_control` → `uv_camera` → `u
 ```
 
 ---
+
+HIL 与 SIL 的图像像素都由 `uv_camera` 从 Stonefish POSIX shared-memory rings
+读取，再经 iceoryx2 提供给 `uv_perception`、`uv_stream` 和 `uv_record`；
+`sim_bridge` 的相机适配只转发 CameraInfo，不转发 `sensor_msgs/Image`。
+`uv_stream` 编码 H.264 并交给 go2rtc，HTTP/API（含预览与 MP4 录像）为 1984，
+WebRTC 媒体为 8555；当前不启用 RTSP/TCP 8554。
 
 ## 二、通信接口详解
 
@@ -226,7 +230,8 @@ MCU 通过 `ZitSetpoint.control_key & 0x03` 解析控制模式：
 | INS 对准      | 模拟 (开机 1.5s 自动完成)                  | MCU 实际执行                        |
 | ARM/安全      | 注释跳过 (始终布防)                        | MCU 实际执行心跳 + 布防逻辑         |
 | PID 参数服务  | sim_bridge`/auv/hardware/zit6/get_params`             | MCU 提供 (micro-ROS service)        |
-| 相机转发      | sim_bridge                                 | sim_bridge (相同)                   |
+| 相机图像数据面 | Stonefish → POSIX SHM → uv_camera → iceoryx2 | Stonefish → POSIX SHM → uv_camera → iceoryx2 |
+| CameraInfo 转发 | sim_bridge 仅转发元数据                    | sim_bridge 仅转发元数据              |
 | 上层接口      | `/auv/hardware/zit6/cmd/setpoint` + `/auv/hardware/zit6/state/*` | **完全相同 — 上层透明** |
 
 ---

@@ -14,7 +14,7 @@
 | `object_localizer` | `uv_perception` | workspace_auv | 双目/射线几何定位 |
 | `object_estimator` | `uv_perception` | workspace_auv | 多帧关联与跟踪 |
 | `camera_streamer` | `uv_stream` | workspace_auv | raw/annotated H264 推流适配 |
-| `dataset_recorder` | `uv_dataset` | workspace_auv | iceoryx2 原图数据集记录 |
+| `record` | `uv_record` | workspace_auv | raw Iceoryx2 或 go2rtc 视频、非图像 rosbag 和运行日志会话记录 |
 | `navigator` | `uv_nav` | workspace_auv | A* 路径规划 + 避障 |
 | `task_runner` | `uv_task` | workspace_auv | YAML 任务执行器 |
 
@@ -22,47 +22,17 @@
 
 ## uv_camera 节点参数
 
-### 运行模式
-
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `sim_mode` | bool | `false` | `true`: Stonefish POSIX 共享内存<br>`false`: 使用 V4L2 设备直接采集 |
-| `front_cam_path` | str | `/dev/video0` | 前视摄像头 V4L2 设备路径（仅 real 模式） |
-| `down_cam_path` | str | `/dev/video2` | 下视摄像头 V4L2 设备路径（仅 real 模式） |
+| `sim_mode` | bool | `false` | `true` 从 Stonefish POSIX 共享内存读取；`false` 从真机 V4L2 采集 |
+| `enable_front` | bool | `true` | 是否启用前视相机 |
+| `enable_down` | bool | `true` | 是否启用下视相机 |
+| `camera_config_profile` | str | `auto` | `auto` 按 sim_mode 选择 `sim` 或 `real` 配置 |
+| `camera_config_dir` | str | `` | 可选相机 YAML 配置目录 |
+| `camera_startup_timeout_sec` | float | `5.0` | 等待相机源就绪的超时 |
+| `camera_info_version` | int | `1` | 写入 iceoryx2 帧头的相机标定版本 |
 
-### 图像数据面
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `camera_config_profile` | str | `auto` | `real` 或 `sim` 相机配置 |
-| `camera_config_dir` | str | `""` | 可选的相机配置目录 |
-| `camera_info_version` | int | `1` | 写入 iceoryx2 FrameHeader 的标定版本 |
-固定服务为 `youlong/camera/front` 和 `youlong/camera/down`；系统只对外提供
-go2rtc `:1984`，不再配置本地 MJPEG 或 RTSP 端口。
-
-iceoryx2 Python binding 不是节点参数。启动前从仓库的
-`third_party/iceoryx2/iceoryx2-ffi/python` 构建并安装 `iceoryx2` 包。
-
-### 模型与数据集
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `model_path` | str | `""` | YOLO 模型 .pt 文件路径。为空时自动查找默认路径 |
-| `save_dataset` | bool | `false` | 是否从传感器采样并保存 YOLO 输入格式的帧 |
-| `dataset_fps` | float | `5.0` | 数据集采集频率，按相机计；独立于 YOLO 推理频率；`0` 表示不限速 |
-| `dataset_dir` | str | `/workspace/records/datasets` | 数据集根目录 |
-| `dataset_format` | str | `png` | `png` 或 `webp_lossless`；两者均无损，PNG 默认更适合实时采集 |
-| `dataset_queue_size` | int | `32` | 异步写盘队列深度；满时背压，不静默丢帧 |
-| `dataset_png_compression` | int | `1` | PNG 压缩等级 0–9，仅对 PNG 生效，不影响无损性 |
-
-### 相机标定
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `front_camera_matrix` | float[9] | 单位矩阵 | 前视相机内参 3x3 |
-| `front_dist_coeffs` | float[5] | 全零 | 前视相机畸变系数 (k1,k2,p1,p2,k3) |
-| `down_camera_matrix` | float[9] | 单位矩阵 | 下视相机内参 3x3 |
-| `down_dist_coeffs` | float[5] | 全零 | 下视相机畸变系数 (k1,k2,p1,p2,k3) |
+Camera YAML 保存设备路径与内参。图像经 `uv_image_transport` 的 iceoryx2 API 发布到 `youlong/camera/front` 和 `youlong/camera/down`；不发布 DDS 图像话题。视频由 `uv_stream` 转码。iceoryx2 Python binding 由仓库现有脚本构建和安装。
 
 ## uv_perception 节点参数
 
@@ -104,10 +74,15 @@ iceoryx2 Python binding 不是节点参数。启动前从仓库的
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enable_ai` | `true` | 启用 uv_camera + object_localizer |
+| `enable_ai` | `true` | 启用 uv_perception 检测、定位和跟踪节点；相机采集由相机启动项管理 |
 | `enable_motion` | `true` | 启用 basic_motion |
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
+| `enable_stream` | `true` | 启动 go2rtc；raw-only 录制可设为 `false` |
+| `record_session` | `false` | 创建并记录统一 session |
+| `record_mode` | `raw` | 图像录制方式：`raw` 或 `go2rtc`，每个 session 选一种 |
+| `go2rtc_stream_mode` | `unannotated` | go2rtc 模式的流选择：`unannotated`、`annotated` 或 `both` |
+| `go2rtc_video_format` | `jpeg` | go2rtc 视频归档格式：`jpeg` 或 `ts` |
 | `mission_file` | `config/missions/robocup_26.yaml` | YAML 任务流程或单个任务文件路径 |
 | `scenario_desc` | `guoshui_2026_cruise_seeded.scn` | Stonefish 场景文件 |
 | `scene_seed` | `0` | 生成场景使用的整数 seed，运行目录隔离 |
@@ -124,7 +99,7 @@ ros2 launch uv_sim_bringup sim.launch.py profile:=sim_dev enable_ai:=true
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enable_ai` | `true` | 启用 uv_camera + object_localizer |
+| `enable_ai` | `true` | 启用 `uv_perception` 检测、定位观测和跟踪节点；相机采集由相机启动项管理 |
 | `enable_motion` | `true` | 启用 basic_motion |
 | `enable_nav` | `true` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
@@ -137,7 +112,7 @@ ros2 launch uv_bringup real.launch.py profile:=real_default
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `enable_ai` | `false` | 启用 uv_camera + object_localizer |
+| `enable_ai` | `false` | 是否启动 uv_perception 检测、定位和跟踪节点 |
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
 | `enable_motion` | `false` | 启用 basic_motion |
@@ -149,26 +124,24 @@ ros2 launch uv_bringup real.launch.py profile:=real_default
 ros2 launch uv_sim_bringup hil.launch.py enable_ai:=true
 ```
 
-### uv_camera/launch/perception_launch.py
+### 分包启动
 
-该启动文件不再提供图像发布参数；视频通过 go2rtc 查看。
+单独启动组件时分别使用所属包的 launch；完整真机或仿真图由 `uv_bringup` / `uv_sim_bringup` 编排。
 
-**用法：**
 ```bash
-ros2 launch uv_camera perception_launch.py
+ros2 launch uv_camera camera_launch.py sim_mode:=false
+ros2 launch uv_perception perception_launch.py
+ros2 launch uv_stream stream_launch.py
 ```
 
 ## 话题参考
 
-### uv_camera 发布话题
+### uv_perception 检测话题
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
-| `/auv/perception/detections/front/left` | `DetectionArray` | 前视左检测结果 |
-| `/auv/perception/detections/front/right` | `DetectionArray` | 前视右检测结果 |
-| `/auv/perception/detections/downward/left` | `DetectionArray` | 下视左检测结果 |
-| `/auv/perception/detections/downward/right` | `DetectionArray` | 下视右检测结果 |
-uv_camera 不发布图像 DDS 话题；请通过 go2rtc 的 `front`、`down`、
+| `/auv/perception/detections` | `DetectionArray` | 汇总检测结果；消息内 `camera_name` 标识 front_left、front_right、down_left 或 down_right |
+uv_camera 通过 CameraInfo 发布标定元数据，并在 iceoryx2 服务 `youlong/camera/front`、`youlong/camera/down` 发送图像帧；它不发布 DDS 图像话题。请通过 go2rtc 的 `front`、`down`、
 `front_annotated`、`down_annotated` 流查看视频。
 
 go2rtc 视频流：
@@ -182,4 +155,10 @@ go2rtc 视频流：
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
-| `/auv/perception/observations` | `ObjectPositionArray` | 3D 物体世界坐标 |
+| `/auv/perception/measurements` | `ObjectMeasurementArray` | 由检测、CameraInfo 和 TF 生成的几何测量 |
+
+### object_estimator 发布话题
+
+| 话题 | 类型 | 说明 |
+|---|---|---|
+| `/auv/perception/tracks` | `ObjectTrackArray` | 多帧关联后的目标状态 |
