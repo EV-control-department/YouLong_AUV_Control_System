@@ -21,12 +21,11 @@
   <exec_depend>uv_camera</exec_depend>
   <exec_depend>uv_perception</exec_depend>
   <exec_depend>uv_stream</exec_depend>
-  <exec_depend>uv_dataset</exec_depend>
+  <exec_depend>uv_record</exec_depend>
   <exec_depend>uv_planning</exec_depend>
   <exec_depend>uv_task</exec_depend>
   <exec_depend>uv_sim_evaluation</exec_depend>
   <exec_depend>uv_sim_degradation</exec_depend>
-  <exec_depend>uv_log</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

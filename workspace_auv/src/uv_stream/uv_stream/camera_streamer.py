@@ -14,18 +14,25 @@ import os
 import subprocess
 import sys
 import threading
+import time
+import uuid
 from typing import Iterable
 
 import cv2
 import numpy as np
 
-from auv_protocol.topics import ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT, PERCEPTION_DETECTIONS
-from uv_perception.transport.iceoryx2 import FramePacket, Iceoryx2Reader
+from auv_protocol.topics import (
+    ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT, PERCEPTION_DETECTIONS,
+    STREAM_FRAME_INFO,
+)
+from uv_image_transport.iceoryx2 import (
+    FramePacket, Iceoryx2Error, Iceoryx2Reader,
+)
 
 
 DISPLAY_WIDTH = 1280
 DISPLAY_HEIGHT = 960
-DISPLAY_EVERY_N = 3
+FPS_SAMPLE_FRAMES = 7
 OVERLAY_WINDOW_NS = 300_000_000
 
 
@@ -35,6 +42,7 @@ class CachedFrame:
     capture_id: int
     stereo_pair_id: int
     timestamp_ns: int
+    arrival_monotonic_ns: int
 
 
 @dataclass(frozen=True)
@@ -88,52 +96,91 @@ class DetectionCache:
         return tuple(best.detections)
 
 
-class DetectionSubscriber:
-    """Optional rclpy subscriber; failure leaves annotated output as raw."""
+class StreamMetadataBridge:
+    """Publish the exact source-to-encoded-frame map over a small ROS topic."""
 
-    def __init__(self, cache: DetectionCache):
-        self.cache = cache
+    def __init__(self, camera: str, mode: str, stream_instance_id: str):
         self.node = None
         self._thread = None
+        self.publisher = None
+        self.rclpy = None
+        self.executor = None
+        self.camera = camera
+        self.mode = mode
+        self.stream_mode = 'annotated' if mode == 'annotated' else 'unannotated'
+        self.stream_instance_id = stream_instance_id
+        self.timestamp_epoch = 0
+        self.last_source_timestamp_ns = None
+        self.detection_cache = DetectionCache()
         try:
             import rclpy
             from rclpy.executors import SingleThreadedExecutor
-            from rclpy.qos import qos_profile_sensor_data
-            from uv_msgs.msg import DetectionArray
-        except Exception as error:  # pragma: no cover - exercised outside ROS
-            print(f'camera_streamer: ROS detections unavailable: {error}',
+            from rclpy.qos import (
+                QoSProfile, ReliabilityPolicy, qos_profile_sensor_data)
+            from uv_msgs.msg import CameraStreamFrameInfo, DetectionArray
+        except Exception as error:  # pragma: no cover - deployment error
+            print(f'camera_streamer: frame metadata unavailable: {error}',
                   file=sys.stderr, flush=True)
             return
 
-        self._rclpy = rclpy
+        self.rclpy = rclpy
         if not rclpy.ok():
             rclpy.init(args=None)
-        self.node = rclpy.create_node('camera_streamer_detection_overlay')
-        self.node.create_subscription(
-            DetectionArray, PERCEPTION_DETECTIONS, self.cache.add,
-            qos_profile_sensor_data)
-        self._executor = SingleThreadedExecutor()
-        self._executor.add_node(self.node)
+        self.node = rclpy.create_node('camera_streamer_frame_metadata')
+        qos = QoSProfile(depth=8192)
+        qos.reliability = ReliabilityPolicy.RELIABLE
+        self.publisher = self.node.create_publisher(
+            CameraStreamFrameInfo, STREAM_FRAME_INFO, qos)
+        if mode == 'annotated':
+            self.node.create_subscription(
+                DetectionArray, PERCEPTION_DETECTIONS,
+                self.detection_cache.add, qos_profile_sensor_data)
+        self.message_type = CameraStreamFrameInfo
+        self.executor = SingleThreadedExecutor()
+        self.executor.add_node(self.node)
         self._thread = threading.Thread(
             target=self._spin, name='camera-streamer-ros', daemon=True)
         self._thread.start()
 
     def _spin(self):
         try:
-            while self._rclpy.ok():
-                self._executor.spin_once(timeout_sec=0.05)
+            while self.rclpy.ok():
+                self.executor.spin_once(timeout_sec=0.05)
         except Exception as error:  # pragma: no cover - shutdown race
-            print(f'camera_streamer: detection subscriber stopped: {error}',
+            print(f'camera_streamer: metadata subscriber stopped: {error}',
                   file=sys.stderr, flush=True)
+
+    def publish(self, frame: CachedFrame, sequence: int, output_fps: float):
+        if self.publisher is None:
+            return
+        message = self.message_type()
+        message.stream_instance_id = self.stream_instance_id
+        message.camera_name = self.camera
+        message.stream_mode = self.stream_mode
+        message.frame_sequence = int(sequence)
+        message.presentation_timestamp_ns = int(round(
+            sequence * 1_000_000_000 / output_fps))
+        stamp_ns = max(0, int(frame.timestamp_ns))
+        message.source_stamp.sec = stamp_ns // 1_000_000_000
+        message.source_stamp.nanosec = stamp_ns % 1_000_000_000
+        message.capture_id = int(frame.capture_id)
+        message.stereo_pair_id = int(frame.stereo_pair_id)
+        if (self.last_source_timestamp_ns is not None
+                and stamp_ns < self.last_source_timestamp_ns):
+            self.timestamp_epoch += 1
+        self.last_source_timestamp_ns = stamp_ns
+        message.timestamp_epoch = self.timestamp_epoch
+        message.output_fps = float(output_fps)
+        self.publisher.publish(message)
 
     def close(self):
         if self.node is None:
             return
         try:
-            self._executor.remove_node(self.node)
+            self.executor.remove_node(self.node)
             self.node.destroy_node()
-            if self._rclpy.ok():
-                self._rclpy.shutdown()
+            if self.rclpy.ok():
+                self.rclpy.shutdown()
         except Exception:
             pass
 
@@ -141,7 +188,7 @@ class DetectionSubscriber:
 def _label(detection) -> str:
     class_id = int(getattr(detection, 'class_id', -1))
     try:
-        from uv_camera.model_classes import model_class_name
+        from uv_perception.model_classes import model_class_name
         return model_class_name(class_id)
     except Exception:
         return f'class_{class_id}'
@@ -205,6 +252,10 @@ def _resize_stitched(packet: FramePacket) -> np.ndarray:
 
 def _ffmpeg_process(output_fps: float):
     ffmpeg = os.environ.get('UV_STREAM_FFMPEG', 'ffmpeg')
+    # Bound the GOP to two seconds at the measured source rate. A fixed
+    # 10-fps encoder paired with unconditional 3:1 decimation made simulator
+    # streams run at roughly 3 fps and pushed fresh-client IDRs far apart.
+    gop_frames = max(1, int(round(output_fps * 2.0)))
     return subprocess.Popen([
         ffmpeg, '-loglevel', 'error',
         '-f', 'rawvideo', '-pix_fmt', 'bgr24',
@@ -212,7 +263,9 @@ def _ffmpeg_process(output_fps: float):
         '-r', f'{output_fps:.3f}', '-i', 'pipe:0',
         '-an', '-c:v', 'libx264', '-preset', 'ultrafast',
         '-tune', 'zerolatency', '-pix_fmt', 'yuv420p',
-        '-f', 'mpegts', 'pipe:1',
+        '-g', str(gop_frames), '-keyint_min', str(gop_frames),
+        '-sc_threshold', '0', '-x264-params', 'repeat-headers=1',
+        '-mpegts_copyts', '1', '-f', 'mpegts', 'pipe:1',
     ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, bufsize=0)
 
 
@@ -230,63 +283,128 @@ def _forward_stdout(process):
         return
 
 
+def _sample_source_rate(reader: Iceoryx2Reader, target_fps: float):
+    """Estimate unique captured-frame rate before choosing encoder PTS/GOP."""
+    packet = None
+    arrivals = []
+    timestamps = []
+    for _ in range(FPS_SAMPLE_FRAMES):
+        packet = reader.read()
+        if packet is None:
+            return None, max(0.1, float(target_fps)), 0, False
+        arrivals.append(time.monotonic_ns())
+        timestamp_ns = int(packet.header.timestamp_ns)
+        if timestamp_ns > 0 and (not timestamps or timestamp_ns > timestamps[-1]):
+            timestamps.append(timestamp_ns)
+
+    use_header_timestamps = len(timestamps) >= 2
+    if use_header_timestamps:
+        elapsed_ns = timestamps[-1] - timestamps[0]
+        measured_fps = ((len(timestamps) - 1) * 1_000_000_000 / elapsed_ns
+                        if elapsed_ns > 0 else float(target_fps))
+        first_clock_ns = int(packet.header.timestamp_ns)
+    else:
+        elapsed_ns = arrivals[-1] - arrivals[0]
+        measured_fps = ((len(arrivals) - 1) * 1_000_000_000 / elapsed_ns
+                        if elapsed_ns > 0 else float(target_fps))
+        first_clock_ns = arrivals[-1]
+
+    if not np.isfinite(measured_fps) or measured_fps <= 0.0:
+        measured_fps = float(target_fps)
+    effective_fps = max(0.1, min(float(target_fps), measured_fps))
+    return packet, effective_fps, first_clock_ns, use_header_timestamps
+
+
 def run(camera: str, mode: str, output_fps: float) -> int:
     service = ICEORYX_CAMERA_FRONT if camera == 'front' else ICEORYX_CAMERA_DOWN
     reader = Iceoryx2Reader(service)
-    detection_cache = DetectionCache()
-    detection_subscriber = DetectionSubscriber(detection_cache) if mode == 'annotated' else None
-    encoder = _ffmpeg_process(output_fps)
-    forwarder = threading.Thread(target=_forward_stdout, args=(encoder,),
-                                  name='camera-streamer-stdout', daemon=True)
-    forwarder.start()
-    cache: deque[CachedFrame] = deque()
-    input_count = 0
-    newest_timestamp = 0
+    stream_instance_id = uuid.uuid4().hex
+    metadata_bridge = StreamMetadataBridge(camera, mode, stream_instance_id)
+    detection_cache = metadata_bridge.detection_cache
+    encoder = None
+    forwarder = None
     try:
-        while True:
-            packet = reader.read()
-            if packet is None:
-                return 0
-            input_count += 1
-            if input_count % DISPLAY_EVERY_N:
-                continue
+        first_packet, effective_fps, last_frame_clock_ns, use_header_timestamps = (
+            _sample_source_rate(reader, output_fps))
+        if first_packet is None:
+            return 0
+        # The same rounded rate is used for rawvideo PTS and the published map.
+        effective_fps = float(f'{effective_fps:.3f}')
+        print(
+            f'camera_streamer: {camera} input rate sampled; '
+            f'encoding at {effective_fps:.2f} fps',
+            file=sys.stderr, flush=True)
+        encoder = _ffmpeg_process(effective_fps)
+        forwarder = threading.Thread(target=_forward_stdout, args=(encoder,),
+                                     name='camera-streamer-stdout', daemon=True)
+        forwarder.start()
+        cache: deque[CachedFrame] = deque()
+        newest_arrival_ns = 0
+        min_frame_period_ns = int(round(1_000_000_000 / effective_fps))
+        output_sequence = 0
+
+        def encode_packet(packet):
+            nonlocal newest_arrival_ns, output_sequence
             image = _resize_stitched(packet)
-            cached = CachedFrame(image, packet.header.capture_id,
-                                 packet.header.stereo_pair_id,
-                                 packet.header.timestamp_ns)
+            cached = CachedFrame(
+                image, packet.header.capture_id, packet.header.stereo_pair_id,
+                int(packet.header.timestamp_ns), time.monotonic_ns())
             cache.append(cached)
-            newest_timestamp = max(newest_timestamp, cached.timestamp_ns)
-            cutoff = newest_timestamp - OVERLAY_WINDOW_NS
-            while cache and cache[0].timestamp_ns <= cutoff:
+            newest_arrival_ns = max(
+                newest_arrival_ns, cached.arrival_monotonic_ns)
+            cutoff = newest_arrival_ns - OVERLAY_WINDOW_NS
+            while cache and cache[0].arrival_monotonic_ns <= cutoff:
                 ready = cache.popleft()
                 frame = ready.image
                 if mode == 'annotated':
-                    batches = detection_cache.for_frame(ready)
-                    # The detection cache stores individual arrays.  Re-read
-                    # the matching side from the cache so left/right are not
-                    # ever drawn into the opposite half.
-                    # ``for_frame`` returns only detections; matching side is
-                    # resolved by the helper below from the latest batches.
                     frame = _annotate_from_cache(frame, ready, detection_cache)
                 if encoder.stdin is None:
-                    return 0
+                    return False
                 try:
                     encoder.stdin.write(frame.tobytes())
                     encoder.stdin.flush()
                 except (BrokenPipeError, OSError):
-                    return 0
+                    return False
+                metadata_bridge.publish(ready, output_sequence, effective_fps)
+                output_sequence += 1
+            return True
+
+        if not encode_packet(first_packet):
+            return 0
+        while True:
+            packet = reader.read()
+            if packet is None:
+                return 0
+            clock_ns = (int(packet.header.timestamp_ns)
+                        if use_header_timestamps else time.monotonic_ns())
+            if use_header_timestamps and clock_ns <= 0:
+                continue
+            if clock_ns == last_frame_clock_ns:
+                continue
+            if clock_ns < last_frame_clock_ns:
+                # Camera/ROS time can reset during a simulator reset.
+                last_frame_clock_ns = clock_ns - min_frame_period_ns
+            if clock_ns - last_frame_clock_ns < min_frame_period_ns:
+                continue
+            if not encode_packet(packet):
+                return 0
+            last_frame_clock_ns = clock_ns
     except KeyboardInterrupt:
         return 0
+    except Iceoryx2Error as error:
+        if 'Interrupt' in str(error):
+            return 0
+        raise
     finally:
         reader.close()
-        if detection_subscriber is not None:
-            detection_subscriber.close()
-        if encoder.stdin is not None:
-            encoder.stdin.close()
-        try:
-            encoder.wait(timeout=1.0)
-        except subprocess.TimeoutExpired:
-            encoder.kill()
+        metadata_bridge.close()
+        if encoder is not None:
+            if encoder.stdin is not None:
+                encoder.stdin.close()
+            try:
+                encoder.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                encoder.kill()
 
 
 def _annotate_from_cache(image, frame: CachedFrame, cache: DetectionCache):

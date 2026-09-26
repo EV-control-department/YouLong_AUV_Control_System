@@ -1,13 +1,17 @@
 """Regressions for incomplete indexes, torn writes and incremental syncing."""
 
+import json
 import os
 import sqlite3
 from unittest.mock import patch
 
-from uv_log.jpeg_archive import JpegArchiveWriter, load_chunk_entries, read_payload
-from uv_log.player import BagPlayback, _bag_part_paths
-from uv_log.performance import ProcessSampler
-from uv_log.recorder import SegmentSyncer
+from uv_record.jpeg_archive import (
+    JpegArchiveWriter, archive_entries, load_chunk_entries, read_payload,
+)
+from uv_record.player import BagPlayback, _bag_part_paths
+from uv_record.performance import ProcessSampler
+from uv_record.recorder import SegmentSyncer
+from uv_record.recover import recover_frame_alignment, recover_raw_camera
 
 
 def archive(tmp_path):
@@ -36,7 +40,7 @@ def test_torn_last_frame_keeps_valid_prefix(tmp_path):
 
 def test_complete_index_does_not_rescan_video_payload(tmp_path):
     chunk = archive(tmp_path)
-    with patch('uv_log.jpeg_archive.scan_chunk', side_effect=AssertionError('unexpected full scan')):
+    with patch('uv_record.jpeg_archive.scan_chunk', side_effect=AssertionError('unexpected full scan')):
         assert len(load_chunk_entries(chunk)) == 3
 
 
@@ -52,7 +56,7 @@ def test_syncer_syncs_growing_tail_and_skips_unchanged_shutdown_files(tmp_path):
     bag = tmp_path / 'part_0.mcap'
     bag.write_bytes(b'first')
     syncer = SegmentSyncer([tmp_path], patterns=('*.mcap',))
-    with patch('uv_log.recorder._sync_file', return_value=True) as sync:
+    with patch('uv_record.recorder._sync_file', return_value=True) as sync:
         syncer.sync_once()
         sync.assert_called_once_with(bag)
         bag.write_bytes(b'first second')
@@ -112,7 +116,7 @@ def test_sqlite_bag_playback_without_rosbag2_py(tmp_path):
     modules = (
         object(), None, lambda payload, _type: payload,
         lambda _type: object())
-    with patch('uv_log.player._rosbag_modules', return_value=modules):
+    with patch('uv_record.player._rosbag_modules', return_value=modules):
         playback = BagPlayback(tmp_path, node)
         assert playback.topic_count == 1
         assert playback.start_ns == 100
@@ -130,3 +134,57 @@ def test_sampler_reports_current_process_without_commandline_secrets():
     second = sampler.sample()
     current = next(p for p in second['processes'] if p['pid'] == os.getpid())
     assert current['cpu_percent'] is not None
+
+
+def test_jpeg_archive_persists_source_frame_alignment_metadata(tmp_path):
+    writer = JpegArchiveWriter(tmp_path, fps=10, chunk_seconds=2)
+    metadata = {
+        'source_timestamp_ns': 5_123_000_000,
+        'timestamp_aligned': True,
+        'capture_id': 14,
+        'stereo_pair_id': 9,
+        'timestamp_epoch': 2,
+    }
+    writer.write(
+        b'\xff\xd8' + b'frame' + b'\xff\xd9',
+        timestamp_ns=5_123_000_000, sequence=7, metadata=metadata)
+    writer.close()
+
+    entry = archive_entries(tmp_path)[0]
+    assert entry.timestamp_ns == 5_123_000_000
+    assert entry.metadata['capture_id'] == 14
+    assert entry.metadata['stereo_pair_id'] == 9
+    assert entry.metadata['timestamp_epoch'] == 2
+
+def test_raw_recovery_discards_missing_and_truncated_frames(tmp_path):
+    import cv2
+    import numpy as np
+
+    directory = tmp_path / 'camera' / 'raw' / 'front'
+    directory.mkdir(parents=True)
+    complete = directory / 'complete.png'
+    assert cv2.imwrite(str(complete), np.zeros((2, 3, 3), dtype=np.uint8))
+    truncated = directory / 'truncated.png'
+    truncated.write_bytes(b'\x89PNG\r\n\x1a\npartial')
+    records = [
+        {'path': 'complete.png', 'timestamp_ns': 100, 'width': 3, 'height': 2},
+        {'path': 'truncated.png', 'timestamp_ns': 200, 'width': 3, 'height': 2},
+        {'path': 'missing.png', 'timestamp_ns': 300, 'width': 3, 'height': 2},
+    ]
+    index = directory / 'frames.jsonl'
+    index.write_text(''.join(json.dumps(item) + '\n' for item in records))
+
+    assert recover_raw_camera(directory)
+    recovered = [json.loads(line) for line in index.read_text().splitlines()]
+    assert [item['path'] for item in recovered] == ['complete.png']
+
+def test_frame_alignment_recovery_discards_partial_jsonl_tail(tmp_path):
+    directory = tmp_path / 'video' / 'front'
+    directory.mkdir(parents=True)
+    index = directory / 'frame_alignment.jsonl'
+    record = {'sequence': 4, 'receive_time_unix_ns': 500,
+              'source_timestamp_ns': None, 'timestamp_aligned': False}
+    index.write_text(json.dumps(record) + '\n{"sequence":')
+
+    assert recover_frame_alignment(directory)
+    assert [json.loads(line) for line in index.read_text().splitlines()] == [record]

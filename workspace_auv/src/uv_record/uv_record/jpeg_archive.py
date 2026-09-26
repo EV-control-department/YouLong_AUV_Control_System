@@ -1,4 +1,4 @@
-"""Crash-recoverable JPEG frame archives used by :mod:`uv_log`.
+"""Crash-recoverable JPEG frame archives used by :mod:`uv_record`.
 
 The camera HTTP endpoint already carries complete JPEG frames.  Re-encoding
 those frames to H.264 while recording costs CPU and makes the encoder the
@@ -35,6 +35,7 @@ class JpegFrameRef:
     offset: int
     size: int
     crc32: int
+    metadata: dict | None = None
 
 
 def _chunk_number(path: Path) -> int:
@@ -76,6 +77,7 @@ def _entry_json(ref: JpegFrameRef) -> str:
         'offset': ref.offset,
         'size': ref.size,
         'crc32': ref.crc32,
+        **(ref.metadata or {}),
     }, ensure_ascii=False, separators=(',', ':')) + '\n'
 
 
@@ -142,6 +144,7 @@ class JpegArchiveWriter:
         payload: bytes,
         timestamp_ns: int | None = None,
         sequence: int | None = None,
+        metadata: dict | None = None,
     ) -> bool:
         """Write one complete JPEG and return whether it was accepted."""
         if not _is_jpeg(payload) or len(payload) > MAX_FRAME_BYTES:
@@ -168,6 +171,7 @@ class JpegArchiveWriter:
             offset=payload_offset,
             size=len(payload),
             crc32=crc32,
+            metadata=dict(metadata or {}),
         )
         self.index.write(_entry_json(ref))
         self.index.flush()
@@ -245,6 +249,9 @@ def _read_index(path: Path, chunk: Path) -> list[JpegFrameRef]:
                     timestamp = int(item['timestamp_ns'])
                     sequence = int(item['sequence'])
                     crc32 = int(item['crc32'])
+                    metadata = {key: value for key, value in item.items()
+                                if key not in {'chunk', 'timestamp_ns', 'sequence',
+                                               'offset', 'size', 'crc32'}}
                 except (TypeError, ValueError, KeyError, json.JSONDecodeError):
                     continue
                 if offset < FRAME_HEADER.size or size <= 0:
@@ -256,6 +263,7 @@ def _read_index(path: Path, chunk: Path) -> list[JpegFrameRef]:
                     offset=offset,
                     size=size,
                     crc32=crc32,
+                    metadata=metadata,
                 ))
     except OSError:
         return []

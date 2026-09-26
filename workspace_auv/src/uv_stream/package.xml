@@ -8,6 +8,7 @@
   <license>GPL-3.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>auv_protocol</exec_depend>
+  <exec_depend>uv_image_transport</exec_depend>
   <exec_depend>uv_perception</exec_depend>
   <exec_depend>uv_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>

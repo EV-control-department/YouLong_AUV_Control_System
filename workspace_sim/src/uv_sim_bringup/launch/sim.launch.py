@@ -104,9 +104,11 @@ def generate_launch_description():
     render_quality = LaunchConfiguration('render_quality')
     render_fps = LaunchConfiguration('render_fps')
     enable_ai = LaunchConfiguration('enable_ai')
+    enable_stream = LaunchConfiguration('enable_stream')
     enable_motion = LaunchConfiguration('enable_motion')
     enable_nav = LaunchConfiguration('enable_nav')
     enable_task = LaunchConfiguration('enable_task')
+    enable_perception_gui = LaunchConfiguration('enable_perception_gui')
     estimator = LaunchConfiguration('estimator')
     enable_evaluation = LaunchConfiguration('enable_evaluation')
     enable_degradation = LaunchConfiguration('enable_degradation')
@@ -200,8 +202,11 @@ def generate_launch_description():
     })
     perception = _include('uv_perception', 'perception_launch.py', {
         'confidence': LaunchConfiguration('ai_confidence'),
+        'enable_gui': enable_perception_gui,
     }, condition=IfCondition(enable_ai))
-    stream = _include('uv_stream', 'stream_launch.py', {})
+    stream = _include(
+        'uv_stream', 'stream_launch.py', {},
+        condition=IfCondition(enable_stream))
     planning = _include('uv_planning', 'planning_launch.py', {
         'enable_nav': enable_nav, 'profile_params': '',
     })
@@ -216,6 +221,16 @@ def generate_launch_description():
         'preview_port': LaunchConfiguration('preview_port'),
         'record_session': LaunchConfiguration('record_session'),
         'record_root': LaunchConfiguration('record_root'),
+        'record_mode': LaunchConfiguration('record_mode'),
+        'go2rtc_stream_mode': LaunchConfiguration('go2rtc_stream_mode'),
+        'go2rtc_video_format': LaunchConfiguration('go2rtc_video_format'),
+        'record_video_fps': LaunchConfiguration('record_video_fps'),
+        'record_video_codec': LaunchConfiguration('record_video_codec'),
+        'video_segment_seconds': LaunchConfiguration('video_segment_seconds'),
+        'bag_segment_seconds': LaunchConfiguration('bag_segment_seconds'),
+        'record_bag_storage': LaunchConfiguration('record_bag_storage'),
+        'record_use_sim_time': LaunchConfiguration('record_use_sim_time'),
+        'record_image_topics': LaunchConfiguration('record_image_topics'),
     })
     evaluation = Node(
         package='uv_sim_evaluation', executable='evaluator',
@@ -233,6 +248,11 @@ def generate_launch_description():
             enable_ai='true', enable_nav='false', enable_task='false',
             enable_motion='true'),
         *declare_simulation_arguments(), *declare_observability_arguments(),
+        DeclareLaunchArgument('enable_perception_gui', default_value='false'),
+        DeclareLaunchArgument(
+            'enable_stream', default_value='true',
+            description='Launch go2rtc; set false for raw-only recording',
+        ),
         DeclareLaunchArgument('enable_evaluation', default_value='true'),
         DeclareLaunchArgument(
             'estimator', default_value='bootstrap', choices=['bootstrap'],

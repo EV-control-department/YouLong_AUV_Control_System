@@ -188,7 +188,7 @@ main() {
     source_ros_and_python
     build_workspaces
 
-    log 'ROS、iceoryx2、uv_perception、uv_stream 和 uv_dataset 已准备完成'
+    log 'ROS、iceoryx2、uv_perception、uv_stream 和 uv_record 已准备完成'
     log "运行时 PYTHONPATH=${PYTHONPATH}"
 }
 

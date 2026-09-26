@@ -7,10 +7,14 @@ def test_public_topic_constants_are_vehicle_scoped():
     constants = [
         value for name, value in vars(topics).items()
         if name.isupper() and name != 'ROOT' and isinstance(value, str)
-        and not name.startswith('LEGACY_')
+        and not name.startswith(('LEGACY_', 'ICEORYX_'))
     ]
     assert constants
     assert all(value.startswith('/auv/') for value in constants)
+
+
+def test_stream_frame_metadata_topic_is_vehicle_scoped():
+    assert topics.STREAM_FRAME_INFO == '/auv/stream/frame_info'
 
 
 def test_camera_channel_names_match_the_canonical_protocol():

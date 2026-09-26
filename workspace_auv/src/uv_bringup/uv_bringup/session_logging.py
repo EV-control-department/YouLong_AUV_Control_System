@@ -4,7 +4,7 @@ import re
 
 from launch.actions import RegisterEventHandler
 from launch.event_handlers import OnProcessExit, OnProcessIO, OnProcessStart
-from uv_log.session import append_event, update_manifest, write_json_atomic
+from uv_record.session import append_event, update_manifest, write_json_atomic
 
 
 def session_log_handlers(paths, arguments):

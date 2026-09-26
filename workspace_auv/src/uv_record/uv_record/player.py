@@ -1,10 +1,11 @@
-"""Play video and synchronized non-image ROS topics from a uv_log session."""
+"""Play video and synchronized non-image ROS topics from a uv_record session."""
 
 from __future__ import annotations
 
 import argparse
 import bisect
 import json
+from dataclasses import replace
 import re
 import sqlite3
 import subprocess
@@ -556,8 +557,35 @@ def _has_valid_jpeg(session_dir: Path) -> bool:
     )
 
 
+def _raw_frame_records(directory: Path) -> list[dict]:
+    index = directory / 'frames.jsonl'
+    records = []
+    try:
+        with index.open(encoding='utf-8') as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                    filename = str(item['path'])
+                    frame = (directory / filename).resolve()
+                    if frame.parent != directory.resolve() or not frame.is_file():
+                        continue
+                    item['_frame_path'] = frame
+                    records.append(item)
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+    except OSError:
+        return []
+    return records
+
+
+def _has_valid_raw(session_dir: Path) -> bool:
+    return any(_raw_frame_records(session_dir / 'camera' / 'raw' / camera)
+               for camera in ('front', 'down'))
+
+
 def _has_valid_media(session_dir: Path) -> bool:
-    return _has_valid_ts(session_dir) or _has_valid_jpeg(session_dir)
+    return (_has_valid_ts(session_dir) or _has_valid_jpeg(session_dir)
+            or _has_valid_raw(session_dir))
 
 
 def _preferred_stream(session_dir: Path, camera: str) -> str:
@@ -568,6 +596,8 @@ def _preferred_stream(session_dir: Path, camera: str) -> str:
         directory = session_dir / 'video' / stream
         if any(_valid_ts(path) for path in directory.glob('*.ts')):
             return stream
+    if _raw_frame_records(session_dir / 'camera' / 'raw' / camera):
+        return 'raw'
     # Keep the UI useful while a new recording is still being written.
     return f'{camera}_annotated'
 
@@ -609,6 +639,24 @@ class SegmentVideo:
         self.segment_index = -1
         self.frame_index = 0
         self.latest_frame = None
+        self._frame_times_ns = []
+        try:
+            indexed_frames = [json.loads(line) for line in
+                              (directory / 'frame_alignment.jsonl').read_text(
+                                  encoding='utf-8').splitlines()]
+        except (OSError, ValueError):
+            try:
+                indexed_frames = [json.loads(line) for line in
+                                  (directory / 'frames.jsonl').read_text(
+                                      encoding='utf-8').splitlines()]
+            except (OSError, ValueError):
+                indexed_frames = []
+        if indexed_frames:
+            self._frame_times_ns = _timeline_times(indexed_frames, self.fps)
+        self._start_ns = self._frame_times_ns[0] if self._frame_times_ns else None
+        self._end_ns = self._frame_times_ns[-1] if self._frame_times_ns else None
+        if self._frame_times_ns:
+            self.durations = [max(0.0, (self._end_ns - self._start_ns) / NANOSECONDS)]
         for index in range(len(self.segments)):
             if self._open_segment(index):
                 break
@@ -638,11 +686,11 @@ class SegmentVideo:
 
     @property
     def start_ns(self) -> int | None:
-        return None
+        return self._start_ns
 
     @property
     def end_ns(self) -> int | None:
-        return None
+        return self._end_ns
 
     @property
     def empty(self) -> bool:
@@ -650,6 +698,9 @@ class SegmentVideo:
 
     def seek(self, position: float):
         """Seek approximately to a timeline position in seconds."""
+        if self._frame_times_ns:
+            self.seek_ns(self._start_ns + int(max(0.0, position) * NANOSECONDS))
+            return
         position = max(0.0, min(float(position), self.duration))
         elapsed = 0.0
         index = 0
@@ -690,10 +741,151 @@ class SegmentVideo:
                 break
         return self.latest_frame
 
+    def read_to_ns(self, target_ns: int):
+        if not self._frame_times_ns:
+            return self.read_to(max(0.0, (target_ns - (self._start_ns or 0))
+                                    / NANOSECONDS))
+        target_frame = max(
+            0, bisect.bisect_right(self._frame_times_ns, target_ns) - 1)
+        while self.frame_index <= target_frame:
+            if self.cap is None:
+                break
+            ok, frame = self.cap.read()
+            if ok and frame is not None:
+                self.latest_frame = frame
+                self.frame_index += 1
+                continue
+            next_index = self.segment_index + 1
+            while next_index < len(self.segments):
+                if self._open_segment(next_index):
+                    break
+                next_index += 1
+            else:
+                break
+        return self.latest_frame
+
+    def seek_ns(self, target_ns: int):
+        if not self._frame_times_ns:
+            self.seek(max(0.0, (target_ns - (self._start_ns or 0))
+                          / NANOSECONDS))
+            return
+        frame_target = max(
+            0, bisect.bisect_right(self._frame_times_ns, target_ns) - 1)
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        self.segment_index = -1
+        self.frame_index = 0
+        self.latest_frame = None
+        self._open_segment(0)
+        self.read_to_ns(self._frame_times_ns[frame_target])
+
     def close(self):
         if self.cap is not None:
             self.cap.release()
             self.cap = None
+
+
+def _timeline_times(entries, fps: float) -> list[int]:
+    """Make a seekable playback axis while keeping source stamps untouched."""
+    period = max(1, int(round(NANOSECONDS / max(1.0, float(fps)))))
+    timeline = []
+    last_time = None
+    previous_epoch = None
+    offset = 0
+    for entry in entries:
+        timestamp = int(getattr(entry, 'timestamp_ns', 0) or 0)
+        metadata = getattr(entry, 'metadata', None) or {}
+        if isinstance(entry, dict):
+            timestamp = int(entry.get('source_timestamp_ns')
+                            or entry.get('timestamp_ns') or 0)
+            metadata = entry
+        epoch = int(metadata.get('timestamp_epoch') or 0)
+        if timestamp > 0:
+            if last_time is None:
+                candidate = timestamp
+            else:
+                if (epoch != previous_epoch
+                        or timestamp + offset < last_time):
+                    offset = last_time + period - timestamp
+                candidate = timestamp + offset
+        else:
+            receive = int(metadata.get('receive_time_unix_ns') or 0)
+            candidate = (receive if last_time is None and receive > 0
+                         else (last_time + period if last_time is not None else 0))
+        if last_time is not None and candidate < last_time:
+            candidate = last_time + period
+        timeline.append(candidate)
+        last_time = candidate
+        previous_epoch = epoch
+    return timeline
+
+
+class RawFrameVideo:
+    """Decode original PNG camera frames against their source timestamp index."""
+
+    def __init__(self, directory: Path, fallback_fps: float):
+        self.directory = directory
+        self.entries = _raw_frame_records(directory)
+        self.fps = max(1.0, float(fallback_fps))
+        self._times_ns = _timeline_times(self.entries, self.fps)
+        self.cursor = 0
+        self.latest_frame = None
+        self.width = 0
+        self.height = 0
+        self._start_ns = self._times_ns[0] if self._times_ns else 0
+        self._duration = (
+            max(0.0, (self._times_ns[-1] - self._start_ns) / NANOSECONDS)
+            + 1.0 / self.fps if self._times_ns else 0.0)
+
+    @property
+    def duration(self) -> float:
+        return self._duration
+
+    @property
+    def empty(self) -> bool:
+        return not self.entries
+
+    @property
+    def start_ns(self) -> int | None:
+        return self._start_ns if self.entries else None
+
+    @property
+    def end_ns(self) -> int | None:
+        return self._times_ns[-1] if self._times_ns else None
+
+    def _decode(self, entry):
+        frame = cv2.imread(str(entry['_frame_path']), cv2.IMREAD_COLOR)
+        if frame is not None and self.width == 0:
+            self.height, self.width = frame.shape[:2]
+        return frame
+
+    def seek(self, position: float):
+        self.seek_ns(self._start_ns + int(max(0.0, position) * NANOSECONDS))
+
+    def seek_ns(self, target_ns: int):
+        index = bisect.bisect_right(self._times_ns, target_ns)
+        self.cursor = max(0, index - 1)
+        self.latest_frame = (
+            self._decode(self.entries[index - 1]) if index > 0 else None)
+        self.cursor = index
+
+    def read_to(self, position: float):
+        target_ns = self._start_ns + int(max(0.0, position) * NANOSECONDS)
+        return self.read_to_ns(target_ns)
+
+    def read_to_ns(self, target_ns: int):
+        while self.cursor < len(self.entries):
+            if self._times_ns[self.cursor] > target_ns:
+                break
+            frame = self._decode(self.entries[self.cursor])
+            if frame is not None:
+                self.latest_frame = frame
+            self.cursor += 1
+        return self.latest_frame
+
+    def close(self):
+        pass
 
 
 class JpegArchiveVideo:
@@ -707,13 +899,29 @@ class JpegArchiveVideo:
     ):
         self.directory = directory
         self.entries = archive_entries(directory)
+        sidecar = {}
+        try:
+            with (directory / 'frame_alignment.jsonl').open(encoding='utf-8') as handle:
+                for line in handle:
+                    try:
+                        item = json.loads(line)
+                        sidecar[int(item['sequence'])] = item
+                    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                        continue
+        except OSError:
+            pass
+        if sidecar:
+            self.entries = [
+                replace(entry, metadata={**(entry.metadata or {}),
+                                         **sidecar.get(entry.sequence, {})})
+                for entry in self.entries]
         self.fps = max(1.0, float(fallback_fps))
         self.latest_frame = None
         self.frame_index = 0
         self.cursor = 0
         self.width = 0
         self.height = 0
-        self._times_ns = [entry.timestamp_ns for entry in self.entries]
+        self._times_ns = _timeline_times(self.entries, self.fps)
         self._start_ns = self._times_ns[0] if self._times_ns else 0
         self._duration = 0.0
         if self._times_ns:
@@ -779,7 +987,7 @@ class JpegArchiveVideo:
             return self.latest_frame
         while self.cursor < len(self.entries):
             entry = self.entries[self.cursor]
-            if entry.timestamp_ns > target_ns:
+            if self._times_ns[self.cursor] > target_ns:
                 break
             frame = self._decode(entry)
             if frame is not None:
@@ -793,9 +1001,17 @@ class JpegArchiveVideo:
 
 
 def _make_video(directory: Path, fps: float, segment_duration: float):
+    if directory.parent.name == 'raw' and directory.parent.parent.name == 'camera':
+        return RawFrameVideo(directory, fps)
     if any(directory.glob('chunk_*.mjpg')):
         return JpegArchiveVideo(directory, fps, segment_duration)
     return SegmentVideo(directory, fps, segment_duration)
+
+
+def _camera_media_directory(session_dir: Path, camera: str, stream: str):
+    if stream == 'raw':
+        return session_dir / 'camera' / 'raw' / camera
+    return session_dir / 'video' / stream
 
 
 def _load_manifest(session_dir: Path) -> dict:
@@ -844,7 +1060,7 @@ def _open_bag_playback(session_dir: Path):
         if not rclpy.ok():
             rclpy.init(args=None)
             owns_context = True
-        node = rclpy.create_node('uv_log_player')
+        node = rclpy.create_node('uv_record_player')
         try:
             bag = BagPlayback(session_dir / 'bag', node)
         except Exception:
@@ -872,7 +1088,7 @@ def _build_window(session_dir: Path):
             QWidget,
         )
     except ImportError as error:
-        raise RuntimeError('PySide6 is required for uv_log player') from error
+        raise RuntimeError('PySide6 is required for uv_record player') from error
 
     class Panel(QLabel):
         def __init__(self, title):
@@ -904,18 +1120,18 @@ def _build_window(session_dir: Path):
     class PlayerWindow(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle(f'uv_log player - {session_dir.name}')
+            self.setWindowTitle(f'uv_record player - {session_dir.name}')
             self.resize(1280, 760)
             manifest = _load_manifest(session_dir)
             self.front_stream = _preferred_stream(session_dir, 'front')
             self.down_stream = _preferred_stream(session_dir, 'down')
             self.front = _make_video(
-                session_dir / 'video' / self.front_stream,
+                _camera_media_directory(session_dir, 'front', self.front_stream),
                 _manifest_fps(manifest, self.front_stream, 10.0),
                 _manifest_segment_duration(
                     manifest, self.front_stream, 2.0))
             self.down = _make_video(
-                session_dir / 'video' / self.down_stream,
+                _camera_media_directory(session_dir, 'down', self.down_stream),
                 _manifest_fps(manifest, self.down_stream, 10.0),
                 _manifest_segment_duration(
                     manifest, self.down_stream, 2.0))
@@ -1035,7 +1251,7 @@ def _build_window(session_dir: Path):
             target_ns = self.timeline_origin_ns + int(
                 self.position * NANOSECONDS)
             for video in (self.front, self.down):
-                if isinstance(video, JpegArchiveVideo):
+                if isinstance(video, (JpegArchiveVideo, RawFrameVideo)) or video.start_ns is not None:
                     video.seek_ns(target_ns)
                 else:
                     video.seek(self.position)
@@ -1059,11 +1275,11 @@ def _build_window(session_dir: Path):
                 self.bag.publish_until(target_ns)
             front = (
                 self.front.read_to_ns(target_ns)
-                if isinstance(self.front, JpegArchiveVideo)
+                if isinstance(self.front, (JpegArchiveVideo, RawFrameVideo)) or self.front.start_ns is not None
                 else self.front.read_to(self.position))
             down = (
                 self.down.read_to_ns(target_ns)
-                if isinstance(self.down, JpegArchiveVideo)
+                if isinstance(self.down, (JpegArchiveVideo, RawFrameVideo)) or self.down.start_ns is not None
                 else self.down.read_to(self.position))
             if front is not None:
                 self.front_panel.set_frame(front)
@@ -1108,7 +1324,7 @@ def main():
     existing = [candidate for candidate in candidates if candidate.is_dir()]
     if not existing:
         print(
-            f'uv_log player: session does not exist: {candidates[0]}',
+            f'uv_record player: session does not exist: {candidates[0]}',
             file=sys.stderr,
         )
         return 2
@@ -1116,7 +1332,7 @@ def main():
         (_path for _path in existing if _has_valid_media(_path)), existing[0])
     if not _has_valid_media(session_dir):
         print(
-            f'uv_log player: no valid video segments in {session_dir}',
+            f'uv_record player: no valid video segments in {session_dir}',
             file=sys.stderr,
         )
         return 2
@@ -1125,7 +1341,7 @@ def main():
     window = PlayerWindow()
     if window.front.empty and window.down.empty:
         print(
-            f'uv_log player: video archives cannot be decoded in {session_dir}',
+            f'uv_record player: video archives cannot be decoded in {session_dir}',
             file=sys.stderr,
         )
         return 2

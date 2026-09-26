@@ -51,6 +51,7 @@ def DETECTIONS(camera_channel):
 PERCEPTION_DETECTIONS = f'{ROOT}/perception/detections'
 MEASUREMENTS = f'{ROOT}/perception/measurements'
 TRACKS = f'{ROOT}/perception/tracks'
+STREAM_FRAME_INFO = f'{ROOT}/stream/frame_info'
 
 
 # iceoryx2 service names are deliberately kept outside the ROS graph.

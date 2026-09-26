@@ -1,12 +1,12 @@
 api:
   listen: ":1984"
 
-# The browser page can use go2rtc's HTTP transports on 1984. No RTSP or
-# separate WebRTC listener is needed for this deployment.
+# Preview, WebRTC signaling, and recording use the HTTP API on 1984.
+# WebRTC media uses TCP/UDP 8555. RTSP output is disabled.
 rtsp:
   listen: ""
 webrtc:
-  listen: ""
+  listen: ":8555"
 
 streams:
   front: "exec:camera_streamer --camera front --mode raw"

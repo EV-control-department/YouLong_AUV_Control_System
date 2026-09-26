@@ -79,8 +79,8 @@ case "${mode}" in
     real)
         exec ros2 launch uv_bringup real.launch.py "$@"
         ;;
-    dataset)
-        exec ros2 run uv_dataset dataset_recorder "$@"
+    record)
+        exec ros2 run uv_record record "$@"
         ;;
     stream)
         exec ros2 run uv_stream camera_streamer "$@"

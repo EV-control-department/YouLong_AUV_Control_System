@@ -121,8 +121,8 @@ def declare_feature_arguments(
 
 
 def declare_observability_arguments():
-    """Declare go2rtc:1984 and session recording arguments."""
-    from uv_log.session import default_output_root
+    """Declare go2rtc preview and session recording arguments."""
+    from uv_record.session import default_output_root
 
     return [
         DeclareLaunchArgument(
@@ -131,7 +131,7 @@ def declare_observability_arguments():
         ),
         DeclareLaunchArgument(
             "enable_preview", default_value="true",
-            description="Enable go2rtc preview and video capture",
+            description="Legacy compatibility argument; enable_stream controls go2rtc startup",
         ),
         DeclareLaunchArgument(
             "annotated_max_width", default_value="1280",
@@ -154,16 +154,17 @@ def declare_observability_arguments():
             description="Directory under which recording sessions are created",
         ),
         DeclareLaunchArgument(
-            "record_raw_video", default_value="false",
-            description="Deprecated compatibility option",
+            "record_mode", default_value="raw", choices=("raw", "go2rtc"),
+            description="Image recording path: source frames or go2rtc video",
         ),
         DeclareLaunchArgument(
-            "record_video_mode", default_value="raw",
-            description="Video streams to record: raw, annotated, or both",
+            "go2rtc_stream_mode", default_value="unannotated",
+            choices=("unannotated", "annotated", "both"),
+            description="go2rtc stream selection when record_mode is go2rtc",
         ),
         DeclareLaunchArgument(
-            "record_video_format", default_value="jpeg",
-            description="Video archive format: jpeg or ts",
+            "go2rtc_video_format", default_value="jpeg", choices=("jpeg", "ts"),
+            description="go2rtc archive format",
         ),
         DeclareLaunchArgument(
             "record_video_fps", default_value=LaunchConfiguration("camera_stitch_fps"),

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.request import urlopen
 from pathlib import Path
 
 from .session import (
@@ -27,6 +28,7 @@ from .session import (
     update_manifest,
 )
 from .jpeg_archive import next_chunk_number
+from .raw_recorder import RawFrameRecorder
 from .performance import ProcessSampler
 
 
@@ -47,12 +49,12 @@ IMAGE_TOPIC_TYPES = (
     'stereo_msgs/msg/DisparityImage',
 )
 VIDEO_STREAMS = {
-    'front_annotated': '/api/stream.mjpeg?src=front_annotated',
-    'down_annotated': '/api/stream.mjpeg?src=down_annotated',
+    'front_annotated': '/api/stream.ts?src=front_annotated',
+    'down_annotated': '/api/stream.ts?src=down_annotated',
 }
 RAW_STREAMS = {
-    'front': '/api/stream.mjpeg?src=front',
-    'down': '/api/stream.mjpeg?src=down',
+    'front': '/api/stream.ts?src=front',
+    'down': '/api/stream.ts?src=down',
 }
 
 
@@ -182,7 +184,7 @@ class SegmentSyncer(threading.Thread):
         patterns: tuple[str, ...] = ('*.ts',),
         period: float = 1.0,
     ):
-        super().__init__(daemon=True, name='uv-log-segment-sync')
+        super().__init__(daemon=True, name='uv-record-segment-sync')
         self.directories = directories
         self.patterns = patterns
         self.period = max(0.25, period)
@@ -293,7 +295,7 @@ class ChildSupervisor(threading.Thread):
         log_path: Path,
         stop_signal=signal.SIGTERM,
     ):
-        super().__init__(daemon=True, name=f'uv-log-{name}')
+        super().__init__(daemon=True, name=f'uv-record-{name}')
         self.name_label = name
         self.command_factory = command_factory
         self.log_path = log_path
@@ -399,12 +401,16 @@ class Recorder:
     def __init__(self, paths: SessionPaths, args):
         self.paths = paths
         self.args = args
+        self.record_mode = str(getattr(args, 'record_mode', 'raw')).strip().lower()
+        if self.record_mode not in ('raw', 'go2rtc'):
+            raise ValueError('record_mode must be raw or go2rtc')
+        self.raw_recorder: RawFrameRecorder | None = None
         self.bag_storage = _select_bag_storage(
             getattr(args, 'bag_storage', 'auto'))
         self._bag_record_help = _rosbag_record_help()
         self.stop_event = threading.Event()
         self.heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop, daemon=True, name='uv-log-heartbeat')
+            target=self._heartbeat_loop, daemon=True, name='uv-record-heartbeat')
         self.syncer = SegmentSyncer([])
         self.children: list[ChildSupervisor] = []
         self.video_directories: list[Path] = []
@@ -414,18 +420,12 @@ class Recorder:
         self._prepare_video_streams()
 
     def _recorded_streams(self):
-        """Return only the video streams requested for this session.
-
-        The annotated streams are tied to the YOLO inference rate, which is
-        intentionally lower than the camera rate.  Recording them as the
-        primary video therefore produces a slideshow even when the encoder is
-        healthy.  Raw streams are the default; annotated streams remain
-        available for sessions that explicitly request them.
-        """
-        mode = str(getattr(self.args, 'video_mode', 'raw')).strip().lower()
-        if not _bool_value(getattr(self.args, 'enable_video', True)):
+        """Return go2rtc streams selected for this exclusive record mode."""
+        if self.record_mode != 'go2rtc':
             return {}
-        if mode == 'raw':
+        mode = str(getattr(
+            self.args, 'go2rtc_stream_mode', 'unannotated')).strip().lower()
+        if mode == 'unannotated':
             return dict(RAW_STREAMS)
         if mode == 'annotated':
             return dict(VIDEO_STREAMS)
@@ -434,7 +434,8 @@ class Recorder:
             streams.update(VIDEO_STREAMS)
             return streams
         raise ValueError(
-            f'unsupported video mode {mode!r}; use raw, annotated, or both')
+            f'unsupported go2rtc_stream_mode {mode!r}; '
+            'use unannotated, annotated, or both')
 
     def _prepare_video_streams(self):
         streams = self._recorded_streams()
@@ -452,10 +453,11 @@ class Recorder:
                 'segment_seconds': self.args.segment_duration,
                 'fps': float(self.args.video_fps),
                 'directory': str(directory),
+                'frame_metadata': ('frame_alignment.jsonl + archive index'
+                                   if self.args.video_format == 'jpeg'
+                                   else 'frame_alignment.jsonl'),
+                'timestamp_source': 'camera_stream_frame_info_pts',
             }
-            if self.args.video_format == 'jpeg':
-                videos[name]['frame_metadata'] = 'embedded_header+jsonl'
-                videos[name]['timestamp_source'] = 'mjpeg_X-Frame-Stamp-Ns'
             update_manifest(self.paths.root, video=videos)
 
     def _video_command(self, name: str, path: str, directory: Path):
@@ -466,20 +468,23 @@ class Recorder:
         url = f'http://{self.args.host}:{self.args.port}{path}'
         duration = max(0.5, float(self.args.segment_duration))
         command = [
-            sys.executable, '-m', 'uv_log.mjpeg_proxy',
+            sys.executable, '-m', 'uv_record.mjpeg_proxy',
             '--url', url,
+            '--camera', name.split('_', 1)[0],
+            '--stream-mode', ('annotated' if name.endswith('_annotated')
+                              else 'unannotated'),
             '--output-dir', str(directory),
             '--start-number', str(start_number),
             '--segment-duration', str(duration),
             '--fps', str(self.args.video_fps),
             '--output-format', self.args.video_format,
+            '--ffmpeg', self.args.ffmpeg,
         ]
         if self.args.video_format == 'ts':
             playlist = str(directory / f'index_{start_number:06d}.m3u8')
             command += [
                 '--playlist', playlist,
                 '--video-codec', self.args.video_codec,
-                '--ffmpeg', self.args.ffmpeg,
             ]
         return command
 
@@ -518,7 +523,7 @@ class Recorder:
                 command += topics
             else:
                 print(
-                    'uv_log: no matching ROS topics found for Foxy bag '
+                    'uv_record: no matching ROS topics found for Foxy bag '
                     'record; the supervised recorder will retry',
                     flush=True)
         if '--max-bag-duration' in capabilities:
@@ -534,6 +539,50 @@ class Recorder:
                 '--use-sim-time' in capabilities):
             command.append('--use-sim-time')
         return command
+
+    def _wait_for_go2rtc(self, timeout: float = 15.0):
+        """Fail early when go2rtc mode has no reachable HTTP API."""
+        endpoint = f'http://{self.args.host}:{self.args.port}/api/streams'
+        deadline = time.monotonic() + timeout
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                with urlopen(endpoint, timeout=1.0) as response:
+                    if response.status == 200:
+                        return
+                    last_error = RuntimeError(
+                        f'go2rtc returned HTTP {response.status}')
+            except Exception as error:
+                last_error = error
+            time.sleep(0.25)
+        raise RuntimeError(
+            f'go2rtc mode requires an available HTTP API at {endpoint}: '
+            f'{last_error}')
+
+    def _wait_for_video_frames(self, timeout: float = 20.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            ready = True
+            for directory in self.video_directories:
+                try:
+                    status = json.loads(
+                        (directory / 'status.json').read_text(encoding='utf-8'))
+                except (OSError, ValueError):
+                    ready = False
+                    break
+                if int(status.get('frames', 0)) <= 0:
+                    ready = False
+                    break
+            if ready and self.video_directories:
+                return
+            time.sleep(0.25)
+        raise RuntimeError(
+            'go2rtc mode requires a live frame from every selected stream; '
+            'check stream names, HTTP port, and uv_stream status')
+
+    def _start_raw_recorder(self):
+        self.raw_recorder = RawFrameRecorder(self.paths.root)
+        self.raw_recorder.start()
 
     def _start_bag_child(self):
         existing = [
@@ -576,6 +625,10 @@ class Recorder:
                 sample['disk_free_bytes'] = shutil.disk_usage(self.paths.root).free
                 sample['children'] = snapshots
                 sample['video'] = {}
+                if self.raw_recorder is not None:
+                    sample['camera_raw'] = self.raw_recorder.snapshot()
+                    if self.raw_recorder.error is not None:
+                        self.health_errors += 1
                 for directory in self.video_directories:
                     try:
                         status = json.loads((directory / 'status.json').read_text())
@@ -591,13 +644,18 @@ class Recorder:
                     os.fsync(handle.fileno())
             except (OSError, ValueError) as error:
                 self.health_errors += 1
-                print(f'uv_log: health logging failed: {error}', flush=True)
+                print(f'uv_record: health logging failed: {error}', flush=True)
 
     def start(self):
-        if self._recorded_streams() and self.args.video_format == 'ts' and shutil.which(self.args.ffmpeg) is None:
-            raise RuntimeError(f'ffmpeg executable not found: {self.args.ffmpeg}')
+        if self.record_mode == 'go2rtc':
+            if shutil.which(self.args.ffmpeg) is None:
+                raise RuntimeError(f'ffmpeg executable not found: {self.args.ffmpeg}')
+            self._wait_for_go2rtc()
         self._start_bag_child()
-        self._start_video_children()
+        if self.record_mode == 'raw':
+            self._start_raw_recorder()
+        else:
+            self._start_video_children()
         self.syncer = SegmentSyncer(
             # JPEG writers sync their own active/closed chunks. Only legacy
             # TS and rosbag need an external syncer.
@@ -608,12 +666,20 @@ class Recorder:
         self.syncer.start()
         for child in self.children:
             child.start()
+        if self.record_mode == 'go2rtc':
+            self._wait_for_video_frames()
         update_manifest(
             self.paths.root,
             bag={'directory': 'bag', 'storage': self.bag_storage,
                  'segment_seconds': float(self.args.bag_duration),
                  'segmenting_supported': '--max-bag-duration' in
                  self._bag_record_help},
+            camera_raw=({
+                'directory': 'camera/raw',
+                'format': 'png',
+                'frame_index': 'frames.jsonl',
+                'timestamp_source': 'iceoryx2_frame_header',
+            } if self.record_mode == 'raw' else {}),
             recorder={
                 'pid': os.getpid(),
                 'topic_regex': self._bag_topic_regex(),
@@ -627,17 +693,22 @@ class Recorder:
                 self._bag_record_help,
                 'bag_storage': self.bag_storage,
                 'video_segment_seconds': float(self.args.segment_duration),
-                'video_mode': self.args.video_mode,
+                'record_mode': self.record_mode,
+                'go2rtc_stream_mode': getattr(
+                    self.args, 'go2rtc_stream_mode', 'unannotated'),
                 'video_format': self.args.video_format,
                 'video_fps': float(self.args.video_fps),
                 'use_sim_time': _bool_value(self.args.use_sim_time),
                 'image_topics_excluded': True,
-                'enable_video': bool(self._recorded_streams()),
+                'enable_video': self.record_mode == 'go2rtc',
+                'timestamp_alignment': (
+                    'iceoryx2_frame_header' if self.record_mode == 'raw'
+                    else 'camera_stream_frame_info_pts'),
             },
         )
         if _bool_value(getattr(self.args, 'record_image_topics', False)):
             print(
-                'uv_log: record_image_topics is deprecated and ignored; '
+                'uv_record: record_image_topics is deprecated and ignored; '
                 'image message types are always excluded from rosbag',
                 flush=True)
         append_event(self.paths.root, {'event': 'recorder_started'})
@@ -650,6 +721,8 @@ class Recorder:
         self.stop_event.set()
         for child in self.children:
             child.stop()
+        if self.raw_recorder is not None:
+            self.raw_recorder.stop()
         for child in self.children:
             if child.is_alive():
                 child.join(timeout=8.0)
@@ -659,7 +732,29 @@ class Recorder:
         self.syncer.sync_all()
         if self.heartbeat_thread.is_alive():
             self.heartbeat_thread.join(timeout=2.0)
-        update_manifest(self.paths.root, recording_health={
+        alignment = {'status': 'aligned', 'mode': self.record_mode}
+        if self.raw_recorder is not None:
+            raw_status = self.raw_recorder.snapshot()
+            alignment.update(raw_status)
+            if raw_status['alignment_status'] != 'aligned':
+                alignment['status'] = 'degraded'
+        if self.record_mode == 'go2rtc':
+            video_statuses = []
+            for directory in self.video_directories:
+                try:
+                    video_statuses.append(json.loads(
+                        (directory / 'status.json').read_text(encoding='utf-8')))
+                except (OSError, ValueError):
+                    video_statuses.append({'alignment_status': 'degraded'})
+            alignment['streams'] = {
+                directory.name: status
+                for directory, status in zip(self.video_directories, video_statuses)}
+            if (not video_statuses or any(
+                    status.get('alignment_status') != 'aligned'
+                    for status in video_statuses)):
+                alignment['status'] = 'degraded'
+        update_manifest(self.paths.root, timestamp_alignment=alignment,
+                        recording_health={
             'sync_errors': self.syncer.errors, 'health_errors': self.health_errors,
             'children': {child.name_label: child.snapshot() for child in self.children},
         })
@@ -672,8 +767,9 @@ def _parse_args():
     parser.add_argument('--output-root', default=str(default_output_root()))
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=1984)
-    parser.add_argument('--enable-video', default='true',
-                        help='false records ROS/logs only, without reconnecting video workers')
+    parser.add_argument(
+        '--record-mode', choices=('raw', 'go2rtc'), default='raw',
+        help='exclusive image recording path: source BGR8 frames or go2rtc video')
     parser.add_argument('--segment-duration', type=float, default=2.0)
     parser.add_argument('--bag-duration', type=float, default=10.0)
     parser.add_argument(
@@ -682,7 +778,7 @@ def _parse_args():
             'ROS bag storage backend. auto selects MCAP when the plugin is '
             'installed, otherwise sqlite3 for ROS 2 Foxy compatibility'))
     parser.add_argument(
-        '--video-format', choices=('jpeg', 'ts'), default='jpeg',
+        '--go2rtc-video-format', dest='video_format', choices=('jpeg', 'ts'), default='jpeg',
         help=(
             'jpeg stores source JPEG frames and decodes on playback; '
             'ts keeps the legacy H.264 transcode path'))
@@ -693,19 +789,15 @@ def _parse_args():
             'to the source topic rate; default matches the simulator stitch '
             'rate'))
     parser.add_argument(
-        '--video-mode', choices=('raw', 'annotated', 'both'), default='raw',
-        help=(
-            'Video streams to record. raw is recommended because annotated '
-            'frames are produced at the lower AI inference rate'))
+        '--go2rtc-stream-mode', choices=('unannotated', 'annotated', 'both'),
+        default='unannotated',
+        help='go2rtc stream(s) to record; unannotated is the camera-rate stream')
     parser.add_argument('--topic-regex', default=METADATA_TOPIC_REGEX)
     parser.add_argument(
         '--record-image-topics', default='false',
         help=(
             'Deprecated compatibility argument; image message types are '
             'always excluded because video is stored separately'))
-    parser.add_argument(
-        '--record-raw', default='false',
-        help='deprecated compatibility argument; use --video-mode')
     parser.add_argument('--use-sim-time', default='false')
     parser.add_argument('--video-codec', default='libx264')
     parser.add_argument('--ffmpeg', default='ffmpeg')
@@ -738,12 +830,14 @@ def main():
         paths = _session_from_args(args)
         recorder = Recorder(paths, args)
         recorder.start()
-        print(f'uv_log: recording session {paths.root}', flush=True)
+        print(f'uv_record: recording session {paths.root}', flush=True)
         while not stop_requested.wait(0.5):
-            pass
+            if recorder.raw_recorder is not None and recorder.raw_recorder.error:
+                raise RuntimeError(
+                    f'raw camera recorder failed: {recorder.raw_recorder.error}')
         recorder.stop()
         finish_session(paths.root, 'STOPPED')
-        print('uv_log: recording stopped cleanly', flush=True)
+        print('uv_record: recording stopped cleanly', flush=True)
         return 0
     except KeyboardInterrupt:
         if recorder is not None:
@@ -752,7 +846,7 @@ def main():
             finish_session(paths.root, 'STOPPED')
         return 0
     except Exception as error:
-        print(f'uv_log: recorder failed: {error}', flush=True)
+        print(f'uv_record: recorder failed: {error}', flush=True)
         if recorder is not None:
             recorder.stop()
         if paths is not None:
