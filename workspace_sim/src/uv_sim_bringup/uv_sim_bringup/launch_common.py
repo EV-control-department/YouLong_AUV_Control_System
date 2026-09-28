@@ -19,6 +19,11 @@ def declare_feature_arguments(*args, **kwargs):
     return _common.declare_feature_arguments(*args, **kwargs)
 
 
+def declare_launch_preset(*args, **kwargs):
+    """Forward shared launch-preset loading from the AUV bringup package."""
+    return _common.declare_launch_preset(*args, **kwargs)
+
+
 def declare_mission_file(*args, **kwargs):
     """Forward the mission-file declaration from the AUV package."""
     return _common.declare_mission_file(*args, **kwargs)
@@ -194,9 +199,6 @@ def declare_simulation_arguments(
         DeclareLaunchArgument(
             'gate_feature_mode', default_value='auto',
             description='Front gate feature selection mode'),
-        DeclareLaunchArgument(
-            'target_id', default_value='yellow_golf',
-            description='Competition target metadata'),
         DeclareLaunchArgument(
             'startup_timeout', default_value='120.0',
             description='Maximum seconds per readiness stage'),

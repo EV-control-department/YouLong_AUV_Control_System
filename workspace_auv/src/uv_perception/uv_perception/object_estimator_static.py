@@ -43,7 +43,7 @@ class ObjectEstimator:
         self.publisher = node.create_publisher(ObjectTrackArray, TRACKS, 10)
         self.world_frame = str(node.declare_parameter('world_frame', 'odom').value)
         self.association_distance_m = float(
-            node.declare_parameter('association_distance_m', 2.0).value)
+            node.declare_parameter('association_distance_m', 1.5).value)
         self.bearing_association_distance_m = float(
             node.declare_parameter('bearing_association_distance_m', 0.35).value)
         self.stale_after_s = float(node.declare_parameter('stale_after_s', 0.5).value)

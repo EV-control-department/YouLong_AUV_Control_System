@@ -12,7 +12,7 @@ compose_files=(
 
 if [[ -d /dev/input ]]; then
     compose_files+=(
-        -f "${PROJECT_ROOT}/compose.joystick.yaml"
+        -f "${PROJECT_ROOT}/compose/joystick.yaml"
     )
     echo "检测到 /dev/input，启用手柄设备映射。" >&2
 
@@ -33,10 +33,25 @@ fi
 
 if [[ "${YOULONG_RUNTIME:-sim}" == "real" ]]; then
     compose_files+=(
-        -f "${PROJECT_ROOT}/compose.real.yaml"
+        -f "${PROJECT_ROOT}/compose/real.yaml"
     )
     echo "YOULONG_RUNTIME=real，启用 V4L2/硬件设备映射。" >&2
 fi
+
+case "${YOULONG_GPU:-cpu}" in
+    cpu|none|"")
+        ;;
+    nvidia)
+        compose_files+=(
+            -f "${PROJECT_ROOT}/compose/nvidia.yaml"
+        )
+        echo "YOULONG_GPU=nvidia，启用 NVIDIA GPU。" >&2
+        ;;
+    *)
+        echo "不支持的 YOULONG_GPU 值：${YOULONG_GPU}（可选 cpu 或 nvidia）。" >&2
+        exit 2
+        ;;
+esac
 
 if [[ "$#" -eq 0 ]]; then
     set -- up

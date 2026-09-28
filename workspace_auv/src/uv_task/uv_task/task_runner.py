@@ -156,23 +156,6 @@ class TaskRunnerNode(Node):
         self._debug_executing = False
         self._debug_timeout = -1.0
 
-        # Competition metadata only.  The current cruise environment keeps all
-        # targets visible; this value tells task logic which one is correct and
-        # intentionally does not create scoring or grasping behaviour.
-        self.declare_parameter('target_id', 'yellow_golf')
-        self.target_id = self.get_parameter('target_id').get_parameter_value().string_value
-        valid_target_ids = {
-            name for name in ('yellow_golf', 'pink_golf', 'red_ring')
-            if model_class_id(name, required=False) is not None
-        }
-        if self.target_id not in valid_target_ids:
-            self.get_logger().warning(
-                f"未知的 target_id {self.target_id!r}；将使用 'yellow_golf'。"
-                f"有效值：{', '.join(sorted(valid_target_ids))}"
-            )
-            self.target_id = 'yellow_golf'
-        self.get_logger().info(f'比赛目标元数据：{self.target_id}')
-
         self.declare_parameter('camera_config_profile', 'auto')
         self.declare_parameter('camera_config_dir', '')
         self.declare_parameter('camera_base_frame', 'base_link')

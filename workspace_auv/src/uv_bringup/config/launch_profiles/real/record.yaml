@@ -1,0 +1,15 @@
+schema_version: 1
+runtime: real
+preset: record
+description: Capture source camera frames for dataset creation with uv_record raw mode.
+arguments:
+  profile: real_safe
+  enable_hardware: "true"
+  enable_ai: "false"
+  enable_motion: "false"
+  enable_nav: "false"
+  enable_task: "false"
+  enable_stream: "false"
+  record_session: "true"
+  record_mode: raw
+  record_use_sim_time: "false"

@@ -2,7 +2,7 @@
 \label{ch:operations}
 
 \section{环境与构建}
-项目兼容 ROS 2 Foxy/Jazzy：Edge 设备保持 Foxy，开发/仿真环境可使用 Jazzy。首次使用仿真时按 \pathref{scripts/setup_workspace_python.sh} 创建工作区 Python 环境；AI 依赖根据 GPU/CUDA 条件选择性安装。两个 workspace 应按 overlay 顺序构建：先 \pkg{workspace_auv}，再 \pkg{workspace_sim}。
+项目兼容 ROS 2 Foxy/Jazzy：Edge 设备保持 Foxy，开发/仿真环境可使用 Jazzy。首次使用仿真时按 \pathref{scripts/setup_workspace_python.sh} 创建工作区 Python 环境；AI Python 依赖由 \code{INSTALL_WORKSPACE_AI} 独立控制，是否向容器提供 NVIDIA GPU 则由 Compose 覆盖层控制。CPU 主机无需 CUDA 或 NVIDIA Container Toolkit，也可运行基础 ROS、相机和仿真工作流；AI 推理可使用 CPU。两个 workspace 应按 overlay 顺序构建：先 \pkg{workspace_auv}，再 \pkg{workspace_sim}。
 
 \begin{lstlisting}[language=bash,caption={构建和环境检查}]
 cd workspace_auv
@@ -14,6 +14,28 @@ cd ../workspace_sim
 colcon build
 source install/setup.bash
 \end{lstlisting}
+
+\section{Docker Compose 与硬件覆盖}
+根目录的 \pathref{compose.yaml} 是基础服务定义，默认不申请 GPU。可选覆盖文件集中在 \pathref{compose/}：\code{joystick.yaml} 映射输入设备，\code{real.yaml} 映射相机和串口，\code{nvidia.yaml} 申请 NVIDIA GPU。日常通过 \pathref{scripts/compose_up.sh} 组合配置：检测到宿主机 \code{/dev/input} 时自动加入摇杆覆盖；\code{YOULONG_RUNTIME=real} 加入真机设备；\code{YOULONG_GPU=nvidia} 才加入 NVIDIA 覆盖。Compose 默认不向容器注入 NVIDIA GPU，因此不支持 CUDA 的主机使用默认配置即可。注意，launch 参数\code{gpu}选择 Stonefish 的 GPU 版可执行程序，\code{gpu_backend} 选择 OpenGL provider；它们与 Compose 的 NVIDIA 设备映射是不同的开关。
+
+\begin{lstlisting}[language=bash,caption={Compose 启动示例}]
+# 基础/CPU 环境，不要求 CUDA 或 NVIDIA Container Toolkit
+./scripts/compose_up.sh up -d
+./scripts/compose_up.sh run --rm auv sim preset:=debug
+
+# 真机设备映射，与 GPU 选择相互独立
+YOULONG_RUNTIME=real ./scripts/compose_up.sh up -d
+YOULONG_RUNTIME=real ./scripts/compose_up.sh run --rm auv real preset:=record
+
+# 只有已安装 NVIDIA 驱动和 NVIDIA Container Toolkit 时才启用
+YOULONG_GPU=nvidia ./scripts/compose_up.sh up -d
+YOULONG_GPU=nvidia ./scripts/compose_up.sh run --rm auv sim preset:=debug
+
+# 可单独跳过 AI Python 依赖安装
+INSTALL_WORKSPACE_AI=false ./scripts/compose_up.sh up -d
+\end{lstlisting}
+
+\code{INSTALL_WORKSPACE_AI} 只影响 Python AI 依赖是否安装，与 GPU 设备映射不是同一个开关。启用 NVIDIA 覆盖需要宿主机已配置 NVIDIA Container Toolkit；不启用该覆盖时，容器不会获得 NVIDIA 设备，OpenGL 使用当前系统可用的 provider。
 
 \section{真机启动前检查}
 \begin{enumerate}

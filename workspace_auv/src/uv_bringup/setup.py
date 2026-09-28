@@ -1,3 +1,5 @@
+from glob import glob
+
 from setuptools import setup
 
 package_name = 'uv_bringup'
@@ -14,6 +16,8 @@ setup(
             'launch/readiness.launch.py',
             'launch/observability.launch.py',
         ]),
+        ('share/' + package_name + '/config/launch_profiles/real',
+         glob('config/launch_profiles/real/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

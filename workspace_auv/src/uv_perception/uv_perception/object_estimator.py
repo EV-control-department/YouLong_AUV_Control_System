@@ -33,7 +33,7 @@ class ObjectEstimator:
         self.node = node
         self.publisher = node.create_publisher(ObjectTrackArray, TRACKS, 10)
         self.association_distance_m = float(
-            node.declare_parameter('association_distance_m', 2.0).value)
+            node.declare_parameter('association_distance_m', 1.5).value)
         self.stale_after_s = float(node.declare_parameter('stale_after_s', 0.5).value)
         self.lost_after_s = float(node.declare_parameter('lost_after_s', 2.0).value)
         self._lock = threading.Lock()

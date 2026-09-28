@@ -32,6 +32,7 @@ from launch_ros.substitutions import FindPackageShare
 from uv_sim_bringup.launch_common import (
     configure_simulator_gpu_environment,
     declare_feature_arguments,
+    declare_launch_preset,
     declare_mission_file,
     declare_observability_arguments,
     declare_profile,
@@ -212,7 +213,6 @@ def generate_launch_description():
     })
     task = _include('uv_task', 'task_launch.py', {
         'enable_task': enable_task,
-        'target_id': LaunchConfiguration('target_id'),
         'camera_config_profile': 'sim', 'camera_config_dir': camera_dir,
         'profile_params': '', 'mission_file': mission_file,
     })
@@ -243,6 +243,10 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        *declare_launch_preset(
+            "sim", "uv_sim_bringup",
+            choices=("default", "record", "debug", "task"),
+        ),
         declare_profile('sim', 'sim_dev'), declare_mission_file(),
         *declare_feature_arguments(
             enable_ai='true', enable_nav='false', enable_task='false',

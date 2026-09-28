@@ -38,17 +38,6 @@ services:
     # shared memory, so Docker's 64 MiB is not sufficient.
     shm_size: "1g"
 
-    # NVIDIA Container Toolkit injects /dev/nvidia* and the matching driver
-    # libraries. Do not manually map /dev/dri here: on hybrid AMD/NVIDIA
-    # laptops that can make Mesa select the AMD radeonsi driver instead.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
     environment:
       ROS_DISTRO: "${YOULONG_ROS_DISTRO:-foxy}"
       DISPLAY: "${DISPLAY:-:1}"
@@ -57,11 +46,6 @@ services:
       ROS_HOME: "/workspace/.docker/ros/${YOULONG_ROS_DISTRO:-foxy}/ros"
       ROS_LOG_DIR: "/workspace/.docker/ros/${YOULONG_ROS_DISTRO:-foxy}/log/ros"
       XDG_RUNTIME_DIR: "/tmp/runtime-${HOST_UID:-1000}"
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: all
-      __NV_PRIME_RENDER_OFFLOAD: "1"
-      __GLX_VENDOR_LIBRARY_NAME: nvidia
-      __VK_LAYER_NV_optimus: NVIDIA_only
       # Stonefish uses SDL2 for its graphical window.  The container exposes
       # the host X11 socket, so do not let SDL probe Wayland/other backends.
       SDL_VIDEODRIVER: x11

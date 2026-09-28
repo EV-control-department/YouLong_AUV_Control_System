@@ -35,7 +35,9 @@ class FrameMappingSubscriber:
             if not rclpy.ok():
                 rclpy.init(args=None)
             self.node = rclpy.create_node('uv_record_frame_mapping')
-            qos = QoSProfile(depth=8192)
+            # Match the publisher while staying below Fast DDS Foxy's
+            # default per-instance sample limit (400).
+            qos = QoSProfile(depth=128)
             qos.reliability = ReliabilityPolicy.RELIABLE
             self.node.create_subscription(
                 CameraStreamFrameInfo, STREAM_FRAME_INFO, self._on_mapping, qos)

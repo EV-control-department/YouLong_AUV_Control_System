@@ -1,0 +1,5 @@
+schema_version: 1
+runtime: sim
+preset: default
+description: Keep the existing sim.launch.py defaults.
+arguments: {}

@@ -14,7 +14,7 @@
 		                              (4.15, 0.85), (2.75, 1.15)
 		    Target rack:             centre (0.95, -0.45, 1.00), 0.50 x 0.50
 		    Collection frame:        centre (1.55, -1.65, 0.94), 0.40 x 0.30
-	  The launcher supplies target_id as metadata (yellow_golf, pink_golf, red_ring);
+	  Task target selection is configured in mission/task YAML;
 	  all three acquisition targets intentionally remain visible in this scene.
 	-->
 

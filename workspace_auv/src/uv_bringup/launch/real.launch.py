@@ -20,7 +20,9 @@ from launch_ros.substitutions import FindPackageShare
 
 from uv_bringup.launch_common import (
     declare_feature_arguments,
+    declare_launch_preset,
     declare_mission_file,
+    declare_observability_arguments,
     declare_profile,
     profile_path,
     validate_profile,
@@ -59,6 +61,7 @@ def generate_launch_description():
     enable_perception_gui = LaunchConfiguration('enable_perception_gui')
     mission_file = LaunchConfiguration("mission_file")
     camera_config_dir = LaunchConfiguration("camera_config_dir")
+    enable_stream = LaunchConfiguration("enable_stream")
 
     description = _include("auv_description", "description.launch.py", {
         "use_sim_time": "false",
@@ -84,14 +87,31 @@ def generate_launch_description():
         "confidence": "0.8",
         "enable_gui": enable_perception_gui,
     }, condition=IfCondition(enable_ai))
-    stream = _include("uv_stream", "stream_launch.py", {})
+    stream = _include(
+        "uv_stream", "stream_launch.py", {},
+        condition=IfCondition(enable_stream))
+    observability = _include("uv_bringup", "observability.launch.py", {
+        "enable_preview": LaunchConfiguration("enable_preview"),
+        "preview_port": LaunchConfiguration("preview_port"),
+        "record_session": LaunchConfiguration("record_session"),
+        "record_root": LaunchConfiguration("record_root"),
+        "record_mode": LaunchConfiguration("record_mode"),
+        "go2rtc_stream_mode": LaunchConfiguration("go2rtc_stream_mode"),
+        "go2rtc_video_format": LaunchConfiguration("go2rtc_video_format"),
+        "record_video_fps": LaunchConfiguration("record_video_fps"),
+        "record_video_codec": LaunchConfiguration("record_video_codec"),
+        "video_segment_seconds": LaunchConfiguration("video_segment_seconds"),
+        "bag_segment_seconds": LaunchConfiguration("bag_segment_seconds"),
+        "record_bag_storage": LaunchConfiguration("record_bag_storage"),
+        "record_use_sim_time": LaunchConfiguration("record_use_sim_time"),
+        "record_image_topics": LaunchConfiguration("record_image_topics"),
+    })
     navigation = _include("uv_planning", "planning_launch.py", {
         "enable_nav": enable_nav,
         "profile_params": "",
     })
     task = _include("uv_task", "task_launch.py", {
         "enable_task": enable_task,
-        "target_id": LaunchConfiguration("target_id"),
         "profile_params": "",
         "camera_config_profile": "real",
         "camera_config_dir": camera_config_dir,
@@ -110,15 +130,27 @@ def generate_launch_description():
         return []
 
     return LaunchDescription([
+        *declare_launch_preset(
+            "real", "uv_bringup",
+            choices=("default", "record", "debug", "task"),
+        ),
         declare_profile("real", "real_default"),
         declare_mission_file(),
         *declare_feature_arguments(
             enable_ai="true", enable_nav="true", enable_task="false",
             enable_motion="true",
         ),
+        *declare_observability_arguments(),
+        DeclareLaunchArgument(
+            "camera_stitch_fps", default_value="5.0",
+            description="Default source-camera frame rate used by the recorder",
+        ),
+        DeclareLaunchArgument(
+            "enable_stream", default_value="true",
+            description="Launch go2rtc preview streams; raw recording can run with this disabled",
+        ),
         DeclareLaunchArgument("enable_perception_gui", default_value="false"),
         DeclareLaunchArgument("enable_hardware", default_value="true"),
-        DeclareLaunchArgument("target_id", default_value="yellow_golf"),
         DeclareLaunchArgument(
             "camera_config_dir", default_value="",
             description="Optional directory containing front.yaml and down.yaml",
@@ -133,6 +165,7 @@ def generate_launch_description():
         camera,
         perception,
         stream,
+        observability,
         navigation,
         task,
     ])

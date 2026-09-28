@@ -12,7 +12,7 @@ def generate_launch_description():
         DeclareLaunchArgument('model_path', default_value=''),
         DeclareLaunchArgument('confidence', default_value='0.5'),
         DeclareLaunchArgument('stereo_baseline_m', default_value='0.10'),
-        DeclareLaunchArgument('association_distance_m', default_value='2.0'),
+        DeclareLaunchArgument('association_distance_m', default_value='1.5'),
         DeclareLaunchArgument('bearing_association_distance_m', default_value='0.35'),
         DeclareLaunchArgument('world_frame', default_value='odom'),
         DeclareLaunchArgument('edge_margin_px', default_value='8.0'),

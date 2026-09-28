@@ -64,7 +64,7 @@ class PerceptionGui(Node):
         super().__init__("perception_gui")
         self.declare_parameter("refresh_period_ms", 150)
         self.declare_parameter("measurement_history_limit", 500)
-        self.declare_parameter("association_distance_m", 2.0)
+        self.declare_parameter("association_distance_m", 1.5)
         self.refresh_period_ms = max(
             50, int(self.get_parameter("refresh_period_ms").value))
         self.history_limit = max(

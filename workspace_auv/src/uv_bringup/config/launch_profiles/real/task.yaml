@@ -1,0 +1,17 @@
+schema_version: 1
+runtime: real
+preset: task
+description: Enable the real mission stack and automatically execute the default RoboCup 2026 mission.
+arguments:
+  profile: real_default
+  enable_hardware: "true"
+  enable_ai: "true"
+  enable_motion: "true"
+  enable_nav: "true"
+  enable_task: "true"
+  enable_stream: "true"
+  record_session: "true"
+  record_mode: go2rtc
+  go2rtc_stream_mode: unannotated
+  go2rtc_video_format: jpeg
+  record_use_sim_time: "false"

@@ -11,19 +11,19 @@ runtime_dir="${XDG_RUNTIME_DIR:-/tmp/runtime-${HOST_UID:-1000}}"
 mkdir -p "${runtime_dir}"
 chmod 700 "${runtime_dir}"
 
-# Preserve the Compose image's convenient NVIDIA-offloaded rqt wrapper.  The
-# old inline Compose command generated this on every start; keeping it here
-# makes `docker compose exec auv bash -lc rqt` behave the same way.
-if ! grep -q 'youlong-compose-nvidia-rqt-wrapper-v4' "${HOME}/.bashrc" 2>/dev/null; then
-    printf '%s\n' \
-        '# youlong-compose-nvidia-rqt-wrapper-v4' \
-        'rqt() {' \
-        '  if [ "$#" -eq 0 ]; then' \
-        '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt' \
-        '  else' \
-        '    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop rqt "$@"' \
-        '  fi' \
-        '}' >> "${HOME}/.bashrc"
+# Preserve NVIDIA OpenGL offload for rqt only when the NVIDIA Compose overlay
+# is enabled. CPU-only hosts use their normal Qt/OpenGL selection.
+if ! grep -q 'youlong-compose-nvidia-rqt-wrapper-v5' "${HOME}/.bashrc" 2>/dev/null; then
+    cat >> "${HOME}/.bashrc" <<'RQT_WRAPPER'
+# youlong-compose-nvidia-rqt-wrapper-v5
+rqt() {
+  if [ "${YOULONG_NVIDIA_ENABLED:-false}" = "true" ]; then
+    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop command rqt "$@"
+  else
+    command rqt "$@"
+  fi
+}
+RQT_WRAPPER
 fi
 
 # shellcheck disable=SC1091

@@ -10,7 +10,6 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     enable_task = LaunchConfiguration("enable_task")
-    target_id = LaunchConfiguration("target_id")
     profile_params = LaunchConfiguration("profile_params")
     mission_file = LaunchConfiguration("mission_file")
     camera_config_profile = LaunchConfiguration("camera_config_profile")
@@ -22,7 +21,6 @@ def generate_launch_description():
         if profile:
             parameters.append(profile)
         task_parameters = {
-            "target_id": target_id,
             "mission_file": mission_file,
         }
         requested_camera_profile = camera_config_profile.perform(context).strip()
@@ -45,7 +43,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_task", default_value="true"),
-        DeclareLaunchArgument("target_id", default_value="yellow_golf"),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument("camera_config_profile", default_value="auto"),
         DeclareLaunchArgument("camera_config_dir", default_value=""),

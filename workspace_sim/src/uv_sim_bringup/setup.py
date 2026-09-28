@@ -1,3 +1,5 @@
+from glob import glob
+
 from setuptools import setup
 
 package_name = 'uv_sim_bringup'
@@ -16,6 +18,10 @@ setup(
             'launch/degradation.launch.py',
             'launch/experiment.launch.py',
         ]),
+        ('share/' + package_name + '/config/launch_profiles/sim',
+         glob('config/launch_profiles/sim/*.yaml')),
+        ('share/' + package_name + '/config/launch_profiles/hil',
+         glob('config/launch_profiles/hil/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

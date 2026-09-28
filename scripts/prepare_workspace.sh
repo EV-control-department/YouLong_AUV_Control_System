@@ -155,14 +155,48 @@ build_workspaces() {
     source install/setup.bash
     set -u
 
-    if [[ -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples" \
-          && -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces" ]]; then
-        log '构建 ZIT6 ROS 接口'
+    if [[ -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces" ]]; then
+        local zit6_paths=(
+            "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces"
+        )
+        local zit6_packages=(zit6_interfaces)
+        local upper_config="${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples/UserApp/Config/config.json"
+
+        # upper_examples needs a machine-local ZIT6 configuration that is not
+        # checked into git. Keep the ROS interface build portable, and include
+        # the application only after its local configuration has been supplied.
+        case "${BUILD_ZIT6_UPPER_EXAMPLES:-auto}" in
+            true)
+                if [[ ! -f "${upper_config}" ]]; then
+                    log "缺少 ${upper_config}; BUILD_ZIT6_UPPER_EXAMPLES=true 无法继续"
+                    exit 1
+                fi
+                zit6_paths+=("${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples")
+                zit6_packages+=(upper_examples)
+                ;;
+            auto)
+                if [[ -f "${upper_config}" ]]; then
+                    zit6_paths+=("${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples")
+                    zit6_packages+=(upper_examples)
+                elif [[ -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples" ]]; then
+                    log '跳过 upper_examples（未找到本机 UserApp/Config/config.json）；需要时设置 BUILD_ZIT6_UPPER_EXAMPLES=true'
+                fi
+                ;;
+            false)
+                if [[ -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples" ]]; then
+                    log '按 BUILD_ZIT6_UPPER_EXAMPLES=false 跳过 upper_examples'
+                fi
+                ;;
+            *)
+                log 'BUILD_ZIT6_UPPER_EXAMPLES 只接受 auto、true 或 false'
+                exit 2
+                ;;
+        esac
+
+        log "构建 ZIT6 ROS 包: ${zit6_packages[*]}"
         colcon build --symlink-install --parallel-workers "${workers}" \
-            --base-paths \
-                "${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples" \
-                "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces" \
-            --packages-select zit6_interfaces upper_examples
+            --base-paths "${zit6_paths[@]}" \
+            --packages-select "${zit6_packages[@]}"
         # shellcheck disable=SC1091
         set +u
         source install/setup.bash

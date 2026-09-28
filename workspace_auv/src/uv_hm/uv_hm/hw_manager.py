@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, UInt32
 
@@ -79,7 +80,8 @@ class HwManagerNode(Node):
         self.declare_parameter('cycle_time_warn_threshold', 100.0)
         self.declare_parameter(
             'legacy_state_topics', True,
-            description='Bridge the current /zit6/state/* firmware topics')
+            ParameterDescriptor(
+                description='Bridge the current /zit6/state/* firmware topics'))
 
         # ── Internal state ───────────────────────────────────────
         self._status_lock = threading.Lock()

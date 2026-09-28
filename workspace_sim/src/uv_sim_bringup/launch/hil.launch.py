@@ -20,7 +20,9 @@ from launch_ros.substitutions import FindPackageShare
 from uv_sim_bringup.launch_common import (
     configure_simulator_gpu_environment,
     declare_feature_arguments,
+    declare_launch_preset,
     declare_mission_file,
+    declare_observability_arguments,
     declare_profile,
     declare_simulation_arguments,
     profile_path,
@@ -79,6 +81,7 @@ def generate_launch_description():
     seed = LaunchConfiguration('scene_seed')
     camera_dir = LaunchConfiguration('camera_config_dir')
     mission_file = LaunchConfiguration('mission_file')
+    enable_stream = LaunchConfiguration('enable_stream')
 
     description = _include('uv_sim_description', 'description.launch.py', {
         'use_sim_time': 'true',
@@ -116,13 +119,30 @@ def generate_launch_description():
     })
     perception = _include('uv_perception', 'perception_launch.py', {},
                           condition=IfCondition(LaunchConfiguration('enable_ai')))
-    stream = _include('uv_stream', 'stream_launch.py', {})
+    stream = _include(
+        'uv_stream', 'stream_launch.py', {},
+        condition=IfCondition(enable_stream))
+    observability = _include('uv_bringup', 'observability.launch.py', {
+        'enable_preview': LaunchConfiguration('enable_preview'),
+        'preview_port': LaunchConfiguration('preview_port'),
+        'record_session': LaunchConfiguration('record_session'),
+        'record_root': LaunchConfiguration('record_root'),
+        'record_mode': LaunchConfiguration('record_mode'),
+        'go2rtc_stream_mode': LaunchConfiguration('go2rtc_stream_mode'),
+        'go2rtc_video_format': LaunchConfiguration('go2rtc_video_format'),
+        'record_video_fps': LaunchConfiguration('record_video_fps'),
+        'record_video_codec': LaunchConfiguration('record_video_codec'),
+        'video_segment_seconds': LaunchConfiguration('video_segment_seconds'),
+        'bag_segment_seconds': LaunchConfiguration('bag_segment_seconds'),
+        'record_bag_storage': LaunchConfiguration('record_bag_storage'),
+        'record_use_sim_time': LaunchConfiguration('record_use_sim_time'),
+        'record_image_topics': LaunchConfiguration('record_image_topics'),
+    })
     planning = _include('uv_planning', 'planning_launch.py', {
         'enable_nav': LaunchConfiguration('enable_nav'), 'profile_params': '',
     })
     task = _include('uv_task', 'task_launch.py', {
         'enable_task': LaunchConfiguration('enable_task'),
-        'target_id': LaunchConfiguration('target_id'),
         'camera_config_profile': 'sim', 'camera_config_dir': camera_dir,
         'profile_params': '', 'mission_file': mission_file,
     })
@@ -133,10 +153,16 @@ def generate_launch_description():
         name='micro_ros_agent', output='both')
 
     return LaunchDescription([
+        *declare_launch_preset(
+            'hil', 'uv_sim_bringup',
+            choices=('default', 'record', 'debug', 'task'),
+        ),
         declare_profile('hil', 'hil_lab'), declare_mission_file(),
         *declare_feature_arguments(
             enable_ai='false', enable_nav='false', enable_task='false',
             enable_motion='false'),
+        *declare_observability_arguments(),
+        DeclareLaunchArgument('enable_stream', default_value='true'),
         *declare_simulation_arguments(
             scenario_default='underwater_xunyun.scn',
             window_width_default='1280', window_height_default='720',
@@ -155,5 +181,5 @@ def generate_launch_description():
             start_actions=[description, localization, stonefish_gpu,
                            stonefish_nogpu, bridge,
                            agent, control, camera, perception, stream,
-                           planning, task]),
+                           planning, task, observability]),
     ])

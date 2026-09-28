@@ -127,7 +127,9 @@ class StreamMetadataBridge:
         if not rclpy.ok():
             rclpy.init(args=None)
         self.node = rclpy.create_node('camera_streamer_frame_metadata')
-        qos = QoSProfile(depth=8192)
+        # Keep depth below Fast DDS Foxy's default per-instance sample limit
+        # (400); a depth of 8192 makes publisher creation fail on the Edge.
+        qos = QoSProfile(depth=128)
         qos.reliability = ReliabilityPolicy.RELIABLE
         self.publisher = self.node.create_publisher(
             CameraStreamFrameInfo, STREAM_FRAME_INFO, qos)

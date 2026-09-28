@@ -60,6 +60,19 @@ YouLong_AUV_Control_System/
 ## 构建与运行
 
 ```bash
+# Edge 首次准备：安装 iceoryx2 并构建工作区
+source /opt/ros/foxy/setup.bash
+INSTALL_WORKSPACE_AI=false ./scripts/prepare_workspace.sh
+
+# 新终端中加载 ROS overlay 与 venv Python 包（包括 iceoryx2）
+source scripts/source_workspace.sh
+
+# Edge 相机入口会检查设备节点、权限并启动采集
+./scripts/edge_camera.sh
+# 有需要时覆盖设备映射，或先只启用前视相机
+UV_CAMERA_DOWN_DEVICE=/dev/video4 ./scripts/edge_camera.sh
+UV_CAMERA_ENABLE_DOWN=false ./scripts/edge_camera.sh
+
 # 首次使用仿真环境时，创建工作空间本地 Python 运行时
 bash scripts/setup_workspace_python.sh
 
@@ -80,6 +93,47 @@ ros2 launch uv_sim sim.launch.py \
 调用 `uv_sim_bringup sim.launch.py scenario_desc:=...`；旧的场景 basename 会映射到
 迁移后的维护场景或 `worlds/examples/`，其余旧 fixture 从 `legacy_data/` 运行。新的入口同时指定 `world:=` 和
 `scenario_desc:=` 会直接报错，避免场景选择歧义。
+
+### Docker Compose
+
+基础配置位于根目录的 compose.yaml；compose/ 下保存可选的硬件覆盖配置。
+通过入口脚本启动时，会在检测到 /dev/input 时自动启用摇杆映射。默认不请求
+GPU，适用于没有 CUDA/NVIDIA Container Toolkit 的电脑；有 NVIDIA GPU 且已配置
+NVIDIA Container Toolkit 时，设置 YOULONG_GPU=nvidia 启用 GPU：
+
+    # CPU 或无 NVIDIA GPU
+    ./scripts/compose_up.sh up -d
+
+    # 启用 NVIDIA GPU
+    YOULONG_GPU=nvidia ./scripts/compose_up.sh up -d
+
+    # 真机硬件映射（与 GPU 选项独立）
+    YOULONG_RUNTIME=real ./scripts/compose_up.sh up -d
+
+真实硬件和 GPU 选项可以组合，例如设置 YOULONG_RUNTIME=real 和
+YOULONG_GPU=nvidia 后再运行启动脚本。
+
+### ROS 2 启动预设
+
+预设按运行环境分属 uv_bringup（真机）和 uv_sim_bringup（仿真）。
+record 使用 uv_record 的 raw 模式采集源帧；debug 默认启用 AI，并以 go2rtc
+归档未标注相机流，同时记录 rosbag 和 session 日志。task 会组合 debug 录制，
+启用 motion、navigation 和 task runner。
+
+    ros2 launch uv_bringup real.launch.py preset:=record
+    ros2 launch uv_bringup real.launch.py preset:=debug
+    ros2 launch uv_bringup real.launch.py preset:=task
+
+    ros2 launch uv_sim_bringup sim.launch.py preset:=record
+    ros2 launch uv_sim_bringup sim.launch.py preset:=debug
+    ros2 launch uv_sim_bringup sim.launch.py preset:=task
+
+    ros2 launch uv_sim_bringup hil.launch.py preset:=record
+    ros2 launch uv_sim_bringup hil.launch.py preset:=debug
+    ros2 launch uv_sim_bringup hil.launch.py preset:=task
+
+task 预设未指定 mission_file 时使用默认的 robocup_26.yaml；task runner 启动后
+会自动开始执行该 mission。真机 task 预设会启动运动控制和导航。
 
 常用 world 名称：
 

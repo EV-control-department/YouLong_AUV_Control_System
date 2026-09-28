@@ -27,6 +27,8 @@ class CameraDriver(Node):
         self.declare_parameter('enable_down', True)
         self.declare_parameter('camera_config_profile', 'auto')
         self.declare_parameter('camera_config_dir', '')
+        self.declare_parameter('front_camera_device', '')
+        self.declare_parameter('down_camera_device', '')
         self.declare_parameter('camera_startup_timeout_sec', 5.0)
         self.declare_parameter('camera_info_version', 1)
         sim_mode = bool(self.get_parameter('sim_mode').value)
@@ -36,9 +38,15 @@ class CameraDriver(Node):
         if profile.strip().lower() == 'auto':
             profile = 'sim' if sim_mode else 'real'
         config_dir = str(self.get_parameter('camera_config_dir').value or '')
+        device_overrides = {
+            'front': str(self.get_parameter('front_camera_device').value or '').strip(),
+            'down': str(self.get_parameter('down_camera_device').value or '').strip(),
+        }
         self._configs = {}
         for camera in ('front', 'down'):
             config = load_camera_config(camera, profile, config_dir or None)
+            if not sim_mode and device_overrides[camera]:
+                config = replace(config, device=device_overrides[camera])
             if sim_mode:
                 info_topics = {
                     'left': f'/auv/sensors/camera/{"downward" if camera == "down" else camera}/left/camera_info',

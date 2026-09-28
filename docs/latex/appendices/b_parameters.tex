@@ -13,11 +13,18 @@
   \midrule
   \endhead
   \code{profile} & real/sim/hil & 选择模式参数文件。 \\
+  \code{preset} & real/sim/hil & 加载 default、record、debug 或 task 启动预设；CLI 显式参数可覆盖预设值。 \\
   \code{enable_motion} & 所有运行模式 & 是否启动 BasicMotion。 \\
   \code{enable_ai} & real/sim/hil & 是否启动 AI/目标定位。 \\
   \code{enable_nav} & real/sim/hil & 是否启动导航节点。 \\
   \code{enable_task} & real/sim/hil & 是否启动任务执行器。 \\
   \code{mission_file} & 任务模式 & Mission 或单个 Task YAML。 \\
+  \code{record_session} & real/sim/hil & 是否创建 session，记录图像、rosbag 和运行日志。 \\
+  \code{record_mode} & real/sim/hil & 图像路径：raw 源帧或 go2rtc 视频。 \\
+  \code{go2rtc_stream_mode} & go2rtc 录制 & 选择未标注流、标注流或两者。 \\
+  \code{go2rtc_video_format} & go2rtc 录制 & 归档格式：jpeg 或 ts。 \\
+  \code{enable_stream} & real/sim/hil & 是否启动 go2rtc 流；raw 图像录制不依赖它。 \\
+  \code{gpu}、\code{gpu_backend} & sim/hil & 选择 Stonefish GPU 可执行程序和 OpenGL 供应方。 \\
   \code{scenario_desc} & sim/hil & Stonefish 场景文件。 \\
   \code{scene_seed} & sim/hil & 生成场景的整数 seed。 \\
   \code{enable_degradation} & sim & 是否启用传感器退化。 \\
@@ -34,7 +41,11 @@
   \item 任务 Task：\pathref{workspace_auv/src/uv_task/config/tasks/}。
   \item 仿真 bridge：\pathref{workspace_sim/src/uv_sim_bridge/config/profiles/}。
   \item 退化参数：\path{uv_sim_bringup/degradation.launch.py} 及 sim launch 参数。
+  \item 真机启动预设：\pathref{workspace_auv/src/uv_bringup/config/launch_profiles/real/}。
+  \item 仿真/HIL 启动预设：\pathref{workspace_sim/src/uv_sim_bringup/config/launch_profiles/}。
 \end{itemize}
+
+\code{preset} 文件与标准 ROS 参数 \code{profile} 分开维护。前者控制一组 launch 开关及录制选项；后者仍负责节点参数。修改预设时应分别检查 real、sim、hil 的参数是否属于对应入口。
 
 \section{参数审查原则}
 参数名称应包含物理含义，时间用秒、距离用米、角度明确度或弧度；速度和推力参数要说明坐标系和正方向；随机退化参数必须说明 seed；真机安全参数必须有更保守的 profile。完整生效树通过 ROS 2 参数查询和启动日志确认。

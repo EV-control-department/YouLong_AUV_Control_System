@@ -35,11 +35,22 @@ profile 是标准 ROS 2 YAML 参数文件，用于按模式选择保守或开发
 \begin{itemize}
   \item real：\code{real_default}、\code{real_safe}；
   \item sim：\code{sim_dev}、\code{sim_ci}；公开 \pkg{uv_sim} 入口另提供
-        \code{guoshui}、\code{guoshui_cruise}、\code{guoshui_cruise_seeded}、
-        \code{sauvc_finals} 和 \code{sauvc_qualification} world 预设；
+        \code{guoshui}、\path{guoshui_cruise}、\path{guoshui_cruise_seeded}、
+        \code{sauvc_finals} 和 \path{sauvc_qualification} world 预设；
   \item hil：\code{hil_lab}。
 \end{itemize}
 启动文件在进入子 launch 前解析 profile 路径并校验 profile 与运行模式匹配，避免将仿真参数误用于真机。
+
+\section{运行预设}
+\code{profile} 与 \code{preset} 是两层不同的配置。\code{profile} 选择传给节点的 ROS 2 参数文件；\code{preset} 则从独立的 launch YAML 读取一组启动参数默认值。显式写在命令行上的 launch 参数优先于预设值；不指定 \code{preset} 或选择 \code{default} 时保留入口原有默认行为。
+
+预设按运行时和所属包分别维护：真机位于 \pathref{workspace_auv/src/uv_bringup/config/launch_profiles/real/}；SIL 与 HIL 分别位于 \pathref{workspace_sim/src/uv_sim_bringup/config/launch_profiles/sim/} 和 \pathref{workspace_sim/src/uv_sim_bringup/config/launch_profiles/hil/}。每个目录提供 \code{default.yaml}、\code{record.yaml}、\code{debug.yaml} 和 \code{task.yaml}。
+
+\begin{itemize}
+  \item \code{record} 启动 \pkg{uv_record} 的 \code{raw} 图像模式，从 Iceoryx2 相机源帧保存无损 PNG，适合后续整理数据集；同时保存 rosbag 和 session 日志，不要求启动 go2rtc。
+  \item \code{debug} 默认启用 AI，并录制 go2rtc 未标注相机流（JPEG）及 rosbag、session 日志，便于复现运行问题。
+  \item \code{task} 启用 AI、运动、导航和任务执行器，并组合 debug 录制设置。任务执行器会自动加载并开始执行默认的 \code{robocup_26.yaml}；需要其他任务时可显式传入 \code{mission_file}。
+\end{itemize}
 
 \Needspace{12\baselineskip}
 \section{常用启动命令}
@@ -64,8 +75,29 @@ ros2 launch uv_sim_bringup hil.launch.py profile:=hil_lab \
   serial_dev:=/dev/ttyUSB0 serial_baud:=921600
 \end{lstlisting}
 
+\begin{lstlisting}[language=bash,caption={使用运行预设的一键启动入口}]
+# 数据集采集：uv_record raw 源帧
+ros2 launch uv_bringup real.launch.py preset:=record
+ros2 launch uv_sim_bringup sim.launch.py preset:=record
+ros2 launch uv_sim_bringup hil.launch.py preset:=record
+
+# 调试：AI + 未标注 go2rtc 视频 + rosbag/session 日志
+ros2 launch uv_bringup real.launch.py preset:=debug
+ros2 launch uv_sim_bringup sim.launch.py preset:=debug
+ros2 launch uv_sim_bringup hil.launch.py preset:=debug
+
+# 一键运行默认 Mission；也可附加 mission_file:=/path/to/mission.yaml
+ros2 launch uv_bringup real.launch.py preset:=task
+ros2 launch uv_sim_bringup sim.launch.py preset:=task
+ros2 launch uv_sim_bringup hil.launch.py preset:=task
+\end{lstlisting}
+
+\begin{warningbox}
+\code{task} 是会自动执行 Mission 的运行预设，不只是启动一个空闲的任务节点。真机入口同时启用运动控制；使用前应确认车辆处于允许运动的安全环境，并检查实际传入的 \code{mission_file}。
+\end{warningbox}
+
 \section{启动顺序与就绪}
-典型依赖顺序是：描述/固定 TF、硬件或仿真输入、定位、控制、相机/感知、规划、任务。任务默认关闭，避免节点刚启动时立即执行 Mission。\pkg{uv_bringup} 提供 readiness 检查，可按 backend、control、sensors、perception 阶段确认 Topic 和节点已达到运行条件。
+典型依赖顺序是：描述/固定 TF、硬件或仿真输入、定位、控制、相机/感知、规划、任务。常规启动默认不执行任务；选择 \code{preset:=task} 时会显式启用任务执行器并自动开始默认 Mission。\pkg{uv_bringup} 提供 readiness 检查，可按 backend、control、sensors、perception 阶段确认 Topic 和节点已达到运行条件。
 
 \section{参数事实来源}
 启动参数的默认值在 launch 中定义，模式参数在 profile 中覆盖，任务参数在 Mission/Task YAML 中维护，相机参数在相机 profile 和标定文件中维护。参数优先级和最终生效值应通过启动日志或 ROS 参数查询确认；LaTeX 不复制完整参数树，附录只列出入口和语义。

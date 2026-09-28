@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import (
@@ -36,6 +37,85 @@ def profile_path(profile, package):
         "profiles",
         filename,
     ])
+
+
+def declare_launch_preset(runtime, package, *, choices, default="default"):
+    """Load a package-owned launch preset before other launch arguments.
+
+    Preset values act as defaults. Values passed explicitly on the command
+    line are already present in the launch context and take precedence.
+    """
+    choices = tuple(choices)
+    if default not in choices:
+        raise ValueError(f"default preset {default!r} is not in choices")
+
+    def _load_preset(context):
+        selected = str(context.launch_configurations.get(
+            "preset", default)).strip()
+        if selected not in choices:
+            raise RuntimeError(
+                f"preset {selected!r} is not valid for runtime {runtime!r}; "
+                f"choose one of {', '.join(choices)}")
+
+        preset_file = Path(
+            get_package_share_directory(package),
+            "config",
+            "launch_profiles",
+            runtime,
+            f"{selected}.yaml",
+        )
+        if not preset_file.is_file():
+            raise RuntimeError(f"launch preset file does not exist: {preset_file}")
+        try:
+            payload = yaml.safe_load(preset_file.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as error:
+            raise RuntimeError(
+                f"cannot read launch preset {preset_file}: {error}") from error
+
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            raise RuntimeError(
+                f"launch preset {preset_file} must use schema_version: 1")
+        if payload.get("runtime") != runtime:
+            raise RuntimeError(
+                f"launch preset {preset_file} is for runtime "
+                f"{payload.get('runtime')!r}, expected {runtime!r}")
+        if payload.get("preset") != selected:
+            raise RuntimeError(
+                f"launch preset {preset_file} must declare "
+                f"preset: {selected}")
+        arguments = payload.get("arguments", {})
+        if not isinstance(arguments, dict):
+            raise RuntimeError(
+                f"launch preset {preset_file} arguments must be a mapping")
+
+        for name, value in arguments.items():
+            if not isinstance(name, str) or name == "preset":
+                raise RuntimeError(
+                    f"launch preset {preset_file} has invalid argument name "
+                    f"{name!r}")
+            if name in context.launch_configurations:
+                continue
+            if isinstance(value, bool):
+                value = "true" if value else "false"
+            elif isinstance(value, (str, int, float)):
+                value = str(value)
+            else:
+                raise RuntimeError(
+                    f"launch preset {preset_file} argument {name!r} "
+                    "must be a scalar")
+            context.launch_configurations[name] = value
+        return []
+
+    return [
+        DeclareLaunchArgument(
+            "preset",
+            default_value=default,
+            choices=list(choices),
+            description=(
+                f"Launch preset for {runtime}: {', '.join(choices)}"),
+        ),
+        OpaqueFunction(function=_load_preset),
+    ]
 
 
 def validate_profile(profile, mode):
