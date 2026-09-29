@@ -15,7 +15,7 @@ from uv_image_transport.iceoryx2 import (
     CAMERA_DOWN, CAMERA_FRONT, FrameHeader, Iceoryx2Publisher,
 )
 
-from .camera_config import load_camera_config
+from .camera_config import camera_mode_for_sim_mode, load_camera_config
 from .sensor import Sensor
 
 
@@ -25,7 +25,7 @@ class CameraDriver(Node):
         self.declare_parameter('sim_mode', False)
         self.declare_parameter('enable_front', True)
         self.declare_parameter('enable_down', True)
-        self.declare_parameter('camera_config_profile', 'auto')
+        self.declare_parameter('camera_mode', 'auto')
         self.declare_parameter('camera_config_dir', '')
         self.declare_parameter('front_camera_device', '')
         self.declare_parameter('down_camera_device', '')
@@ -34,9 +34,8 @@ class CameraDriver(Node):
         sim_mode = bool(self.get_parameter('sim_mode').value)
         enable_front = bool(self.get_parameter('enable_front').value)
         enable_down = bool(self.get_parameter('enable_down').value)
-        profile = str(self.get_parameter('camera_config_profile').value or 'auto')
-        if profile.strip().lower() == 'auto':
-            profile = 'sim' if sim_mode else 'real'
+        camera_mode = camera_mode_for_sim_mode(
+            sim_mode, str(self.get_parameter('camera_mode').value or 'auto'))
         config_dir = str(self.get_parameter('camera_config_dir').value or '')
         device_overrides = {
             'front': str(self.get_parameter('front_camera_device').value or '').strip(),
@@ -44,7 +43,7 @@ class CameraDriver(Node):
         }
         self._configs = {}
         for camera in ('front', 'down'):
-            config = load_camera_config(camera, profile, config_dir or None)
+            config = load_camera_config(camera, camera_mode, config_dir or None)
             if not sim_mode and device_overrides[camera]:
                 config = replace(config, device=device_overrides[camera])
             if sim_mode:

@@ -11,7 +11,7 @@
 任务应由 YAML 参数和独立 Python 模块组成，通过 task runner 的公开 Action/Topic 工作。必须定义开始条件、完成条件、超时、取消、失败恢复、传感器丢失和安全停止行为，并在测试中覆盖至少一个失败路径。
 
 \section{Git 与版本}
-代码、配置和文档的接口性改动应在同一提交中完成。正式实验记录 commit、分支、profile、seed、场景、标定版本和结果目录。LaTeX 封面由 Makefile 自动读取当前 commit；生成 PDF 不能脱离源码版本单独传播。
+代码、配置和文档的接口性改动应在同一提交中完成。正式实验记录 commit、分支、bringup profile、seed、world/场景、标定版本和结果目录。LaTeX 封面由 Makefile 自动读取当前 commit；生成 PDF 不能脱离源码版本单独传播。
 
 \section{提交前检查}
 \begin{lstlisting}[language=bash,caption={提交前最小检查集}]

@@ -3,19 +3,20 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     enable_hardware = LaunchConfiguration("enable_hardware")
-    profile_params = LaunchConfiguration("profile_params")
+    params_file = LaunchConfiguration("params_file")
 
     def _nodes(context):
         parameters = []
-        profile = profile_params.perform(context).strip()
-        if profile:
-            parameters.append(profile)
+        parameter_file = params_file.perform(context).strip()
+        if parameter_file:
+            parameters.append(parameter_file)
         return [Node(
             package="uv_hm",
             executable="hw_manager",
@@ -28,6 +29,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_hardware", default_value="true"),
-        DeclareLaunchArgument("profile_params", default_value=""),
+        DeclareLaunchArgument(
+            "params_file",
+            default_value=PathJoinSubstitution([
+                FindPackageShare("uv_hm"), "config", "default.yaml",
+            ]),
+            description="Hardware manager default parameters",
+        ),
         OpaqueFunction(function=_nodes),
     ])

@@ -113,37 +113,36 @@ NVIDIA Container Toolkit 时，设置 YOULONG_GPU=nvidia 启用 GPU：
 真实硬件和 GPU 选项可以组合，例如设置 YOULONG_RUNTIME=real 和
 YOULONG_GPU=nvidia 后再运行启动脚本。
 
-### ROS 2 启动预设
+### 整机启动 profile
 
-预设按运行环境分属 uv_bringup（真机）和 uv_sim_bringup（仿真）。
-record 使用 uv_record 的 raw 模式采集源帧；debug 默认启用 AI，并以 go2rtc
-归档未标注相机流，同时记录 rosbag 和 session 日志。task 会组合 debug 录制，
-启用 motion、navigation 和 task runner。
+uv_bringup 真机入口以及 uv_sim_bringup 的 SIL/HIL 入口使用 profile 选择整机启停组合。真机 default 保留基础启动组合并关闭 navigation；record 关闭 AI 和 task，保留 motion 并采集 raw 源帧；debug 启动 AI、motion 和 go2rtc 录制，不自动启动 task；task 启动 AI、motion、task runner，默认自动执行完整 robocup_26.yaml mission。真机所有 profile 默认关闭尚未形成闭环的 navigation，需要时可显式传 enable_nav:=true。
 
-    ros2 launch uv_bringup real.launch.py preset:=record
-    ros2 launch uv_bringup real.launch.py preset:=debug
-    ros2 launch uv_bringup real.launch.py preset:=task
+    ros2 launch uv_bringup real.launch.py profile:=default
+    ros2 launch uv_bringup real.launch.py profile:=record
+    ros2 launch uv_bringup real.launch.py profile:=debug
+    ros2 launch uv_bringup real.launch.py profile:=task
 
-    ros2 launch uv_sim_bringup sim.launch.py preset:=record
-    ros2 launch uv_sim_bringup sim.launch.py preset:=debug
-    ros2 launch uv_sim_bringup sim.launch.py preset:=task
+Sim/HIL 也用 profile:=default|record|debug|task 选择整机启动组合；原有启停和录制组合保留。相机和其他组件不再各自选择 profile，组件从默认参数运行。
 
-    ros2 launch uv_sim_bringup hil.launch.py preset:=record
-    ros2 launch uv_sim_bringup hil.launch.py preset:=debug
-    ros2 launch uv_sim_bringup hil.launch.py preset:=task
+    ros2 launch uv_sim_bringup sim.launch.py profile:=record
+    ros2 launch uv_sim_bringup sim.launch.py profile:=debug
+    ros2 launch uv_sim_bringup sim.launch.py profile:=task
 
-task 预设未指定 mission_file 时使用默认的 robocup_26.yaml；task runner 启动后
-会自动开始执行该 mission。真机 task 预设会启动运动控制和导航。
+    ros2 launch uv_sim_bringup hil.launch.py profile:=record
+    ros2 launch uv_sim_bringup hil.launch.py profile:=debug
+    ros2 launch uv_sim_bringup hil.launch.py profile:=task
 
-常用 world 名称：
+任务 profile 未指定 mission_file 时使用默认的 robocup_26.yaml。单项任务文件示例见下方任务配置说明。
 
-```text
-guoshui_2026/cruise
-guoshui_2026/cruise_seeded
-sauvc_2026/finals
-sauvc_2026/qualification
-sauvc_2026/pool
-```
+仿真场景通过 uv_sim 的 world 选择，例如：
+
+    ros2 launch uv_sim sim.launch.py world:=sauvc_2026/finals
+    ros2 launch uv_sim sim.launch.py world:=guoshui_2026/cruise_seeded
+
+world 只表示 Stonefish 场景；SIL/HIL 整机启动组合由 uv_sim_bringup 的 profile 选择。HIL 串口参数直接传给 micro-ROS agent：
+
+    ros2 launch uv_sim_bringup hil.launch.py profile:=default \
+      serial_dev:=/dev/ttyUSB0 serial_baud:=921600
 
 仿真 Python 节点会自动使用 `workspace_auv/.venv`。依赖文件会按 Python 版本
 选择 NumPy 1.x：Foxy/Python 3.8 使用 `<1.25`，Jazzy 使用 `1.26.4`，以避免
@@ -166,30 +165,6 @@ ros2 launch uv_sim_bringup sim.launch.py enable_task:=true \
 ```
 
 自定义任务链仍可传入 `missions/*.yaml` 文件。
-
-正式运行入口按模式划分，`profile` 是标准 ROS 2 参数文件预设：
-
-```bash
-# SIL 仿真：默认 sim_dev；CI/headless 显式关闭桌面观测
-ros2 launch uv_sim_bringup sim.launch.py profile:=sim_dev
-ros2 launch uv_sim_bringup sim.launch.py profile:=sim_ci enable_preview:=false
-
-# 竞赛 world 预设；显式 world:= 会覆盖 profile 选择
-ros2 launch uv_sim sim.launch.py profile:=sauvc_finals
-ros2 launch uv_sim sim.launch.py profile:=guoshui_cruise_seeded
-
-# 混合显卡机器：默认自动使用容器中的 NVIDIA；需要系统 OpenGL 时显式指定
-ros2 launch uv_sim_bringup sim.launch.py gpu_backend:=auto
-ros2 launch uv_sim_bringup sim.launch.py gpu_backend:=nvidia
-ros2 launch uv_sim_bringup sim.launch.py gpu_backend:=system
-
-# HIL：串口参数直接传给 micro-ROS agent
-ros2 launch uv_sim_bringup hil.launch.py profile:=hil_lab \
-  serial_dev:=/dev/ttyUSB0 serial_baud:=921600
-
-# 真机：real_safe 使用更保守的功能参数
-ros2 launch uv_bringup real.launch.py profile:=real_safe
-```
 
 场景 seed 会生成到独立的临时 Data 目录，不会改写源码场景；请使用
 `sim.launch.py`、`hil.launch.py`、`real.launch.py` 和 `core_sim.launch.py`

@@ -10,22 +10,22 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     enable_task = LaunchConfiguration("enable_task")
-    profile_params = LaunchConfiguration("profile_params")
+    params_file = LaunchConfiguration("params_file")
     mission_file = LaunchConfiguration("mission_file")
-    camera_config_profile = LaunchConfiguration("camera_config_profile")
+    camera_mode = LaunchConfiguration("camera_mode")
     camera_config_dir = LaunchConfiguration("camera_config_dir")
 
     def _nodes(context):
         parameters = []
-        profile = profile_params.perform(context).strip()
-        if profile:
-            parameters.append(profile)
+        parameter_file = params_file.perform(context).strip()
+        if parameter_file:
+            parameters.append(parameter_file)
         task_parameters = {
             "mission_file": mission_file,
         }
-        requested_camera_profile = camera_config_profile.perform(context).strip()
-        if requested_camera_profile and requested_camera_profile.lower() != "auto":
-            task_parameters["camera_config_profile"] = camera_config_profile
+        requested_camera_mode = camera_mode.perform(context).strip()
+        if requested_camera_mode and requested_camera_mode.lower() != "auto":
+            task_parameters["camera_mode"] = camera_mode
         requested_camera_dir = camera_config_dir.perform(context).strip()
         if requested_camera_dir:
             task_parameters["camera_config_dir"] = camera_config_dir
@@ -43,8 +43,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_task", default_value="true"),
-        DeclareLaunchArgument("profile_params", default_value=""),
-        DeclareLaunchArgument("camera_config_profile", default_value="auto"),
+        DeclareLaunchArgument("params_file", default_value=""),
+        DeclareLaunchArgument("camera_mode", default_value="auto"),
         DeclareLaunchArgument("camera_config_dir", default_value=""),
         DeclareLaunchArgument(
             "mission_file",

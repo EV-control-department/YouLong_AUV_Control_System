@@ -1,0 +1,5 @@
+schema_version: 1
+runtime: hil
+profile: default
+description: Keep the existing hil.launch.py defaults.
+arguments: {}

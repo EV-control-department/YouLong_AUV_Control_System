@@ -19,7 +19,6 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     LogInfo,
-    OpaqueFunction,
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -32,13 +31,10 @@ from launch_ros.substitutions import FindPackageShare
 from uv_sim_bringup.launch_common import (
     configure_simulator_gpu_environment,
     declare_feature_arguments,
-    declare_launch_preset,
+    declare_profile,
     declare_mission_file,
     declare_observability_arguments,
-    declare_profile,
     declare_simulation_arguments,
-    profile_path,
-    validate_profile,
 )
 from uv_sim_bringup.scene import prepare_scene
 
@@ -66,35 +62,8 @@ def _include(package, launch_file, arguments, *, condition=None):
     )
 
 
-def _profile_include(
-    package, launch_file, arguments, *, profile, profile_package,
-):
-    """Resolve a profile path in the parent launch context."""
-    def _create_include(context):
-        resolved_arguments = dict(arguments)
-        resolved_profile = profile_path(
-            profile, profile_package).perform(context)
-        resolved_arguments['profile_params'] = resolved_profile
-        return [
-            LogInfo(msg=[
-                'Resolved ', package, ' profile: ', resolved_profile,
-            ]),
-            _include(package, launch_file, resolved_arguments),
-        ]
-
-    return OpaqueFunction(function=_create_include)
-
-
-def _capture_profile(context):
-    """Preserve the simulator profile before child launches reuse ``profile``."""
-    context.launch_configurations['sim_profile'] = (
-        context.launch_configurations.get('profile', ''))
-    return []
-
-
 def generate_launch_description():
     profile = LaunchConfiguration('profile')
-    sim_profile = LaunchConfiguration('sim_profile')
     gpu = LaunchConfiguration('gpu')
     gpu_backend = LaunchConfiguration('gpu_backend')
     scenario = LaunchConfiguration('scenario_desc')
@@ -163,11 +132,11 @@ def generate_launch_description():
             'scenario_desc': LaunchConfiguration('resolved_scenario'),
             'simulation_rate': sim_rate,
         }, condition=UnlessCondition(gpu))
-    bridge = _profile_include('uv_sim_bridge', 'bridge.launch.py', {
+    bridge = _include('uv_sim_bridge', 'bridge.launch.py', {
         'hil_mode': 'false',
         'camera_stitch_fps': LaunchConfiguration('camera_stitch_fps'),
         'publish_raw_camera_topics': 'false',
-    }, profile=sim_profile, profile_package='uv_sim_bridge')
+    })
     localization = _include('uv_localization', 'localization_launch.py', {
         'sim_mode': 'true', 'publish_tf': 'true',
         'estimator': estimator,
@@ -195,10 +164,10 @@ def generate_launch_description():
     })
     control = _include('uv_control', 'control_launch.py', {
         'enable_motion': enable_motion, 'sim_mode': 'true',
-        'profile_params': '',
+        'params_file': '',
     })
     camera = _include('uv_camera', 'camera_launch.py', {
-        'sim_mode': 'true', 'camera_config_profile': 'sim',
+        'sim_mode': 'true', 'camera_mode': 'sim',
         'camera_config_dir': camera_dir,
     })
     perception = _include('uv_perception', 'perception_launch.py', {
@@ -209,12 +178,12 @@ def generate_launch_description():
         'uv_stream', 'stream_launch.py', {},
         condition=IfCondition(enable_stream))
     planning = _include('uv_planning', 'planning_launch.py', {
-        'enable_nav': enable_nav, 'profile_params': '',
+        'enable_nav': enable_nav, 'params_file': '',
     })
     task = _include('uv_task', 'task_launch.py', {
         'enable_task': enable_task,
-        'camera_config_profile': 'sim', 'camera_config_dir': camera_dir,
-        'profile_params': '', 'mission_file': mission_file,
+        'camera_mode': 'sim', 'camera_config_dir': camera_dir,
+        'params_file': '', 'mission_file': mission_file,
     })
     observability = _include('uv_bringup', 'observability.launch.py', {
         'enable_preview': LaunchConfiguration('enable_preview'),
@@ -243,11 +212,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        *declare_launch_preset(
+        *declare_profile(
             "sim", "uv_sim_bringup",
             choices=("default", "record", "debug", "task"),
         ),
-        declare_profile('sim', 'sim_dev'), declare_mission_file(),
+        declare_mission_file(),
         *declare_feature_arguments(
             enable_ai='true', enable_nav='false', enable_task='false',
             enable_motion='true'),
@@ -284,9 +253,7 @@ def generate_launch_description():
         DeclareLaunchArgument('usbl_outlier_stddev', default_value='0.0'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
         configure_simulator_gpu_environment(gpu, gpu_backend),
-        validate_profile(profile, 'sim'),
-        OpaqueFunction(function=_capture_profile),
-        LogInfo(msg=['Simulation profile: ', sim_profile]),
+        LogInfo(msg=['Simulation profile: ', profile]),
         prepare_scene(
             scenario_desc=scenario, scene_seed=seed, launch_file=__file__,
             start_actions=[description, localization, stonefish_gpu,

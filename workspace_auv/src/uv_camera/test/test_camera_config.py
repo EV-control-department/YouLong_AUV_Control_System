@@ -8,15 +8,16 @@ import pytest
 from uv_camera.camera_config import CameraConfigError, load_camera_config
 
 
-def test_all_camera_profiles_load_intrinsics_without_npz_or_extrinsics():
-    for profile in ("sim", "real"):
+def test_all_camera_modes_load_intrinsics_without_npz_or_extrinsics():
+    for mode in ("sim", "real"):
         for camera in ("front", "down"):
-            config = load_camera_config(camera, profile)
+            config = load_camera_config(camera, mode)
+            assert config.mode == mode
             assert config.capture_resolution[0] > 0
             assert config.capture_resolution[1] > 0
             assert config.eye_resolution == (1280, 960)
             assert config.calibration_source == (
-                "sim_camera_info" if profile == "sim" else "yaml")
+                "sim_camera_info" if mode == "sim" else "yaml")
             assert config.side("left").matrix.shape == (3, 3)
             assert config.side("right").distortion.shape == (5,)
             assert not hasattr(config, "calibration_npz")
@@ -24,8 +25,8 @@ def test_all_camera_profiles_load_intrinsics_without_npz_or_extrinsics():
             assert not hasattr(config.side("left"), "optical_to_body")
 
 
-def test_config_dir_accepts_package_config_root():
-    config_root = Path(__file__).parents[1] / "config"
+def test_config_dir_accepts_package_root():
+    config_root = Path(__file__).parents[1]
     config = load_camera_config("down", "sim", config_root)
     assert config.calibration_source == "sim_camera_info"
 
@@ -57,7 +58,7 @@ def test_sim_camera_info_topics_match_stonefish_publishers():
 
 
 def test_old_schema_requires_urdf_tf_migration(tmp_path):
-    source_dir = Path(__file__).parents[1] / "config" / "cameras"
+    source_dir = Path(__file__).parents[1] / "stereos"
     config_dir = tmp_path / "cameras"
     config_dir.mkdir()
     source = (source_dir / "front.yaml").read_text(encoding="utf-8")
@@ -69,7 +70,7 @@ def test_old_schema_requires_urdf_tf_migration(tmp_path):
 
 
 def test_extrinsics_are_rejected_even_with_new_schema(tmp_path):
-    source_dir = Path(__file__).parents[1] / "config" / "cameras"
+    source_dir = Path(__file__).parents[1] / "stereos"
     config_dir = tmp_path / "cameras"
     config_dir.mkdir()
     source = (source_dir / "front.yaml").read_text(encoding="utf-8")
@@ -81,3 +82,34 @@ def test_extrinsics_are_rejected_even_with_new_schema(tmp_path):
     (config_dir / "front.yaml").write_text(source, encoding="utf-8")
     with pytest.raises(CameraConfigError, match="extrinsics"):
         load_camera_config("front", "real", config_dir)
+
+
+def test_urdf_remains_the_source_of_stereo_baselines():
+    urdf = Path(__file__).resolve().parents[2] / "auv_description" / "urdf" / "auv.urdf"
+    root = ET.parse(urdf).getroot()
+    origins = {
+        joint.get("name"): tuple(float(value) for value in
+                                 joint.find("origin").get("xyz").split())
+        for joint in root.findall("joint")
+        if joint.get("name") in {
+            "front_left_camera_mount", "front_right_camera_mount",
+            "downward_left_camera_mount", "downward_right_camera_mount",
+        }
+    }
+    assert origins["front_left_camera_mount"][1] == pytest.approx(-0.05)
+    assert origins["front_right_camera_mount"][1] == pytest.approx(0.05)
+    assert origins["downward_left_camera_mount"][1] == pytest.approx(-0.05)
+    assert origins["downward_right_camera_mount"][1] == pytest.approx(0.05)
+    for left, right in (("front_left_camera_mount", "front_right_camera_mount"),
+                        ("downward_left_camera_mount", "downward_right_camera_mount")):
+        baseline = sum((a - b) ** 2 for a, b in zip(origins[left], origins[right])) ** 0.5
+        assert baseline == pytest.approx(0.1)
+
+
+def test_camera_calibration_files_are_installed_under_stereos():
+    package_root = Path(__file__).parents[1]
+    setup = (package_root / "setup.py").read_text(encoding="utf-8")
+    assert "stereos/front.yaml" in setup
+    assert "stereos/down.yaml" in setup
+    assert "config/cameras" not in setup
+    assert "config/profiles" not in setup

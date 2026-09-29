@@ -16,10 +16,10 @@
   \pkg{uv_msgs} & \pathref{workspace_auv/src/uv_msgs/msg/}、srv、action & 应用消息、Service、BasicMotion Action 生成。 \\
   \pkg{zit6_interfaces} & \pathref{workspace_auv/src/zit6_interfaces/} & 固件兼容命令、状态和参数服务。 \\
   \pkg{auv_description} & \pathref{workspace_auv/src/auv_description/launch/}、urdf & 真机模型、组件和固定 TF。 \\
-  \pkg{uv_bringup} & \pathref{workspace_auv/src/uv_bringup/launch/real.launch.py}、\pathref{workspace_auv/src/uv_bringup/config/launch_profiles/real/} & 真机组合启动、运行预设、readiness 和 observability。 \\
-  \pkg{uv_hm} & \pathref{workspace_auv/src/uv_hm/launch/}、config & heartbeat、状态适配、watchdog 和硬件 profile。 \\
+  \pkg{uv_bringup} & \pathref{workspace_auv/src/uv_bringup/launch/real.launch.py}、\pathref{workspace_auv/src/uv_bringup/config/profiles/real/} & 真机组合启动与整机 profile、readiness 和 observability。 \\
+  \pkg{uv_hm} & \pathref{workspace_auv/src/uv_hm/launch/}、\pathref{workspace_auv/src/uv_hm/config/default.yaml} & heartbeat、状态适配、watchdog 和硬件管理器默认参数。 \\
   \pkg{uv_localization} & \pathref{workspace_auv/src/uv_localization/launch/localization_launch.py} & bootstrap 状态、健康状态和动态 TF。 \\
-  \pkg{uv_camera} & \pathref{workspace_auv/src/uv_camera/launch/camera_launch.py}、config & 真机/仿真图像采集、相机参数、CameraInfo 和 TF 工具。 \\
+  \pkg{uv_camera} & \pathref{workspace_auv/src/uv_camera/launch/camera_launch.py}、\pathref{workspace_auv/src/uv_camera/stereos/} & 真机/仿真图像采集、相机内参 modes、CameraInfo 和 TF 工具。 \\
   \pkg{uv_image_transport} & 包源码 & Iceoryx2 图像帧读写接口。 \\
   \pkg{uv_perception} & perception launch、detector/localization & 检测、定位、跟踪和类别/权重资源。 \\
   \pkg{uv_nav}、\pkg{uv_planning} & nav/planning launch 和节点实现 & 规划入口与 A* 后端迁移实现。 \\
@@ -45,7 +45,7 @@
   \pkg{uv_sim_description} & 仿真 URDF 与 description launch & 仿真几何、sensor frame 和 static TF。 \\
   \pkg{uv_sim_bridge} & bridge launch、config、bridge/core & canonical 输入输出、Host 控制核、mixer 和 HIL 边界。 \\
   \pkg{zit6_control_core} & CMake/C++ 控制核 & SIL Host PID/控制核，与固件算法保持契约一致。 \\
-  \pkg{uv_sim_bringup} & sim、hil、experiment launch、\pathref{workspace_sim/src/uv_sim_bringup/config/launch_profiles/} & SIL/HIL 组合启动、运行预设、场景准备、退化、记录和评测编排。 \\
+  \pkg{uv_sim_bringup} & sim、hil、experiment launch、\pathref{workspace_sim/src/uv_sim_bringup/config/profiles/} & SIL/HIL 组合启动与整机 profile、场景准备、退化、记录和评测编排。 \\
   \pkg{uv_sim_degradation} & degradation launch/node & 显式退化 Topic、seed 和事件记录。 \\
   \pkg{uv_sim_evaluation} & evaluator & Ground Truth 对齐、ATE/RPE、性能和事件指标。 \\
   \pkg{uv_sim} & public world/vehicle launch、legacy bridge & 新入口选择场景并转发到 \pkg{uv_sim_bringup}；保留旧 scenario\_desc 兼容。 \\

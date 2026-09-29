@@ -160,7 +160,7 @@ build_workspaces() {
             "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces"
         )
         local zit6_packages=(zit6_interfaces)
-        local upper_config="${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples/UserApp/Config/config.json"
+        local upper_config="${REPO_ROOT}/third_party/AUV_zit6_cmake/UserApp/Config/config.json"
 
         # upper_examples needs a machine-local ZIT6 configuration that is not
         # checked into git. Keep the ROS interface build portable, and include

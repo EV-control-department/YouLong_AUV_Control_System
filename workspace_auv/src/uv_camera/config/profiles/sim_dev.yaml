@@ -1,4 +1,0 @@
-/uv_camera:
-  ros__parameters:
-    sim_mode: true
-    camera_config_profile: sim

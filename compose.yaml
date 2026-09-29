@@ -66,6 +66,8 @@ services:
       # Set false for a lightweight container that only needs raw camera and
       # streaming. It defaults to true so object_detector works immediately.
       INSTALL_WORKSPACE_AI: "${INSTALL_WORKSPACE_AI:-true}"
+      # Include upper_examples in the ZIT6 workspace build and source flow.
+      BUILD_ZIT6_UPPER_EXAMPLES: "${BUILD_ZIT6_UPPER_EXAMPLES:-true}"
       FORCE_ICEORYX2_BUILD: "${FORCE_ICEORYX2_BUILD:-false}"
       YOLO_CONFIG_DIR: "/workspace/.docker/ultralytics"
       # Image bytes use the dedicated iceoryx2/POSIX rings. Keep ROS 2 control

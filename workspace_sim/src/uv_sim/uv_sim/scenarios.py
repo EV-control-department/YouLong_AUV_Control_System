@@ -17,19 +17,6 @@ WORLD_ALIASES = {
     "sauvc_2026/pool": "worlds/sauvc_2026/sauvc_pool.scn",
 }
 
-# Public launch presets.  Competition presets select a world and reuse the
-# ordinary simulator profile for bridge/perception parameters.  An explicit
-# ``world:=`` always wins over the preset world.
-PROFILE_ALIASES = {
-    "sim_dev": ("sim_dev", None),
-    "sim_ci": ("sim_ci", None),
-    "guoshui": ("sim_dev", "guoshui_2026/cruise_seeded"),
-    "guoshui_cruise": ("sim_dev", "guoshui_2026/cruise"),
-    "guoshui_cruise_seeded": ("sim_dev", "guoshui_2026/cruise_seeded"),
-    "sauvc_finals": ("sim_dev", "sauvc_2026/finals"),
-    "sauvc_qualification": ("sim_dev", "sauvc_2026/qualification"),
-}
-
 
 def resolve_world(assets_root: Path, value: str) -> Path:
     """Resolve a public world name or a package-relative ``.scn`` path."""

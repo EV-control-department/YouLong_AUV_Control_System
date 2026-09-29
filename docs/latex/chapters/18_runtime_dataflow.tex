@@ -74,5 +74,5 @@
 观测节点可以读取运行状态和仿真真值，但只能将结果写入 \topic{/auv/evaluation/metrics}、\topic{/auv/evaluation/events} 或 session 目录。任何需要“修正状态”的逻辑必须明确属于估计器，而不是评测节点；否则会把离线信息偷偷引入在线控制。
 
 \begin{infobox}
-判断一条 Topic 是否属于控制闭环，不能只看名称。应沿 launch、publisher、subscriber 和参数 profile 追踪其真实数据路径，再确认它是否被 \pkg{uv_localization}、\pkg{uv_control}、\pkg{uv_nav} 或 \pkg{uv_task} 消费。
+判断一条 Topic 是否属于控制闭环，不能只看名称。应沿 launch、publisher、subscriber 和组件参数追踪其真实数据路径，再确认它是否被 \pkg{uv_localization}、\pkg{uv_control}、\pkg{uv_nav} 或 \pkg{uv_task} 消费。
 \end{infobox}

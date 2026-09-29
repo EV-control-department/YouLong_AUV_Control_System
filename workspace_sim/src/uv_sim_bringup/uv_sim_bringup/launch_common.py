@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ament_index_python.packages import get_package_share_directory
 from launch.actions import (
     DeclareLaunchArgument,
     LogInfo,
@@ -19,11 +18,6 @@ def declare_feature_arguments(*args, **kwargs):
     return _common.declare_feature_arguments(*args, **kwargs)
 
 
-def declare_launch_preset(*args, **kwargs):
-    """Forward shared launch-preset loading from the AUV bringup package."""
-    return _common.declare_launch_preset(*args, **kwargs)
-
-
 def declare_mission_file(*args, **kwargs):
     """Forward the mission-file declaration from the AUV package."""
     return _common.declare_mission_file(*args, **kwargs)
@@ -34,20 +28,10 @@ def declare_observability_arguments(*args, **kwargs):
     return _common.declare_observability_arguments(*args, **kwargs)
 
 
-def profile_path(*args, **kwargs):
-    """Forward package profile lookup from the AUV launch package."""
-    return _common.profile_path(*args, **kwargs)
+def declare_profile(*args, **kwargs):
+    """Forward whole-system profile loading from the AUV bringup package."""
+    return _common.declare_profile(*args, **kwargs)
 
-
-PROFILE_CHOICES = {
-    'sim': ('sim_dev', 'sim_ci'),
-    'hil': ('hil_lab',),
-}
-
-PROFILE_PACKAGES = {
-    'sim': ('uv_sim_bridge', 'uv_camera'),
-    'hil': ('uv_sim_bridge', 'uv_camera'),
-}
 
 
 def configure_simulator_gpu_environment(gpu, gpu_backend):
@@ -92,40 +76,6 @@ def configure_simulator_gpu_environment(gpu, gpu_backend):
         ]
 
     return OpaqueFunction(function=_configure)
-
-
-def validate_profile(profile, mode):
-    """Reject a simulation profile from another simulation mode."""
-
-    def _validate(context):
-        value = profile.perform(context).strip()
-        choices = PROFILE_CHOICES[mode]
-        if value not in choices:
-            raise RuntimeError(
-                f'profile {value!r} is not valid for mode {mode!r}; '
-                f'choose one of {", ".join(choices)}')
-        for package in PROFILE_PACKAGES[mode]:
-            profile_file = Path(
-                get_package_share_directory(package), 'config', 'profiles',
-                f'{value}.yaml')
-            if not profile_file.is_file():
-                raise RuntimeError(
-                    f'profile parameter file does not exist: {profile_file}')
-        return []
-
-    return OpaqueFunction(function=_validate)
-
-
-def declare_profile(mode, default):
-    """Declare a simulation or HIL profile selector."""
-    return DeclareLaunchArgument(
-        'profile',
-        default_value=default,
-        choices=list(PROFILE_CHOICES[mode]),
-        description=(
-            f'Runtime parameter profile for {mode}: '
-            f'{", ".join(PROFILE_CHOICES[mode])}'),
-    )
 
 
 def declare_simulation_arguments(

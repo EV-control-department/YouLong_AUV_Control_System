@@ -9,13 +9,13 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     enable_nav = LaunchConfiguration("enable_nav")
-    profile_params = LaunchConfiguration("profile_params")
+    params_file = LaunchConfiguration("params_file")
 
     def _nodes(context):
         parameters = []
-        profile = profile_params.perform(context).strip()
-        if profile:
-            parameters.append(profile)
+        parameter_file = params_file.perform(context).strip()
+        if parameter_file:
+            parameters.append(parameter_file)
         return [Node(
             package="uv_nav",
             executable="navigator",
@@ -29,6 +29,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_nav", default_value="true"),
-        DeclareLaunchArgument("profile_params", default_value=""),
+        DeclareLaunchArgument("params_file", default_value=""),
         OpaqueFunction(function=_nodes),
     ])

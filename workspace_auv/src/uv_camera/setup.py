@@ -8,16 +8,9 @@ data_files = [
     ('share/' + package_name + '/launch', [
         'launch/camera_launch.py',
     ]),
-    ('share/' + package_name + '/config/profiles', [
-        'config/profiles/sim_dev.yaml',
-        'config/profiles/sim_ci.yaml',
-        'config/profiles/hil_lab.yaml',
-        'config/profiles/real_default.yaml',
-        'config/profiles/real_safe.yaml',
-    ]),
-    ('share/' + package_name + '/config/cameras', [
-        'config/cameras/front.yaml',
-        'config/cameras/down.yaml',
+    ('share/' + package_name + '/stereos', [
+        'stereos/front.yaml',
+        'stereos/down.yaml',
     ]),
 ]
 

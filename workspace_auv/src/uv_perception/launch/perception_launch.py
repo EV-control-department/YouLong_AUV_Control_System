@@ -1,4 +1,4 @@
-"""Launch detector, geometry localizer, and multi-frame estimator."""
+"""Launch detector, per-view ray localizer, and static ray estimator."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -11,20 +11,31 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('model_path', default_value=''),
         DeclareLaunchArgument('confidence', default_value='0.5'),
-        DeclareLaunchArgument('stereo_baseline_m', default_value='0.10'),
-        DeclareLaunchArgument('association_distance_m', default_value='1.5'),
-        DeclareLaunchArgument('bearing_association_distance_m', default_value='0.35'),
         DeclareLaunchArgument('world_frame', default_value='odom'),
         DeclareLaunchArgument('edge_margin_px', default_value='8.0'),
         DeclareLaunchArgument('edge_margin_ratio', default_value='0.02'),
-        DeclareLaunchArgument('stereo_epipolar_tolerance_px', default_value='10.0'),
-        DeclareLaunchArgument('max_stereo_range_m', default_value='30.0'),
+        DeclareLaunchArgument('observation_pool_size', default_value='300'),
+        DeclareLaunchArgument('candidate_ray_limit', default_value='80'),
+        DeclareLaunchArgument('candidate_pair_limit', default_value='2400'),
+        DeclareLaunchArgument('max_candidate_clusters', default_value='8'),
+        DeclareLaunchArgument('seed_cluster_radius_m', default_value='0.35'),
+        DeclareLaunchArgument('max_pair_gap_m', default_value='1.0'),
         DeclareLaunchArgument('min_parallax_deg', default_value='5.0'),
+        DeclareLaunchArgument('clutter_prior', default_value='0.08'),
         DeclareLaunchArgument('huber_delta', default_value='2.5'),
+        DeclareLaunchArgument('lm_iterations', default_value='10'),
+        DeclareLaunchArgument('association_cycles', default_value='3'),
         DeclareLaunchArgument('pose_translation_sigma_m', default_value='0.03'),
         DeclareLaunchArgument('pose_rotation_sigma_deg', default_value='1.0'),
         DeclareLaunchArgument('extrinsic_translation_sigma_m', default_value='0.005'),
         DeclareLaunchArgument('extrinsic_rotation_sigma_deg', default_value='0.5'),
+        DeclareLaunchArgument('anchor_sigma_default_m', default_value='0.10'),
+        DeclareLaunchArgument('anchor_sigma_collection_frame_m', default_value='0.14'),
+        DeclareLaunchArgument('anchor_sigma_target_rack_m', default_value='0.14'),
+        DeclareLaunchArgument('stable_covariance_trace_m2', default_value='0.04'),
+        DeclareLaunchArgument('stale_after_s', default_value='0.5'),
+        DeclareLaunchArgument('lost_after_s', default_value='2.0'),
+        DeclareLaunchArgument('instance_association_distance_m', default_value='1.5'),
         DeclareLaunchArgument('enable_gui', default_value='false'),
         Node(
             package='uv_perception', executable='object_detector',
@@ -39,41 +50,41 @@ def generate_launch_description():
             respawn_delay=1.0,
             remappings=[('/tf', '/auv/tf'), ('/tf_static', '/auv/tf_static')],
             parameters=[{
-                'stereo_baseline_m': LaunchConfiguration('stereo_baseline_m'),
                 'world_frame': LaunchConfiguration('world_frame'),
                 'edge_margin_px': LaunchConfiguration('edge_margin_px'),
                 'edge_margin_ratio': LaunchConfiguration('edge_margin_ratio'),
-                'stereo_epipolar_tolerance_px':
-                    LaunchConfiguration('stereo_epipolar_tolerance_px'),
-                'max_stereo_range_m': LaunchConfiguration('max_stereo_range_m'),
-                'pose_translation_sigma_m':
-                    LaunchConfiguration('pose_translation_sigma_m'),
-                'pose_rotation_sigma_deg':
-                    LaunchConfiguration('pose_rotation_sigma_deg'),
-                'extrinsic_translation_sigma_m':
-                    LaunchConfiguration('extrinsic_translation_sigma_m'),
-                'extrinsic_rotation_sigma_deg':
-                    LaunchConfiguration('extrinsic_rotation_sigma_deg'),
             }]),
         Node(
             package='uv_perception', executable='object_estimator',
             name='object_estimator', output='both', respawn=True,
             respawn_delay=1.0, parameters=[{
                 'world_frame': LaunchConfiguration('world_frame'),
-                'association_distance_m': LaunchConfiguration(
-                    'association_distance_m'),
-                'bearing_association_distance_m':
-                    LaunchConfiguration('bearing_association_distance_m'),
+                'observation_pool_size': LaunchConfiguration('observation_pool_size'),
+                'candidate_ray_limit': LaunchConfiguration('candidate_ray_limit'),
+                'candidate_pair_limit': LaunchConfiguration('candidate_pair_limit'),
+                'max_candidate_clusters': LaunchConfiguration('max_candidate_clusters'),
+                'seed_cluster_radius_m': LaunchConfiguration('seed_cluster_radius_m'),
+                'max_pair_gap_m': LaunchConfiguration('max_pair_gap_m'),
                 'min_parallax_deg': LaunchConfiguration('min_parallax_deg'),
+                'clutter_prior': LaunchConfiguration('clutter_prior'),
                 'huber_delta': LaunchConfiguration('huber_delta'),
-                'pose_translation_sigma_m':
-                    LaunchConfiguration('pose_translation_sigma_m'),
-                'pose_rotation_sigma_deg':
-                    LaunchConfiguration('pose_rotation_sigma_deg'),
-                'extrinsic_translation_sigma_m':
-                    LaunchConfiguration('extrinsic_translation_sigma_m'),
-                'extrinsic_rotation_sigma_deg':
-                    LaunchConfiguration('extrinsic_rotation_sigma_deg'),
+                'lm_iterations': LaunchConfiguration('lm_iterations'),
+                'association_cycles': LaunchConfiguration('association_cycles'),
+                'pose_translation_sigma_m': LaunchConfiguration('pose_translation_sigma_m'),
+                'pose_rotation_sigma_deg': LaunchConfiguration('pose_rotation_sigma_deg'),
+                'extrinsic_translation_sigma_m': LaunchConfiguration('extrinsic_translation_sigma_m'),
+                'extrinsic_rotation_sigma_deg': LaunchConfiguration('extrinsic_rotation_sigma_deg'),
+                'anchor_sigma_default_m': LaunchConfiguration('anchor_sigma_default_m'),
+                'anchor_sigma_collection_frame_m':
+                    LaunchConfiguration('anchor_sigma_collection_frame_m'),
+                'anchor_sigma_target_rack_m':
+                    LaunchConfiguration('anchor_sigma_target_rack_m'),
+                'stable_covariance_trace_m2':
+                    LaunchConfiguration('stable_covariance_trace_m2'),
+                'stale_after_s': LaunchConfiguration('stale_after_s'),
+                'lost_after_s': LaunchConfiguration('lost_after_s'),
+                'instance_association_distance_m':
+                    LaunchConfiguration('instance_association_distance_m'),
             }]),
         Node(
             package='uv_perception', executable='perception_gui',

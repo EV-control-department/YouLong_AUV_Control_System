@@ -8,9 +8,6 @@ def _localizer():
     localizer = ObjectLocalizer.__new__(ObjectLocalizer)
     localizer.edge_margin_px = 8.0
     localizer.edge_margin_ratio = 0.02
-    localizer.stereo_epipolar_tolerance_px = 10.0
-    localizer.baseline_m = 0.10
-    localizer.max_stereo_range_m = 30.0
     return localizer
 
 
@@ -37,26 +34,22 @@ def _array(camera, box, pixel_x):
     return message
 
 
-def test_edge_eye_is_rejected_before_stereo_and_valid_eye_remains_eligible():
+def test_clipped_eye_is_rejected_while_valid_eye_still_contributes_a_ray():
     localizer = _localizer()
     left = _array('front_left', (8.0, 300.0, 120.0, 500.0), 600.0)
     right = _array('front_right', (40.0, 300.0, 150.0, 500.0), 580.0)
     info = _info()
 
-    left_eligible = localizer._eligible(left, info)
-    right_eligible = localizer._eligible(right, info)
-
-    assert left_eligible == []
-    assert right_eligible == [0]
-    assert localizer._stereo_pairs(
-        left, right, info, info, left_eligible, right_eligible) == []
+    assert localizer._eligible(left, info) == []
+    assert localizer._eligible(right, info) == [0]
 
 
-def test_valid_rectified_stereo_pair_is_assigned_once():
+def test_rectified_stereo_views_remain_independent_ray_observations():
     localizer = _localizer()
     left = _array('front_left', (100.0, 300.0, 220.0, 500.0), 600.0)
     right = _array('front_right', (80.0, 300.0, 200.0, 500.0), 580.0)
     info = _info()
 
-    assert localizer._stereo_pairs(
-        left, right, info, info, [0], [0]) == [(0, 0)]
+    assert localizer._eligible(left, info) == [0]
+    assert localizer._eligible(right, info) == [0]
+    assert not hasattr(localizer, '_stereo_pairs')

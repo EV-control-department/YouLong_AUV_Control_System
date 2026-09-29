@@ -11,7 +11,8 @@ def generate_launch_description():
         DeclareLaunchArgument('sim_mode', default_value='false'),
         DeclareLaunchArgument('enable_front', default_value='true'),
         DeclareLaunchArgument('enable_down', default_value='true'),
-        DeclareLaunchArgument('camera_config_profile', default_value='auto'),
+        DeclareLaunchArgument(
+            'camera_mode', default_value='auto', choices=['auto', 'real', 'sim']),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
         DeclareLaunchArgument('front_camera_device', default_value=''),
         DeclareLaunchArgument('down_camera_device', default_value=''),
@@ -23,7 +24,7 @@ def generate_launch_description():
                 'sim_mode': LaunchConfiguration('sim_mode'),
                 'enable_front': LaunchConfiguration('enable_front'),
                 'enable_down': LaunchConfiguration('enable_down'),
-                'camera_config_profile': LaunchConfiguration('camera_config_profile'),
+                'camera_mode': LaunchConfiguration('camera_mode'),
                 'camera_config_dir': LaunchConfiguration('camera_config_dir'),
                 'front_camera_device': LaunchConfiguration('front_camera_device'),
                 'down_camera_device': LaunchConfiguration('down_camera_device'),

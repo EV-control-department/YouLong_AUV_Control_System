@@ -1,17 +1,25 @@
-"""Static contracts for the runtime-preset launch layout."""
+"""Static contracts for bringup profiles and component defaults."""
 
 import ast
 from pathlib import Path
 
+import yaml
+
 
 PACKAGE_ROOT = Path(__file__).parents[1]
 LAUNCH_ROOT = PACKAGE_ROOT / "launch"
-PROFILE_ROOT = PACKAGE_ROOT / "config" / "profiles"
 AUV_SOURCE_ROOT = PACKAGE_ROOT.parent
+SIM_SOURCE_ROOT = PACKAGE_ROOT.parents[2] / "workspace_sim" / "src"
+REAL_PROFILE_ROOT = PACKAGE_ROOT / "config" / "profiles" / "real"
+SIM_PROFILE_ROOT = SIM_SOURCE_ROOT / "uv_sim_bringup" / "config" / "profiles"
 
 
 def _source(name):
     return (LAUNCH_ROOT / name).read_text(encoding="utf-8")
+
+
+def _profile(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def test_formal_mode_entries_exist():
@@ -22,19 +30,16 @@ def test_formal_mode_entries_exist():
 
 
 def test_mode_entries_do_not_define_component_nodes():
-    """Mode files may orchestrate, but component Nodes belong to feature packages."""
-    for name in ("real.launch.py",):
-        tree = ast.parse(_source(name), filename=name)
-        called_names = {
-            node.func.id
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        assert "Node" not in called_names
+    tree = ast.parse(_source("real.launch.py"), filename="real.launch.py")
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "Node" not in called_names
 
 
 def test_bringup_uses_the_invoking_terminal():
-    """Terminal multiplexing is deliberately outside the ROS launch layer."""
     launch_files = list(LAUNCH_ROOT.glob("*.py"))
     forbidden = (
         "t" + "mux",
@@ -48,18 +53,194 @@ def test_bringup_uses_the_invoking_terminal():
         assert not any(token in source for token in forbidden), path
 
 
-def test_all_profiles_are_standard_ros_parameter_files():
+def test_top_level_launch_modes_use_profile_and_no_preset_selector():
+    launch_files = [
+        LAUNCH_ROOT / "real.launch.py",
+        SIM_SOURCE_ROOT / "uv_sim_bringup" / "launch" / "sim.launch.py",
+        SIM_SOURCE_ROOT / "uv_sim_bringup" / "launch" / "hil.launch.py",
+    ]
+    for path in launch_files:
+        source = path.read_text(encoding="utf-8")
+        assert "declare_profile(" in source
+        assert "declare_launch_preset" not in source
+        assert "preset" not in source.lower()
+
+
+def test_real_profiles_have_expected_startup_combinations():
+    expected_names = {"default.yaml", "record.yaml", "debug.yaml", "task.yaml"}
+    assert {path.name for path in REAL_PROFILE_ROOT.glob("*.yaml")} == expected_names
+    loaded = {path.stem: _profile(path) for path in REAL_PROFILE_ROOT.glob("*.yaml")}
+    for name, payload in loaded.items():
+        assert payload["runtime"] == "real"
+        assert payload["profile"] == name
+        assert payload["arguments"].get("enable_nav") is False
+
+    record = loaded["record"]["arguments"]
+    assert record["enable_ai"] is False
+    assert record["enable_motion"] is True
+    assert record["enable_task"] is False
+    assert record["record_mode"] == "raw"
+    assert record["record_session"] is True
+
+    debug = loaded["debug"]["arguments"]
+    assert debug["enable_ai"] is True
+    assert debug["enable_motion"] is True
+    assert debug["enable_task"] is False
+    assert debug["record_mode"] == "go2rtc"
+    assert debug["enable_stream"] is True
+
+    task = loaded["task"]["arguments"]
+    assert task["enable_ai"] is True
+    assert task["enable_motion"] is True
+    assert task["enable_task"] is True
+    assert task["record_mode"] == "go2rtc"
+
+
+def test_sim_and_hil_profile_combinations_remain_available():
     expected = {
-        "uv_camera": {
-            "sim_dev.yaml", "sim_ci.yaml", "hil_lab.yaml",
-            "real_default.yaml", "real_safe.yaml",
+        "sim": {
+            "record": {
+                "enable_ai": False, "enable_motion": True,
+                "enable_nav": False, "enable_task": False,
+                "gpu": True, "gpu_backend": "auto",
+                "enable_stream": False, "enable_evaluation": False,
+                "record_session": True, "record_mode": "raw",
+                "record_use_sim_time": True,
+            },
+            "debug": {
+                "enable_ai": True, "enable_motion": True,
+                "enable_nav": False, "enable_task": False,
+                "gpu": True, "gpu_backend": "auto",
+                "enable_stream": True, "enable_evaluation": True,
+                "record_session": True, "record_mode": "go2rtc",
+                "go2rtc_stream_mode": "unannotated",
+                "go2rtc_video_format": "jpeg",
+                "record_use_sim_time": True,
+            },
+            "task": {
+                "enable_ai": True, "enable_motion": True,
+                "enable_nav": True, "enable_task": True,
+                "gpu": True, "gpu_backend": "auto",
+                "enable_stream": True, "enable_evaluation": True,
+                "record_session": True, "record_mode": "go2rtc",
+                "go2rtc_stream_mode": "unannotated",
+                "go2rtc_video_format": "jpeg",
+                "record_use_sim_time": True,
+            },
         },
-        "uv_hm": {"real_default.yaml", "real_safe.yaml"},
+        "hil": {
+            "record": {
+                "enable_ai": False, "enable_motion": False,
+                "enable_nav": False, "enable_task": False,
+                "gpu": True, "gpu_backend": "auto",
+                "enable_stream": False, "record_session": True,
+                "record_mode": "raw", "record_use_sim_time": True,
+            },
+            "debug": {
+                "enable_ai": True, "enable_motion": False,
+                "enable_nav": False, "enable_task": False,
+                "gpu": True, "gpu_backend": "auto",
+                "enable_stream": True, "record_session": True,
+                "record_mode": "go2rtc",
+                "go2rtc_stream_mode": "unannotated",
+                "go2rtc_video_format": "jpeg",
+                "record_use_sim_time": True,
+            },
+            "task": {
+                "enable_ai": True, "enable_motion": True,
+                "enable_nav": True, "enable_task": True,
+                "gpu": True, "gpu_backend": "auto",
+                "enable_stream": True, "record_session": True,
+                "record_mode": "go2rtc",
+                "go2rtc_stream_mode": "unannotated",
+                "go2rtc_video_format": "jpeg",
+                "record_use_sim_time": True,
+            },
+        },
     }
-    assert not list(PROFILE_ROOT.glob("*.yaml"))
-    for package, names in expected.items():
-        root = AUV_SOURCE_ROOT / package / "config" / "profiles"
-        assert {path.name for path in root.glob("*.yaml")} == names
-        for path in root.glob("*.yaml"):
-            text = path.read_text(encoding="utf-8")
-            assert "ros__parameters:" in text
+    for runtime in ("sim", "hil"):
+        root = SIM_PROFILE_ROOT / runtime
+        assert {path.name for path in root.glob("*.yaml")} == {
+            "default.yaml", "record.yaml", "debug.yaml", "task.yaml",
+        }
+        profiles = {path.stem: _profile(path) for path in root.glob("*.yaml")}
+        for name, payload in profiles.items():
+            assert payload["runtime"] == runtime
+            assert payload["profile"] == name
+        assert profiles["default"]["arguments"] == {}
+        for name, values in expected[runtime].items():
+            assert profiles[name]["arguments"] == values
+
+
+def test_component_profiles_and_old_pid_files_are_removed():
+    component_roots = [
+        AUV_SOURCE_ROOT / "uv_camera",
+        AUV_SOURCE_ROOT / "uv_hm",
+        SIM_SOURCE_ROOT / "uv_sim",
+        SIM_SOURCE_ROOT / "uv_sim_bridge",
+    ]
+    for root in component_roots:
+        assert not (root / "config" / "profiles").exists()
+        if (root / "setup.py").exists():
+            setup = (root / "setup.py").read_text(encoding="utf-8")
+            assert "config/profiles" not in setup
+            assert "launch_profiles" not in setup
+
+    hm_root = AUV_SOURCE_ROOT / "uv_hm"
+    assert {path.name for path in (hm_root / "config").glob("*.yaml")} == {
+        "default.yaml",
+    }
+    params = _profile(hm_root / "config" / "default.yaml")["/hw_manager"]["ros__parameters"]
+    assert params["arm_mode"] == 1
+    assert params["watchdog_timeout"] == 7.0
+    assert params["battery_low_threshold"] == 14.0
+    hm_setup = (hm_root / "setup.py").read_text(encoding="utf-8")
+    assert "config/default.yaml" in hm_setup
+    assert "pid_parameters.json" not in hm_setup
+    assert "pid_params.yaml" not in hm_setup
+    assert not (hm_root / "config" / "pid_parameters.json").exists()
+    assert not (hm_root / "config" / "pid_params.yaml").exists()
+
+
+def test_only_bringup_packages_install_startup_profiles():
+    real_setup = (PACKAGE_ROOT / "setup.py").read_text(encoding="utf-8")
+    sim_setup = (SIM_SOURCE_ROOT / "uv_sim_bringup" / "setup.py").read_text(encoding="utf-8")
+    assert "config/profiles/real" in real_setup
+    assert "config/profiles/sim" in sim_setup
+    assert "config/profiles/hil" in sim_setup
+    assert "launch_profiles" not in real_setup + sim_setup
+
+
+def test_component_parameter_file_and_camera_mode_arguments_are_named():
+    camera_files = [
+        AUV_SOURCE_ROOT / "uv_camera" / "launch" / "camera_launch.py",
+        AUV_SOURCE_ROOT / "uv_camera" / "uv_camera" / "driver.py",
+        AUV_SOURCE_ROOT / "uv_task" / "launch" / "task_launch.py",
+    ]
+    camera_source = "\n".join(path.read_text(encoding="utf-8")
+                                for path in camera_files)
+    assert "camera_mode" in camera_source
+    assert "camera_config_profile" not in camera_source
+
+    parameter_launch_files = [
+        AUV_SOURCE_ROOT / "uv_control" / "launch" / "control_launch.py",
+        AUV_SOURCE_ROOT / "uv_hm" / "launch" / "hardware_launch.py",
+        AUV_SOURCE_ROOT / "uv_nav" / "launch" / "navigation_launch.py",
+        AUV_SOURCE_ROOT / "uv_planning" / "launch" / "planning_launch.py",
+        AUV_SOURCE_ROOT / "uv_task" / "launch" / "task_launch.py",
+        SIM_SOURCE_ROOT / "uv_sim" / "launch" / "bridge.launch.py",
+        SIM_SOURCE_ROOT / "uv_sim_bridge" / "launch" / "bridge.launch.py",
+    ]
+    for path in parameter_launch_files:
+        source = path.read_text(encoding="utf-8")
+        assert "params_file" in source
+        assert "profile_params" not in source
+
+
+def test_uv_sim_scene_selector_is_world_only():
+    sim_root = SIM_SOURCE_ROOT / "uv_sim"
+    launch = (sim_root / "launch" / "sim.launch.py").read_text(encoding="utf-8")
+    scenarios = (sim_root / "uv_sim" / "scenarios.py").read_text(encoding="utf-8")
+    assert '"world"' in launch
+    assert "PROFILE_ALIASES" not in launch + scenarios
+    assert 'DeclareLaunchArgument("profile"' not in launch

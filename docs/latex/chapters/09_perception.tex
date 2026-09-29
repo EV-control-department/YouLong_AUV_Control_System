@@ -22,7 +22,8 @@
     \draw[arr] (yolo) -- (det);
     \draw[arr] (yolo) -- (line);
     \draw[arr] (det) -- (loc);
-    \draw[arr] (line) |- (loc);
+    % Route auxiliary detections beneath the node row.
+    \draw[arr] (line.south) -- ++(0,-5mm) -| (loc.south);
   \end{tikzpicture}
   \caption{视觉感知与目标定位链路}
   \label{fig:perception-pipeline}
@@ -54,5 +55,5 @@ AI 对每个相机左右目发布 \code{DetectionArray}，包括类别、置信�
 相机无帧、左右目不同步、标定缺失、bbox 贴边、类别不一致、极线误差过大、射线近平行、目标过期和姿态过期都应有可观测的拒绝原因。视觉节点可以发布空检测结果以维持数据流和 readiness，但不能把“没有模型”伪装成“没有目标”。
 
 \section{模型和标定文件}
-模型权重与类别映射位于 \pathref{workspace_auv/src/uv_camera/weights/}，相机 profile 与 \code{*.npz} 位于 \pathref{workspace_auv/src/uv_camera/config/}。权重、内参和外参不应复制进 LaTeX；本手册只记录版本、来源、坐标转换和验证结果。
+模型权重与类别映射位于 \pathref{workspace_auv/src/uv_camera/weights/}，前视和下视双目配置位于 \pathref{workspace_auv/src/uv_camera/stereos/}。配置用 \code{modes.real} 和 \code{modes.sim} 保存对应运行模式的内参与图像接口；双目相对位姿和相机安装外参由 URDF/TF 提供。归档的 NPZ 不作为运行输入。权重、内参和外参不应复制进 LaTeX；本手册只记录版本、来源、坐标转换和验证结果。
 

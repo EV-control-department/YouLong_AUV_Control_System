@@ -5,10 +5,10 @@
 标定结果必须有来源、单位、坐标系、时间、工具版本和验证样本。原始数据、优化结果和部署文件应分离保存；LaTeX 记录方法和引用路径，配置文件保存实际运行数值。
 
 \section{相机内参}
-每个前视/下视相机的左右目需要记录图像分辨率、焦距、主点、畸变模型和畸变系数。运行时由 \pkg{uv_camera.camera_config} 根据 profile 加载 YAML/NPZ；视觉算法不能假定所有相机共用一套 $f_x,f_y,c_x,c_y$。
+每个前视/下视相机的左右目需要记录图像分辨率、焦距、主点、畸变模型和畸变系数。运行时由 \pkg{uv_camera.camera_config} 从 \pathref{workspace_auv/src/uv_camera/stereos/} 加载 YAML；\code{camera_mode} 选择 \code{real} 或 \code{sim} 模式，\code{auto} 时由 \code{sim_mode} 推导。仿真模式可从 Stonefish 的左右目 CameraInfo 获取内参。视觉算法不能假定所有相机共用一套 $f_x,f_y,c_x,c_y$。
 
 \section{双目外参}
-左右目外参用于像素射线生成和三角测量。对于校正后的双目对，水平视差 $d=u_l-u_r$ 与近似深度关系为
+左右目相对位姿用于像素射线生成和三角测量；该位姿及基线由 URDF/TF 提供，不放在相机内参 YAML 中。对于校正后的双目对，水平视差 $d=u_l-u_r$ 与近似深度关系为
 \begin{equation}
   Z \approx \frac{fB}{d},
 \end{equation}
@@ -32,6 +32,8 @@
   \item 用零输入和单轴输入验证推进器 mixer 符号、轴向和饱和。
 \end{enumerate}
 
+旧 PID 文件 \path{uv_hm/config/pid_parameters.json} 与 \path{uv_hm/config/pid_params.yaml} 在源码中没有运行时消费者，已从 \pkg{uv_hm} 安装清单移除。SIL 控制核实际读取 \path{zit6_control_core/sim_config.json}；真机 PID 参数通过 ZIT6 MCU 参数服务和固件管理。
+
 \section{当前文件映射}
 \begin{table}[H]
   \centering
@@ -41,11 +43,12 @@
     \toprule
     资产 & 用途 \\
     \midrule
-    \pathref{workspace_auv/src/uv_camera/config/cameras/*.yaml} & 相机设备和相机 profile。 \\
-    \pathref{workspace_auv/src/uv_camera/config/*.npz} & 内参与立体标定数据。 \\
+    \pathref{workspace_auv/src/uv_camera/stereos/*.yaml} & 前视/下视相机的左右目内参、图像接口和 real/sim modes。 \\
+    \pathref{workspace_auv/src/uv_camera/stereos/archive/*.npz} & 旧标定数据归档，不作为运行输入。 \\
     \pathref{workspace_auv/src/auv_description/urdf/auv.urdf} & 真机固定几何和 TF。 \\
-    \pathref{workspace_auv/src/uv_hm/config/pid_params.yaml} & 控制/PID 参数入口。 \\
+    \pathref{workspace_auv/src/uv_hm/config/default.yaml} & ROS 硬件管理器默认参数，如 watchdog 与电池告警阈值，不存储 PID 增益。 \\
     \pathref{workspace_sim/src/zit6_control_core/sim_config.json} & SIL Host 控制核的 chassis 配置。 \\
+    ZIT6 MCU 参数服务/固件 & 真机控制器参数的查询和更新入口。 \\
     \bottomrule
   \end{tabularx}
 \end{table}

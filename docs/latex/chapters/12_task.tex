@@ -24,14 +24,15 @@
     \draw[arr] (perception) -- (runner);
     \draw[arr] (runner) -- (action);
     \draw[arr] (action) -- (zit);
-    \draw[arr] (zit) |- (perception);
+    % Route actuator feedback underneath the node row.
+    \draw[arr] (zit.south) -- ++(0,-5mm) -| (perception.south);
   \end{tikzpicture}
   \caption{任务层控制关系}
   \label{fig:task-flow}
 \end{figure}
 
 \section{配置与校验}
-配置加载器检查 YAML 重复键、任务名称、命令类型、姿态结构、参数类型和默认值。任务参数应放在 Task YAML 或 Mission 的 initial override 中；运行时通过 profile 和 launch 参数传入的设备/环境选项不应写死在任务实现中。
+配置加载器检查 YAML 重复键、任务名称、命令类型、姿态结构、参数类型和默认值。任务参数应放在 Task YAML 或 Mission 的 initial override 中；运行时通过整机 bringup profile 和 launch 参数传入的设备/环境选项不应写死在任务实现中。
 
 \section{失败、超时与恢复}
 每个任务必须定义完成条件、观测丢失条件、动作超时、取消响应和失败结果。Mission 可以按任务名和失败类型选择覆盖策略；失败策略应保持可记录、可重放，不能通过无限重试掩盖底层通信或传感器故障。任务开始前通常执行 START 或初始姿态动作，任务结束后执行安全停留或返回原点。

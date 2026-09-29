@@ -10,13 +10,7 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/hm_launch.py', 'launch/hardware_launch.py']),
-        ('share/' + package_name + '/config', [
-            'config/pid_parameters.json', 'config/pid_params.yaml',
-        ]),
-        ('share/' + package_name + '/config/profiles', [
-            'config/profiles/real_default.yaml',
-            'config/profiles/real_safe.yaml',
-        ]),
+        ('share/' + package_name + '/config', ['config/default.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

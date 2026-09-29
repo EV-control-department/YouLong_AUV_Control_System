@@ -10,7 +10,6 @@ from launch.actions import (
     ExecuteProcess,
     IncludeLaunchDescription,
     LogInfo,
-    OpaqueFunction,
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -20,13 +19,10 @@ from launch_ros.substitutions import FindPackageShare
 from uv_sim_bringup.launch_common import (
     configure_simulator_gpu_environment,
     declare_feature_arguments,
-    declare_launch_preset,
+    declare_profile,
     declare_mission_file,
     declare_observability_arguments,
-    declare_profile,
     declare_simulation_arguments,
-    profile_path,
-    validate_profile,
 )
 from uv_sim_bringup.scene import prepare_scene
 
@@ -41,32 +37,6 @@ def _include(package, launch_file, arguments, *, condition=None):
     )
 
 
-def _profile_include(
-    package, launch_file, arguments, *, profile, profile_package,
-):
-    """Resolve a profile path in the parent launch context."""
-    def _create_include(context):
-        resolved_arguments = dict(arguments)
-        resolved_profile = profile_path(
-            profile, profile_package).perform(context)
-        resolved_arguments['profile_params'] = resolved_profile
-        return [
-            LogInfo(msg=[
-                'Resolved ', package, ' profile: ', resolved_profile,
-            ]),
-            _include(package, launch_file, resolved_arguments),
-        ]
-
-    return OpaqueFunction(function=_create_include)
-
-
-def _capture_profile(context):
-    """Preserve the HIL profile before child launches reuse ``profile``."""
-    context.launch_configurations['hil_profile'] = (
-        context.launch_configurations.get('profile', ''))
-    return []
-
-
 def _agent_default():
     candidate = (Path.home() / 'micro_ros_agent_ws' / 'install' /
                  'micro_ros_agent' / 'lib' / 'micro_ros_agent' /
@@ -76,7 +46,6 @@ def _agent_default():
 
 def generate_launch_description():
     profile = LaunchConfiguration('profile')
-    hil_profile = LaunchConfiguration('hil_profile')
     scenario = LaunchConfiguration('scenario_desc')
     seed = LaunchConfiguration('scene_seed')
     camera_dir = LaunchConfiguration('camera_config_dir')
@@ -104,17 +73,17 @@ def generate_launch_description():
     localization = _include('uv_localization', 'localization_launch.py', {
         'sim_mode': 'true', 'publish_tf': 'true',
     })
-    bridge = _profile_include('uv_sim_bridge', 'bridge.launch.py', {
+    bridge = _include('uv_sim_bridge', 'bridge.launch.py', {
         'hil_mode': 'true',
         'camera_stitch_fps': LaunchConfiguration('camera_stitch_fps'),
         'publish_raw_camera_topics': 'false',
-    }, profile=hil_profile, profile_package='uv_sim_bridge')
+    })
     control = _include('uv_control', 'control_launch.py', {
         'enable_motion': LaunchConfiguration('enable_motion'),
-        'sim_mode': 'true', 'profile_params': '',
+        'sim_mode': 'true', 'params_file': '',
     })
     camera = _include('uv_camera', 'camera_launch.py', {
-        'sim_mode': 'true', 'camera_config_profile': 'sim',
+        'sim_mode': 'true', 'camera_mode': 'sim',
         'camera_config_dir': camera_dir,
     })
     perception = _include('uv_perception', 'perception_launch.py', {},
@@ -139,12 +108,12 @@ def generate_launch_description():
         'record_image_topics': LaunchConfiguration('record_image_topics'),
     })
     planning = _include('uv_planning', 'planning_launch.py', {
-        'enable_nav': LaunchConfiguration('enable_nav'), 'profile_params': '',
+        'enable_nav': LaunchConfiguration('enable_nav'), 'params_file': '',
     })
     task = _include('uv_task', 'task_launch.py', {
         'enable_task': LaunchConfiguration('enable_task'),
-        'camera_config_profile': 'sim', 'camera_config_dir': camera_dir,
-        'profile_params': '', 'mission_file': mission_file,
+        'camera_mode': 'sim', 'camera_config_dir': camera_dir,
+        'params_file': '', 'mission_file': mission_file,
     })
     agent = ExecuteProcess(
         cmd=[LaunchConfiguration('agent_executable'), 'serial', '-D',
@@ -153,11 +122,11 @@ def generate_launch_description():
         name='micro_ros_agent', output='both')
 
     return LaunchDescription([
-        *declare_launch_preset(
+        *declare_profile(
             'hil', 'uv_sim_bringup',
             choices=('default', 'record', 'debug', 'task'),
         ),
-        declare_profile('hil', 'hil_lab'), declare_mission_file(),
+        declare_mission_file(),
         *declare_feature_arguments(
             enable_ai='false', enable_nav='false', enable_task='false',
             enable_motion='false'),
@@ -173,9 +142,7 @@ def generate_launch_description():
         DeclareLaunchArgument('serial_dev', default_value='/dev/ttyUSB0'),
         DeclareLaunchArgument('serial_baud', default_value='921600'),
         DeclareLaunchArgument('agent_executable', default_value=_agent_default()),
-        validate_profile(profile, 'hil'),
-        OpaqueFunction(function=_capture_profile),
-        LogInfo(msg=['HIL profile: ', hil_profile]),
+        LogInfo(msg=['HIL profile: ', profile]),
         prepare_scene(
             scenario_desc=scenario, scene_seed=seed, launch_file=__file__,
             start_actions=[description, localization, stonefish_gpu,

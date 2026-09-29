@@ -9,14 +9,14 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     enable_motion = LaunchConfiguration("enable_motion")
-    profile_params = LaunchConfiguration("profile_params")
+    params_file = LaunchConfiguration("params_file")
     sim_mode = LaunchConfiguration("sim_mode")
 
     def _nodes(context):
         parameters = []
-        profile = profile_params.perform(context).strip()
-        if profile:
-            parameters.append(profile)
+        parameter_file = params_file.perform(context).strip()
+        if parameter_file:
+            parameters.append(parameter_file)
         return [Node(
             package="uv_control",
             executable="basic_motion",
@@ -31,6 +31,6 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("enable_motion", default_value="true"),
         DeclareLaunchArgument("sim_mode", default_value="false"),
-        DeclareLaunchArgument("profile_params", default_value=""),
+        DeclareLaunchArgument("params_file", default_value=""),
         OpaqueFunction(function=_nodes),
     ])

@@ -13,12 +13,12 @@ chmod 700 "${runtime_dir}"
 
 # Preserve NVIDIA OpenGL offload for rqt only when the NVIDIA Compose overlay
 # is enabled. CPU-only hosts use their normal Qt/OpenGL selection.
-if ! grep -q 'youlong-compose-nvidia-rqt-wrapper-v5' "${HOME}/.bashrc" 2>/dev/null; then
+if ! grep -q 'youlong-compose-nvidia-rqt-wrapper-v6' "${HOME}/.bashrc" 2>/dev/null; then
     cat >> "${HOME}/.bashrc" <<'RQT_WRAPPER'
-# youlong-compose-nvidia-rqt-wrapper-v5
+# youlong-compose-nvidia-rqt-wrapper-v6
 rqt() {
   if [ "${YOULONG_NVIDIA_ENABLED:-false}" = "true" ]; then
-    env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop command rqt "$@"
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia QT_OPENGL=desktop command rqt "$@"
   else
     command rqt "$@"
   fi

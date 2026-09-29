@@ -67,7 +67,7 @@ RB26DropBeaconTask = import_module(
     'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
 from uv_camera.camera_tf import CameraExtrinsicsProvider, CameraExtrinsicsUnavailable
-from uv_camera.camera_config import load_camera_config, profile_for_mode
+from uv_camera.camera_config import camera_mode_for_sim_mode, load_camera_config
 from uv_perception.model_classes import model_class_id
 
 
@@ -156,17 +156,17 @@ class TaskRunnerNode(Node):
         self._debug_executing = False
         self._debug_timeout = -1.0
 
-        self.declare_parameter('camera_config_profile', 'auto')
+        self.declare_parameter('camera_mode', 'auto')
         self.declare_parameter('camera_config_dir', '')
         self.declare_parameter('camera_base_frame', 'base_link')
         self.declare_parameter('camera_tf_timeout_sec', 5.0)
         self.declare_parameter('camera_tf_retry_period_sec', 0.1)
-        camera_profile = profile_for_mode(
-            False, self.get_parameter('camera_config_profile').value)
+        camera_mode = camera_mode_for_sim_mode(
+            False, self.get_parameter('camera_mode').value)
         camera_config_dir = str(
             self.get_parameter('camera_config_dir').value).strip() or None
         self.camera_configs = {
-            camera: load_camera_config(camera, camera_profile, camera_config_dir)
+            camera: load_camera_config(camera, camera_mode, camera_config_dir)
             for camera in ('front', 'down')
         }
         self.camera_extrinsics_provider = CameraExtrinsicsProvider(

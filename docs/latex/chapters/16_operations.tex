@@ -21,15 +21,15 @@ source install/setup.bash
 \begin{lstlisting}[language=bash,caption={Compose 启动示例}]
 # 基础/CPU 环境，不要求 CUDA 或 NVIDIA Container Toolkit
 ./scripts/compose_up.sh up -d
-./scripts/compose_up.sh run --rm auv sim preset:=debug
+./scripts/compose_up.sh run --rm auv sim profile:=debug
 
 # 真机设备映射，与 GPU 选择相互独立
 YOULONG_RUNTIME=real ./scripts/compose_up.sh up -d
-YOULONG_RUNTIME=real ./scripts/compose_up.sh run --rm auv real preset:=record
+YOULONG_RUNTIME=real ./scripts/compose_up.sh run --rm auv real profile:=record
 
 # 只有已安装 NVIDIA 驱动和 NVIDIA Container Toolkit 时才启用
 YOULONG_GPU=nvidia ./scripts/compose_up.sh up -d
-YOULONG_GPU=nvidia ./scripts/compose_up.sh run --rm auv sim preset:=debug
+YOULONG_GPU=nvidia ./scripts/compose_up.sh run --rm auv sim profile:=debug
 
 # 可单独跳过 AI Python 依赖安装
 INSTALL_WORKSPACE_AI=false ./scripts/compose_up.sh up -d
@@ -41,7 +41,7 @@ INSTALL_WORKSPACE_AI=false ./scripts/compose_up.sh up -d
 \begin{enumerate}
   \item 确认电池、电源、急停、推进器机械状态和舱体密封。
   \item 确认 Jetson/Edge 已连接 ROS 2 网络，MCU 通道或外部 Agent 可用。
-  \item 确认相机设备路径、分辨率、时间戳和标定 profile。
+  \item 确认相机设备路径、分辨率、时间戳以及 \code{camera_mode} 对应的标定模式。
   \item 确认 ZIT6 状态、INS 导航就绪、heartbeat 和电池状态。
   \item 先运行无运动的 readiness 检查，再启用 motion/task。
   \item 下水前确认 Mission 文件、目标类别、速度上限和超时策略。
@@ -60,5 +60,5 @@ INSTALL_WORKSPACE_AI=false ./scripts/compose_up.sh up -d
 代码、接口、参数和文档应在同一提交中变更；每个正式实验绑定 Git commit；每次 protocol 或坐标系变更都要更新契约测试；新算法必须说明输入 Topic、输出 Topic、频率、延迟、失败行为和真值隔离情况。发布前执行 \code{git diff --check}、Python 编译检查、接口测试和对应模式的启动 smoke test。
 
 \begin{warningbox}
-真机 profile 与仿真 profile 不可混用。任何会改变布防、最大速度、推力或 watchdog 的配置变更，都必须经过静态检查、台架测试和有急停条件的水池测试。
+bringup profile 按 real、sim、hil 运行环境分别校验，不能跨环境使用。任何会改变布防、最大速度、推力或 watchdog 的配置变更，都必须经过静态检查、台架测试和有急停条件的水池测试。
 \end{warningbox}

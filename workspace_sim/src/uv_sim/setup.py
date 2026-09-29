@@ -13,11 +13,6 @@ setup(
         'launch/bridge.launch.py',
         'launch/sim.launch.py',
     ]),
-    ('share/' + package_name + '/config/profiles', [
-        'config/profiles/sim_dev.yaml',
-        'config/profiles/sim_ci.yaml',
-        'config/profiles/hil_lab.yaml',
-    ]),
     ],
     # Keep the NumPy 1.x ABI used by cv_bridge on both ROS 2 Foxy/Python 3.8
     # and ROS 2 Jazzy/newer Python runtimes.

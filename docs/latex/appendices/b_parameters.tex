@@ -12,8 +12,10 @@
   参数 & 适用入口 & 作用 \\
   \midrule
   \endhead
-  \code{profile} & real/sim/hil & 选择模式参数文件。 \\
-  \code{preset} & real/sim/hil & 加载 default、record、debug 或 task 启动预设；CLI 显式参数可覆盖预设值。 \\
+  \code{profile} & uv\_bringup、uv\_sim\_bringup & 选择整机启动模式；profile YAML 为 launch 参数设置默认值，CLI 显式参数优先。 \\
+  \code{params\_file} & 支持该参数的组件 launch & 显式指定 ROS 2 节点参数 YAML；未覆盖时使用组件默认参数。 \\
+  \code{camera\_mode}、\code{sim\_mode} & uv\_camera & 选择相机 real/sim 标定模式；\code{auto} 根据 \code{sim\_mode} 推导。 \\
+  \code{world} & uv\_sim & 选择公开 Stonefish 场景名称或场景文件路径。 \\
   \code{enable_motion} & 所有运行模式 & 是否启动 BasicMotion。 \\
   \code{enable_ai} & real/sim/hil & 是否启动 AI/目标定位。 \\
   \code{enable_nav} & real/sim/hil & 是否启动导航节点。 \\
@@ -34,18 +36,17 @@
 
 \section{参数查找路径}
 \begin{itemize}
-  \item 硬件监控：\pathref{workspace_auv/src/uv_hm/config/profiles/}。
-  \item 相机与 AI：\pathref{workspace_auv/src/uv_camera/config/profiles/}。
-  \item 相机标定：\pathref{workspace_auv/src/uv_camera/config/cameras/} 和 \code{*.npz}。
+  \item 硬件管理器默认参数：\pathref{workspace_auv/src/uv_hm/config/default.yaml}。
+  \item 相机内参与 real/sim 模式：\pathref{workspace_auv/src/uv_camera/stereos/}。
+  \item 旧 NPZ 标定归档：\pathref{workspace_auv/src/uv_camera/stereos/archive/}；运行时不读取。
   \item 任务 Mission：\pathref{workspace_auv/src/uv_task/config/missions/}。
   \item 任务 Task：\pathref{workspace_auv/src/uv_task/config/tasks/}。
-  \item 仿真 bridge：\pathref{workspace_sim/src/uv_sim_bridge/config/profiles/}。
   \item 退化参数：\path{uv_sim_bringup/degradation.launch.py} 及 sim launch 参数。
-  \item 真机启动预设：\pathref{workspace_auv/src/uv_bringup/config/launch_profiles/real/}。
-  \item 仿真/HIL 启动预设：\pathref{workspace_sim/src/uv_sim_bringup/config/launch_profiles/}。
+  \item 真机整机启动 profile：\pathref{workspace_auv/src/uv_bringup/config/profiles/real/}。
+  \item 仿真/HIL 整机启动 profile：\pathref{workspace_sim/src/uv_sim_bringup/config/profiles/}。
 \end{itemize}
 
-\code{preset} 文件与标准 ROS 参数 \code{profile} 分开维护。前者控制一组 launch 开关及录制选项；后者仍负责节点参数。修改预设时应分别检查 real、sim、hil 的参数是否属于对应入口。
+整机 \code{profile} 只由 bringup 入口解释，控制节点启停、录制等 launch 参数默认值；它不是 ROS 2 节点参数文件。组件默认参数由所属包维护，只有需要覆盖时才通过 \code{params\_file} 显式提供参数 YAML。相机标定 YAML 内的 \code{modes} 是 real/sim 相机数据分组，仿真场景则由 \code{uv\_sim} 的 \code{world} 选择。
 
 \section{参数审查原则}
-参数名称应包含物理含义，时间用秒、距离用米、角度明确度或弧度；速度和推力参数要说明坐标系和正方向；随机退化参数必须说明 seed；真机安全参数必须有更保守的 profile。完整生效树通过 ROS 2 参数查询和启动日志确认。
+参数名称应包含物理含义，时间用秒、距离用米、角度明确度或弧度；速度和推力参数要说明坐标系和正方向；随机退化参数必须说明 seed；真机安全参数应有明确的默认值和评审记录。完整生效树通过 ROS 2 参数查询和启动日志确认。

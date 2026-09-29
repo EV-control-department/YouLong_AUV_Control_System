@@ -32,7 +32,9 @@
     \draw[arr] (localization) -- (control);
     \draw[arr] (task) -- (control);
     \draw[arr] (control) -- (actuator);
-    \draw[arr] (actuator.north) |- (source.south);
+    % Route the feedback loop around the outside of the node rows.
+    \draw[arr] (actuator.south) -- ++(0,-8mm)
+      -| ([xshift=-8mm]source.west) -- (source.west);
   \end{tikzpicture}
   \caption{YouLong AUV 的逻辑闭环}
   \label{fig:system-loop}

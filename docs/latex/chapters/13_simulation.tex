@@ -27,4 +27,4 @@ HIL 使用仿真世界提供传感器和动力学，用真实 MCU 执行 ZIT6 �
 默认生成的竞赛场景会复制到独立临时 assets 目录，再按 seed 生成场景，不修改源码场景。运行多个 seed 时可使用不同 \code{ROS_DOMAIN_ID} 隔离 DDS 域。场景描述文件、生成器和模型资产位于 \pathref{workspace_sim/src/uv_sim_assets/}；Stonefish wrapper 本身不再安装资源目录。
 
 \section{仿真有效性}
-仿真结果只能说明在给定场景、模型、传感器噪声和控制核下的行为；不能直接等价为真机性能。报告必须同时写清：场景文件、seed、simulation rate、GPU/CPU 模式、退化 profile、估计器版本、代码 commit 和输出目录。
+仿真结果只能说明在给定场景、模型、传感器噪声和控制核下的行为；不能直接等价为真机性能。报告必须同时写清：场景文件、seed、simulation rate、GPU/CPU 模式、experiment launch 的退化设置、估计器版本、代码 commit 和输出目录。

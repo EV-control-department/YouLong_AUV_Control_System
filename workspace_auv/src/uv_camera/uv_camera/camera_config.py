@@ -18,7 +18,7 @@ import yaml
 
 
 _CAMERAS = ("front", "down")
-_PROFILES = ("sim", "real")
+_MODES = ("sim", "real")
 _SIDES = ("left", "right")
 
 
@@ -32,10 +32,10 @@ class CameraSideConfig:
 
 @dataclass(frozen=True)
 class CameraConfig:
-    """Validated configuration for one camera pair and one profile."""
+    """Validated configuration for one camera pair and one mode."""
 
     name: str
-    profile: str
+    mode: str
     capture_resolution: tuple[int, int]
     eye_resolution: tuple[int, int]
     image_topic: str
@@ -118,21 +118,21 @@ def _config_candidates(config_dir: str | os.PathLike | None) -> list[Path]:
         # Accept either the registry directory itself or the package config
         # root, which is convenient for deployments that override all camera
         # assets below one directory.
-        return [root, root / "cameras"]
+        return [root, root / "stereos"]
 
     candidates: list[Path] = []
     package_root = Path(__file__).resolve().parents[1]
-    candidates.append(package_root / "config" / "cameras")
+    candidates.append(package_root / "stereos")
     try:
         from ament_index_python.packages import get_package_share_directory
         candidates.append(
             Path(get_package_share_directory("uv_camera")) /
-            "config" / "cameras")
+            "stereos")
     except Exception:
         pass
     candidates.append(
         Path.cwd() / "workspace_auv" / "src" / "uv_camera" /
-        "config" / "cameras")
+        "stereos")
     return candidates
 
 
@@ -142,7 +142,7 @@ def _find_config_dir(config_dir: str | os.PathLike | None, camera: str) -> Path:
         if (candidate / f"{camera}.yaml").is_file():
             return candidate
     searched = ", ".join(str(path / f"{camera}.yaml") for path in candidates)
-    raise FileNotFoundError(f"camera config not found; searched: {searched}")
+    raise FileNotFoundError(f"camera stereo configuration not found; searched: {searched}")
 
 
 
@@ -181,53 +181,53 @@ def _parse_side(raw: Any, context: str) -> CameraSideConfig:
 
 def load_camera_config(
     camera_name: str,
-    profile: str = "auto",
+    mode: str = "auto",
     config_dir: str | os.PathLike | None = None,
 ) -> CameraConfig:
-    """Load and strictly validate one camera's selected profile."""
+    """Load and strictly validate one camera's selected mode."""
     camera = str(camera_name).strip().lower()
     if camera not in _CAMERAS:
         raise CameraConfigError(
             f"unknown camera {camera_name!r}; expected one of {_CAMERAS}")
-    selected_profile = str(profile or "auto").strip().lower()
-    if selected_profile == "auto":
-        selected_profile = os.environ.get("UV_CAMERA_PROFILE", "real").strip().lower()
-    if selected_profile not in _PROFILES:
+    selected_mode = str(mode or "auto").strip().lower()
+    if selected_mode == "auto":
+        selected_mode = os.environ.get("UV_CAMERA_MODE", "real").strip().lower()
+    if selected_mode not in _MODES:
         raise CameraConfigError(
-            f"unknown camera profile {profile!r}; expected one of {_PROFILES}")
+            f"unknown camera mode {mode!r}; expected one of {_MODES}")
 
     directory = _find_config_dir(config_dir, camera)
     path = directory / f"{camera}.yaml"
     document = _load_yaml(path)
     if str(document.get("camera", "")).strip().lower() != camera:
         raise CameraConfigError(f"{path} 的 camera 字段不是 {camera!r}")
-    profiles = _mapping(document.get("profiles"), f"{path}.profiles")
-    raw_profile = _mapping(
-        profiles.get(selected_profile), f"{path}.profiles.{selected_profile}")
+    modes = _mapping(document.get("modes"), f"{path}.modes")
+    raw_mode = _mapping(
+        modes.get(selected_mode), f"{path}.modes.{selected_mode}")
 
     capture = _resolution(
-        raw_profile.get("capture_resolution"),
-        f"{path}.profiles.{selected_profile}.capture_resolution")
+        raw_mode.get("capture_resolution"),
+        f"{path}.modes.{selected_mode}.capture_resolution")
     eye = _resolution(
-        raw_profile.get("eye_resolution"),
-        f"{path}.profiles.{selected_profile}.eye_resolution")
-    context = f"{path}.profiles.{selected_profile}"
+        raw_mode.get("eye_resolution"),
+        f"{path}.modes.{selected_mode}.eye_resolution")
+    context = f"{path}.modes.{selected_mode}"
     if capture[0] != 2 * eye[0] or capture[1] != eye[1]:
         raise CameraConfigError(
-            f"{path}.profiles.{selected_profile} 的 capture_resolution "
+            f"{path}.modes.{selected_mode} 的 capture_resolution "
             "必须是左右目 eye_resolution 的水平拼接尺寸")
-    image_topic = raw_profile.get("image_topic")
+    image_topic = raw_mode.get("image_topic")
     if not isinstance(image_topic, str) or not image_topic.strip():
         raise CameraConfigError("image_topic 必须是非空字符串")
     image_topic = _canonical_topic(image_topic, f"{context}.image_topic")
-    stereo_info_topic = raw_profile.get("stereo_info_topic", "")
+    stereo_info_topic = raw_mode.get("stereo_info_topic", "")
     if not isinstance(stereo_info_topic, str):
         raise CameraConfigError("stereo_info_topic 必须是字符串")
     stereo_info_topic = _canonical_topic(
         stereo_info_topic, f"{context}.stereo_info_topic", allow_empty=True)
     raw_camera_info_topics = _mapping(
-        raw_profile.get("camera_info_topics", {}),
-        f"{path}.profiles.{selected_profile}.camera_info_topics")
+        raw_mode.get("camera_info_topics", {}),
+        f"{path}.modes.{selected_mode}.camera_info_topics")
     camera_info_topics = {}
     for side in _SIDES:
         topic = raw_camera_info_topics.get(side, "")
@@ -237,8 +237,8 @@ def load_camera_config(
         camera_info_topics[side] = _canonical_topic(
             topic, f"{context}.camera_info_topics.{side}", allow_empty=True)
     raw_eye_image_topics = _mapping(
-        raw_profile.get("eye_image_topics", {}),
-        f"{path}.profiles.{selected_profile}.eye_image_topics")
+        raw_mode.get("eye_image_topics", {}),
+        f"{path}.modes.{selected_mode}.eye_image_topics")
     eye_image_topics = {}
     for side in _SIDES:
         topic = raw_eye_image_topics.get(side, "")
@@ -247,42 +247,42 @@ def load_camera_config(
                 f"eye_image_topics.{side} 必须是字符串")
         eye_image_topics[side] = _canonical_topic(
             topic, f"{context}.eye_image_topics.{side}", allow_empty=True)
-    device = raw_profile.get("device")
+    device = raw_mode.get("device")
     if device is not None and (not isinstance(device, str) or not device.strip()):
         raise CameraConfigError("device 必须是字符串或 null")
 
-    if "calibration_npz" in raw_profile:
+    if "calibration_npz" in raw_mode:
         raise CameraConfigError(
             f"{context}.calibration_npz 已废弃；双目标定矩阵由 K、D 和 URDF/TF 运行时生成")
-    source = str(raw_profile.get("calibration_source", "yaml")).strip().lower()
+    source = str(raw_mode.get("calibration_source", "yaml")).strip().lower()
     if source not in {"yaml", "sim_camera_info"}:
         if source == "npz":
             raise CameraConfigError(
                 f"{context}.calibration_source=npz 已废弃；请迁移到 YAML K/D 和 URDF/TF")
         raise CameraConfigError(f"不支持的 calibration_source：{source!r}")
-    if selected_profile == "real" and not isinstance(device, str):
-        raise CameraConfigError("real profile 必须提供 device")
+    if selected_mode == "real" and not isinstance(device, str):
+        raise CameraConfigError("real mode 必须提供 device")
     if source == "sim_camera_info" and any(
             not camera_info_topics[side] for side in _SIDES):
         raise CameraConfigError(
             "sim_camera_info 必须为左右目提供 camera_info_topics")
     raw_intrinsics = _mapping(
-        raw_profile.get("intrinsics"), f"{context}.intrinsics")
+        raw_mode.get("intrinsics"), f"{context}.intrinsics")
     if set(raw_intrinsics) != set(_SIDES):
         raise CameraConfigError(
             f"{context}.intrinsics 必须且只能包含 left、right")
-    if "extrinsics" in raw_profile:
+    if "extrinsics" in raw_mode:
         raise CameraConfigError(
             f"{context}.extrinsics 已废弃；相机安装外参必须统一从 URDF/TF 获取")
     sides = {}
     for side in _SIDES:
         intrinsics = _mapping(
-            raw_intrinsics.get(side), f"{path}.profiles.{selected_profile}.intrinsics.{side}")
+            raw_intrinsics.get(side), f"{path}.modes.{selected_mode}.intrinsics.{side}")
         sides[side] = _parse_side(
             intrinsics, f"{context}.intrinsics.{side}")
     return CameraConfig(
         name=camera,
-        profile=selected_profile,
+        mode=selected_mode,
         capture_resolution=capture,
         eye_resolution=eye,
         image_topic=image_topic,
@@ -295,12 +295,12 @@ def load_camera_config(
     )
 
 
-def profile_for_mode(sim_mode: bool, requested: str = "auto") -> str:
-    """Resolve a node's explicit/automatic camera profile."""
+def camera_mode_for_sim_mode(sim_mode: bool, requested: str = "auto") -> str:
+    """Resolve a node's explicit/automatic camera mode."""
     value = str(requested or "auto").strip().lower()
     if value == "auto":
         return "sim" if bool(sim_mode) else "real"
-    if value not in _PROFILES:
+    if value not in _MODES:
         raise CameraConfigError(
-            f"unknown camera profile {requested!r}; expected auto, sim or real")
+            f"unknown camera mode {requested!r}; expected auto, sim or real")
     return value

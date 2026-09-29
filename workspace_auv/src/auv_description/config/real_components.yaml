@@ -6,8 +6,8 @@ coordinate_frame:
   axes: { x: forward, y: right, z: down }
   length_unit: m
 
-# Mechanical reference geometry for the real vehicle.  Camera K/D and final
-# stereo R/T/P/Q remain in uv_camera/config/cameras/*.yaml and *.npz.
+# Mechanical reference geometry for the real vehicle.
+# Camera K/D are in uv_camera/stereos/*.yaml; mounting transforms and stereo baseline remain in URDF/TF.
 reference_points:
   down_camera:
     position_body: [-0.130, 0.000, 0.0645]

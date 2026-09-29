@@ -15,8 +15,8 @@
     机械尺寸、部件位置、标定参考点 & 项目 \code{docs} 目录中的机械说明 PDF 及 \pkg{auv_description}。 \\
     真实 TF 和传感器安装关系 & \pathref{workspace_auv/src/auv_description/urdf/auv.urdf}。 \\
     真实组件登记 & \pathref{workspace_auv/src/auv_description/config/real_components.yaml}。 \\
-    相机内参与立体外参 & \pathref{workspace_auv/src/uv_camera/config/cameras/}、\code{*.npz} 和相机 profile。 \\
-    ZIT6 控制参数 & 固件配置和 \pathref{workspace_auv/src/uv_hm/config/}。 \\
+    相机内参与运行模式 & \pathref{workspace_auv/src/uv_camera/stereos/}；相机安装关系及双目相对位姿由 \pathref{workspace_auv/src/auv_description/urdf/auv.urdf} 的 TF 提供。 \\
+    ZIT6 控制参数 & MCU/固件配置与在线参数服务；ROS 硬件管理器默认值位于 \pathref{workspace_auv/src/uv_hm/config/default.yaml}。 \\
     \bottomrule
   \end{tabularx}
 \end{table}

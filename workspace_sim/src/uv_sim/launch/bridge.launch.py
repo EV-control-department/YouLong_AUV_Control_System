@@ -10,13 +10,13 @@ def generate_launch_description():
     hil_mode = LaunchConfiguration("hil_mode")
     camera_stitch_fps = LaunchConfiguration("camera_stitch_fps")
     publish_raw = LaunchConfiguration("publish_raw_camera_topics")
-    profile_params = LaunchConfiguration("profile_params")
+    params_file = LaunchConfiguration("params_file")
 
     def _nodes(context):
         parameters = []
-        profile = profile_params.perform(context).strip()
-        if profile:
-            parameters.append(profile)
+        parameter_file = params_file.perform(context).strip()
+        if parameter_file:
+            parameters.append(parameter_file)
         parameters.append({
             "hil_mode": hil_mode,
             "camera_stitch_fps": camera_stitch_fps,
@@ -45,7 +45,7 @@ def generate_launch_description():
             description="Republish individual raw camera image topics",
         ),
         DeclareLaunchArgument(
-            "profile_params", default_value="",
+            "params_file", default_value="",
             description="Optional standard ROS 2 parameter file",
         ),
         OpaqueFunction(function=_nodes),

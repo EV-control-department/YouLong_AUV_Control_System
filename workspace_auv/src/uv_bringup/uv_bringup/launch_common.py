@@ -14,85 +14,55 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
-    PythonExpression,
 )
 from launch_ros.substitutions import FindPackageShare
 
 
-PROFILE_CHOICES = {
-    "real": ("real_default", "real_safe"),
-}
+def declare_profile(runtime, package, *, choices, default="default"):
+    """Load a whole-system startup profile before other launch arguments.
 
-PROFILE_PACKAGES = {
-    "real": ("uv_hm", "uv_camera"),
-}
-
-
-def profile_path(profile, package):
-    """Return a package-owned standard ROS parameter file for ``profile``."""
-    filename = PythonExpression(["'", profile, "' + '.yaml'"])
-    return PathJoinSubstitution([
-        FindPackageShare(package),
-        "config",
-        "profiles",
-        filename,
-    ])
-
-
-def declare_launch_preset(runtime, package, *, choices, default="default"):
-    """Load a package-owned launch preset before other launch arguments.
-
-    Preset values act as defaults. Values passed explicitly on the command
-    line are already present in the launch context and take precedence.
+    Profile values act as defaults. Explicit launch arguments take precedence.
     """
     choices = tuple(choices)
     if default not in choices:
-        raise ValueError(f"default preset {default!r} is not in choices")
+        raise ValueError(f"default profile {default!r} is not in choices")
 
-    def _load_preset(context):
-        selected = str(context.launch_configurations.get(
-            "preset", default)).strip()
+    def _load_profile(context):
+        selected = str(context.launch_configurations.get("profile", default)).strip()
         if selected not in choices:
             raise RuntimeError(
-                f"preset {selected!r} is not valid for runtime {runtime!r}; "
+                f"profile {selected!r} is not valid for runtime {runtime!r}; "
                 f"choose one of {', '.join(choices)}")
 
-        preset_file = Path(
-            get_package_share_directory(package),
-            "config",
-            "launch_profiles",
-            runtime,
-            f"{selected}.yaml",
-        )
-        if not preset_file.is_file():
-            raise RuntimeError(f"launch preset file does not exist: {preset_file}")
+        profile_file = Path(
+            get_package_share_directory(package), "config", "profiles",
+            runtime, f"{selected}.yaml")
+        if not profile_file.is_file():
+            raise RuntimeError(f"bringup profile file does not exist: {profile_file}")
         try:
-            payload = yaml.safe_load(preset_file.read_text(encoding="utf-8"))
+            payload = yaml.safe_load(profile_file.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError) as error:
             raise RuntimeError(
-                f"cannot read launch preset {preset_file}: {error}") from error
+                f"cannot read bringup profile {profile_file}: {error}") from error
 
         if not isinstance(payload, dict) or payload.get("schema_version") != 1:
             raise RuntimeError(
-                f"launch preset {preset_file} must use schema_version: 1")
+                f"bringup profile {profile_file} must use schema_version: 1")
         if payload.get("runtime") != runtime:
             raise RuntimeError(
-                f"launch preset {preset_file} is for runtime "
+                f"bringup profile {profile_file} is for runtime "
                 f"{payload.get('runtime')!r}, expected {runtime!r}")
-        if payload.get("preset") != selected:
+        if payload.get("profile") != selected:
             raise RuntimeError(
-                f"launch preset {preset_file} must declare "
-                f"preset: {selected}")
+                f"bringup profile {profile_file} must declare profile: {selected}")
         arguments = payload.get("arguments", {})
         if not isinstance(arguments, dict):
             raise RuntimeError(
-                f"launch preset {preset_file} arguments must be a mapping")
-
+                f"bringup profile {profile_file} arguments must be a mapping")
         for name, value in arguments.items():
-            if not isinstance(name, str) or name == "preset":
+            if not isinstance(name, str) or name == "profile":
                 raise RuntimeError(
-                    f"launch preset {preset_file} has invalid argument name "
-                    f"{name!r}")
+                    f"bringup profile {profile_file} has invalid argument name {name!r}")
             if name in context.launch_configurations:
                 continue
             if isinstance(value, bool):
@@ -101,59 +71,17 @@ def declare_launch_preset(runtime, package, *, choices, default="default"):
                 value = str(value)
             else:
                 raise RuntimeError(
-                    f"launch preset {preset_file} argument {name!r} "
-                    "must be a scalar")
+                    f"bringup profile {profile_file} argument {name!r} must be a scalar")
             context.launch_configurations[name] = value
         return []
 
     return [
         DeclareLaunchArgument(
-            "preset",
-            default_value=default,
-            choices=list(choices),
-            description=(
-                f"Launch preset for {runtime}: {', '.join(choices)}"),
-        ),
-        OpaqueFunction(function=_load_preset),
+            "profile", default_value=default, choices=list(choices),
+            description=(f"Whole-system startup profile for {runtime}: "
+                         f"{', '.join(choices)}")),
+        OpaqueFunction(function=_load_profile),
     ]
-
-
-def validate_profile(profile, mode):
-    """Return a launch action that rejects a profile from another mode."""
-
-    def _validate(context):
-        value = profile.perform(context).strip()
-        choices = PROFILE_CHOICES[mode]
-        if value not in choices:
-            raise RuntimeError(
-                f"profile {value!r} is not valid for mode {mode!r}; "
-                f"choose one of {', '.join(choices)}")
-        for package in PROFILE_PACKAGES[mode]:
-            profile_file = Path(
-                get_package_share_directory(package),
-                "config",
-                "profiles",
-                f"{value}.yaml",
-            )
-            if not profile_file.is_file():
-                raise RuntimeError(
-                    f"profile parameter file does not exist: {profile_file}")
-        return []
-
-    return OpaqueFunction(function=_validate)
-
-
-def declare_profile(mode, default):
-    """Declare a mode-specific profile selector."""
-    return DeclareLaunchArgument(
-        "profile",
-        default_value=default,
-        choices=list(PROFILE_CHOICES[mode]),
-        description=(
-            f"Runtime parameter profile for {mode}: "
-            f"{', '.join(PROFILE_CHOICES[mode])}"
-        ),
-    )
 
 
 def declare_mission_file():
