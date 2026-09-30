@@ -1,48 +1,75 @@
 <?xml version="1.0"?>
 <robot name="youlong_auv">
-  <link name="base_link"/>
+  <material name="Hull White"><color rgba="0.88 0.89 0.86 1"/></material>
+  <material name="Hull Yellow"><color rgba="1 0.72 0.04 1"/></material>
+  <material name="Sensor Housing"><color rgba="0.20 0.24 0.27 1"/></material>
+  <material name="Lens Glass"><color rgba="0.08 0.48 0.72 0.95"/></material>
+  <material name="Sensor Metal"><color rgba="0.62 0.66 0.68 1"/></material>
+  <material name="Propeller Dark"><color rgba="0.14 0.16 0.18 1"/></material>
+  <link name="base_link">
+  <!-- These OBJ files are CAD-space meshes. Their geometry origins reproduce
+       Stonefish's mesh origin plus compound transform, including the 180 deg
+       X rotation into body-FRD; only the visuals are rotated, not the TF links. -->
+
+  <!-- Stonefish youlong.scn visual-only hull parts, converted from millimetres. -->
+  <visual><origin xyz="0 0 0.18" rpy="3.1415926 0 0"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/xy_buoyancy_block.obj" scale="0.001 0.001 0.001"/></geometry><material name="Hull Yellow"/></visual>
+  <visual><origin xyz="0 0 0.18" rpy="3.1415926 0 0"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/xy_left_sideplate.obj" scale="0.001 0.001 0.001"/></geometry><material name="Hull White"/></visual>
+  <visual><origin xyz="0 0 0.18" rpy="3.1415926 0 0"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/xy_right_sideplate.obj" scale="0.001 0.001 0.001"/></geometry><material name="Hull White"/></visual>
+  <visual><origin xyz="0 0 0.18" rpy="3.1415926 0 0"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/xy_forward_bracket.obj" scale="0.001 0.001 0.001"/></geometry><material name="Hull White"/></visual>
+  <visual><origin xyz="0 0 0.18" rpy="3.1415926 0 0"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/xy_aft_bracket.obj" scale="0.001 0.001 0.001"/></geometry><material name="Hull White"/></visual>
+  <visual><origin xyz="0 0 0.18" rpy="3.1415926 0 0"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/xy_core_enclosure.obj" scale="0.001 0.001 0.001"/></geometry><material name="Hull White"/></visual>
+  <visual><origin xyz="0 0 0.18" rpy="3.1415926 0 0"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/xy_ins_base_plate.obj" scale="0.001 0.001 0.001"/></geometry><material name="Hull White"/></visual>
+  <visual><origin xyz="0 0 0.18" rpy="3.1415926 0 0"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/battery_pod.obj" scale="0.001 0.001 0.001"/></geometry><material name="Hull White"/></visual>
+  <!-- Stonefish actuator propeller placements from youlong.scn. -->
+  <visual><origin xyz="-0.16485 0.12935 0.1095" rpy="0 0 0.780003"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/propeller.obj" scale="0.35 0.35 0.35"/></geometry><material name="Propeller Dark"/></visual>
+  <visual><origin xyz="-0.16485 -0.12935 0.1095" rpy="0 0 -0.780003"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/propeller.obj" scale="0.35 0.35 0.35"/></geometry><material name="Propeller Dark"/></visual>
+  <visual><origin xyz="0 -0.13 0.015" rpy="0 -1.5708 -0.00000265359"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/propeller.obj" scale="0.35 0.35 0.35"/></geometry><material name="Propeller Dark"/></visual>
+  <visual><origin xyz="0 0.13 0.015" rpy="0 -1.5708 -0.00000265359"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/propeller.obj" scale="0.35 0.35 0.35"/></geometry><material name="Propeller Dark"/></visual>
+  <visual><origin xyz="0.16485 0.12935 0.1095" rpy="0 0 2.356"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/propeller.obj" scale="0.35 0.35 0.35"/></geometry><material name="Propeller Dark"/></visual>
+  <visual><origin xyz="0.16485 -0.12935 0.1095" rpy="0 0 -2.356"/><geometry><mesh filename="package://uv_rviz/meshes/youlong/propeller.obj" scale="0.35 0.35 0.35"/></geometry><material name="Propeller Dark"/></visual>
+  </link>
 
   <!-- Real vehicle geometry from docs/auv元件说明和标定数据_第四版.pdf.
        Coordinates are body-FRD metres: x forward, y right, z down. -->
-  <link name="front_camera_link"/>
+  <link name="front_camera_link"><visual><geometry><box size="0.09 0.14 0.055"/></geometry><material name="Sensor Housing"/></visual></link>
   <joint name="front_camera_mount" type="fixed">
     <parent link="base_link"/>
     <child link="front_camera_link"/>
     <origin xyz="0.23 0.0 0.076" rpy="0 0 0"/>
   </joint>
-  <link name="front_left_camera_optical_frame"/>
+  <link name="front_left_camera_optical_frame"><visual><geometry><cylinder radius="0.014" length="0.014"/></geometry><material name="Lens Glass"/></visual></link>
   <joint name="front_left_camera_mount" type="fixed">
     <parent link="front_camera_link"/>
     <child link="front_left_camera_optical_frame"/>
     <origin xyz="0 -0.05 0" rpy="1.5708 0 1.5708"/>
   </joint>
-  <link name="front_right_camera_optical_frame"/>
+  <link name="front_right_camera_optical_frame"><visual><geometry><cylinder radius="0.014" length="0.014"/></geometry><material name="Lens Glass"/></visual></link>
   <joint name="front_right_camera_mount" type="fixed">
     <parent link="front_camera_link"/>
     <child link="front_right_camera_optical_frame"/>
     <origin xyz="0 0.05 0" rpy="1.5708 0 1.5708"/>
   </joint>
 
-  <link name="downward_camera_link"/>
+  <link name="downward_camera_link"><visual><geometry><box size="0.075 0.14 0.045"/></geometry><material name="Sensor Housing"/></visual></link>
   <joint name="downward_camera_mount" type="fixed">
     <parent link="base_link"/>
     <child link="downward_camera_link"/>
     <origin xyz="-0.13 0 0.0645" rpy="0 0 0"/>
   </joint>
-  <link name="downward_left_camera_optical_frame"/>
+  <link name="downward_left_camera_optical_frame"><visual><geometry><cylinder radius="0.013" length="0.012"/></geometry><material name="Lens Glass"/></visual></link>
   <joint name="downward_left_camera_mount" type="fixed">
     <parent link="downward_camera_link"/>
     <child link="downward_left_camera_optical_frame"/>
     <origin xyz="0 -0.05 0" rpy="0 0 1.5708"/>
   </joint>
-  <link name="downward_right_camera_optical_frame"/>
+  <link name="downward_right_camera_optical_frame"><visual><geometry><cylinder radius="0.013" length="0.012"/></geometry><material name="Lens Glass"/></visual></link>
   <joint name="downward_right_camera_mount" type="fixed">
     <parent link="downward_camera_link"/>
     <child link="downward_right_camera_optical_frame"/>
     <origin xyz="0 0.05 0" rpy="0 0 1.5708"/>
   </joint>
 
-  <link name="imu_link"/>
+  <link name="imu_link"><visual><geometry><box size="0.075 0.075 0.04"/></geometry><material name="Sensor Metal"/></visual></link>
   <joint name="imu_mount" type="fixed">
     <parent link="base_link"/>
     <child link="imu_link"/>
@@ -50,7 +77,7 @@
          attitude/orientation is intentionally left undefined. -->
     <origin xyz="0.03 0 0" rpy="0 0 0"/>
   </joint>
-  <link name="usbl_link"/>
+  <link name="usbl_link"><visual><geometry><cylinder radius="0.042" length="0.025"/></geometry><material name="Sensor Housing"/></visual></link>
   <joint name="usbl_mount" type="fixed">
     <parent link="base_link"/>
     <child link="usbl_link"/>
@@ -59,25 +86,25 @@
 
   <!-- USBL transducer positions.  They are exposed for calibration and TF
        consumers; the acoustic reference point remains usbl_link. -->
-  <link name="usbl_transducer_a1"/>
+  <link name="usbl_transducer_a1"><visual><geometry><cylinder radius="0.012" length="0.012"/></geometry><material name="Sensor Metal"/></visual></link>
   <joint name="usbl_transducer_a1_mount" type="fixed">
     <parent link="base_link"/>
     <child link="usbl_transducer_a1"/>
     <origin xyz="0.03 -0.10 0.105" rpy="0 0 0"/>
   </joint>
-  <link name="usbl_transducer_a2"/>
+  <link name="usbl_transducer_a2"><visual><geometry><cylinder radius="0.012" length="0.012"/></geometry><material name="Sensor Metal"/></visual></link>
   <joint name="usbl_transducer_a2_mount" type="fixed">
     <parent link="base_link"/>
     <child link="usbl_transducer_a2"/>
     <origin xyz="0.03 0.10 0.105" rpy="0 0 0"/>
   </joint>
-  <link name="usbl_transducer_a3"/>
+  <link name="usbl_transducer_a3"><visual><geometry><cylinder radius="0.012" length="0.012"/></geometry><material name="Sensor Metal"/></visual></link>
   <joint name="usbl_transducer_a3_mount" type="fixed">
     <parent link="base_link"/>
     <child link="usbl_transducer_a3"/>
     <origin xyz="0.23 0.10 0.105" rpy="0 0 0"/>
   </joint>
-  <link name="usbl_array_geometry_center"/>
+  <link name="usbl_array_geometry_center"><visual><geometry><sphere><radius>0.012</radius></sphere></geometry><material name="Hull Yellow"/></visual></link>
   <joint name="usbl_array_geometry_center_mount" type="fixed">
     <parent link="base_link"/>
     <child link="usbl_array_geometry_center"/>

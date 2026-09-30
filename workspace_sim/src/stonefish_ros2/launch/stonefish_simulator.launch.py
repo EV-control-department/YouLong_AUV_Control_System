@@ -61,6 +61,7 @@ def generate_launch_description():
             arguments=[simulation_data, scenario_desc, simulation_rate, window_res_x, window_res_y, rendering_quality],
             output='screen',
             parameters=[{'render_fps': render_fps}],
+            remappings=[('/tf', '/stonefish_ros2/tf_raw')],
     )
 
     def _stonefish_exit(event, context):

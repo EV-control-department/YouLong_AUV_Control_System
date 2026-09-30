@@ -88,6 +88,7 @@ class NavigatorNode(Node):
         # Publish planned path
         path_msg = WaypointPath()
         path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = 'odom'
 
         wp_start = Waypoint()
         wp_start.x = start_x

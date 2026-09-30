@@ -28,6 +28,25 @@ ROS 2 / DDS 只承载 CameraInfo、检测、测量、跟踪和 TF，不承载任
 | `uv_record` | `record` | 统一 session 记录；raw 原始帧或 go2rtc 视频可选 |
 | `uv_stream` | `camera_streamer` | 显示缩放、抽帧、300 ms 匹配缓存、raw/annotated H264 |
 
+## 目标位置估计
+
+object_localizer 把每次检测转换成检测时刻 odom 坐标系下的单目方位射线；左右目
+同一帧中类别相同且两条射线几何一致的检测，还会生成一个瞬时双目三维位置
+（FORM_FRONT_STEREO / FORM_DOWN_STEREO）。瞬时位置只用于观测显示，不进入全局射线估计。
+object_estimator 按前视/下视和物理类别分别存储单目射线；默认在节点本次运行期间保留全部
+观测，observation_pool_size 设为正数时才按条数限制。
+候选位置由历史和最新射线对生成，随后用每条观测的角度、位姿、外参、类别锚点误差
+及检测置信度计算似然，进行带杂波项的软关联和 Huber 鲁棒位置优化。
+
+每次有新射线时，估计器重新使用池中全部射线拟合候选。单实例目标的新证据即使让
+估计位置移动超过轨迹关联距离，也会修正原轨迹；多实例目标则可用当前受支持的
+新候选替换名额已满但未匹配的旧轨迹。轨迹的“稳定/暂定”状态由观测支持和位置
+协方差决定，不随距上次观测的时间自动变为“过期/丢失”；
+last_measurement_stamp 仍提供最后一次观测时间。前视与下视目前各自估计，不会合并为一个位置。RViz 的 perception measurements
+MarkerArray 会用洋红色大球显示当前帧的瞬时双目位置（约 0.6 秒），池化估计轨迹
+仍由 perception tracks 单独显示。匹配最大射线间距和最小视差角可通过
+stereo_max_ray_gap_m、stereo_min_parallax_deg 调整。
+
 ## ROS 接口
 
 ```text

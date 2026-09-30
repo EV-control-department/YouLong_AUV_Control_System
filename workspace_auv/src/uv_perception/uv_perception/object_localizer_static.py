@@ -1,4 +1,4 @@
-"""Convert each timestamped detection into an odom-frame bearing ray."""
+"""Publish odom-frame mono rays and matched instantaneous stereo positions."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from auv_protocol.topics import (
 from sensor_msgs.msg import CameraInfo
 from uv_msgs.msg import DetectionArray, ObjectMeasurement, ObjectMeasurementArray
 
-from .localization.geometry import bbox_is_localizable
+from .localization.geometry import bbox_is_localizable, minimum_cost_assignment
 from .localization.stereo import camera_ray
 
 
@@ -44,6 +44,12 @@ class ObjectLocalizer:
         self.edge_margin_px = float(node.declare_parameter('edge_margin_px', 8.0).value)
         self.edge_margin_ratio = float(
             node.declare_parameter('edge_margin_ratio', 0.02).value)
+        self.stereo_max_ray_gap_m = max(
+            0.01, float(node.declare_parameter(
+                'stereo_max_ray_gap_m', 0.35).value))
+        self.stereo_min_parallax_deg = max(
+            0.0, float(node.declare_parameter(
+                'stereo_min_parallax_deg', 0.2).value))
         try:
             from tf2_ros import Buffer, TransformListener
             self._tf_buffer = Buffer()
@@ -144,16 +150,138 @@ class ObjectLocalizer:
         # Mutating output.header.frame_id must not rewrite the input camera frame.
         output.header = copy.deepcopy(first.header)
         output.header.frame_id = self.world_frame
+        rays_by_camera = {}
         for camera_name, message in messages.items():
             info = infos.get(camera_name)
             ids = pending.detection_ids.get(camera_name, [])
+            camera_rays = []
             for index in self._eligible(message, info):
                 detection_id = ids[index] if index < len(ids) else index + 1
                 ray = self._bearing_measurement(message, index, info, detection_id)
                 if ray is not None:
                     output.measurements.append(ray)
+                    camera_rays.append((index, ray))
+            rays_by_camera[camera_name] = camera_rays
+        # Keep the two mono rays as estimator inputs, and add a separate
+        # instantaneous stereo position for RViz and the measurement UI.
+        for group in ('front', 'down'):
+            left_name, right_name = f'{group}_left', f'{group}_right'
+            if left_name not in messages or right_name not in messages:
+                continue
+            output.measurements.extend(self._stereo_measurements(
+                group, messages[left_name], messages[right_name],
+                rays_by_camera.get(left_name, []),
+                rays_by_camera.get(right_name, []),
+                pending.detection_ids.get(left_name, []),
+                pending.detection_ids.get(right_name, [])))
         if output.measurements:
             self.publisher.publish(output)
+
+    def _stereo_measurements(self, group, left_message, right_message,
+                             left_rays, right_rays, left_ids, right_ids):
+        """Match same-class eye detections and triangulate their world rays."""
+        if not left_rays or not right_rays:
+            return []
+        costs = []
+        positions = {}
+        for left_row, (left_index, left_ray) in enumerate(left_rays):
+            row = []
+            left_detection = left_message.detections[left_index]
+            for right_column, (right_index, right_ray) in enumerate(right_rays):
+                right_detection = right_message.detections[right_index]
+                if int(left_detection.class_id) != int(right_detection.class_id):
+                    row.append(None)
+                    continue
+                geometry = self._intersect_stereo_rays(left_ray, right_ray)
+                if geometry is None:
+                    row.append(None)
+                    continue
+                position, covariance, gap = geometry
+                max_gap = getattr(self, 'stereo_max_ray_gap_m', 0.35)
+                row.append(gap / max_gap)
+                positions[(left_row, right_column)] = (position, covariance)
+            costs.append(row)
+
+        output = []
+        for left_row, right_column, _cost in minimum_cost_assignment(
+                costs, unmatched_cost=1.0):
+            left_index, _left_ray = left_rays[left_row]
+            right_index, _right_ray = right_rays[right_column]
+            position, covariance = positions[(left_row, right_column)]
+            left_detection = left_message.detections[left_index]
+            right_detection = right_message.detections[right_index]
+            left_id = (left_ids[left_index] if left_index < len(left_ids)
+                       else left_index + 1)
+            right_id = (right_ids[right_index] if right_index < len(right_ids)
+                        else right_index + 1)
+            form = (ObjectMeasurement.FORM_FRONT_STEREO if group == 'front'
+                    else ObjectMeasurement.FORM_DOWN_STEREO)
+            measurement = self._base(
+                left_message, left_index, form, [left_id, right_id])
+            measurement.source_camera = f'{group}_stereo'
+            measurement.confidence = min(
+                float(left_detection.confidence),
+                float(right_detection.confidence))
+            measurement.has_position = True
+            measurement.world_x, measurement.world_y, measurement.world_z = (
+                float(value) for value in position)
+            measurement.position_covariance = [
+                float(value) for value in covariance.reshape(-1)]
+            output.append(measurement)
+        return output
+
+    def _intersect_stereo_rays(self, left, right):
+        """Return midpoint, angular-error covariance, and ray gap."""
+        origin_left = np.asarray((left.ray_origin_x, left.ray_origin_y,
+                                  left.ray_origin_z), dtype=float)
+        origin_right = np.asarray((right.ray_origin_x, right.ray_origin_y,
+                                   right.ray_origin_z), dtype=float)
+        direction_left = np.asarray((left.ray_direction_x, left.ray_direction_y,
+                                     left.ray_direction_z), dtype=float)
+        direction_right = np.asarray((right.ray_direction_x, right.ray_direction_y,
+                                      right.ray_direction_z), dtype=float)
+        dot = float(np.clip(np.dot(direction_left, direction_right), -1.0, 1.0))
+        angle = math.degrees(math.acos(dot))
+        if angle < getattr(self, 'stereo_min_parallax_deg', 0.2):
+            return None
+        denominator = 1.0 - dot * dot
+        if denominator <= 1e-12:
+            return None
+        offset = origin_left - origin_right
+        left_offset = float(np.dot(direction_left, offset))
+        right_offset = float(np.dot(direction_right, offset))
+        distance_left = (dot * right_offset - left_offset) / denominator
+        distance_right = (right_offset - dot * left_offset) / denominator
+        if (not math.isfinite(distance_left) or not math.isfinite(distance_right)
+                or distance_left <= 0.0 or distance_right <= 0.0):
+            return None
+        closest_left = origin_left + distance_left * direction_left
+        closest_right = origin_right + distance_right * direction_right
+        gap = float(np.linalg.norm(closest_left - closest_right))
+        max_gap = getattr(self, 'stereo_max_ray_gap_m', 0.35)
+        if not math.isfinite(gap) or gap > max_gap:
+            return None
+        position = 0.5 * (closest_left + closest_right)
+
+        # Angular pixel error becomes transverse position error proportional
+        # to range. Combining both ray information matrices preserves the
+        # larger uncertainty along the weakly observed depth direction.
+        identity = np.eye(3)
+        sigma_left = max(float(left.ray_sigma_rad), 1e-6)
+        sigma_right = max(float(right.ray_sigma_rad), 1e-6)
+        projector_left = identity - np.outer(direction_left, direction_left)
+        projector_right = identity - np.outer(direction_right, direction_right)
+        information = (
+            projector_left / (distance_left * sigma_left) ** 2
+            + projector_right / (distance_right * sigma_right) ** 2)
+        try:
+            covariance = np.linalg.inv(information)
+        except np.linalg.LinAlgError:
+            covariance = np.linalg.pinv(information)
+        covariance = 0.5 * (covariance + covariance.T)
+        if not np.all(np.isfinite(position)) or not np.all(np.isfinite(covariance)):
+            return None
+        return position, covariance, gap
 
     def _base(self, message, index, form, detection_ids):
         detection = message.detections[index]

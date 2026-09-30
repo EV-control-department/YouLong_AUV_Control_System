@@ -37,6 +37,7 @@ def generate_launch_description():
             exec_name='stonefish_simulator_nogpu',
             arguments=[simulation_data, scenario_desc, simulation_rate],
             output='screen',
+            remappings=[('/tf', '/stonefish_ros2/tf_raw')],
     )
 
     def _stonefish_exit(event, context):

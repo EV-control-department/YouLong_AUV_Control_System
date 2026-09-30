@@ -49,6 +49,11 @@ def _model_default() -> str:
     return ''
 
 
+def _camera_optical_frame(camera, side):
+    frame_prefix = 'downward' if camera == 'down' else camera
+    return f'{frame_prefix}_{side}_camera_optical_frame'
+
+
 def _stamp(node, timestamp_ns):
     from rclpy.time import Time
     return Time(nanoseconds=int(timestamp_ns)).to_msg()
@@ -172,7 +177,7 @@ class ObjectDetector:
     def _publish(self, camera, side, packet, image, results, polygons):
         message = DetectionArray()
         message.header.stamp = _stamp(self.node, packet.header.timestamp_ns)
-        message.header.frame_id = f'{camera}_{side}_camera_optical_frame'
+        message.header.frame_id = _camera_optical_frame(camera, side)
         message.camera_name = f'{camera}_{side}'
         message.capture_id = packet.header.capture_id
         message.stereo_pair_id = packet.header.stereo_pair_id

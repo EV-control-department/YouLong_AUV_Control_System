@@ -53,6 +53,14 @@ MEASUREMENTS = f'{ROOT}/perception/measurements'
 TRACKS = f'{ROOT}/perception/tracks'
 STREAM_FRAME_INFO = f'{ROOT}/stream/frame_info'
 
+# RViz-only projections; consumers must not use these for control or estimation.
+VIZ_ODOM = f'{ROOT}/visualization/odom'
+VIZ_ODOM_PATH = f'{ROOT}/visualization/odom_path'
+VIZ_MEASUREMENTS = f'{ROOT}/visualization/measurements'
+VIZ_TRACKS = f'{ROOT}/visualization/tracks'
+VIZ_PLANNED_PATH = f'{ROOT}/visualization/planned_path'
+VIZ_ROBOT_DESCRIPTION = f'{ROOT}/visualization/robot_description'
+
 
 # iceoryx2 service names are deliberately kept outside the ROS graph.
 ICEORYX_CAMERA_FRONT = 'youlong/camera/front'
@@ -83,6 +91,10 @@ STATE_HEALTH = f'{ROOT}/state/health'
 STATE_RESET = f'{ROOT}/state/reset'
 TF = f'{ROOT}/tf'
 TF_STATIC = f'{ROOT}/tf_static'
+# Foxy's RViz TF listener subscribes to these absolute root topics internally,
+# so uv_rviz mirrors the canonical AUV TF stream here while it is running.
+RVIZ_TF = '/tf'
+RVIZ_TF_STATIC = '/tf_static'
 MOTION_COMMAND = f'{ROOT}/control/motion_command'
 TRAJECTORY = f'{ROOT}/control/trajectory'
 CONTROL_STATUS = f'{ROOT}/control/status'

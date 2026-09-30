@@ -14,7 +14,9 @@ def generate_launch_description():
         DeclareLaunchArgument('world_frame', default_value='odom'),
         DeclareLaunchArgument('edge_margin_px', default_value='8.0'),
         DeclareLaunchArgument('edge_margin_ratio', default_value='0.02'),
-        DeclareLaunchArgument('observation_pool_size', default_value='300'),
+        DeclareLaunchArgument('stereo_max_ray_gap_m', default_value='0.35'),
+        DeclareLaunchArgument('stereo_min_parallax_deg', default_value='0.2'),
+        DeclareLaunchArgument('observation_pool_size', default_value='0'),
         DeclareLaunchArgument('candidate_ray_limit', default_value='80'),
         DeclareLaunchArgument('candidate_pair_limit', default_value='2400'),
         DeclareLaunchArgument('max_candidate_clusters', default_value='8'),
@@ -33,8 +35,6 @@ def generate_launch_description():
         DeclareLaunchArgument('anchor_sigma_collection_frame_m', default_value='0.14'),
         DeclareLaunchArgument('anchor_sigma_target_rack_m', default_value='0.14'),
         DeclareLaunchArgument('stable_covariance_trace_m2', default_value='0.04'),
-        DeclareLaunchArgument('stale_after_s', default_value='0.5'),
-        DeclareLaunchArgument('lost_after_s', default_value='2.0'),
         DeclareLaunchArgument('instance_association_distance_m', default_value='1.5'),
         DeclareLaunchArgument('enable_gui', default_value='false'),
         Node(
@@ -53,6 +53,10 @@ def generate_launch_description():
                 'world_frame': LaunchConfiguration('world_frame'),
                 'edge_margin_px': LaunchConfiguration('edge_margin_px'),
                 'edge_margin_ratio': LaunchConfiguration('edge_margin_ratio'),
+                'stereo_max_ray_gap_m':
+                    LaunchConfiguration('stereo_max_ray_gap_m'),
+                'stereo_min_parallax_deg':
+                    LaunchConfiguration('stereo_min_parallax_deg'),
             }]),
         Node(
             package='uv_perception', executable='object_estimator',
@@ -81,8 +85,6 @@ def generate_launch_description():
                     LaunchConfiguration('anchor_sigma_target_rack_m'),
                 'stable_covariance_trace_m2':
                     LaunchConfiguration('stable_covariance_trace_m2'),
-                'stale_after_s': LaunchConfiguration('stale_after_s'),
-                'lost_after_s': LaunchConfiguration('lost_after_s'),
                 'instance_association_distance_m':
                     LaunchConfiguration('instance_association_distance_m'),
             }]),

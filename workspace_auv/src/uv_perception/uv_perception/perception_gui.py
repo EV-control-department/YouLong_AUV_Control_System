@@ -23,6 +23,7 @@ from uv_msgs.msg import (
 
 _FORM_NAMES = {
     int(ObjectMeasurement.FORM_FRONT_STEREO): "前视双目",
+    int(ObjectMeasurement.FORM_DOWN_STEREO): "下视双目",
     int(ObjectMeasurement.FORM_FRONT_BEARING): "前视方位",
     int(ObjectMeasurement.FORM_DOWN_DIRECT): "下视平面交点（兼容）",
     int(ObjectMeasurement.FORM_DOWN_BEARING): "下视方位",

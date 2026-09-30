@@ -3,6 +3,7 @@
 # XYZ values. The perception localizer publishes every such geometry in odom.
 
 uint8 FORM_FRONT_STEREO=1
+uint8 FORM_DOWN_STEREO=16
 uint8 FORM_FRONT_BEARING=2
 uint8 FORM_DOWN_DIRECT=4
 uint8 FORM_DOWN_BEARING=8

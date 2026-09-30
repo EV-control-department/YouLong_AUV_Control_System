@@ -40,8 +40,11 @@ class ObjectEstimator:
         self.node = node
         self.publisher = node.create_publisher(ObjectTrackArray, TRACKS, 10)
         self.world_frame = str(node.declare_parameter('world_frame', 'odom').value)
-        self.pool_capacity = max(2, int(node.declare_parameter(
-            'observation_pool_size', 300).value))
+        # Zero keeps all observations for the duration of this estimator run.
+        # A positive value opts into count-bounded memory usage.
+        requested_capacity = int(node.declare_parameter(
+            'observation_pool_size', 0).value)
+        self.pool_capacity = max(2, requested_capacity) if requested_capacity > 0 else 0
         self.seed_ray_limit = max(2, int(node.declare_parameter(
             'candidate_ray_limit', 80).value))
         self.seed_pair_limit = max(1, int(node.declare_parameter(
@@ -73,16 +76,13 @@ class ObjectEstimator:
         self.anchor_sigma_default_m = max(0.0, float(node.declare_parameter(
             'anchor_sigma_default_m', 0.10).value))
         self.anchor_sigma_by_class = self._declare_anchor_sigmas(node)
-        self.stale_after_s = max(0.0, float(node.declare_parameter(
-            'stale_after_s', 0.5).value))
-        self.lost_after_s = max(self.stale_after_s, float(node.declare_parameter(
-            'lost_after_s', 2.0).value))
         self.max_instance_association_m = max(0.1, float(node.declare_parameter(
             'instance_association_distance_m', 1.5).value))
         self.stable_covariance_trace_m2 = max(0.0, float(node.declare_parameter(
             'stable_covariance_trace_m2', 0.04).value))
         self._lock = threading.Lock()
-        self._pools = {}                 # (view, physical class) -> rolling ray list
+        self._pools = {}                 # (view, physical class) -> ray list
+        self._pool_source_ids = {}       # pool key -> retained detection IDs
         self._dirty_pools = set()
         self._tracks = {}
         self._pool_track_ids = {}        # pool key -> persistent track IDs
@@ -200,19 +200,32 @@ class ObjectEstimator:
             for factor in factors:
                 key = (factor['view'], factor['physical_class_name'])
                 pool = self._pools.setdefault(key, [])
+                seen_ids = self._pool_source_ids.setdefault(key, set())
                 source_ids = set(factor['source_detection_ids'])
                 # A retransmitted camera detection must not gain extra weight.
-                if any(source_ids.intersection(ray['source_detection_ids'])
-                       for ray in pool):
+                if not seen_ids.isdisjoint(source_ids):
                     continue
                 pool.append(factor)
-                if len(pool) > self.pool_capacity:
-                    del pool[:len(pool) - self.pool_capacity]
+                seen_ids.update(source_ids)
+                if self.pool_capacity and len(pool) > self.pool_capacity:
+                    evicted = pool[:-self.pool_capacity]
+                    del pool[:-self.pool_capacity]
+                    for ray in evicted:
+                        seen_ids.difference_update(ray['source_detection_ids'])
                 self._dirty_pools.add(key)
 
     def _seed_candidates(self, rays):
-        recent = rays[-self.seed_ray_limit:]
-        count = len(recent)
+        if len(rays) > self.seed_ray_limit:
+            recent_count = max(1, self.seed_ray_limit // 2)
+            history = rays[:-recent_count]
+            history_count = self.seed_ray_limit - recent_count
+            indices = np.linspace(0, len(history) - 1, history_count,
+                                  dtype=int)
+            sampled = [history[int(index)] for index in indices]
+            sampled.extend(rays[-recent_count:])
+        else:
+            sampled = rays
+        count = len(sampled)
         if count < 2:
             return []
         first_indices, second_indices = np.triu_indices(count, 1)
@@ -221,8 +234,8 @@ class ObjectEstimator:
                                  self.seed_pair_limit, dtype=int)
             first_indices = first_indices[sample]
             second_indices = second_indices[sample]
-        first = [recent[index] for index in first_indices]
-        second = [recent[index] for index in second_indices]
+        first = [sampled[index] for index in first_indices]
+        second = [sampled[index] for index in second_indices]
         d1 = np.asarray([ray['ray_direction'] for ray in first], dtype=float)
         d2 = np.asarray([ray['ray_direction'] for ray in second], dtype=float)
         o1 = np.asarray([ray['ray_origin'] for ray in first], dtype=float)
@@ -462,23 +475,18 @@ class ObjectEstimator:
         accepted = []
         for index, candidate in enumerate(candidates):
             membership = responsibilities[index]
-            residuals, inlier_indices = [], []
-            effective_support = 0.0
-            for ray_index, (factor, weight) in enumerate(zip(rays, membership)):
-                if weight <= 1e-4:
-                    continue
-                loglike, residual = self._log_likelihood(factor, candidate['position'])
-                if not math.isfinite(loglike):
-                    continue
-                effective_support += float(weight)
-                residuals.append(residual)
-                if weight >= 0.25 and residual <= max(3.0, self.huber_delta * 1.5):
-                    inlier_indices.append(ray_index)
+            evaluation = self._evaluate_batch(batch, candidate['position'])
+            ranges, whitened, valid = evaluation[2], evaluation[4], evaluation[5]
+            support_mask = (membership > 1e-4) & valid
+            effective_support = float(np.sum(membership[support_mask]))
+            residuals = whitened[support_mask]
+            inlier_mask = ((membership >= 0.25) & valid &
+                           (whitened <= max(3.0, self.huber_delta * 1.5)))
+            inlier_indices = np.flatnonzero(inlier_mask).tolist()
             if effective_support < 2.0 or len(inlier_indices) < 2:
                 continue
             inlier_rays = [rays[i] for i in inlier_indices]
-            parallax = self._max_parallax(inlier_rays)
-            if math.degrees(parallax) < self.min_parallax_deg:
+            if not self._has_min_parallax(inlier_rays, self.min_parallax_deg):
                 continue
             normal, _ = self._information_matrix(
                 rays, membership, candidate['position'], batch)
@@ -489,9 +497,7 @@ class ObjectEstimator:
             if not math.isfinite(condition) or condition > 1e8:
                 continue
             covariance = np.linalg.inv(normal)
-            ranges = [float(np.linalg.norm(candidate['position'] - ray['ray_origin']))
-                      for ray in inlier_rays]
-            max_range = max(ranges, default=0.0)
+            max_range = float(np.max(ranges[inlier_mask]))
             shared_floor = (
                 self.pose_translation_sigma_m ** 2 +
                 self.extrinsic_translation_sigma_m ** 2 +
@@ -505,7 +511,7 @@ class ObjectEstimator:
                 'inlier_indices': inlier_indices,
                 'inlier_count': len(inlier_indices),
                 'effective_support': effective_support,
-                'mean_residual': float(np.mean(residuals)) if residuals else math.inf,
+                'mean_residual': float(np.mean(residuals)) if residuals.size else math.inf,
                 'covariance': covariance,
                 'condition': condition,
                 'score': (len(inlier_indices), effective_support,
@@ -523,43 +529,46 @@ class ObjectEstimator:
         if not deduplicated:
             return [], np.zeros(len(rays), dtype=bool), len(rays), math.inf, 0.0
         responsibilities = self._responsibilities(rays, deduplicated, batch)
+        final_whitened, final_valid = [], []
         for index, candidate in enumerate(deduplicated):
-            candidate['responsibilities'] = responsibilities[index]
+            membership = responsibilities[index]
+            candidate['responsibilities'] = membership
             # Recompute diagnostics after the final soft assignment.
-            inlier_indices = []
-            residuals = []
-            for ray_index, (factor, weight) in enumerate(zip(rays, responsibilities[index])):
-                loglike, residual = self._log_likelihood(factor, candidate['position'])
-                if math.isfinite(loglike) and weight >= 0.25 and \
-                        residual <= max(3.0, self.huber_delta * 1.5):
-                    inlier_indices.append(ray_index)
-                    residuals.append(residual)
+            *_, whitened, valid, _ = self._evaluate_batch(batch, candidate['position'])
+            final_whitened.append(whitened)
+            final_valid.append(valid)
+            inlier_mask = ((membership >= 0.25) & valid &
+                           (whitened <= max(3.0, self.huber_delta * 1.5)))
+            inlier_indices = np.flatnonzero(inlier_mask).tolist()
             candidate['inlier_indices'] = inlier_indices
             candidate['inlier_count'] = len(inlier_indices)
-            candidate['mean_residual'] = (float(np.mean(residuals))
-                                          if residuals else math.inf)
+            candidate['mean_residual'] = (float(np.mean(whitened[inlier_mask]))
+                                          if inlier_indices else math.inf)
         best_membership = np.max(responsibilities, axis=0)
         best_assignment = np.argmax(responsibilities, axis=0)
         assigned_mask = best_membership >= 0.5
         clutter_count = int(np.count_nonzero(~assigned_mask))
         all_residuals = []
-        for ray_index in np.flatnonzero(assigned_mask):
-            candidate = deduplicated[int(best_assignment[ray_index])]
-            _, residual = self._log_likelihood(rays[ray_index], candidate['position'])
-            if math.isfinite(residual):
-                all_residuals.append(residual)
+        for index in range(len(deduplicated)):
+            selected = assigned_mask & (best_assignment == index) & final_valid[index]
+            if np.any(selected):
+                all_residuals.extend(final_whitened[index][selected].tolist())
         mean_residual = float(np.mean(all_residuals)) if all_residuals else math.inf
         return deduplicated, assigned_mask, clutter_count, mean_residual, float(np.mean(best_membership))
 
     @staticmethod
-    def _max_parallax(rays):
+    def _has_min_parallax(rays, min_parallax_deg):
         if len(rays) < 2:
-            return 0.0
+            return False
         directions = np.asarray([ray['ray_direction'] for ray in rays], dtype=float)
-        absolute_dots = np.abs(directions @ directions.T)
-        np.fill_diagonal(absolute_dots, 1.0)
-        minimum_dot = float(np.min(np.clip(absolute_dots, 0.0, 1.0)))
-        return math.asin(math.sqrt(max(0.0, 1.0 - minimum_dot * minimum_dot)))
+        threshold_dot = math.cos(math.radians(float(min_parallax_deg)))
+        # Stop as soon as one pair has enough angle. This avoids allocating the
+        # full N-by-N dot-product matrix for a large observation pool.
+        for index in range(len(directions) - 1):
+            if np.any(np.abs(directions[index + 1:] @ directions[index]) <=
+                      threshold_dot):
+                return True
+        return False
 
     def _information_matrix(self, rays, memberships, position, batch=None):
         if batch is None:
@@ -598,16 +607,20 @@ class ObjectEstimator:
             return len(rays), math.inf
         batch = self._ray_batch(rays)
         responsibilities = self._responsibilities(rays, clusters, batch)
+        whitened_by_cluster, valid_by_cluster = [], []
         for index, cluster in enumerate(clusters):
             membership = responsibilities[index]
+            evaluation = self._evaluate_batch(batch, cluster['position'])
+            ranges, whitened, valid = evaluation[2], evaluation[4], evaluation[5]
+            whitened_by_cluster.append(whitened)
+            valid_by_cluster.append(valid)
             normal, _ = self._information_matrix(
                 rays, membership, cluster['position'], batch)
             eigenvalues = np.linalg.eigvalsh(normal)
             if eigenvalues[0] > 1e-8 and np.all(np.isfinite(eigenvalues)):
                 cluster['covariance'] = np.linalg.inv(normal)
-                ranges = [float(np.linalg.norm(cluster['position'] - ray['ray_origin']))
-                          for ray, weight in zip(rays, membership) if weight >= 0.25]
-                max_range = max(ranges, default=0.0)
+                supported = (membership >= 0.25) & valid
+                max_range = float(np.max(ranges[supported])) if np.any(supported) else 0.0
                 shared_floor = (
                     self.pose_translation_sigma_m ** 2 +
                     self.extrinsic_translation_sigma_m ** 2 +
@@ -616,34 +629,42 @@ class ObjectEstimator:
                      self.extrinsic_rotation_sigma_rad ** 2))
                 cluster['covariance'] += np.eye(3) * shared_floor
                 cluster['condition'] = float(eigenvalues[-1] / eigenvalues[0])
-            inliers, residuals = [], []
-            for ray_index, (factor, weight) in enumerate(zip(rays, membership)):
-                loglike, residual = self._log_likelihood(factor, cluster['position'])
-                if (math.isfinite(loglike) and weight >= 0.25 and
-                        residual <= max(3.0, self.huber_delta * 1.5)):
-                    inliers.append(ray_index)
-                    residuals.append(residual)
+            residual_mask = (membership >= 0.25) & valid
+            inlier_mask = (residual_mask &
+                           (whitened <= max(3.0, self.huber_delta * 1.5)))
+            inliers = np.flatnonzero(inlier_mask).tolist()
             cluster['responsibilities'] = membership
             cluster['inlier_indices'] = inliers
             cluster['inlier_count'] = len(inliers)
             cluster['effective_support'] = float(np.sum(membership))
-            cluster['mean_residual'] = (float(np.mean(residuals))
-                                        if residuals else math.inf)
+            cluster['mean_residual'] = (float(np.mean(whitened[residual_mask]))
+                                        if np.any(residual_mask) else math.inf)
         best_membership = np.max(responsibilities, axis=0)
         best_assignment = np.argmax(responsibilities, axis=0)
         assigned = best_membership >= 0.5
         residuals = []
-        for ray_index in np.flatnonzero(assigned):
-            cluster = clusters[int(best_assignment[ray_index])]
-            _, residual = self._log_likelihood(rays[ray_index], cluster['position'])
-            if math.isfinite(residual):
-                residuals.append(residual)
+        for index in range(len(clusters)):
+            selected = assigned & (best_assignment == index) & valid_by_cluster[index]
+            if np.any(selected):
+                residuals.extend(whitened_by_cluster[index][selected].tolist())
         mean_residual = float(np.mean(residuals)) if residuals else math.inf
         return int(np.count_nonzero(~assigned)), mean_residual
 
     def _rebuild_pool(self, key, rays, now):
         physical_name = key[1]
         seeds = self._seed_candidates(rays)
+        # Retain hypotheses supported by older pooled rays after they leave
+        # the recent subset used for pair seeding.
+        for track_id in self._pool_track_ids.get(key, ()):
+            state = self._tracks.get(track_id)
+            if state is None or state.position is None:
+                continue
+            position = np.asarray(state.position, dtype=float)
+            if any(np.linalg.norm(position - seed['position']) <
+                   self.seed_cluster_radius_m for seed in seeds):
+                continue
+            seeds.append({'position': position, 'seed_score': 0.0,
+                          'seed_support': 0})
         clusters, _, clutter_count, mean_residual, _ = self._fit_candidates(rays, seeds)
         max_instances, multi_instance = self._max_instances(physical_name, rays)
         clusters = clusters[:max_instances]
@@ -661,7 +682,14 @@ class ObjectEstimator:
             costs.append(row)
         assignment = {row: column for row, column, _ in
                       minimum_cost_assignment(costs, self.max_instance_association_m)}
+        if max_instances == 1 and clusters and states:
+            # The view and physical class identify a singleton. Its estimate
+            # may move far when later pooled evidence corrects an early error.
+            assignment = {0: 0}
         new_pool_track_ids = set(track_ids)
+        reserved_track_ids = {states[index].track_id for index in assignment.values()}
+        replaceable_states = [state for state in states
+                              if state.track_id not in reserved_track_ids]
         for cluster_index, cluster in enumerate(clusters):
             inlier_indices = cluster['inlier_indices']
             if len(inlier_indices) < 2:
@@ -670,7 +698,17 @@ class ObjectEstimator:
                 state = states[assignment[cluster_index]]
             else:
                 if len(new_pool_track_ids) >= max_instances:
-                    continue
+                    if not replaceable_states:
+                        continue
+                    # A supported new cluster replaces an old track with no
+                    # matching cluster when the instance budget is full.
+                    old = min(replaceable_states, key=lambda item: (
+                        item.measurement_count,
+                        -sum(item.covariance[index] for index in (0, 4, 8)),
+                        item.last_ns))
+                    replaceable_states.remove(old)
+                    new_pool_track_ids.discard(old.track_id)
+                    self._tracks.pop(old.track_id, None)
                 newest = max((rays[index] for index in inlier_indices),
                              key=lambda ray: ray['arrival_ns'])
                 state = TrackState(
@@ -740,7 +778,6 @@ class ObjectEstimator:
         for state in states:
             if state.position is None:
                 continue
-            age = max(0.0, (now - state.last_ns) / 1e9)
             track = ObjectTrack()
             track.track_id = state.track_id
             track.last_observation_id = state.last_observation_id
@@ -755,12 +792,8 @@ class ObjectEstimator:
             track.world_x, track.world_y, track.world_z = state.position
             track.position_covariance = state.covariance
             covariance_trace = sum(state.covariance[index] for index in (0, 4, 8))
-            if age > self.lost_after_s:
-                track.status = ObjectTrack.STATUS_LOST
-            elif age > self.stale_after_s:
-                track.status = ObjectTrack.STATUS_STALE
-            elif (track.measurement_count >= 2 and
-                  covariance_trace <= self.stable_covariance_trace_m2):
+            if (track.measurement_count >= 2 and
+                    covariance_trace <= self.stable_covariance_trace_m2):
                 track.status = ObjectTrack.STATUS_STABLE
             else:
                 track.status = ObjectTrack.STATUS_TENTATIVE
