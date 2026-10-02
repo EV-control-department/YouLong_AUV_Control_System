@@ -1,339 +1,185 @@
-# 九宫格锥桶建图任务
+# 九宫格建图：相机内处理、任务只消费观测
 
-## 1. 任务边界
-
-本任务对应《水下具身智能》中的中心区域建图。比赛机器人必须自主运行，不能依靠拖缆、遥控、外部定位或外部数据回传改变运动结果。任务只使用艇上 ROS 2/DDS 数据：机器人位姿、左右下视相机图像、相机标定信息和视觉检测结果。
-
-当前场景使用 AprilTag。OpenCV 通过 `cv2.aruco.ArucoDetector` 提供 AprilTag
-家族检测接口；建图配置当前使用 `DICT_APRILTAG_16h5`，`tag_id=-1` 表示接受配置列表中的 ID 0–6，多帧融合时保持同一 ID。场景中
-资源文件仍可能保留 `aruco_*.png` 的历史文件名，但不代表编码家族仍是 ArUco。
-
-当前场景给出的几何量为：
-
-- 标记中心：`(1.50, -2.00)`。
-- 九宫格中心：`(2.00, -4.00)`。
-- 九宫格边长：`2.00 m`。
-- 九宫格航向：`0°`。
-- 每个格子的理论中心间距：`2 / 3 m`。
-- AprilTag 上方巡检高度：`survey_z=0.10 m`，用于扩大下视相机视野；池底高度仍为 `floor_z=1.994 m`。
-- 锥桶类别：YOLO 分割模型 `best.pt` 的 `0 = 方形锥桶`、`1 = 圆形锥桶`。
-
-实际比赛前应将九宫格中心、边长、航向、池底深度和标记 ID 写入 `config/tasks/mapping_grid.json`，不要把仿真坐标直接当成现场坐标。
-
-## 2. 执行流程
-
-历史测试中曾因格点0四秒观察窗口内同步帧为0而直接中止，导致后续八个格点没有访问；也曾因总时限 420 秒在第 8 格运动尚未结束时耗尽而中止。
-当前实现已将“单格点观测失败”和“运动失败”分离：前者只记录该格点状态并继续，后者仍然中止任务以保证运动安全。
-
-场景模板及当前随机场景引用 `apriltag_16h5_id2.png`，已保留原有 ID 2；
-另一个跟踪场景保留 ID 4。随机生成器为 ID 0–6 预备同一家族的七张纹理，
-使用 OpenCV 生成含黑色编码边框、白色留白的 RGB 图，并逐张自检解码；
-不再选择旧的 `aruco_4x4_id*.png`。标记朝上的网格表面已修正镜像 UV。
-读取标记时每三秒输出中文进度；`frames=0` 并伴随位姿错误表示时间同步失败，
-`markers=0` 表示未解码，`wrong_id` 表示 ID 不匹配，`no_depth` 表示解码后深度无效。
-启动日志包含实际 Python 文件路径，可核对运行的是否是新安装版本。
+## 信息流与边界
 
 ```text
-仿真起点 `(0, 0, 0.10)`，跳过实机拔缆倒计时并执行 START
-        ↓
-WTRAVEL 到池底标记附近
-        ↓
-下视图识别标记，并记录多帧位置
-        ↓
-按固定访问顺序进入九宫格九个理论中心
-        ↓
-左右下视图同步获得检测结果和分割掩膜
-        ↓
-对左右图像做 SGBM，读取掩膜内深度直方图主峰
-        ↓
-根据相机标定和机器人位姿换算到建图坐标系
-        ↓
-按理论格位关联目标，使用静态位置卡尔曼滤波器更新
-        ↓
-输出九宫格地图和访问记录
+真机 V4L2 → uv_camera.Sensor → 内存 FrameGate → uv_camera.Ai (YOLO-Seg)
+仿真 Stonefish 左/右目 Image → uv_camera.Sensor 直接配对 → 同一 FrameGate
+                                                   ↓
+uv_camera.MappingVision：AprilTag 16h5 + 校正/SGBM + 掩膜深度峰 + 采集位姿
+                                                   ↓ 小型观测数组 (DDS)
+                           /perception/mapping/observations
+                                                   ↓
+uv_task.MappingTask：九格关联 → 静态卡尔曼滤波 → 类别投票 → 路径规划/状态机
+                                                   ↓
+                       /task/mapping/map 和 /task/mapping/events
 ```
 
-任务访问所有九个格子，最终应确认四个目标格。路线顺序在 JSON 的 `visit_order` 中配置，当前为 `[0, 1, 2, 5, 8, 7, 6, 3, 4]`。
+真机从 V4L2 到 YOLO/建图视觉均是进程内 BGR 数组，不发布 DDS Image。
+仿真受 Stonefish 原生接口限制，第一跳仍是 `/sim/{front,down}_cam/{left,right}/image_color`；
+camera 直接接收并在本进程配对/拼接。默认关闭 sim_bridge 旧的 `/auv/*/stitched`
+二次发布；确有旧消费者时可在 sim_bridge 设置 `enable_camera_passthrough:=true`。
+camera 的普通 YOLO DetectionArray 话题仍保留供其他模块使用，但 MappingTask 不订阅它们。
 
-### 2.1 本次问题与解决方法
+camera 生成的每帧观测使用 `uv_msgs/msg/MappingObservationArray`：
+`header.stamp` 是左目采集时间；`processed`/ `reason` 区分有效、标定缺失和位姿过期；
+数组同时带标记/锥桶候选数量及深度拒绝数量，方便区分“没识别”与“识别到但测距失败”。
+每个 `MappingObservation` 带 `kind=TAG/CONE`、标记 ID 或锥桶类 ID、
+置信度、深度米数、主峰有效像素数、`mapping_odom` 三维坐标和采集位姿时间差。
+空帧也发布数组，让任务能统计真实处理过的同步帧；不传图像和掩膜多边形。
+camera 使用采集时间查找最近 PoseInfo，默认最大位姿差 1 秒，超出时明确拒绝，
+不复用任意旧位姿。视觉线程采用 latest-wins 队列，不积压过时图像。
 
-此前建图采用“移动到格点后，再在主流程中读取一次检测”的串行方式。该方式有两个明显缺陷：
+## 任务执行
 
-1. WTRAVEL 期间不处理视觉数据，YOLO 推理延迟会使检测结果在格点观察窗口之外才到达。
-2. 检测消息、拼接图像和位姿消息由不同回调发布，严格要求它们在很小的时间差内相等，容易将真实检测误判为 `image timestamp unavailable` 或 `no pose close enough to image timestamp`。
+任务清单先 `start`（建立 odom 原点），再 `mapping_grid`。
+camera 感知线程独立运行，运动与观测并行；任务主流程仍串行 WTRAVEL：
 
-当前解决方案是“运动控制串行、感知处理并行”：WTRAVEL 仍然一次只执行一个目标，保证控制链路安全；`MappingTask` 在标定准备完成后启动独立的后台感知线程，持续消费图像和检测消息。感知结果不再依赖某一个格点的瞬时窗口，而是持续进入观测池和静态位置滤波器。
+1. 等待 camera 的有效观测帧和 PoseInfo；WTRAVEL 到 AprilTag 理论位置。
+2. camera 在校正后的下视左图解码 `DICT_APRILTAG_16h5`，允许 ID 0–6
+   （任务 `tag_id=-1` 表示接收任意 ID，但同一条轨迹只融合同一个 ID）。
+   多次观测确认后，依配置 `visit_order` 逐格巡检。
+3. camera 对 YOLO 0=方形、1=圆形的分割掩膜运行 SGBM 深度主峰，
+   以主峰像素中位数反投影并用采集时位姿换算世界坐标。
+   Task 按 XY 最近理论格关联，先做格位门限，再做静态目标滤波/离群剔除/类别投票。
+4. 空格或暂时无深度只记观测不足，仍访问剩余格子。运动失败或标记未确认
+   才提前中止。九格后按“两方两圆”约束选最可信的部分/完整结果并发布地图。
+5. 返回已观测 AprilTag 位置，先圆形后方形遍历已确认锥桶。
+   遍历在九宫格四邻接图上沿格点中心走；锥桶格进入一次后不可再次进入。
+   有目标的终点使用融合坐标，不回退到 JSON 理论中心。
 
-### 2.2 `uv_task` 修正方案
+任务仍订阅小型 `/basic_motion/pose_info`，用于遍历阶段实时位置安全监测；
+它不再做图像/检测/CameraInfo 的时间配对。九格关联和 Kalman 状态都在 task，
+不会被 camera 的单帧视觉判断固定。
 
-核心修改位于 `uv_task/mapping_task.py`，不改变现有 ROS 任务接口：
+## 配置与标定
 
-- 增加 `mapping-perception` 后台线程，统一处理 AprilTag 和锥桶感知。
-- 主线程的 `_read_tag()` 改为等待后台线程累计到足够的 AprilTag 有效观测，不再重复扫描同一批图像。
-- 主线程的 `_observe_cones()` 改为读取当前格点的累计计数，只负责等待观察时间结束和输出统计。
-- 抽出 `_process_cone_pair()`，对每个左右目检测对执行掩膜深度主峰、世界坐标换算、格点关联、卡尔曼更新和类别投票。
-- 单格点无检测、深度无效或时间配对失败，只产生事件和警告，不会抛出任务级异常。
-- WTRAVEL 失败、标定失败、AprilTag 在规定时间内未确认，以及最终目标数量不足，仍会按任务失败处理。
-- 后台线程在 `execute()` 的 `finally` 和 `destroy()` 中停止并回收，避免任务结束后遗留线程。
+九宫格中心为 `(2.0, -4.0) m`，单格边长 `0.8 m`，总边长 `2.4 m`；
+`grid_side_m` 表示整个 3×3 网格的边长，随机锥桶中心也按 0.8 m 格距生成。
+`workspace_auv/src/uv_task/config/tasks/mapping_grid.json` 只保留任务几何、
+巡检/遍历、滤波和目标数量参数。视觉参数在 `uv_camera` 节点：
+`mapping_tag_dictionary`、`mapping_tag_id`、`mapping_*depth*`、
+`mapping_sgbm_*`、`mapping_left/right_translation`、`mapping_camera_rotation`。
+仿真采用 Stonefish CameraInfo 及场景中的左右相机外参；默认基线 0.10 m。
+`sim_dev`/`sim_ci`/`hil_lab` 的下视相机平移必须与
+`xunyun_fixed.scn` 一致（左目 `[0,-0.05,0.176]`，右目 `[0,0.05,0.176]`）。
+位姿按左右相邻采样插值（yaw 使用最短角差），避免快速转向时用最近 30Hz
+离散姿态直接投影产生横向位置抖动。双目 SGBM 已直接提供深度，因此锥桶
+不再要求右目 YOLO 必须同时检出；观测消息分别统计低置信度、掩膜缺失和
+深度峰失败，便于判定观测停在哪一道检查。
 
-线程之间共享滤波器、类别投票和观测计数时使用 `self.lock`；图像和检测队列使用有限长度缓存，避免积压过期帧。
+真机使用 `mapping_calibration_file`（默认 `uv_camera/config/down.npz`）。
+现有 NPZ 对应的默认检查尺寸为每目 1280×960，而当前 V4L2 采集配置为
+每目 1920×1080；尺寸不匹配会发布 `processed=false` 和清晰错误，
+不会输出貌似正确的世界坐标。实机运行前必须在实际采集模式重新标定并设置
+`mapping_calibration_file`、`mapping_calibration_width`、
+`mapping_calibration_height`，或把采集模式改为标定时的模式并验证分辨率。
+仿真不受此 NPZ 限制。
 
-## 2.3 具体任务执行逻辑
+## 上位机与日志
 
-任务列表由 `mapping_grid.json` 提供，正常包含 `start` 和 `mapping_grid` 两个任务。整体伪代码如下：
+`visualization/mapping_visualizer.py` 只从 DDS 读取地图、事件、PoseInfo。
+图像、掩膜叠加、视差、深度和深度直方图由 camera 用同一帧计算，
+经 HTTP 快照提供：
 
 ```text
-start
-  └─ START：以当前 map 位姿建立 odom 原点
-
-mapping_grid
-  ├─ 等待左右相机 CameraInfo 和机器人位姿
-  ├─ 创建双目标定、立体校正映射和 SGBM
-  ├─ 启动后台感知线程
-  │    ├─ 新图像：尝试识别 AprilTag，并更新 tag_filter
-  │    └─ 新检测对：计算锥桶深度和世界坐标，并更新 cone_filter
-  ├─ WTRAVEL 到 AprilTag 理论位置
-  ├─ 等待 tag_filter 达到 min_observations
-  ├─ 按 visit_order 逐格执行
-  │    ├─ WTRAVEL 到理论格点中心
-  │    ├─ 等待 observe_seconds，让后台线程继续累计观测
-  │    ├─ 保存该格点的同步帧数和有效测量数
-  │    ├─ 无有效观测：记录为空格，继续下一格
-  │    └─ 发布地图快照和 cell_completed 事件
-  ├─ 确认九个格点均已访问
-  ├─ 统一检查 expected_cones、观测次数和类别投票
-  └─ 发布 completed 或 failed
+http://127.0.0.1:8090/mapping/input.jpg
+http://127.0.0.1:8090/mapping/overlay.jpg
+http://127.0.0.1:8090/mapping/disparity.jpg
+http://127.0.0.1:8090/mapping/depth.jpg
+http://127.0.0.1:8090/mapping/histogram.jpg
 ```
 
-后台线程不要求当前状态必须是 `observe_cell` 才处理视觉数据。移动期间得到的有效目标测量也可以进入对应理论格点的滤波器；只有“同步帧数”统计限定在当前格点停留阶段，用于判断该格点是否真正获得过可用感知输入。这样可以利用运动期间已经产生的有效数据，同时避免把移动过程中的帧伪装成格点停留观测。
+面板启动前确保 camera 的 `enable_gortc=true`（会启动本地 8090 MJPEG/快照源）。
+远程显示设置 `UV_CAMERA_MJPEG_URL=http://艇载主机:8090`；真实比赛不依赖面板。
+地图和观测为小型 DDS 消息，可用
+`ros2 topic echo /perception/mapping/observations` 和
+`ros2 topic echo /task/mapping/events` 排错。
+`uv_log` 的 `/perception/.*` 与 `/task/.*` 规则可记录它们；HTTP 图像不进入 rosbag。
 
-## 2.4 单个格点的状态和任务失败边界
+## 构建与仿真启动
 
-每次访问格点时，任务保存进入观察阶段前的计数快照。观察结束后计算增量：
-
-```text
-本格点新增同步帧 = 结束时同步帧 - 进入时同步帧
-本格点新增测量   = 结束时测量数 - 进入时测量数
-```
-
-`synchronized_frames=0` 不再意味着任务失败，它只说明当前停留期间没有形成完整的图像、位姿和检测数据。九宫格中的空格本来就不应包含锥桶，因此空格允许正常通过。任务只有在完成全部路线后，才检查是否找到了规定数量的锥桶。
-
-失败边界如下：
-
-| 情况 | 处理方式 |
-|---|---|
-| 单格点无检测 | 记录空格，继续下一个格点 |
-| 图像时间戳暂时无法配对 | 保留检测等待重试，不终止任务 |
-| 深度主峰无效 | 拒绝本次测量，继续任务 |
-| 卡尔曼马氏距离超门限 | 拒绝离群观测，继续任务 |
-| WTRAVEL 动作失败 | 中止任务，避免继续盲目运动 |
-| AprilTag 超时未确认 | 中止任务，避免使用未校准的地图坐标 |
-| 九格访问结束但确认目标数不足 | 完整检索后报告建图失败 |
-
-## 2.5 时间戳配对策略
-
-当前配对优先级如下：
-
-1. 左右检测均带有非零且相同的 `stereo_pair_id` 时，直接按 pair ID 配对。该 ID 来自仿真立体拼接器，能够覆盖左右相机约 `0.1 s` 的采集时间差。
-2. 没有 pair ID 的旧接口，才使用 `detection_slop_s` 比较左右检测时间戳。
-3. 用检测时间戳在 `/auv/down_cam/stitched` 缓存中查找最近图像。严格时间窗由 `image_slop_s` 控制；在机器人标记识别或格点停留阶段，差值不超过 5 秒时使用最近帧，并输出中文警告。
-4. 位姿同样优先取最近时间戳。停稳阶段允许不超过 5 秒的有限延迟；超过上限才拒绝该帧。
-5. 检测已经到达但对应图像尚未进入缓存时，不更新 `last_detection_stamp`，后台线程会继续重试，避免检测被提前消费。
-
-上述策略的原则是：运动阶段尽量使用严格时间对齐，停稳阶段允许有限延迟；任何放宽都必须有上限，避免使用无限期的陈旧图像。当前任务总时限为 900 秒、单格观察时间为 6 秒，用于覆盖低帧率仿真下的完整九格路线。
-
-## 3. 视觉和测距实现
-
-### 3.1 YOLO 分割
-
-`uv_camera` 使用 `resource/best.pt`。`uv_ai` 将每个检测的分割轮廓通过 `Detection.mask_x` 和 `Detection.mask_y` 发布到对应的左右检测话题；原有 bbox 和类别字段保持不变。
-
-建图任务只接受类别 ID 0 和 1，并要求左右图像都检测到同一类别。这样可以避免把单目误检直接写入地图。
-
-### 3.2 SGBM 深度主峰
-
-建图节点订阅 `/auv/down_cam/stitched`，拆出左右图像后根据 `CameraInfo` 完成去畸变和立体校正，再运行 `StereoSGBM`。
-
-对每个 YOLO 分割掩膜：
-
-1. 取掩膜范围内的视差。
-2. 删除无效视差、负深度和超出深度范围的数值。
-3. 将深度按 `depth_bin_m` 分箱。
-4. 选取频数最高的合理峰值，并用峰值箱内深度的中位数作为本次测量深度。
-5. 以掩膜像素中心和主峰深度恢复目标点。
-
-这种处理会丢弃掩膜边缘、背景和错误匹配形成的深度群，不直接使用整幅深度图平均值。`depth_peak_ratio` 和 `min_depth_points` 用于拒绝深度分布不可靠的帧。
-
-### 3.3 世界坐标换算
-
-立体校正后的相机点先恢复到左相机光学坐标，再使用下视相机外参换算到艇体坐标，最后使用 `/basic_motion/pose_info` 中的艇体位姿换算到 `mapping_odom` 建图坐标系。
-
-当前实现使用艇体启动后的 odom 坐标作为地图坐标。`START` 前必须确认机器人已经位于规则要求的投放/起始位置；如果现场坐标需要额外平移，应在 JSON 中调整九宫格和标记坐标。
-
-## 4. 静态位置卡尔曼滤波器
-
-锥桶和标记在任务期间视为静止目标，状态只包含三维位置：
-
-```text
-x(k+1) = x(k) + w(k)
-z(k)   = x(k) + v(k)
-```
-
-状态转移矩阵和观测矩阵都是单位阵。过程噪声很小，用来吸收机器人位姿误差和场景微小误差；测量协方差由当前深度测距的固定噪声近似给出。
-
-每次更新前计算马氏距离，超过 `mahalanobis_gate` 的测量会被拒绝。类别不单独做位置滤波，而是对同一格的 0/1 识别结果进行投票；达到 `class_vote_ratio` 后才输出类别。
-
-## 5. DDS 接口
-
-任务使用的输入：
-
-| 话题 | 类型 | 用途 |
-|---|---|---|
-| `/basic_motion/pose_info` | `uv_msgs/msg/PoseInfo` | 机器人位姿和时间对齐 |
-| `/auv/down_cam/stitched` | `sensor_msgs/msg/Image` | 左右下视原始图像 |
-| `/sim/down_cam/left/camera_info` | `sensor_msgs/msg/CameraInfo` | 左相机标定 |
-| `/sim/down_cam/right/camera_info` | `sensor_msgs/msg/CameraInfo` | 右相机标定 |
-| `/perception/detection/down_left` | `uv_msgs/msg/DetectionArray` | 左目类别和分割掩膜 |
-| `/perception/detection/down_right` | `uv_msgs/msg/DetectionArray` | 右目类别和分割掩膜 |
-
-任务输出：
-
-| 话题 | 类型 | 用途 |
-|---|---|---|
-| `/task/mapping/map` | `std_msgs/msg/String` | 低频完整地图快照，Transient Local |
-| `/task/mapping/events` | `std_msgs/msg/String` | 标记测量、锥桶测量、拒绝原因和状态变化 |
-| `/task/status` | `uv_msgs/msg/TaskStatus` | 通用任务状态 |
-
-地图 JSON 中保留格子理论中心、测量位置、协方差、观测次数、类别投票、残差和访问顺序。
-
-## 6. 日志和可视化
-
-现有 `uv_log` 默认主题正则已经包含 `/task/.*`、`/perception/.*`、`/basic_motion/.*`，因此新的地图快照和事件会进入 rosbag。建图事件中的每条数据同时通过 ROS logger 输出关键失败原因，不需要扩大日志包的接口。
-
-可视化脚本只订阅 DDS，不读取地图文件：
-
+在仓库根目录：
+colcon build --symlink-install --packages-select uv_msgs uv_camera uv_task
+colcon build --symlink-install --packages-select uv_sim
 ```bash
 source /opt/ros/humble/setup.bash
-source workspace_auv/install/setup.bash
-python3 visualization/mapping_visualizer.py
-```
-
-它显示九宫格理论位置、滤波后位置、残差连线、标记位置和当前任务状态。
-
-## 7. 运行方式
-
-当前任务清单明确包含两个步骤：先执行 `start` 初始化 odom 原点，再执行
-`mapping_grid`。如果日志出现 `odom origin not set, call start() first`，说明运行的仍是旧版任务清单或没有重新 source 安装空间。
-
-仿真启动默认不再等待四路 YOLO detection 才释放任务。相机和模型在后台继续工作，建图任务在每个格点观察阶段自行等待新鲜检测；这样可以避免 AUV 在模型首次推理期间漂离起点。需要复现旧的全量感知门控时，可显式添加 `wait_for_detections:=true`。
-
-先构建两个工作区：
-
-```bash
-cd YouLong_AUV_Control_System/workspace_auv
-colcon build --symlink-install --packages-up-to uv_msgs uv_camera uv_task
+cd workspace_auv
 source install/setup.bash
-
 cd ../workspace_sim
-colcon build --symlink-install
 source install/setup.bash
-```
-
-启动相机、定位和任务时需要打开 AI；模型路径也可以显式指定：
-
-```bash
 cd ..
-source /opt/ros/humble/setup.bash
-source workspace_auv/install/setup.bash
-source workspace_sim/install/setup.bash
-
 ros2 launch uv_bringup sim.launch.py \
-  profile:=sim_dev \
-  gpu:=true \
-  gpu_backend:=nvidia \
-  enable_ai:=true \
-  enable_nav:=false \
-  enable_task:=true \
-  wait_for_detections:=false \
+  profile:=sim_dev gpu:=true gpu_backend:=nvidia ai_device:=cuda:0 \
+  enable_ai:=true enable_nav:=false enable_task:=true \
   scenario_desc:=water_embodied_intelligence_random.scn \
   mission_file:="$PWD/workspace_auv/src/uv_task/config/missions/mapping_grid.json"
 ```
-ros2 launch uv_bringup sim.launch.py
-  \
-    profile:=sim_dev \
-    gpu:=true \
-    gpu_backend:=nvidia \
-    ai_device:=cuda:0 \
-    enable_ai:=true \
-    enable_nav:=false \
-    enable_task:=true \
-    enable_preview:=true \
-    stream_annotated:=true \
-    scenario_desc:=water_embodied_intel
-    ligence_random.scn \
-    mission_file:="$PWD/workspace_auv/
-    src/uv_task/config/missions/
-    mapping_grid.json"
 
-这里明确使用 `workspace_sim/src/stonefish_ros2/Data/water_embodied_intelligence_random.scn` 作为 Stonefish 场景；`scenario_desc` 传入文件名后，由仿真启动流程从 Stonefish `Data` 目录解析该文件。
+场景使用 `apriltag_16h5_id*.png`（随机生成器可选 0–6）。
+若视觉话题没有 `processed=true`，先查 CameraInfo、位姿时间差和标定错误；
+不要再用旧的 `/auv/down_cam/stitched` 观察任务是否在处理。
 
-如果启动日志出现 `ultralytics not installed`，需要在运行任务的 Python 环境中安装 Ultralytics 和对应的 PyTorch；仅构建 ROS 包不会自动下载这两个推理依赖。模型文件 `resource/best.pt` 受当前仓库的 `*.pt` 忽略规则管理，应在运行机器上准备好。
+## 仅启动仿真并录制视频数据集
 
-单独检查输出：
+以下命令分别在三个终端执行，工作目录均为仓库根目录
+`YouLong_AUV_Control_System`。先启动仿真，等 `uv_camera` 显示 MJPEG 服务已
+监听 `8090`，再启动 GUI 和录制脚本。
+
+终端 1：启动 Stonefish、控制桥与相机，不启动建图任务。这里必须保留
+`enable_ai:=true`，因为当前 `sim.launch.py` 仅在启用感知时包含相机节点；
+`enable_task:=false` 不会自动运行 `task_runner`。
 
 ```bash
-ros2 topic echo /task/mapping/map
-ros2 topic echo /task/mapping/events
-ros2 topic echo /task/status
+cd /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System
+source /opt/ros/humble/setup.bash
+source workspace_auv/install/setup.bash
+source workspace_sim/install/setup.bash
+ros2 launch uv_bringup sim.launch.py \
+  profile:=sim_dev gpu:=true gpu_backend:=nvidia ai_device:=cuda:0 \
+  enable_ai:=true enable_nav:=false enable_task:=false enable_preview:=true \
+  scenario_desc:=water_embodied_intelligence_random.scn
 ```
 
-当前实现的建图任务名称为 `mapping_grid`，也可用调试模式通过 `/task/exec` 单独调用。正式比赛前应先在仿真中验证坐标原点、锥桶深度主峰、SGBM 参数和四个目标的格位关联。
+终端 2：打开 ZIT6 上位机。`gui.py` 使用包内相对导入，不能直接执行文件路径；
+通过模块方式启动，并将仓库中的 `upper_examples` 加入 Python 搜索路径。
 
-本任务不使用 `yellow_golf`、`pink_golf` 等旧竞赛目标元数据；默认 `target_id` 为
-`mapping_grid`。旧任务若需要使用旧目标，必须在启动命令中显式传入对应的 `target_id`。
+```bash
+cd /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System
+source /opt/ros/humble/setup.bash
+source workspace_auv/install/setup.bash
+source workspace_sim/install/setup.bash
+PYTHONPATH="$PWD/third_party/AUV_zit6_cmake/upper_examples${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -m upper_examples.gui
+```
 
-### 建图后的锥桶遍历
+终端 3：直接连接相机节点的 MJPEG 源，逐帧保存前视 `/front` 与下视 `/down`
+双目拼接画面；不经过 DDS 图像话题，也不依赖 go2rtc 转发。
 
-九格巡检结束后冻结最终建图结果，先返回已识别 AprilTag 的融合位置上方，
-再遍历圆形锥桶（类别 1），最后遍历方形锥桶（类别 0）。
-这里的遍历指 WTRAVEL 到目标上方，不是绕桩，xy 使用融合位置，z 仍为 `survey_z=0.1`。
-路线在九宫格四邻接图上搜索，像棋子一样每步进入相邻格；空格可以重复作为通道，
-锥桶格一旦进入即计入搜索状态，后续路线不能再次进入。搜索先完成所有圆形格，
-再进入方形格；在满足顺序与不重入条件的路线中选择最短的格点路径。
-入格/返程只允许从边界格衔接 AprilTag，返程穿过网格时也使用相邻空格作通道。
-空格的 WTRAVEL 目标为九宫格中心；锥桶格的终点为观测融合位置，且必须落在该格内。
-每个最终格点只进入一次，到达成功后才写入 `traversal_order`；该字段与建图巡检的
-`visit_order` 独立，并通过地图和事件 DDS 消息发布。运动失败立即中止，不自动重试。
-地图证据不足时只遍历已有目标，不补造未知锥桶；`result_complete=false` 表示未完成四目标结果。
-若九宫格的锥桶分布使四邻接、先圆后方、不重入无法同时满足，规划报无解并停止。
-只有遍历阶段结束才发送任务 `completed`，此前建图结束发送 `mapping_completed`。
-默认总超时增加为 1800 秒（包含建图和遍历，不重置计时），单次移动仍为 150 秒；
-这是调试预算，正式比赛应按规则另行设置。
+```bash
+cd /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System
+python3 scripts/record_camera_streams.py \
+  --base-url http://127.0.0.1:8090 \
+  --output "$PWD/records/datasets"
+```
 
-遍历阶段的 AprilTag 和锥桶 xy 必须来自观测融合结果，不允许用 JSON 坐标回退；
-JSON 的 tag_x/tag_y 仅用于初次寻找标记，格点中心仅用于建图巡检。
-规划航点通过地图 `return_path`、`traversal_path`、`traversal_plan_cells` 和事件发布；
-上位机用紫色点线显示返程，黄色虚线显示遍历线路。每次发动作前检查实时艇位到航点的直线
-是否跨越其他锥桶格，发现偏离则停止。遍历期间还监听 `/basic_motion/pose_info`；
-艇位明显进入错误锥桶格，或第二次进入已访问锥桶格时，记录 `traversal_violation`
-并请求取消当前动作。格边界 3 cm 范围不计入进入事件，以抑制边界定位抖动。
-监测依赖位姿发布，无法保证相邻两帧间或艇体外轮廓绝不越界；应结合仿真轨迹复核。
+默认持续录制，按 `Ctrl-C` 停止；可加 `--frames 100` 指定每路保存 100 帧，
+或加 `--fps 5` 限制每路保存帧率。每次录制创建独立的 `stream_...` 会话目录，
+内含 `front/`、`down/` JPEG 图像、逐帧时间戳清单 `frames.jsonl` 和状态文件。
+这是**推流画面**（JPEG 压缩、前后视各为左右目拼接图，可能带位姿叠加），
+不是无损原始图像，也不会自动生成检测标签。要从另一台机器录制，把
+`--base-url` 改为 `http://仿真主机IP:8090`。
 
-### 格点纠错与上位机诊断（2026-09-21）
+也可在终端 2 的 GUI「图像监控」页直接设置“数据集保存帧率（每路）”，
+点击“开始录制前视 + 下视”。GUI 会调用同一个
+`scripts/record_camera_streams.py`，结果同样写入仓库的 `records/datasets/`；
+录制时帧率输入锁定，停止后可调整下一次录制的帧率。`0` 表示保存全部收到的帧。
+GUI「键盘遥控」页提供 W/S 前后、A/D 左右、R/F 上浮/下潜、Q/E 左右转；
+先关闭手柄控制与自动任务，再点击“启用键盘控制”。按住按键运动，松键、Esc、
+失焦、切换页面或关闭 GUI 均发送零推力。页面默认每轴最大归一化推力为 `0.2`，
+可在启用前调整；零推力不等同物理急停。
 
-### 首帧纠错与界面同步
 
-首帧位置不再是不可撤销的锚点：马氏门限拒绝新观测时，检查最近 12 条测量。
-若新位置附近的一致簇占多数、通过格点距离门限，且包含至少
-`max(3, min(8, 原滤波接受数 + 1))` 个不同时间戳，则以簇的中位数重建位置滤波和类别投票。
-历史点仍保留，但不属于新簇的点取消接受标志；孤立离群点不会触发纠错。
-该机制允许持续一致的新证据替换错误初值，并非无条件放宽位置门限。
+给我一个python直接完成数据集整理，你需要把画面直接切开，前视和下视都要，datasets文件夹中的所有子文件夹中的内容都要，并俺200份一组打包为zip且注意，三个文件夹中的图像名称相同，不要覆盖，直接给我数据zip
 
-Mapping Lab 显示完整水深、AUV 轨迹与朝向（PoseInfo 的角度单位为度），
-绘制九宫格边界并批量渲染测量点。中文使用系统 Noto CJK 字体，深度频率图使用二维轴。
-原始预览独立更新；分割/SGBM 诊断只使用缓存中与检测采集时间戳一致的图像，
-不会把旧掩膜贴到最新画面。无匹配帧时显示等待状态，保留上一份诊断结果。
-因此同步修正消除的是错帧叠加，并不等于提高上游图像发布帧率。
-
-相机延迟排查时应区分两类视频：`/front`、`/down` 是低延迟原始 MJPEG；
-`/front_annotated`、`/down_annotated` 需要等待 YOLO 分割推理，CPU 仿真下可能明显滞后，不能用它们判断原始图像传输是否正常。当前仿真默认不以四路 detection 作为全局启动门控；建图任务只在逐格观察时等待新鲜检测，因此首次模型推理不会阻塞 AUV 发车。
+1.抓

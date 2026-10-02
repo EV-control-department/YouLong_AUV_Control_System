@@ -25,11 +25,14 @@ TAG_TEXTURES = {
     tag_id: f"apriltag_16h5_id{tag_id}.png" for tag_id in range(7)
 }
 
-# NED x is north and y is east. The grid is centered at (2,-4), with 2 m sides.
+# NED x is north and y is east. The 3x3 grid is centered at (2,-4); each cell is 0.8 m.
+GRID_CENTER_X = 2.0
+GRID_CENTER_Y = -4.0
+GRID_CELL_SIDE_M = 0.8
 GRID_CELLS = [
-    (2.0 + dx, -4.0 + dy)
-    for dx in (-2.0 / 3.0, 0.0, 2.0 / 3.0)
-    for dy in (-2.0 / 3.0, 0.0, 2.0 / 3.0)
+    (GRID_CENTER_X + dx, GRID_CENTER_Y + dy)
+    for dx in (-GRID_CELL_SIDE_M, 0.0, GRID_CELL_SIDE_M)
+    for dy in (-GRID_CELL_SIDE_M, 0.0, GRID_CELL_SIDE_M)
 ]
 CONE_NAMES = (
     "TrafficConeRound00",
@@ -44,6 +47,8 @@ BAND_NAMES = (
     "TrafficConeSquareBand01",
 )
 MAX_CELL_OFFSET = 0.05
+POOL_FLOOR_Z = 1.4
+CONE_BAND_Z = 1.3825
 
 
 def ensure_tag_texture(directory: Path, tag_id: int) -> Path:
@@ -84,7 +89,9 @@ def _world_transform(root: ET.Element, name: str) -> ET.Element:
     raise ValueError(f"scenario object not found: {name}")
 
 
-def _set_xyz(transform: ET.Element, x: float, y: float, z: float = 2.0) -> None:
+def _set_xyz(
+    transform: ET.Element, x: float, y: float, z: float = POOL_FLOOR_Z
+) -> None:
     transform.set("xyz", f"{x:.4f} {y:.4f} {z:.4f}")
 
 
@@ -198,7 +205,7 @@ def randomize_scene(
         y = cell_y + offset_y
         yaw = rng.uniform(-3.1415926, 3.1415926)
         _set_xyz(_world_transform(root, cone_name), x, y)
-        _set_xyz(_world_transform(root, band_name), x, y, 1.9825)
+        _set_xyz(_world_transform(root, band_name), x, y, CONE_BAND_Z)
         _set_yaw(_world_transform(root, cone_name), yaw)
         _world_transform(root, band_name).set("rpy", f"0.0 0.0 {yaw:.5f}")
         placements.append((cone_name, x, y, yaw))

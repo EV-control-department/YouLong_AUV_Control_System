@@ -13,14 +13,14 @@ from uv_task.config_loader import (
 
 CONFIG_ROOT = Path(__file__).parents[1] / "config"
 MISSION = CONFIG_ROOT / "missions" / "robocup_26.yaml"
-GATE_TASK = CONFIG_ROOT / "tasks" / "26rb_gate_task.yaml"
+FIND_TASK = CONFIG_ROOT / "tasks" / "26rb_find_collection_frame.yaml"
+MAPPING_TASK = CONFIG_ROOT / "tasks" / "mapping_grid.json"
+MAPPING_MISSION = CONFIG_ROOT / "missions" / "mapping_grid.json"
 EXPECTED_TASKS = [
     "start",
     "return_origin",
     "btravelx",
     "setz",
-    "26rb_hit_balls",
-    "26rb_gate_task",
     "26rb_find_collection_frame",
     "26rb_grab_ball",
     "light_target_rack_return_origin",
@@ -35,52 +35,51 @@ def test_default_mission_preserves_order_and_values():
         "state_settle_time": 0.3,
         "timeout": 30.0,
     }
-    assert tasks[4]["params"]["order"] == ["blue"]
-    assert tasks[4]["params"]["charge_speed_mps"] == 5
-    assert tasks[5]["params"]["gate_count"] == 4
-    assert tasks[5]["params"]["height_pid_kp"] == 0.8
-    assert tasks[5]["params"]["max_forward_speed_mps"] == 0.18
-    assert tasks[5]["params"]["search_stop_height_fraction"] == 0.4
-    assert tasks[5]["params"]["yaw_pid_kp"] == 1.2
-    assert tasks[6]["params"]["look_order"] == [
+    assert tasks[4]["params"]["look_order"] == [
         "collection_frame", "target_rack"]
-    assert tasks[7]["params"]["ball_color"] == "red"
-    assert tasks[8]["params"]["light_color"] == "yellow"
-    assert tasks[8]["params"]["down_visual_servo_timeout"] == 30.0
-    assert tasks[8]["params"]["down_visual_servo_stable_seconds"] == 1.0
-    assert tasks[8]["params"]["down_detection_timeout"] == 0.8
-    assert tasks[8]["params"]["down_pixel_tolerance_fraction"] == 0.035
-    assert tasks[8]["params"][
+    assert tasks[5]["params"]["ball_color"] == "red"
+    assert tasks[6]["params"]["light_color"] == "yellow"
+    assert tasks[6]["params"]["down_visual_servo_timeout"] == 30.0
+    assert tasks[6]["params"]["down_visual_servo_stable_seconds"] == 1.0
+    assert tasks[6]["params"]["down_detection_timeout"] == 0.8
+    assert tasks[6]["params"]["down_pixel_tolerance_fraction"] == 0.035
+    assert tasks[6]["params"][
         "down_epipolar_vertical_tolerance_fraction"] == 0.04
-    assert tasks[8]["params"]["down_projection_depth_m"] == 0.8
-    assert tasks[8]["params"]["down_visual_servo_gain"] == 0.8
-    assert tasks[8]["params"]["down_visual_servo_max_step_m"] == 0.08
+    assert tasks[6]["params"]["down_projection_depth_m"] == 0.8
+    assert tasks[6]["params"]["down_visual_servo_gain"] == 0.8
+    assert tasks[6]["params"]["down_visual_servo_max_step_m"] == 0.08
 
 
 def test_standalone_task_file_loads_as_one_task():
-    tasks = load_mission_or_task(GATE_TASK)
+    tasks = load_mission_or_task(FIND_TASK)
 
     assert len(tasks) == 1
-    assert tasks[0]["name"] == "26rb_gate_task"
-    assert tasks[0]["params"]["gate_count"] == 4
-    assert tasks[0]["params"]["search_timeout"] == 60.0
-    assert tasks[0]["params"]["yaw_pid_kp"] == 1.2
+    assert tasks[0]["name"] == "26rb_find_collection_frame"
+    assert tasks[0]["params"]["scan_yaw_step_deg"] == 15.0
+    assert tasks[0]["params"]["move_timeout"] == 120.0
+
+
+def test_mapping_json_comments_are_not_task_parameters():
+    tasks = load_mission_or_task(MAPPING_TASK)
+    mission_tasks = load_mission(MAPPING_MISSION)
+
+    assert tasks[0]["name"] == "mapping_grid"
+    assert tasks[0]["params"]["grid_side_m"] == 2.4
+    assert "comments" not in tasks[0]["params"]
+    assert mission_tasks[1]["params"] == tasks[0]["params"]
 
 
 def test_nested_parameters_are_merged_and_flattened(tmp_path):
-    task_file = tmp_path / "gate.yaml"
+    task_file = tmp_path / "grab.yaml"
     task_file.write_text(
-        """task: 26rb_gate_task
+        """task: 26rb_grab_ball
 params:
-  gate_count: 4
-  search:
-    start_offset_deg: -30.0
+  ball_color: red
+  servo:
     timeout: 60.0
-  height_pid:
-    kp: 0.8
-  alignment:
-    yaw_pid:
-      kp: 3.6
+    period: 0.2
+  gripper:
+    offset_x_m: 0.15
 """,
         encoding="utf-8",
     )
@@ -89,26 +88,23 @@ params:
         """mission:
   name: test
   tasks:
-    - name: 26rb_gate_task
-      config: gate.yaml
+    - name: 26rb_grab_ball
+      config: grab.yaml
       params:
-        search:
+        servo:
           timeout: 12.0
-        height_pid:
-          kp: 1.2
 """,
         encoding="utf-8",
     )
 
     tasks = load_mission(mission_file)
     assert tasks == [{
-        "name": "26rb_gate_task",
+        "name": "26rb_grab_ball",
         "params": {
-            "gate_count": 4,
-            "search_start_offset_deg": -30.0,
-            "search_timeout": 12.0,
-            "height_pid_kp": 1.2,
-            "yaw_pid_kp": 3.6,
+            "ball_color": "red",
+            "horizontal_servo_timeout": 12.0,
+            "horizontal_servo_period": 0.2,
+            "gripper_offset_x_m": 0.15,
         },
     }]
 

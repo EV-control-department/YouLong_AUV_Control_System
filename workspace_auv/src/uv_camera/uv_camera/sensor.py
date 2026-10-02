@@ -1,7 +1,7 @@
-"""uv_sensor: frame source (Stonefish sim OR real V4L2 camera) + go2rtc preview.
+"""uv_sensor: Stonefish raw stereo or real V4L2, then in-process frame handoff.
 
 In the SAME process as uv_ai. uv_sensor:
-  * picks the source via params (sim_mode: ROS stitched topics  OR  V4L2 /dev/video*);
+  * picks the source via params (sim_mode: direct Stonefish views OR V4L2);
   * on each frame, updates the raw MJPEG preview cache (fed to go2rtc :1984)
     and hands the BGR frame to uv_ai through an in-memory FrameGate (A3: no ROS
     image topic, no JPEG between sensor and ai).
@@ -21,11 +21,8 @@ from .common import (
     normalize_frame,
 )
 from sensor_msgs.msg import Image
-
-try:
-    from uv_msgs.msg import StereoFrameInfo
-except ImportError:  # Older installed interfaces remain usable as a fallback.
-    StereoFrameInfo = None
+from .common import image_msg_to_bgr
+import numpy as np
 
 
 class Sensor:
@@ -49,10 +46,13 @@ class Sensor:
             depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT,
         )
-        self._stereo_info = {camera: {} for camera in ('front', 'down')}
-        self._pending_sim_images = {}
-        self._pending_sim_lock = threading.Lock()
-        self._pending_sim_timer = None
+        self._sim_views = {camera: {'left': None, 'right': None}
+                           for camera in ('front', 'down')}
+        self._last_sim_pair = {'front': None, 'down': None}
+        self._sim_pair_sequence = {'front': 0, 'down': 0}
+        self._sim_pair_log_at = {'front': time.monotonic(),
+                                 'down': time.monotonic()}
+        self._sim_pair_count = {'front': 0, 'down': 0}
 
     # ── setup: pick source ──────────────────────────────────────────────
     def start(self):
@@ -62,32 +62,58 @@ class Sensor:
             self._start_v4l2()
 
     def _start_sim(self):
-        if StereoFrameInfo is not None:
-            if self._enable_front:
-                self.node.create_subscription(
-                    StereoFrameInfo, '/auv/front_cam/stereo_info',
-                    self._front_stereo_info_cb, self._image_qos)
-            if self._enable_down:
-                self.node.create_subscription(
-                    StereoFrameInfo, '/auv/down_cam/stereo_info',
-                    self._down_stereo_info_cb, self._image_qos)
-        if self._enable_front:
-            self.node.create_subscription(
-                Image, '/auv/front_cam/stitched', self._front_img_cb,
-                self._image_qos)
-        if self._enable_down:
-            self.node.create_subscription(
-                Image, '/auv/down_cam/stitched', self._down_img_cb,
-                self._image_qos)
-        # Metadata and image are published back-to-back, but BEST_EFFORT ROS
-        # delivery does not promise callback order.  Hold an image briefly so
-        # the right-eye timestamp can normally arrive first; if metadata is
-        # missing, the image is still processed with the legacy single stamp.
-        if StereoFrameInfo is not None:
-            self._pending_sim_timer = self.node.create_timer(
-                0.03, self._flush_pending_sim_images)
+        # Stonefish still emits ROS Image messages. Subscribe to its original
+        # pair directly in uv_camera; avoid a second large DDS hop via sim_bridge.
+        for camera, enabled in (('front', self._enable_front),
+                                ('down', self._enable_down)):
+            if enabled:
+                for side in ('left', 'right'):
+                    self.node.create_subscription(
+                        Image, f'/sim/{camera}_cam/{side}/image_color',
+                        lambda msg, camera=camera, side=side:
+                            self._sim_view_cb(camera, side, msg), self._image_qos)
         self.node.get_logger().info(
-            'uv_sensor started (sim mode: ROS stitched topics)')
+            'uv_sensor started (sim mode: direct Stonefish stereo input)')
+
+    def _sim_view_cb(self, camera, side, message):
+        views = self._sim_views[camera]
+        views[side] = message
+        left, right = views['left'], views['right']
+        if left is None or right is None:
+            return
+        left_stamp = left.header.stamp.sec + left.header.stamp.nanosec * 1e-9
+        right_stamp = right.header.stamp.sec + right.header.stamp.nanosec * 1e-9
+        if abs(left_stamp - right_stamp) > 0.12:
+            return
+        pair = (left.header.stamp.sec, left.header.stamp.nanosec,
+                right.header.stamp.sec, right.header.stamp.nanosec)
+        if pair == self._last_sim_pair[camera]:
+            return
+        self._last_sim_pair[camera] = pair
+        # Never reuse either exposure in a second pair. Reusing the latest
+        # opposite eye at low FPS silently creates adjacent-frame stereo.
+        views['left'] = None
+        views['right'] = None
+        self._sim_pair_sequence[camera] += 1
+        self._sim_pair_count[camera] += 1
+        now = time.monotonic()
+        elapsed = now - self._sim_pair_log_at[camera]
+        if elapsed >= 5.0:
+            self.node.get_logger().info(
+                f'仿真双目输入[{camera}] {self._sim_pair_count[camera]/elapsed:.2f}Hz，'
+                f'左右采集时间差={abs(left_stamp-right_stamp):.3f}s')
+            self._sim_pair_log_at[camera] = now
+            self._sim_pair_count[camera] = 0
+        try:
+            frame = np.hstack((image_msg_to_bgr(left), image_msg_to_bgr(right)))
+            self.node.update_raw_preview(camera, frame, left.header.stamp)
+            self.node.submit_frame(
+                camera, frame, left.header.stamp,
+                right_stamp=right.header.stamp,
+                stereo_pair_id=self._sim_pair_sequence[camera])
+        except (ValueError, cv2.error) as error:
+            self.node.get_logger().warning(f'仿真双目帧解码失败[{camera}]：{error}')
+
 
     def _start_v4l2(self):
         front_path = str(self.node.get_parameter('front_cam_path').value)
@@ -188,91 +214,6 @@ class Sensor:
             time.sleep(0.05)
 
     # ── sim callbacks (ROS Image -> BGR -> preview + gate) ──────────────
-    def _front_img_cb(self, msg):
-        self._submit_image(msg, 'front')
-
-    def _down_img_cb(self, msg):
-        self._submit_image(msg, 'down')
-
-    @staticmethod
-    def _stamp_key(stamp):
-        try:
-            return int(stamp.sec), int(stamp.nanosec)
-        except (AttributeError, TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _info_stamps(info):
-        try:
-            left_stamp = info.left_stamp
-            right_stamp = info.right_stamp
-            pair_id = int(info.stereo_pair_id)
-        except (AttributeError, TypeError, ValueError):
-            return None
-        left_key = Sensor._stamp_key(left_stamp)
-        if left_key is None:
-            left_key = Sensor._stamp_key(info.header.stamp)
-        if left_key is None:
-            return None
-        return left_key, right_stamp, pair_id
-
-    def _stereo_info_cb(self, message):
-        camera = str(getattr(message, 'camera_name', '')).strip().lower()
-        if camera not in self._stereo_info:
-            return
-        values = self._info_stamps(message)
-        if values is None:
-            return
-        key, right_stamp, pair_id = values
-        with self._pending_sim_lock:
-            cache = self._stereo_info[camera]
-            cache[key] = (right_stamp, pair_id, time.monotonic())
-            while len(cache) > 8:
-                cache.pop(next(iter(cache)))
-            pending = self._pending_sim_images.pop((camera, key), None)
-        if pending is not None:
-            self.node.submit_image(
-                camera, pending[0], right_stamp=right_stamp,
-                stereo_pair_id=pair_id)
-
-    def _front_stereo_info_cb(self, message):
-        self._stereo_info_cb(message)
-
-    def _down_stereo_info_cb(self, message):
-        self._stereo_info_cb(message)
-
-    def _flush_pending_sim_images(self):
-        now = time.monotonic()
-        expired = []
-        with self._pending_sim_lock:
-            for key, (message, arrival) in self._pending_sim_images.items():
-                if now - arrival >= 0.025:
-                    expired.append((key, message))
-            for key, _ in expired:
-                self._pending_sim_images.pop(key, None)
-        for (camera, _), message in expired:
-            self.node.submit_image(camera, message)
-
-    def _submit_image(self, msg, camera):
-        if StereoFrameInfo is None:
-            self.node.submit_image(camera, msg)
-            return
-        key = self._stamp_key(msg.header.stamp)
-        with self._pending_sim_lock:
-            info = self._stereo_info[camera].pop(key, None) if key else None
-            if info is None and key is not None:
-                self._pending_sim_images[(camera, key)] = (
-                    msg, time.monotonic())
-                return
-        if info is None:
-            self.node.submit_image(camera, msg)
-        else:
-            right_stamp, pair_id, _ = info
-            self.node.submit_image(
-                camera, msg, right_stamp=right_stamp,
-                stereo_pair_id=pair_id)
-
-    # ── v4l2 capture loop ───────────────────────────────────────────────
     def _capture_loop(self, cap, camera, initial_frame=None, path=''):
         read_failures = 0
         failure_started = None
@@ -359,9 +300,6 @@ class Sensor:
     # ── shutdown ────────────────────────────────────────────────────────
     def shutdown(self):
         self._capture_stop.set()
-        if self._pending_sim_timer is not None:
-            self._pending_sim_timer.cancel()
-            self._pending_sim_timer = None
         for cap in (self._front_cap, self._down_cap):
             if cap is not None:
                 cap.release()

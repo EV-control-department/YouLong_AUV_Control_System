@@ -1,0 +1,32 @@
+# 真机转盘独立任务模板。不会被仿真 mission 自动调用。
+# 这是不可执行的标定模板：必填几何项有意留空，运行时会明确拒绝接触。
+# 完整待测、待调参数及逐阶段放行清单见
+# workspace_auv/docs/turntable_calibration_checklist.md。
+task: turntable
+params:
+  allow_contact_motion: false
+  force_limited_control_confirmed: false
+
+  # 以下量均需现场实测、去掉注释后填写；不要用仿真场景数值代替。
+  # disk_center_x: 里程计系转盘轴心 x，单位 m
+  # disk_center_y: 里程计系转盘轴心 y，单位 m
+  # disk_center_z: 里程计系转盘轴心 z，向下为正，单位 m
+  # disk_axis_yaw_deg: 从 AUV 指向盘面的水平法向航向，单位 °
+  # rod_tip_x: 棍端相对机体原点的 x，单位 m
+  # rod_tip_y: 棍端相对机体原点的 y，单位 m
+  # rod_tip_z: 棍端相对机体原点的 z，单位 m
+  # rod_radius_m: 棍子最大半径，单位 m
+  # inner_radius_m: 转盘内圈外沿半径，单位 m
+  # outer_radius_m: 转盘外圈内沿半径，单位 m
+  # contact_radius_m: 选择的棍端孔位半径，必须在内外圈之间
+  # label_to_hole_deg: 黄标零角相对最近孔位的机械相位，单位 °
+  # image_angle_to_disk_sign: 相机图像角度到盘面角度的方向；仅 +1/-1
+  # approach_standoff_m: 接触前棍端到盘面的轴向距离，单位 m
+  # insert_depth_m: 棍端穿过盘面后的插入深度，单位 m，最大 0.06
+
+  stroke_count: 3
+  stroke_yaw_deg: 6.0  # 示例上限；真机从更小角度试起，最大 12°
+  yaw_step_deg: 2.0    # 单步最大 3°；基础运动控制器需另行低速标定
+  drive_yaw_sign: 0    # 待现场试出 +1 或 -1；0 表示禁止动作
+  min_progress_deg: 2.0
+  max_disk_image_shift_px: 120.0

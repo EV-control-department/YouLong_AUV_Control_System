@@ -1,5 +1,7 @@
 /uv_camera:
   ros__parameters:
     sim_mode: false
+    enable_mapping_vision: true
+    mapping_tag_dictionary: "DICT_APRILTAG_16h5"
     enable_gortc: true
     stream_annotated: true

@@ -96,6 +96,24 @@ class _MjpegHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         stream = self.path.strip('/').split('?', 1)[0]
+        if stream.startswith('mapping/'):
+            node = self.node
+            name = stream.split('/', 1)[1].removesuffix('.jpg')
+            sample = (node.mapping_vision.debug_jpeg(name)
+                      if node is not None and node.mapping_vision is not None else None)
+            if sample is None:
+                self.send_error(503, 'mapping diagnostic frame unavailable')
+                return
+            payload, stamp = sample
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', str(len(payload)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Frame-Stamp-Ns',
+                             str(stamp.sec*1000000000 + stamp.nanosec))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         valid_streams = {
             'front': ('front', False),
             'down': ('down', False),

@@ -1,11 +1,14 @@
 """抓球流程的偏置、回位复检和重试测试。"""
 
 from importlib import import_module
+import threading
+import time
 from types import SimpleNamespace
 
 
 _grab = import_module('uv_task.26rb_grab_ball')
 GrabBallTask = _grab.RB26GrabBallTask
+GrabSeaCucumberTask = import_module('uv_task.grab_sea_cucumber').GrabSeaCucumberTask
 
 
 class _Logger:
@@ -68,3 +71,99 @@ def test_execute_retries_when_ball_remains_after_return():
         'servo', 'offset', 'settle', 'descend', 'return', 'verify',
     ]
 
+
+def test_sea_cucumber_ascent_uses_measured_small_bmove_steps():
+    commands = []
+    node = SimpleNamespace(
+        stopped=False,
+        _perception_lock=threading.RLock(),
+        _robot_pose=(1.0, 2.0, 0.50, 0.0, 0.0, 0.0),
+        _format_motion_context=lambda label: label,
+        _cmd_x=1.0, _cmd_y=2.0, _cmd_z=0.50, _cmd_yaw=0.0,
+    )
+
+    def send_goal(command, target, axes, **_kwargs):
+        commands.append((command, list(target), axes))
+        if command == _grab.BasicMotion.Goal.BMOVE:
+            pose = list(node._robot_pose)
+            pose[2] += target[2]
+            node._robot_pose = tuple(pose)
+        return True, 'ok'
+
+    node._send_action_goal = send_goal
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._node = node
+    task._logger = _Logger()
+    task._return_timeout = 5.0
+    task._ascent_step = 0.03
+    task._ascent_step_timeout = 0.5
+    task._ascent_pause = 0.0
+    task._ascent_tolerance = 0.015
+
+    assert task._return_to_recorded_pose((1.1, 2.1, 0.40, 5.0))
+    climbs = [target[2] for command, target, _ in commands
+              if command == _grab.BasicMotion.Goal.BMOVE]
+    assert len(climbs) >= 3
+    assert all(-0.031 <= dz < 0 for dz in climbs)
+    assert commands[-1][0] == _grab.BasicMotion.Goal.SET
+    assert commands[-1][2] == 'xyrz'
+    assert commands[-1][1][2] == node._robot_pose[2]
+
+
+def test_sea_cucumber_ascent_stops_if_measured_depth_does_not_change():
+    commands = []
+    node = SimpleNamespace(
+        stopped=False,
+        _perception_lock=threading.RLock(),
+        _robot_pose=(1.0, 2.0, 0.50, 0.0, 0.0, 0.0),
+        _format_motion_context=lambda label: label,
+        _send_action_goal=lambda command, target, axes, **_kwargs:
+            (commands.append((command, target, axes)) or True, 'ok'),
+    )
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._node = node
+    task._logger = _Logger()
+    task._return_timeout = 0.2
+    task._ascent_step = 0.03
+    task._ascent_step_timeout = 0.05
+    task._ascent_pause = 0.0
+    task._ascent_tolerance = 0.015
+
+    assert not task._return_to_recorded_pose((1.0, 2.0, 0.40, 0.0))
+    assert len(commands) == 1
+    assert commands[0][0] == _grab.BasicMotion.Goal.BMOVE
+
+
+def test_sea_cucumber_delivery_ascent_precedes_horizontal_travel():
+    commands = []
+    node = SimpleNamespace(
+        stopped=False,
+        _perception_lock=threading.RLock(),
+        _robot_pose=(1.0, 2.0, 0.50, 0.0, 0.0, 0.0),
+        _format_motion_context=lambda label: label,
+        _cmd_x=1.0, _cmd_y=2.0, _cmd_z=0.50, _cmd_yaw=0.0,
+    )
+
+    def send_goal(command, target, axes, **_kwargs):
+        commands.append((command, list(target), axes))
+        if command == _grab.BasicMotion.Goal.BMOVE:
+            pose = list(node._robot_pose)
+            pose[2] += target[2]
+            node._robot_pose = tuple(pose)
+        return True, 'ok'
+
+    node._send_action_goal = send_goal
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._node = node
+    task._logger = _Logger()
+    task._ascent_step = 0.03
+    task._ascent_step_timeout = 0.5
+    task._ascent_pause = 0.0
+    task._ascent_tolerance = 0.015
+
+    assert task._travel((3.0, 4.0, 0.40, 10.0), '投放',
+                        time.monotonic() + 5.0, 5.0)
+    assert all(command == _grab.BasicMotion.Goal.BMOVE
+               for command, _, _ in commands[:-1])
+    assert commands[-1][0] == _grab.BasicMotion.Goal.WTRAVEL
+    assert commands[-1][1][2] >= node._robot_pose[2]

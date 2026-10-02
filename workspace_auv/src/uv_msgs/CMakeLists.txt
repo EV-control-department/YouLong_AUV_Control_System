@@ -20,6 +20,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TargetPositionArray.msg"
   "msg/TargetObservation.msg"
   "msg/TargetObservationArray.msg"
+  "msg/MappingObservation.msg"
+  "msg/MappingObservationArray.msg"
   "msg/PidGains.msg"
   "msg/PidState.msg"
   "msg/DeviceCommand.msg"

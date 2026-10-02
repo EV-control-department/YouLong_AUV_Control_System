@@ -1,8 +1,8 @@
 """Composed uv_camera node: uv_sensor + uv_ai in ONE process (A3).
 
 One rclpy Node hosts both:
-  * uv_sensor (sensor.Sensor) — selects the frame source (Stonefish sim via ROS
-    stitched topics, or real V4L2 camera), updates the raw MJPEG go2rtc preview,
+  * uv_sensor (sensor.Sensor) — selects the frame source (Stonefish raw stereo
+    pair or real V4L2 camera), updates the raw MJPEG go2rtc preview,
     and hands each BGR frame to uv_ai through an in-memory FrameGate.
   * uv_ai (ai.Ai) — YOLO detection + draw + publish /perception/detection/*,
     /perception/line/*, /perception/aruco/ids, and the annotated MJPEG cache.
@@ -30,6 +30,8 @@ from std_msgs.msg import Float32MultiArray, Header
 
 from . import ai as ai_mod
 from . import sensor as sensor_mod
+from .mapping_vision import MappingVision
+from .turntable_vision import TurntableVision
 from .common import (
     DATASET_DIR,
     ENABLE_GORTC,
@@ -40,7 +42,6 @@ from .common import (
     _MjpegHandler,
     _MjpegServer,
     FrameGate,
-    image_msg_to_bgr,
 )
 
 
@@ -102,6 +103,23 @@ class CameraAiNode(Node):
         if params['enable_down']:
             active.append('down')
 
+        self.mapping_vision = None
+        self._mapping_gate = None
+        if params['enable_mapping_vision'] and 'down' in active:
+            self.mapping_vision = MappingVision(self, params['sim_mode'])
+            self._mapping_gate = FrameGate(
+                lambda _camera, work: self.mapping_vision.process(*work),
+                cameras=('down',), max_workers=1, log_warn=self._warn)
+        self.turntable_vision = None
+        if params['enable_turntable_vision']:
+            if 'front' not in active:
+                raise ValueError('转盘视觉需要启用前视相机')
+            self.turntable_vision = TurntableVision(
+                self,
+                self.get_parameter('turntable_disk_class_id').value,
+                self.get_parameter('turntable_label_class_id').value,
+                self.get_parameter('turntable_min_confidence').value)
+
         # uv_ai (must be built before gate so gate.consumer is ready)
         self.ai = ai_mod.Ai(
             self, self.update_annotated_stream, cameras=active,
@@ -115,7 +133,10 @@ class CameraAiNode(Node):
             inference_threads=params['inference_threads'],
             gate_feature_mode=params['gate_feature_mode'],
             confidence=params['confidence'],
-            device=params['device'])
+            device=params['device'],
+            mapping_callback=self._submit_mapping_frame if self.mapping_vision else None,
+            turntable_callback=(self.turntable_vision.process
+                                if self.turntable_vision else None))
         self._gate = FrameGate(self.ai.process, cameras=active,
                                max_workers=2, log_warn=self._warn)
         if params['enable_ai']:
@@ -192,6 +213,30 @@ class CameraAiNode(Node):
         self.declare_parameter('dataset_png_compression', 1)
         self.declare_parameter('dataset_format', 'png')
         self.declare_parameter('model_path', '')
+        self.declare_parameter('enable_turntable_vision', False)
+        self.declare_parameter('turntable_disk_class_id', -1)
+        self.declare_parameter('turntable_label_class_id', -1)
+        self.declare_parameter('turntable_min_confidence', 0.5)
+        self.declare_parameter('enable_mapping_vision', False)
+        self.declare_parameter('mapping_calibration_file', '')
+        self.declare_parameter('mapping_calibration_width', 1280)
+        self.declare_parameter('mapping_calibration_height', 960)
+        self.declare_parameter('mapping_left_translation', [-0.13, -0.05, 0.2645])
+        self.declare_parameter('mapping_right_translation', [-0.13, 0.05, 0.2645])
+        self.declare_parameter('mapping_camera_rotation',
+                               [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+        self.declare_parameter('mapping_min_depth_m', 0.2)
+        self.declare_parameter('mapping_max_depth_m', 8.0)
+        self.declare_parameter('mapping_min_depth_points', 20)
+        self.declare_parameter('mapping_depth_bin_m', 0.02)
+        self.declare_parameter('mapping_depth_peak_ratio', 0.12)
+        self.declare_parameter('mapping_min_confidence', 0.35)
+        self.declare_parameter('mapping_max_pose_age_s', 1.0)
+        self.declare_parameter('mapping_tag_id', -1)
+        self.declare_parameter('mapping_allowed_tag_ids', [0, 1, 2, 3, 4, 5, 6])
+        self.declare_parameter('mapping_tag_dictionary', 'DICT_APRILTAG_16h5')
+        self.declare_parameter('mapping_sgbm_block_size', 5)
+        self.declare_parameter('mapping_sgbm_num_disparities', 128)
         # calibration (defaults come from common constants)
         from .common import (FRONT_CAMERA_MATRIX, FRONT_DIST_COEFFS,
                              DOWN_CAMERA_MATRIX, DOWN_DIST_COEFFS)
@@ -230,10 +275,15 @@ class CameraAiNode(Node):
             'enable_front': g('enable_front_camera').value,
             'enable_down': g('enable_down_camera').value,
             'model_path': g('model_path').value,
+            'enable_turntable_vision': _as_bool(g('enable_turntable_vision').value),
+            'enable_mapping_vision': _as_bool(g('enable_mapping_vision').value),
         }
 
     def _warn(self, msg):
         self.get_logger().warn(msg)
+
+    def _submit_mapping_frame(self, frame, stamp, left, right):
+        self._mapping_gate.submit('down', (frame, stamp, left, right))
 
     def report_camera_failure(self, camera, reason):
         """Report a persistent sensor failure and terminate recording safely."""
@@ -295,57 +345,11 @@ class CameraAiNode(Node):
                     (255, 255, 255), thickness, cv2.LINE_AA)
         return overlay
 
-    # ── sensor connector: ROS->BGR gate submission + raw preview ────────
-    def submit_image(self, camera, msg, right_stamp=None, stereo_pair_id=0):
-        """Called from uv_sensor when a ROS Image arrives (sim mode).
+    # ── sensor connector: in-memory BGR gate submission + raw preview ──
 
-        Decode to BGR, update the raw preview cache (same as the V4L2 path),
-        then hand the frame to uv_ai through the in-memory gate.  Simulator
-        stereo metadata keeps the two eye detections tied to their original
-        capture stamps without changing the stitched image transport.
-        """
-        received_at = time.monotonic()
-        if not hasattr(self, '_input_diagnostics'):
-            self._input_diagnostics = {}
-        previous_at, count = self._input_diagnostics.get(camera, (received_at, 0))
-        count += 1
-        self._input_diagnostics[camera] = (previous_at, count)
-        try:
-            cv_img = image_msg_to_bgr(msg)
-        except Exception as e:
-            self.get_logger().warn(f'Image conversion failed ({camera}): {e}')
-            return
-        # raw preview updated at arrival (independent of YOLO speed)
-        self.update_raw_preview(camera, cv_img, msg.header.stamp)
-        # Keep the annotated endpoint usable while the first YOLO inference is
-        # still warming up. It starts as a pose-overlay-only frame and is
-        # replaced by the real annotated frame as soon as AI finishes. This
-        # prevents the preview window from waiting on model startup forever.
-        if self.stream_requested(camera, True):
-            with self._stream_lock:
-                annotated_ready = (
-                    self._stream_annotated_jpegs[camera] is not None)
-            if not annotated_ready:
-                self.update_annotated_stream(
-                    camera, cv_img, msg.header.stamp)
-        self.ai.record_capture_frame(
-            camera, cv_img, msg.header, right_stamp, int(stereo_pair_id or 0))
-        self._gate.submit(
-            camera,
-            ('opencv', cv_img, msg.header.stamp, False,
-             right_stamp, int(stereo_pair_id or 0)),
-        )
-        elapsed = received_at - previous_at
-        if elapsed >= 5.0:
-            self._input_diagnostics[camera] = (received_at, 0)
-            self.get_logger().info(
-                f'camera输入[{camera}] {count / elapsed:.2f}Hz，'
-                f'解码/预览/入队={(time.monotonic()-received_at)*1000:.1f}ms，'
-                f'图像字节={len(msg.data)}，'
-                f'采集戳={msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}')
-
-    def submit_frame(self, camera, frame, stamp=None):
-        """Called from uv_sensor when a V4L2 frame arrives (real mode)."""
+    def submit_frame(self, camera, frame, stamp=None, right_stamp=None,
+                     stereo_pair_id=0):
+        """Accept a decoded stereo frame from Stonefish or V4L2."""
         stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
         if self.stream_requested(camera, True):
             with self._stream_lock:
@@ -355,8 +359,10 @@ class CameraAiNode(Node):
                 self.update_annotated_stream(camera, frame, stamp)
         capture_header = Header()
         capture_header.stamp = stamp
-        self.ai.record_capture_frame(camera, frame, capture_header)
-        self._gate.submit(camera, ('opencv', frame, stamp, True, None, 0))
+        self.ai.record_capture_frame(
+            camera, frame, capture_header, right_stamp, stereo_pair_id)
+        self._gate.submit(camera, ('opencv', frame, stamp, True,
+                                   right_stamp, stereo_pair_id))
 
     @staticmethod
     def _stamp_to_ns(stamp):
@@ -569,6 +575,8 @@ class CameraAiNode(Node):
         # enqueue new frames while the recorder is already being closed.
         self.sensor.shutdown()
         self._gate.shutdown()
+        if self._mapping_gate is not None:
+            self._mapping_gate.shutdown()
         self.ai.shutdown()
         if self._gortc_process is not None and self._gortc_process.poll() is None:
             self._gortc_process.terminate()

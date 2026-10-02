@@ -9,10 +9,6 @@ mission:
       config: ../tasks/btravelx.yaml
     - name: setz
       config: ../tasks/setz.yaml
-    - name: 26rb_hit_balls
-      config: ../tasks/26rb_hit_balls.yaml
-    - name: 26rb_gate_task
-      config: ../tasks/26rb_gate_task.yaml
     - name: 26rb_find_collection_frame
       config: ../tasks/26rb_find_collection_frame.yaml
     - name: 26rb_grab_ball

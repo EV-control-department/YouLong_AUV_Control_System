@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""现代化 DDS 建图调试面板。
+"""建图调试面板：DDS 只接收小型地图/事件，图像经 camera HTTP 快照。
 
-数据全部来自 ROS 2/DDS：地图和原始世界坐标点来自 ``/task/mapping/map``，
-实时状态来自 ``/task/mapping/events``，视觉诊断来自 stitched 图像、YOLO
-分割结果和 CameraInfo。面板只做可视化，不发布控制指令。
+地图和原始世界坐标点来自 DDS ``/task/mapping/map``，实时状态来自
+``/task/mapping/events``；视觉诊断由 uv_camera 内部计算并经 HTTP
+``/mapping/*.jpg`` 提供。面板不订阅 DDS 图像，也不计算 SGBM。
 
 启动：
     source /opt/ros/humble/setup.bash
@@ -21,7 +21,8 @@ import threading
 import time
 from collections import deque
 
-import cv2
+import os
+import urllib.request
 import matplotlib
 
 # Matplotlib 3.5 and newer PySide6 releases have an incompatible Qt enum
@@ -35,9 +36,8 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSPresetProfiles, QoSProfile
-from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
-from uv_msgs.msg import DetectionArray, PoseInfo
+from uv_msgs.msg import PoseInfo
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
@@ -64,34 +64,6 @@ def stamp_seconds(stamp) -> float:
     return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
 
-def image_to_array(message: Image) -> np.ndarray | None:
-    """复制 ROS Image，避免 DDS 回调返回后引用失效。"""
-    try:
-        channels = 1 if message.encoding in ("mono8", "8UC1") else 3
-        row = np.frombuffer(message.data, dtype=np.uint8).reshape(
-            (message.height, message.step))
-        image = row[:, :message.width * channels].reshape(
-            (message.height, message.width, channels))
-        if channels == 1:
-            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        elif message.encoding.lower() in ("rgb8", "rgba8"):
-            image = cv2.cvtColor(image[:, :, :3], cv2.COLOR_RGB2BGR)
-        return image.copy()
-    except (ValueError, TypeError):
-        return None
-
-
-def pixmap_from_bgr(image: np.ndarray, size=(500, 250)) -> QPixmap:
-    if image is None or image.size == 0:
-        return QPixmap()
-    rgb = cv2.cvtColor(np.ascontiguousarray(image), cv2.COLOR_BGR2RGB)
-    h, w = rgb.shape[:2]
-    qimage = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
-    return QPixmap.fromImage(qimage).scaled(
-        size[0], size[1], Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.SmoothTransformation)
-
-
 class RosSnapshot(Node):
     """DDS 接收端；回调只保存最新数据，不做重计算。"""
 
@@ -100,12 +72,7 @@ class RosSnapshot(Node):
         self.lock = threading.RLock()
         self.map_payload = None
         self.pose = None
-        self.image = None
-        self.image_stamp = 0.0
-        self.images = deque(maxlen=24)
         self.trajectory = deque(maxlen=1500)
-        self.down_left = None
-        self.camera_info = None
         self.events = deque(maxlen=200)
         self.event_points = {}
         sensor_qos = QoSPresetProfiles.SENSOR_DATA.value
@@ -113,13 +80,6 @@ class RosSnapshot(Node):
         self.create_subscription(String, "/task/mapping/map", self._map_cb, map_qos)
         self.create_subscription(String, "/task/mapping/events", self._event_cb, 100)
         self.create_subscription(PoseInfo, "/basic_motion/pose_info", self._pose_cb, sensor_qos)
-        self.create_subscription(Image, "/auv/down_cam/stitched", self._image_cb, sensor_qos)
-        self.create_subscription(
-            DetectionArray, "/perception/detection/down_left",
-            self._detection_cb, sensor_qos)
-        self.create_subscription(
-            CameraInfo, "/sim/down_cam/left/camera_info",
-            self._camera_info_cb, sensor_qos)
 
     def _map_cb(self, message):
         try:
@@ -159,33 +119,6 @@ class RosSnapshot(Node):
             if not self.trajectory or np.linalg.norm(np.subtract(self.pose[:3], self.trajectory[-1])) > 0.02:
                 self.trajectory.append(self.pose[:3])
 
-    def _image_cb(self, message):
-        image = image_to_array(message)
-        if image is not None:
-            with self.lock:
-                self.image = image
-                self.image_stamp = stamp_seconds(message.header.stamp)
-                self.images.append((self.image_stamp, image))
-
-    def _detection_cb(self, message):
-        detections = []
-        for detection in message.detections:
-            if int(detection.class_id) not in (0, 1):
-                continue
-            detections.append({
-                "class_id": int(detection.class_id),
-                "confidence": float(detection.confidence),
-                "bbox": (float(detection.bbox_x1), float(detection.bbox_y1),
-                          float(detection.bbox_x2), float(detection.bbox_y2)),
-                "mask_x": list(detection.mask_x),
-                "mask_y": list(detection.mask_y),
-            })
-        with self.lock:
-            self.down_left = (stamp_seconds(message.header.stamp), detections)
-
-    def _camera_info_cb(self, message):
-        with self.lock:
-            self.camera_info = message
 
     def snapshot(self):
         with self.lock:
@@ -193,131 +126,51 @@ class RosSnapshot(Node):
                 "map": copy.deepcopy(self.map_payload),
                 "pose": self.pose,
                 "trajectory": list(self.trajectory),
-                "matched_image": next((im for stamp, im in reversed(self.images)
-                                       if self.down_left and abs(stamp - self.down_left[0]) < 1e-6), None),
-                "image": None if self.image is None else self.image.copy(),
-                "image_stamp": self.image_stamp,
-                "detections": copy.deepcopy(self.down_left),
-                "camera_info": self.camera_info,
                 "events": list(self.events),
                 "event_points": copy.deepcopy(self.event_points),
             }
 
 
-class SgbmWorker:
-    """后台 SGBM 计算器，避免高分辨率视差计算阻塞 Qt。"""
 
-    def __init__(self, result_callback):
-        self.result_callback = result_callback
+
+class CameraSnapshots:
+    """Fetch uv_camera JPEG diagnostics without DDS image traffic."""
+
+    def __init__(self):
+        self.base = os.environ.get('UV_CAMERA_MJPEG_URL',
+                                   'http://127.0.0.1:8090').rstrip('/')
         self.lock = threading.Lock()
-        self.pending = None
-        self.wake = threading.Event()
-        self.stop = False
-        self.thread = threading.Thread(target=self._run, name="sgbm-viewer", daemon=True)
+        self.frames = {}
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
-    def submit(self, image, detections, camera_info):
+    def _run(self):
+        names = ('input', 'overlay', 'disparity', 'depth', 'histogram')
+        while not self.stop.is_set():
+            for name in names:
+                if self.stop.is_set():
+                    break
+                try:
+                    request = urllib.request.Request(
+                        f'{self.base}/mapping/{name}.jpg',
+                        headers={'Cache-Control': 'no-cache'})
+                    with urllib.request.urlopen(request, timeout=1.0) as response:
+                        payload = response.read()
+                        stamp = response.headers.get('X-Frame-Stamp-Ns', '')
+                    with self.lock:
+                        self.frames[name] = (payload, stamp)
+                except (OSError, ValueError):
+                    pass
+            self.stop.wait(0.7)
+
+    def snapshot(self):
         with self.lock:
-            self.pending = (image.copy(), detections, camera_info)
-        self.wake.set()
+            return dict(self.frames)
 
     def close(self):
-        self.stop = True
-        self.wake.set()
-        self.thread.join(timeout=1.0)
-
-    @staticmethod
-    def _calibration(info):
-        fx, fy, cx, cy, baseline = 672.18, 672.18, 640.0, 480.0, 0.1
-        if info is not None:
-            try:
-                fx, fy, cx, cy = (float(info.k[0]), float(info.k[4]),
-                                  float(info.k[2]), float(info.k[5]))
-                if len(info.p) >= 4 and abs(float(info.p[3])) > 1e-6:
-                    baseline = abs(float(info.p[3]) / fx)
-            except (IndexError, TypeError, ValueError):
-                pass
-        return fx, fy, cx, cy, baseline
-
-    def _run(self):
-        while not self.stop:
-            self.wake.wait(0.2)
-            self.wake.clear()
-            with self.lock:
-                pending, self.pending = self.pending, None
-            if pending is None:
-                continue
-            try:
-                self.result_callback(self._compute(*pending))
-            except Exception as error:
-                self.result_callback({"error": str(error)})
-
-    def _compute(self, stitched, detections, camera_info):
-        width = stitched.shape[1] // 2
-        left, right = stitched[:, :width], stitched[:, width:width * 2]
-        gray_left = cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
-        gray_right = cv2.cvtColor(right, cv2.COLOR_BGR2GRAY)
-        sgbm = cv2.StereoSGBM_create(
-            minDisparity=0, numDisparities=128, blockSize=5,
-            P1=200, P2=800, disp12MaxDiff=1,
-            uniquenessRatio=8, speckleWindowSize=80, speckleRange=2,
-            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY)
-        disparity = sgbm.compute(gray_left, gray_right).astype(np.float32) / 16.0
-        valid = disparity > 1.0
-        fx, _, _, _, baseline = self._calibration(camera_info)
-        depth = np.full(disparity.shape, np.nan, dtype=np.float32)
-        depth[valid] = fx * baseline / disparity[valid]
-        depth_valid = depth[np.isfinite(depth) & (depth >= 0.2) & (depth <= 8.0)]
-
-        overlay = left.copy()
-        combined_mask = np.zeros(depth.shape, dtype=np.uint8)
-        modes = []
-        for detection in detections or []:
-            if (len(detection["mask_x"]) >= 3 and
-                    len(detection["mask_x"]) == len(detection["mask_y"])):
-                polygon = np.column_stack((detection["mask_x"], detection["mask_y"])).astype(np.int32)
-            else:
-                x1, y1, x2, y2 = detection["bbox"]
-                polygon = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
-            mask = np.zeros(depth.shape, dtype=np.uint8)
-            cv2.fillPoly(mask, [polygon], 1)
-            combined_mask |= mask
-            color_hex = CLASS_COLORS[detection["class_id"]]
-            color = tuple(int(color_hex[i:i + 2], 16) for i in (1, 3, 5))
-            overlay[mask.astype(bool)] = (
-                0.45 * overlay[mask.astype(bool)] + 0.55 * np.asarray(color)).astype(np.uint8)
-            values = depth[mask.astype(bool)]
-            values = values[np.isfinite(values) & (values >= 0.2) & (values <= 8.0)]
-            if len(values) >= 20:
-                bins = np.arange(0.2, 8.02, 0.02)
-                counts, edges = np.histogram(values, bins=bins)
-                index = int(np.argmax(counts))
-                modes.append({
-                    "class_id": detection["class_id"],
-                    "confidence": detection["confidence"],
-                    "depth_m": float((edges[index] + edges[index + 1]) * 0.5),
-                    "samples": int(counts[index]),
-                })
-            cv2.polylines(overlay, [polygon], True, color, 3)
-
-        def colorize(array, scale, offset=0.0):
-            image = np.zeros(array.shape, dtype=np.uint8)
-            finite = np.isfinite(array)
-            image[finite] = np.clip((array[finite] - offset) * scale, 0, 255).astype(np.uint8)
-            return cv2.applyColorMap(image, cv2.COLORMAP_TURBO)
-
-        return {
-            "overlay": overlay,
-            "disparity": colorize(disparity, 255.0 / 64.0),
-            "depth": colorize(depth, 255.0 / 8.0),
-            "mask": cv2.cvtColor(combined_mask * 255, cv2.COLOR_GRAY2BGR),
-            "hist_x": np.arange(0.2, 8.0, 0.02),
-            "hist_y": np.histogram(depth_valid, bins=np.arange(0.2, 8.02, 0.02))[0]
-            if len(depth_valid) else np.zeros(390),
-            "modes": modes,
-            "valid_pixels": int(len(depth_valid)),
-            "valid_ratio": float(np.count_nonzero(valid) / valid.size),
-        }
+        self.stop.set()
+        self.thread.join(timeout=1.5)
 
 
 class MplCanvas(QFrame):
@@ -347,13 +200,12 @@ class MappingDashboard(QMainWindow):
     def __init__(self, ros_node):
         super().__init__()
         self.ros_node = ros_node
-        self.last_image_stamp = -1.0
-        self.sgbm_result = None
+        self.camera_snapshots = CameraSnapshots()
+        self.last_image_stamps = {}
         self.setWindowTitle("YouLong · Mapping Lab")
         self.resize(1560, 980)
         self.setStyleSheet(self._stylesheet())
         self._build_ui()
-        self.sgbm = SgbmWorker(self._receive_sgbm)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh)
         self.timer.start(180)
@@ -381,7 +233,7 @@ class MappingDashboard(QMainWindow):
         title_box = QVBoxLayout()
         title = QLabel("YouLong · Mapping Lab")
         title.setObjectName("title")
-        subtitle = QLabel("DDS-only 3D mapping and SGBM parameter workbench")
+        subtitle = QLabel("DDS 地图 + camera 同帧视觉诊断")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
@@ -431,7 +283,10 @@ class MappingDashboard(QMainWindow):
             vision_grid.addWidget(box, index // 2, index % 2)
         right_layout.addWidget(vision, 3)
 
-        self.hist_canvas = MplCanvas(right, projection=None)
+        self.hist_canvas = QFrame(right)
+        self.hist_canvas.display = QLabel('等待 camera 深度统计…')
+        self.hist_canvas.display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        QVBoxLayout(self.hist_canvas).addWidget(self.hist_canvas.display)
         self.hist_canvas.setMinimumHeight(180)
         hist_group = QGroupBox("深度频率 · 掩膜内合理峰值")
         hist_layout = QVBoxLayout(hist_group)
@@ -459,9 +314,6 @@ class MappingDashboard(QMainWindow):
         outer.addWidget(bottom, 2)
         self.setCentralWidget(root)
 
-    def _receive_sgbm(self, result):
-        self.sgbm_result = result
-
     def _refresh(self):
         snapshot = self.ros_node.snapshot()
         payload = snapshot["map"]
@@ -472,21 +324,21 @@ class MappingDashboard(QMainWindow):
             self.metrics["points"].setText(str(payload.get("measurement_count", 0)))
             accepted = sum(int(c.get("accepted_observations", 0)) for c in payload.get("cells", []))
             self.metrics["accepted"].setText(str(accepted))
-        if snapshot["image"] is not None:
-            self.image_labels["input"].setPixmap(pixmap_from_bgr(snapshot["image"]))
-            if (snapshot["matched_image"] is not None
-                    and snapshot["camera_info"] is not None
-                    and snapshot["detections"][0] != self.last_image_stamp):
-                self.last_image_stamp = snapshot["detections"][0]
-                self.sgbm.submit(snapshot["matched_image"], snapshot["detections"][1], snapshot["camera_info"])
-        result = self.sgbm_result
-        if result is not None and result is not getattr(self, '_drawn_result', None):
-            self._update_vision(result)
-            self._drawn_result = result
-        if snapshot["detections"]:
-            delta = abs(snapshot["image_stamp"] - snapshot["detections"][0])
-            self.metrics["sync"].setText(
-                f"检测落后 {delta:.2f}s" if snapshot['matched_image'] is not None else "等待同帧图像")
+        frames = self.camera_snapshots.snapshot()
+        for name in ('input', 'overlay', 'disparity', 'depth', 'histogram'):
+            sample = frames.get(name)
+            if sample is None or self.last_image_stamps.get(name) == sample[1]:
+                continue
+            pixmap = QPixmap()
+            if pixmap.loadFromData(sample[0], 'JPEG'):
+                label = (self.hist_canvas.display if name == 'histogram'
+                         else self.image_labels[name])
+                label.setPixmap(pixmap.scaled(
+                    label.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
+                self.last_image_stamps[name] = sample[1]
+        self.metrics['sync'].setText(
+            'camera同帧' if frames.get('depth') else '等待camera诊断流')
         events = snapshot["events"]
         if events:
             self.log_view.setPlainText("\n".join(self._event_text(item) for item in events[-8:]))
@@ -521,8 +373,8 @@ class MappingDashboard(QMainWindow):
         axis.tick_params(colors=MUTED)
         axis.grid(True, color="#344253", alpha=0.55)
         grid = payload.get("grid", {})
-        center = np.asarray(grid.get("center", [2, -4, 1.994]), dtype=float)
-        side = float(grid.get("side_m", 2.0))
+        center = np.asarray(grid.get("center", [2, -4, 1.394]), dtype=float)
+        side = float(grid.get("side_m", 2.4))
         floor = float(grid.get("floor_z", center[2]))
         angle = math.radians(float(grid.get('yaw_deg', 0)))
         rotation = np.array([[math.cos(angle), -math.sin(angle)],
@@ -566,13 +418,21 @@ class MappingDashboard(QMainWindow):
             position = cell.get("position")
             if position:
                 px, py, pz = position
-                axis.scatter([px], [py], [-pz], s=130, color=color, marker="o",
-                             edgecolors="white", linewidths=0.8, label=cell.get("label"))
+                guessed = cell.get("source") == "fallback"
+                axis.scatter([px], [py], [-pz], s=130,
+                             facecolors="none" if guessed else color,
+                             marker="D" if guessed else "o",
+                             edgecolors=color if guessed else "white",
+                             linewidths=1.5 if guessed else 0.8,
+                             label=("猜测: " if guessed else "") + str(cell.get("label")))
         tag = payload.get("tag")
         if tag and tag.get("position"):
             tx, ty, tz = tag["position"]
-            axis.scatter([tx], [ty], [-tz], marker="*", s=240, color="#ffd43b",
-                         edgecolors="white", linewidths=0.7, label="AprilTag")
+            guessed = tag.get("source") in ("fallback", "partial_vision")
+            axis.scatter([tx], [ty], [-tz], marker="*", s=240,
+                         color="#fb923c" if guessed else "#ffd43b",
+                         edgecolors="white", linewidths=0.7,
+                         label="猜测 AprilTag" if guessed else "AprilTag")
         if snapshot["pose"]:
             px, py, pz, yaw = snapshot["pose"]
             yaw = math.radians(yaw)
@@ -598,6 +458,7 @@ class MappingDashboard(QMainWindow):
         self.map_hint.setText(
             f"状态: {payload.get('state')}  |  已访问: {len(payload.get('visit_order', []))}/9  |  "
             f"点集: {payload.get('measurement_count', 0)}  |  "
+            f"兜底: {'未验证' if payload.get('fallback_used') else '无'}  |  "
             f"遍历格序: {payload.get('traversal_plan_cells', [])}  |  "
             f"已到锥桶: {payload.get('traversal_order', [])}")
 
@@ -609,7 +470,8 @@ class MappingDashboard(QMainWindow):
             position = cell.get("position")
             values = [
                 str(cell.get("id", "")), "是" if cell.get("visited") else "否",
-                CLASS_NAMES.get(cell.get("class_id"), "—"), str(len(points)),
+                (("猜测: " if cell.get("source") == "fallback" else "") +
+                 CLASS_NAMES.get(cell.get("class_id"), "—")), str(len(points)),
                 str(cell.get("accepted_observations", 0)),
                 "—" if not position else "(%.2f, %.2f, %.2f)" % tuple(position),
                 "—" if not cell.get("residual") else "%.3f" % np.linalg.norm(cell["residual"][:2]),
@@ -617,32 +479,10 @@ class MappingDashboard(QMainWindow):
             for column, value in enumerate(values):
                 self.table.setItem(row, column, QTableWidgetItem(value))
 
-    def _update_vision(self, result):
-        if result.get("error"):
-            self.image_labels["depth"].setText("SGBM: " + result["error"])
-            return
-        for key in ("overlay", "disparity", "depth"):
-            self.image_labels[key].setPixmap(pixmap_from_bgr(result[key]))
-        axis = self.hist_canvas.axis
-        axis.clear()
-        axis.set_facecolor(BG)
-        axis.bar(result["hist_x"], result["hist_y"], width=0.018,
-                 color="#4dd0e1", alpha=0.75)
-        for mode in result["modes"]:
-            axis.axvline(mode["depth_m"], color=CLASS_COLORS.get(mode["class_id"], "white"), linewidth=2)
-        axis.set_xlim(0.2, 8.0)
-        axis.set_xlabel("深度 / m", color=TEXT)
-        axis.set_ylabel("像素数", color=TEXT)
-        axis.tick_params(colors=MUTED)
-        axis.grid(True, color="#344253", alpha=0.4)
-        peaks = ", ".join(f"{mode['depth_m']:.2f}m" for mode in result["modes"]) or "无"
-        axis.set_title(f"有效视差 {result['valid_ratio'] * 100:.1f}% · 深度峰值 {peaks}",
-                       color=TEXT, fontsize=9)
-        self.hist_canvas.draw_idle()
 
     def closeEvent(self, event):
         self.timer.stop()
-        self.sgbm.close()
+        self.camera_snapshots.close()
         self.ros_node.destroy_node()
         rclpy.shutdown()
         event.accept()

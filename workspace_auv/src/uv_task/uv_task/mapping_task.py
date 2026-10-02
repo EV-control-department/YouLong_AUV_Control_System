@@ -7,17 +7,16 @@
 
 感知方案
 --------
-YOLO 只负责给出分割掩膜和类别，不提供距离；距离由左右相机图像的 SGBM
-视差得到。掩膜内的深度采用直方图主峰，随后用静态目标卡尔曼滤波器融合
-多次测量。
+uv_camera 在同一帧内完成 YOLO-Seg、AprilTag、SGBM、掩膜深度主峰与
+世界坐标换算，并发布小型 MappingObservationArray。任务只负责格点关联、
+静态目标滤波、类别投票及后续遍历规划。
 
 执行框架（运动串行 + 感知并行）
 -------------------------------
 * 运动串行：主线程通过 BasicMotion 的 WTRAVEL 一次只去一个目标点，保证
   控制链路安全、可随时被 /task/stop 中断。
-* 感知并行：``mapping-perception`` 后台线程持续消费图像 / 检测 / 位姿，
-  因此 WTRAVEL 移动期间产生的视觉数据也能进入滤波器，不会因为「到达
-  格点才开始处理」而丢掉 YOLO 推理延迟窗口内的检测结果。
+* 感知并行：camera 独立处理同帧视觉并持续发布观测；任务回调在
+  WTRAVEL 移动期间也会更新格点滤波器，不依赖到格点后临时抓图。
 
 坐标系
 ------
@@ -29,8 +28,8 @@ YOLO 只负责给出分割掩膜和类别，不提供距离；距离由左右相
 
 对外接口
 --------
-* 订阅：``/basic_motion/pose_info``、下视拼接图像、左右目检测结果、
-  左右相机 CameraInfo。
+* 订阅：``/basic_motion/pose_info``（遍历安全监测）、
+  ``/perception/mapping/observations``（带采集时间和质量的小型观测）。
 * 发布：``/task/mapping/map``（低频地图快照，TRANSIENT_LOCAL，后加入的
   订阅者也能立刻拿到最新地图）、``/task/mapping/events``（逐事件调试流）。
 """
@@ -42,16 +41,12 @@ import math
 import threading
 import time
 
-import cv2
-from cv_bridge import CvBridge
 import numpy as np
 import rclpy
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
-from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
-from uv_camera.object_localizer import StereoCalibration
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import DetectionArray, PoseInfo
+from uv_msgs.msg import MappingObservation, MappingObservationArray, PoseInfo
 
 
 def _rpy_matrix(roll, pitch, yaw):
@@ -73,11 +68,7 @@ def _rpy_matrix(roll, pitch, yaw):
 
 
 def _stamp(message):
-    """统一提取消息时间戳并转成秒（float）。
-
-    不同消息类型的时间戳位置不同（Image/PoseInfo 在 header 里，
-    DetectionArray 直接是 stamp 字段），这里做兼容处理。
-    """
+    """提取消息的采集时间戳并转成秒；PoseInfo 使用顶层 stamp。"""
     stamp = message.header.stamp if hasattr(message, 'header') else message.stamp
     return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
@@ -153,8 +144,8 @@ class MappingTask:
     主要参数（来自 ``config/tasks/mapping_grid.json``）：
         timeout / move_timeout / observe_seconds
             任务总时限、单次 WTRAVEL 超时、每个格点的观察时长。
-        min_observations / min_confidence / class_vote_ratio / expected_cones
-            确认目标所需的观测次数、检测置信度下限、类别投票占比、期望目标数。
+        min_observations / class_vote_ratio / expected_cones
+            确认目标所需的观测次数、类别投票占比、期望目标数。
         grid_center_x/y、grid_side_m、grid_yaw_deg、floor_z
             九宫格中心、边长、航向和池底深度，用于推算九个格点的理论中心。
         survey_z、survey_yaw_deg
@@ -163,15 +154,8 @@ class MappingTask:
             池底标记的理论位置、期望 ID（-1 表示接受任意 ID）、字典和超时。
         visit_order
             九个格点的访问顺序（默认蛇形，减少往返路程）。
-        image_topic / left_detection_topic / right_detection_topic / *_info_topic
-            下视拼接图、左右目检测结果和相机内参话题。
-        pose_slop_s / image_slop_s / detection_slop_s
-            位姿、图像、检测左右目的时间同步阈值。
-        left_translation / right_translation / camera_rotation
-            下视双目相机相对机体系的外参。
-        sgbm_* / min_disparity / min_depth_m / max_depth_m / depth_bin_m /
-        depth_peak_ratio / min_depth_points
-            SGBM 与掩膜深度主峰的参数。
+        视觉标定、外参、SGBM 和掩膜深度参数现在属于 uv_camera，
+        不能再通过任务 JSON 修改。
         measurement_sigma_m / process_noise / mahalanobis_gate / cell_gate_m
             观测噪声、过程噪声、离群点门限和目标-格点关联距离门限。
     """
@@ -179,17 +163,11 @@ class MappingTask:
     def __init__(self, node, params):
         self.node = node
         self.params = params
-        # 后台感知线程与 ROS 回调会并发访问滤波器/计数，统一用可重入锁保护
+        # 任务线程与 ROS 观测回调会并发访问滤波器/计数。
         self.lock = threading.RLock()
-        self.bridge = CvBridge()
         self.subscriptions = []
-        self.pose_history = deque(maxlen=300)        # 最近位姿，用于按时间戳查找
-        self.image_history = deque(maxlen=12)        # 最近拼接图（已切成左右目）
-        self.left_detections = deque(maxlen=24)      # 左目检测结果队列
-        self.right_detections = deque(maxlen=24)     # 右目检测结果队列
-        self.camera_info = {}                        # {'left': CameraInfo, 'right': ...}
-        self.calibration = None                      # 双目标定（含基线）
-        self.rectify_maps = None                     # 预计算去畸变+校正映射
+        self.pose_history = deque(maxlen=100)
+        self.last_observation_stamp = -1.0
         self.filters = {}                            # 格点索引 -> StaticPositionFilter
         self.class_votes = {}                        # 格点索引 -> [方形票, 圆形票]
         self.visit_order = []                        # 实际访问过的格点顺序
@@ -198,15 +176,18 @@ class MappingTask:
         self.cell_observations = {}                  # 格点索引 -> 观测计数统计
         self.current_cell = None                     # 当前正在观察的格点
         self.state = 'initializing'                  # 任务状态机，写入事件流
-        self.last_detection_stamp = -1.0             # 已消费的最新检测时间戳
-        self.perception_stop = threading.Event()     # 通知后台线程退出
-        self.perception_thread = None
-        self._next_perception_error_log = 0.0
+        self.fallback_cells = set()
+        self.fallback_tag = None
+        self.fallback_reason = None
         self.perception_stats = {                    # 感知统计，便于调参诊断
-            'detection_pairs': 0,
-            'image_unavailable': 0,
-            'pose_unavailable': 0,
-            'processed_pairs': 0,
+            'received_frames': 0,
+            'processed_frames': 0,
+            'rejected_frames': 0,
+            'cone_candidates': 0,
+            'cone_confidence_rejected': 0,
+            'cone_mask_rejected': 0,
+            'cone_depth_rejected': 0,
+            'cone_observations': 0,
         }
         self.tag_scan_stats = {'frames': 0, 'markers': 0, 'wrong_id': 0,
                                'no_depth': 0}
@@ -228,49 +209,17 @@ class MappingTask:
         self.measurement_points = {
             index: deque(maxlen=120) for index in self.grid_centers
         }
-        # 下视相机外参：相机在机体系下的平移 + 光学系到机体系的旋转
-        self.camera_translation = np.asarray(params['left_translation'], dtype=float)
-        self.right_translation = np.asarray(params['right_translation'], dtype=float)
-        self.camera_rotation = np.asarray(
-            params['camera_rotation'], dtype=float).reshape(3, 3)
-
         # 地图用 TRANSIENT_LOCAL（latched），后启动的可视化工具也能拿到最新一帧
         qos_map = QoSProfile(
             depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.map_pub = node.create_publisher(String, '/task/mapping/map', qos_map)
         self.event_pub = node.create_publisher(String, '/task/mapping/events', 100)
+        self._subscribe(MappingObservationArray,
+                        '/perception/mapping/observations', self._observation_cb)
         self._subscribe(PoseInfo, '/basic_motion/pose_info', self._pose_cb)
-        self._subscribe(Image, params['image_topic'], self._image_cb)
-        self._subscribe(DetectionArray, params['left_detection_topic'],
-                        self._left_detection_cb)
-        self._subscribe(DetectionArray, params['right_detection_topic'],
-                        self._right_detection_cb)
-        self._subscribe(CameraInfo, params['left_info_topic'],
-                        lambda message: self._info_cb('left', message))
-        self._subscribe(CameraInfo, params['right_info_topic'],
-                        lambda message: self._info_cb('right', message))
         # 1Hz 定时发布地图快照，保证外部始终能看到进展
         self.publish_timer = node.create_timer(1.0, self.publish_map)
 
-        # ArUco/AprilTag 检测器：先做环境自检，再兼容 OpenCV 新旧两套 API
-        if not hasattr(cv2, 'aruco'):
-            raise RuntimeError('OpenCV ArUco module is required for the tag trigger')
-        dictionary_id = getattr(cv2.aruco, params['tag_dictionary'], None)
-        if dictionary_id is None:
-            raise ValueError(f'unknown ArUco dictionary: {params["tag_dictionary"]}')
-        self.tag_dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
-        # OpenCV 4.7+ 把标记检测迁移到 ArucoDetector；不同 Ubuntu/ROS 镜像
-        # 可能只有其中一套 API，这里两套都支持且不改变对外接口。
-        self.tag_detector = None
-        detector_type = getattr(cv2.aruco, 'ArucoDetector', None)
-        if detector_type is not None:
-            parameters_type = getattr(cv2.aruco, 'DetectorParameters', None)
-            parameters = parameters_type() if parameters_type is not None else None
-            self.tag_detector = (detector_type(self.tag_dictionary, parameters)
-                                 if parameters is not None else
-                                 detector_type(self.tag_dictionary))
-        # (字典名, 检测器) 列表，便于后续扩展多字典并行尝试
-        self.tag_detectors = [(params['tag_dictionary'], self.tag_detector)]
 
     def _subscribe(self, message_type, topic, callback):
         """创建订阅并登记，destroy() 时统一释放。"""
@@ -292,39 +241,150 @@ class MappingTask:
         }
 
     def _pose_cb(self, message):
-        """缓存位姿，供后台线程按图像时间戳就近查找。"""
         with self.lock:
             self.pose_history.append(message)
 
-    def _image_cb(self, message):
-        """接收下视「左右并排拼接图」，在中间切成左目和右目两幅图后缓存。"""
-        try:
-            image = self.bridge.imgmsg_to_cv2(message, desired_encoding='bgr8')
-            width = image.shape[1] // 2
-            if width < 2:
+    def _observation_cb(self, message):
+        """Consume camera-produced measurements; no image is transported here."""
+        timestamp = _stamp(message)
+        with self.lock:
+            if timestamp <= self.last_observation_stamp:
                 return
-            with self.lock:
-                # 复制一份：cv_bridge 返回的数组底层缓冲可能被复用
-                self.image_history.append((_stamp(message),
-                                           image[:, :width].copy(),
-                                           image[:, width:].copy()))
-        except (cv2.error, ValueError) as error:
-            self.node.get_logger().warning(f'mapping image rejected: {error}')
+            self.last_observation_stamp = timestamp
+            self.perception_stats['received_frames'] += 1
+        if not message.processed:
+            self.perception_stats['rejected_frames'] += 1
+            self.last_tag_reason = message.reason
+            self._emit('frame_rejected', reason=message.reason,
+                       measurement_stamp=timestamp)
+            return
+        self.perception_stats['processed_frames'] += 1
+        self.perception_stats['cone_candidates'] += int(message.cone_candidates)
+        self.perception_stats['cone_confidence_rejected'] += int(
+            message.cone_confidence_rejected)
+        self.perception_stats['cone_mask_rejected'] += int(
+            message.cone_mask_rejected)
+        self.perception_stats['cone_depth_rejected'] += int(
+            message.cone_depth_rejected)
+        self.perception_stats['cone_observations'] += sum(
+            observation.kind == MappingObservation.CONE
+            for observation in message.observations)
+        self.tag_scan_stats['frames'] += 1
+        self.tag_scan_stats['markers'] += int(message.tag_candidates)
+        self.tag_scan_stats['no_depth'] += int(message.tag_depth_rejected)
+        if not message.tag_candidates and self.state == 'reading_tag':
+            self.last_tag_reason = '当前帧未解码到标记'
+        elif message.tag_depth_rejected and self.state == 'reading_tag':
+            self.last_tag_reason = '标记已解码但掩膜深度峰无效'
+        self._record_observation_frame()
+        for observation in message.observations:
+            if observation.kind == MappingObservation.TAG:
+                self._accept_tag_result(observation, timestamp)
+            elif observation.kind == MappingObservation.CONE:
+                self._process_cone_observation(observation, timestamp)
 
-    def _left_detection_cb(self, message):
-        """缓存左目检测结果。"""
+    def _accept_tag_result(self, observation, timestamp):
+        tag_id = int(observation.tag_id)
+        if int(self.params['tag_id']) >= 0 and tag_id != int(self.params['tag_id']):
+            self.tag_scan_stats['wrong_id'] += 1
+            return
+        point = np.array([observation.world_x, observation.world_y,
+                          observation.world_z], dtype=float)
+        covariance = np.eye(3) * float(self.params['measurement_sigma_m']) ** 2
         with self.lock:
-            self.left_detections.append(message)
+            if hasattr(self, 'tag_filter') and tag_id != self.tag_id:
+                self.last_tag_reason = '标记ID改变，拒绝合并不同目标'
+                return
+            if not hasattr(self, 'tag_filter'):
+                self.tag_id = tag_id
+                self.tag_filter = StaticPositionFilter(point, covariance, timestamp)
+                accepted, reason = True, 'initial'
+            else:
+                accepted, reason = self.tag_filter.update(
+                    point, covariance, timestamp,
+                    float(self.params['process_noise']),
+                    float(self.params['mahalanobis_gate']))
+            count = self.tag_filter.accepted
+        self._emit('tag_measurement', tag_id=tag_id, position=point.tolist(),
+                   depth_samples=int(observation.depth_samples), accepted=accepted,
+                   reason=reason, measurement_stamp=timestamp)
+        if accepted and count == int(self.params['min_observations']):
+            self.node.get_logger().info(f'标记确认成功：ID={tag_id}，有效观测={count}')
 
-    def _right_detection_cb(self, message):
-        """缓存右目检测结果。"""
+    def _process_cone_observation(self, observation, timestamp):
+        """Associate to a grid cell, reject outliers, and update a static track."""
+        class_id = int(observation.class_id)
+        if class_id not in (0, 1):
+            return
+        point = np.array([observation.world_x, observation.world_y,
+                          observation.world_z], dtype=float)
+        if not np.all(np.isfinite(point)):
+            return
+        cell = min(self.grid_centers,
+                   key=lambda index: np.linalg.norm(
+                       point[:2] - self.grid_centers[index][:2]))
+        residual = float(np.linalg.norm(point[:2] - self.grid_centers[cell][:2]))
+        record = {'position': point.tolist(), 'class_id': class_id,
+                  'confidence': float(observation.confidence),
+                  'depth_m': float(observation.depth_m),
+                  'residual_m': residual, 'accepted': False,
+                  'timestamp': timestamp}
         with self.lock:
-            self.right_detections.append(message)
+            self.measurement_points[cell].append(record)
+        if residual > float(self.params['cell_gate_m']):
+            self._emit('measurement_rejected', reason='outside_cell_gate',
+                       class_id=class_id, position=point.tolist(),
+                       residual_m=residual, measurement_stamp=timestamp)
+            return
+        covariance = np.eye(3) * float(self.params['measurement_sigma_m']) ** 2
+        covariance[2, 2] *= 2.0
+        with self.lock:
+            track = self.filters.get(cell)
+            if track is None:
+                self.filters[cell] = StaticPositionFilter(point, covariance, timestamp)
+                self.class_votes[cell] = [0, 0]
+                accepted, reason = True, 'initial'
+            else:
+                accepted, reason = track.update(
+                    point, covariance, timestamp,
+                    float(self.params['process_noise']),
+                    float(self.params['mahalanobis_gate']))
+                if not accepted and reason.startswith('outlier:'):
+                    recent = list(self.measurement_points[cell])[-12:]
+                    cluster = {}
+                    for sample in recent:
+                        delta = np.asarray(sample['position']) - point
+                        if (sample['residual_m'] <= float(self.params['cell_gate_m'])
+                                and float(delta @ np.linalg.solve(2*covariance, delta))
+                                <= float(self.params['mahalanobis_gate'])):
+                            cluster[sample['timestamp']] = sample
+                    required = max(3, min(8, track.accepted + 1))
+                    if len(cluster) >= required and len(cluster) > len(recent)/2:
+                        samples = list(cluster.values())
+                        center = np.median([s['position'] for s in samples], axis=0)
+                        track = StaticPositionFilter(center, covariance.copy(), timestamp)
+                        track.accepted = len(samples)
+                        self.filters[cell] = track
+                        self.class_votes[cell] = [0, 0]
+                        for sample in self.measurement_points[cell]:
+                            sample['accepted'] = False
+                        for sample in samples:
+                            sample['accepted'] = True
+                            self.class_votes[cell][sample['class_id']] += 1
+                        self.class_votes[cell][class_id] -= 1
+                        accepted, reason = True, 'consistent_cluster_reinitialized'
+            if accepted:
+                self.class_votes[cell][class_id] += 1
+                record['accepted'] = True
+        self._record_observation_measurement(cell)
+        self._emit('cone_measurement', cell=cell, class_id=class_id,
+                   confidence=float(observation.confidence),
+                   depth_m=float(observation.depth_m),
+                   depth_samples=int(observation.depth_samples),
+                   position=point.tolist(), residual_m=residual,
+                   accepted=accepted, reason=reason,
+                   measurement_stamp=timestamp)
 
-    def _info_cb(self, side, message):
-        """缓存相机内参，左右都到齐后才能建立双目标定。"""
-        with self.lock:
-            self.camera_info[side] = message
 
     def _emit(self, event, **values):
         """发布一条结构化事件（JSON），用于可视化与问题定位。
@@ -370,6 +430,7 @@ class MappingTask:
                     chosen = self.final_assignment.get(index)
                     label = ('square_cone' if chosen == 0 else
                              'round_cone' if chosen == 1 else None)
+                guessed = index in self.fallback_cells
                 cells.append({
                     'id': index,
                     'row': index // 3,
@@ -380,8 +441,10 @@ class MappingTask:
                     'class_id': (getattr(self, 'final_assignment', {}).get(index)
                                  if hasattr(self, 'final_assignment') else
                                  int(np.argmax(votes)) if label else None),
-                    'position': track.position.tolist() if track else None,
+                    'position': (track.position.tolist() if track else
+                                 center.tolist() if guessed else None),
                     'covariance': track.covariance.tolist() if track else None,
+                    'source': 'fallback' if guessed else 'vision' if track else 'none',
                     'observations': track.observations if track else 0,
                     'accepted_observations': track.accepted if track else 0,
                     'votes': votes,
@@ -402,6 +465,11 @@ class MappingTask:
                     'floor_z': float(self.params['floor_z']),
                 },
                 'tag': self._tag_json(),
+                'fallback_used': bool(self.fallback_cells or self.fallback_tag),
+                'fallback_reason': self.fallback_reason,
+                'verified_complete': (len(getattr(self, 'final_assignment', {})) == 4
+                                      and not self.fallback_cells
+                                      and self.fallback_tag is None),
                 'cells': cells,
                 'visit_order': list(self.visit_order),
                 'traversal_order': list(self.traversal_order),
@@ -416,165 +484,19 @@ class MappingTask:
     def _tag_json(self):
         """把池底标记的融合结果序列化成地图里的一段。"""
         if not hasattr(self, 'tag_filter') or self.tag_filter is None:
-            return None
+            return self.fallback_tag
         return {
             'id': self.tag_id,
             'position': self.tag_filter.position.tolist(),
             'covariance': self.tag_filter.covariance.tolist(),
             'observations': self.tag_filter.observations,
+            'source': 'partial_vision' if self.fallback_tag else 'vision',
         }
 
     def _ready(self):
         """任务是否应继续：ROS 正常 + 未被停止 + 未超过总时限。"""
         return rclpy.ok() and not self.node.stopped and time.monotonic() < self.deadline
 
-    def _pose_for(self, timestamp):
-        """取与给定（图像）时间戳最接近的位姿。
-
-        时间门限分两级：严格阈值 pose_slop_s；在 reading_tag/observe_cell
-        阶段艇是静止的，允许放宽到 5s（仿真渲染/发布频率低时时间戳常常对
-        不齐），其他阶段放宽到 1s。超过放宽后的门限直接抛错，由调用方把
-        该帧记为拒绝，而不是用错误的位姿去算世界坐标。
-        """
-        with self.lock:
-            poses = list(self.pose_history)
-        if not poses:
-            raise ValueError('pose is unavailable')
-        pose = min(poses, key=lambda item: abs(_stamp(item) - timestamp))
-        delta = abs(_stamp(pose) - timestamp)
-        strict_slop = float(self.params['pose_slop_s'])
-        fallback_slop = max(
-            strict_slop,
-            5.0 if self.state in ('reading_tag', 'observe_cell') else 1.0)
-        if delta > fallback_slop:
-            raise ValueError('no pose close enough to image timestamp')
-        # 使用了放宽门限时给出限流告警，提醒现场时间同步可能有问题
-        if (delta > strict_slop
-                and self.state in ('reading_tag', 'observe_cell')):
-            now = time.monotonic()
-            if now >= getattr(self, '_next_pose_fallback_log', 0.0):
-                self.node.get_logger().warning(
-                    f'位姿时间戳未严格同步，使用最近位姿：时间差={delta:.3f}s，'
-                    f'严格阈值={strict_slop:.3f}s')
-                self._next_pose_fallback_log = now + 3.0
-        return pose
-
-    def _prepare_calibration(self):
-        """用左右相机内参和外参建立双目标定，并预计算校正映射与 SGBM。
-
-        只需要做一次：之后每帧图像仅需 remap 即可得到校正图。
-        返回 True 表示标定就绪。
-        """
-        with self.lock:
-            infos = dict(self.camera_info)
-        if set(infos) != {'left', 'right'}:
-            return False
-        # 由 CameraInfo + 机体系外参构造标定（同时算出基线 baseline_m）
-        self.calibration = StereoCalibration.from_camera_info(
-            'down_mapping', infos['left'], infos['right'],
-            self.camera_translation, self.camera_rotation,
-            self.right_translation, self.camera_rotation)
-        size = (int(infos['left'].width), int(infos['left'].height))
-        # 去畸变 + 立体校正的查找表，左右各一份（remap 时复用）
-        left_map = cv2.initUndistortRectifyMap(
-            self.calibration.camera_matrix_left, self.calibration.dist_left,
-            self.calibration.rectification_left,
-            self.calibration.projection_left[:, :3], size, cv2.CV_32FC1)
-        right_map = cv2.initUndistortRectifyMap(
-            self.calibration.camera_matrix_right, self.calibration.dist_right,
-            self.calibration.rectification_right,
-            self.calibration.projection_right[:, :3], size, cv2.CV_32FC1)
-        self.rectify_maps = (left_map, right_map)
-        # SGBM 半全局匹配：P1/P2 取经典的 8*bs^2 / 32*bs^2 经验值，
-        # SGBM_3WAY 模式质量更好；speckle 过滤用于去掉水面反光造成的斑点噪声。
-        self.sgbm = cv2.StereoSGBM_create(
-            minDisparity=int(self.params['sgbm_min_disparity']),
-            numDisparities=int(self.params['sgbm_num_disparities']),
-            blockSize=int(self.params['sgbm_block_size']),
-            P1=8 * 1 * int(self.params['sgbm_block_size']) ** 2,
-            P2=32 * 1 * int(self.params['sgbm_block_size']) ** 2,
-            disp12MaxDiff=1, uniquenessRatio=8,
-            speckleWindowSize=80, speckleRange=2,
-            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY)
-        return True
-
-    def _image_for(self, timestamp):
-        """取与给定时间戳最接近的拼接帧，并返回校正后的左、右目图像。
-
-        时间门限与 _pose_for 一致（格点观察/读标记阶段艇静止，可放宽到 5s）。
-        超出容忍范围返回 None，调用方据此拒绝该帧而不是用错配图像。
-        """
-        with self.lock:
-            if not self.image_history:
-                return None
-            candidate = min(self.image_history,
-                            key=lambda item: abs(item[0] - timestamp))
-        delta = abs(candidate[0] - timestamp)
-        strict_slop = float(self.params['image_slop_s'])
-        # Detection and stitched-image messages are produced by different
-        # callbacks.  At a low simulation/render rate, the nearest image can
-        # arrive later than the strict synchronization window.  The vehicle
-        # is stationary during cell observation, so a bounded fallback is
-        # valid and prevents a detection from being discarded unnecessarily.
-        # 检测消息和拼接图来自不同回调：低渲染频率下最近帧可能晚于严格同步
-        # 窗口才到达。格点观察期间艇是静止的，因此有限度地放宽是合理的，
-        # 可避免真实检测被无谓丢弃。
-        fallback_slop = max(
-            strict_slop,
-            5.0 if self.state in ('reading_tag', 'observe_cell') else 1.0)
-        if delta > fallback_slop:
-            return None
-        if delta > strict_slop:
-            now = time.monotonic()
-            if now >= getattr(self, '_next_image_fallback_log', 0.0):
-                self.node.get_logger().warning(
-                    f'图像时间戳未严格同步，使用最近帧：时间差={delta:.3f}s，'
-                    f'严格阈值={strict_slop:.3f}s')
-                self._next_image_fallback_log = now + 3.0
-        left, right = candidate[1], candidate[2]
-        # 校正后的图像像素行对齐，SGBM 才能正确匹配
-        left = cv2.remap(left, *self.rectify_maps[0], cv2.INTER_LINEAR)
-        right = cv2.remap(right, *self.rectify_maps[1], cv2.INTER_LINEAR)
-        return left, right
-
-    def _detection_pair(self):
-        """找出最新的一对可用左右目检测结果。
-
-        只处理比 last_detection_stamp 更新的左目消息，避免同一帧被反复消费。
-        左右关联优先用 stereo_pair_id（仿真里左右目 header 可能差约 100ms，
-        pair id 才是权威关联）；老发布者没有该字段时退回时间戳差门限。
-        返回 (左目消息, 右目消息, 时间戳) 或 None。
-        """
-        with self.lock:
-            left_messages = list(self.left_detections)
-            right_messages = list(self.right_detections)
-        for left_message in reversed(left_messages):
-            timestamp = _stamp(left_message)
-            if timestamp <= self.last_detection_stamp:
-                continue
-            candidates = []
-            for right_message in right_messages:
-                left_id = int(getattr(left_message, 'stereo_pair_id', 0) or 0)
-                right_id = int(getattr(right_message, 'stereo_pair_id', 0) or 0)
-                # The simulator carries the same pair ID even when the two
-                # camera headers differ by roughly 100 ms.  Pair ID is the
-                # authoritative association; timestamp is the fallback for
-                # legacy publishers that do not provide it.
-                # 仿真器左右目 header 时间可能差约 100ms，但 pair id 相同；
-                # 因此 pair id 是权威关联，时间戳只是无 pair id 时的兜底。
-                if left_id and right_id:
-                    if left_id != right_id:
-                        continue
-                elif (abs(_stamp(right_message) - timestamp)
-                      > float(self.params['detection_slop_s'])):
-                    continue
-                candidates.append(right_message)
-            if candidates:
-                # 多个候选时取时间最接近的一个
-                right_message = min(candidates,
-                                    key=lambda item: abs(_stamp(item) - timestamp))
-                return left_message, right_message, timestamp
-        return None
 
     def _record_observation_frame(self):
         """记录当前格点收到了一帧可用于定位的同步感知数据。
@@ -598,212 +520,9 @@ class MappingTask:
                 {'synchronized_frames': 0, 'valid_measurements': 0})
             observation['valid_measurements'] += 1
 
-    def _depth_map(self, left, right):
-        """对校正后的左右目图像做 SGBM，返回 (视差图, 深度图)。
-
-        SGBM 输出的是 16 倍定点视差，需除以 16 还原为像素视差；
-        深度按 Z = fx * B / d 计算（fx 取左目投影矩阵，B 为标定基线）。
-        视差过小（<= min_disparity）视为无效，填 NaN 以便后续过滤。
-        """
-        left_gray = cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
-        right_gray = cv2.cvtColor(right, cv2.COLOR_BGR2GRAY)
-        disparity = self.sgbm.compute(left_gray, right_gray).astype(np.float32) / 16.0
-        depth = np.full(disparity.shape, np.nan, dtype=np.float32)
-        valid = disparity > float(self.params['min_disparity'])
-        depth[valid] = (self.calibration.projection_left[0, 0]
-                        * self.calibration.baseline_m / disparity[valid])
-        return disparity, depth
-
-    def _mask_depth_mode(self, detection, depth):
-        """在分割掩膜内取深度直方图主峰，得到该目标的一次距离测量。
-
-        步骤：
-          1. 用检测消息里的 mask_x/mask_y 多边形填充出掩膜；
-          2. 取掩膜内深度，过滤 NaN 与 [min_depth_m, max_depth_m] 之外的值；
-          3. 有效点太少 -> 放弃（返回 None）；
-          4. 按 depth_bin_m 分桶做直方图，取最高峰所在桶；
-          5. 主峰点数需同时满足 min_depth_points 和 depth_peak_ratio 占比，
-             否则说明掩膜内深度不成峰（多半混入了背景/水面），放弃；
-          6. 返回 (主峰深度中值, 掩膜像素质心 (x, y), 参与统计的点数)。
-
-        取中值而非均值，可以进一步抑制桶内残留的少量离群点。
-        """
-        xs = np.asarray(getattr(detection, 'mask_x', []), dtype=float)
-        ys = np.asarray(getattr(detection, 'mask_y', []), dtype=float)
-        if len(xs) < 3 or len(xs) != len(ys):
-            return None
-        polygon = np.column_stack((xs, ys)).astype(np.int32)
-        mask = np.zeros(depth.shape, dtype=np.uint8)
-        cv2.fillPoly(mask, [polygon], 1)
-        values = depth[mask.astype(bool)]
-        values = values[np.isfinite(values)]
-        values = values[(values >= float(self.params['min_depth_m']))
-                        & (values <= float(self.params['max_depth_m']))]
-        if len(values) < int(self.params['min_depth_points']):
-            return None
-        bin_size = float(self.params['depth_bin_m'])
-        bins = np.arange(float(self.params['min_depth_m']),
-                         float(self.params['max_depth_m']) + bin_size,
-                         bin_size)
-        counts, edges = np.histogram(values, bins=bins)
-        peak = int(np.argmax(counts))
-        selected = values[(values >= edges[peak]) & (values < edges[peak + 1])]
-        if len(selected) < max(int(self.params['min_depth_points']),
-                               int(len(values) * self.params['depth_peak_ratio'])):
-            return None
-        # 像素质心：np.where 返回 (行, 列)，交换后得到常见的 (x, y)
-        center = np.median(np.column_stack(np.where(mask > 0)), axis=0)
-        return float(np.median(selected)), (float(center[1]), float(center[0])), int(len(selected))
-
-    def _world_measurement(self, pixel, depth, pose, rectified=False):
-        """把「像素 + 深度」换算成 odom 系下的三维点。
-
-        坐标链：像素 -> 校正后相机坐标 -> 原始左目光学坐标 -> 机体系 -> odom 系。
-          * 像素反投影：X=(u-cx)Z/fx, Y=(v-cy)Z/fy, Z=depth（Z 即深度）；
-          * 乘 R1^T 把校正后坐标还原回原始左相机光学系；
-          * 用下视相机外参把光学系换算到机体系；
-          * 用 PoseInfo 的 RPY 构造机体系->世界旋转，再加艇位得到 odom 点。
-
-        rectified=True 表示传入像素已经来自校正图（AprilTag 分支），
-        无需再做一次 undistortPoints。
-        """
-        rectified_pixel = (np.asarray(pixel, dtype=float) if rectified else
-                           self.calibration.rectified_pixel(
-                               'left', np.asarray(pixel, dtype=float)))
-        fx = self.calibration.projection_left[0, 0]
-        fy = self.calibration.projection_left[1, 1]
-        cx = self.calibration.projection_left[0, 2]
-        cy = self.calibration.projection_left[1, 2]
-        point_rectified = np.array([
-            (rectified_pixel[0] - cx) * depth / fx,
-            (rectified_pixel[1] - cy) * depth / fy,
-            depth,
-        ])
-        point_optical = self.calibration.rectification_left.T @ point_rectified
-        # 机体系->世界（odom）旋转换矩阵
-        body_rotation = _rpy_matrix(pose.robot_roll, pose.robot_pitch, pose.robot_yaw)
-        body_position = np.array([pose.robot_x, pose.robot_y, pose.robot_z])
-        return body_position + body_rotation @ (
-            self.camera_translation + self.camera_rotation @ point_optical)
-
-    def _process_cone_pair(self, left_message, right_message, timestamp,
-                           image_pair, pose):
-        """处理一对已经完成时间配对的左右检测。
-
-        对每个左目目标：
-          1. 整幅 SGBM 深度图只算一次，左右目共用；
-          2. 类别只接受 0/1，且要求右目也存在同类检测（左右一致性初筛）；
-          3. 掩膜深度主峰 -> 像素 + 距离；
-          4. 换算到世界系，按 xy 距离关联到最近的「理论格点」；
-          5. 距理论格点超过 cell_gate_m 则拒绝（防止关联到错误格子）；
-          6. 通过门限后做静态位置滤波，并给该格点的类别累计一票。
-
-        所有测量（含被拒绝的）都会存入 measurement_points，
-        供可视化与离线调参；任务判定只使用通过门限的滤波结果。
-        返回本对检测产生的测量数量。
-        """
-        _, depth = self._depth_map(*image_pair)
-        self._record_observation_frame()
-        right_detections = [d for d in right_message.detections
-                            if int(d.class_id) in (0, 1)]
-        measurements = 0
-        for left_detection in left_message.detections:
-            class_id = int(left_detection.class_id)
-            # 只关心方形/圆形锥桶，且置信度要达标
-            if (class_id not in (0, 1)
-                    or float(left_detection.confidence)
-                    < float(self.params['min_confidence'])):
-                continue
-            # 右目必须也检出同一类，作为廉价的误检过滤
-            if not any(int(item.class_id) == class_id for item in right_detections):
-                continue
-            result = self._mask_depth_mode(left_detection, depth)
-            if result is None:
-                self._emit('measurement_rejected', reason='no_depth_mode', class_id=class_id,
-                           measurement_stamp=timestamp)
-                continue
-            distance, pixel, sample_count = result
-            point = self._world_measurement(pixel, distance, pose)
-            # 目标关联：按 xy 平面距离选最近的格点（z 不参与，锥桶底都在池底）
-            cell = min(self.grid_centers,
-                       key=lambda index: np.linalg.norm(
-                           point[:2] - self.grid_centers[index][:2]))
-            residual = float(np.linalg.norm(point[:2] - self.grid_centers[cell][:2]))
-            point_record = {
-                'position': point.tolist(),
-                'class_id': class_id,
-                'confidence': float(left_detection.confidence),
-                'depth_m': distance,
-                'residual_m': residual,
-                'accepted': False,
-                'timestamp': float(timestamp),
-            }
-            # 先无条件记录原始观测点，便于事后分析被拒绝的原因
-            with self.lock:
-                self.measurement_points[cell].append(point_record)
-            if residual > float(self.params['cell_gate_m']):
-                self._emit('measurement_rejected', reason='outside_cell_gate', class_id=class_id,
-                           position=point.tolist(), residual_m=residual,
-                           measurement_stamp=timestamp)
-                continue
-            # 观测噪声：水平 sigma，深度方向误差更大，故 z 方差放大 2 倍
-            covariance = np.eye(3) * float(self.params['measurement_sigma_m']) ** 2
-            covariance[2, 2] *= 2.0
-            with self.lock:
-                track = self.filters.get(cell)
-                if track is None:
-                    # 该格点首次观测：直接以本次测量初始化滤波器
-                    self.filters[cell] = StaticPositionFilter(point, covariance, timestamp)
-                    self.class_votes[cell] = [0, 0]
-                    accepted, reason = True, 'initial'
-                else:
-                    accepted, reason = track.update(
-                        point, covariance, timestamp,
-                        float(self.params['process_noise']),
-                        float(self.params['mahalanobis_gate']))
-                    # 连续的独立帧形成更强的新簇时允许纠错，单个离群点不能重置地图。
-                    if not accepted and reason.startswith('outlier:'):
-                        recent = list(self.measurement_points[cell])[-12:]
-                        cluster = {}
-                        for sample in recent:
-                            delta = np.asarray(sample['position']) - point
-                            if (sample['residual_m'] <= float(self.params['cell_gate_m'])
-                                    and float(delta @ np.linalg.solve(2 * covariance, delta))
-                                    <= float(self.params['mahalanobis_gate'])):
-                                cluster[sample['timestamp']] = sample
-                        required = max(3, min(8, track.accepted + 1))
-                        if len(cluster) >= required and len(cluster) > len(recent) / 2:
-                            samples = list(cluster.values())
-                            center = np.median([s['position'] for s in samples], axis=0)
-                            track = StaticPositionFilter(center, covariance.copy(), timestamp)
-                            track.accepted = len(samples)
-                            self.filters[cell] = track
-                            self.class_votes[cell] = [0, 0]
-                            for sample in self.measurement_points[cell]:
-                                sample['accepted'] = False
-                            for sample in samples:
-                                sample['accepted'] = True
-                                self.class_votes[cell][sample['class_id']] += 1
-                            # 当前帧已包含在重建投票中。
-                            self.class_votes[cell][class_id] -= 1
-                            accepted, reason = True, 'consistent_cluster_reinitialized'
-                            self.node.get_logger().warning(
-                                f'格点{cell}位置纠错：使用{len(samples)}个独立帧的一致簇重建滤波与类别投票')
-                # 只有被滤波器接受的观测才计入类别投票，避免离群点污染类别
-                if accepted:
-                    self.class_votes[cell][class_id] += 1
-                    point_record['accepted'] = True
-            self._record_observation_measurement(cell)
-            self._emit('cone_measurement', cell=cell, class_id=class_id,
-                       confidence=float(left_detection.confidence), depth_m=distance,
-                       depth_samples=sample_count, position=point.tolist(),
-                       residual_m=residual, accepted=accepted, reason=reason,
-                       measurement_stamp=timestamp)
-            measurements += 1
-        return measurements
 
     def _observe_cones(self):
-        """等待后台感知线程累计当前格点的观测，不再主动取帧。
+        """等待 camera 持续发布的观测，不再主动取帧。
 
         主线程只负责「等够 observe_seconds」并对比进入前后的计数增量；
         返回本格点新增同步帧数是否达到 min_observations。
@@ -823,208 +542,24 @@ class MappingTask:
         observed_frames = current['synchronized_frames'] - start['synchronized_frames']
         measurements = current['valid_measurements'] - start['valid_measurements']
         self.node.get_logger().info(
-            f'格点{cell}观察完成：后台同步帧={observed_frames}，'
+            f'格点{cell}观察完成：已处理双目帧={observed_frames}，'
             f'新增有效目标测量={measurements}，累计有效目标测量={current["valid_measurements"]}；'
             f'感知统计={self.perception_stats}')
         return observed_frames >= int(self.params['min_observations'])
 
-    def _tag_measurement(self, image_pair, pose):
-        """在左目图上尝试识别池底标记，成功则返回 (id, 世界坐标, 深度点数)。
-
-        为了提高解码成功率：
-          * 同时尝试原灰度图和 CLAHE 对比度增强图（水下光照/渲染对比度低）；
-          * 遍历所有 (字典, 检测器) 组合，并兼容 OpenCV 新旧两套检测接口；
-          * 用掩膜深度主峰测距，再换算到世界系（像素已在校正图上，
-            因此 rectified=True）。
-        失败时把具体原因写进 last_tag_reason（no_marker / wrong_id / no_depth_mode
-        / 具体异常），供 _read_tag() 超时时输出诊断信息。
-        """
-        left, _ = image_pair
-        gray = cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
-        self.tag_scan_stats['frames'] += 1
-        self.last_tag_reason = '未发现可解码标记'
-        # Rendering, water contrast and the stitched image can make the
-        # native detector sensitive to scale.  Keep the original image and a
-        # contrast-normalized variant; do not use annotated frames here.
-        # 渲染、水体对比度和拼接都会影响检测器的尺度敏感性。这里保留原图并
-        # 额外尝试对比度归一化版本；注意不要用带标注框的图像，否则会干扰解码。
-        variants = (gray, cv2.createCLAHE(clipLimit=2.0,
-                                          tileGridSize=(8, 8)).apply(gray))
-        for family, detector in self.tag_detectors:
-            for variant in variants:
-                corners, ids, _ = (detector.detectMarkers(variant) if detector is not None
-                                   else cv2.aruco.detectMarkers(variant, self.tag_dictionary))
-                if ids is None:
-                    continue
-                self.tag_scan_stats['markers'] += len(ids)
-                for polygon, tag_id in zip(corners, ids.flatten()):
-                    tag_id = int(tag_id)
-                    # tag_id < 0 表示接受任意 ID（随机场景）；否则必须是期望 ID
-                    if int(self.params['tag_id']) >= 0 and tag_id != int(self.params['tag_id']):
-                        self.tag_scan_stats['wrong_id'] += 1
-                        self.last_tag_reason = f'{family}:wrong_id:{tag_id}'
-                        continue
-                    # 用一个轻量匿名对象承载标记四角，复用锥桶的掩膜深度逻辑
-                    detection = type('TagMask', (), {
-                        'mask_x': polygon.reshape(-1, 2)[:, 0].tolist(),
-                        'mask_y': polygon.reshape(-1, 2)[:, 1].tolist(),
-                    })()
-                    result = self._mask_depth_mode(
-                        detection, self._depth_map(*image_pair)[1])
-                    if result is None:
-                        self.tag_scan_stats['no_depth'] += 1
-                        self.last_tag_reason = f'{family}:no_depth_mode'
-                        continue
-                    distance, pixel, sample_count = result
-                    self.last_tag_reason = f'{family}:accepted'
-                    return (tag_id, self._world_measurement(pixel, distance, pose, rectified=True),
-                            sample_count)
-        if self.tag_scan_stats['markers'] == 0:
-            self.last_tag_reason = 'no_marker'
-        return None
-
-    def _accept_tag_result(self, result, timestamp):
-        """将后台线程得到的 AprilTag 测量写入静态滤波器。
-
-        只融合同一个标记 ID 的测量：ID 变化说明识别到了别的标记，
-        直接拒绝合并，避免把不同目标混进同一条轨迹。
-        返回该测量是否被滤波器接受。
-        """
-        if result is None:
-            return False
-        tag_id, point, sample_count = result
-        with self.lock:
-            if hasattr(self, 'tag_filter') and tag_id != self.tag_id:
-                self.last_tag_reason = '标记ID改变，拒绝合并不同目标'
-                return False
-            covariance = np.eye(3) * float(self.params['measurement_sigma_m']) ** 2
-            if not hasattr(self, 'tag_filter'):
-                self.tag_id = tag_id
-                self.tag_filter = StaticPositionFilter(point, covariance, timestamp)
-                accepted, reason = True, 'initial'
-            else:
-                accepted, reason = self.tag_filter.update(
-                    point, covariance, timestamp,
-                    float(self.params['process_noise']),
-                    float(self.params['mahalanobis_gate']))
-            observations = self.tag_filter.observations
-        self._emit('tag_measurement', tag_id=tag_id, position=point.tolist(),
-                   depth_samples=sample_count, accepted=accepted, reason=reason,
-                   measurement_stamp=timestamp)
-        if observations >= int(self.params['min_observations']):
-            self.node.get_logger().info(
-                f'标记确认成功：ID={tag_id}，有效观测={observations}')
-        return accepted
-
-    def _perception_loop(self):
-        """后台持续处理最新图像、AprilTag 和左右目分割检测。
-
-        与主线程的 WTRAVEL 并行运行：
-          * 已处理过的图像时间戳不再重复处理（last_image_processed 游标）；
-          * 图像若暂时无法时间配对（_image_for 返回 None），本轮不消费，
-            留待下次回调补齐数据后再处理；
-          * 每轮都尝试取一对新的左右目检测做锥桶测量；
-          * 整轮无事可做才休眠 30ms，用 Event.wait 保证能立刻响应退出。
-        """
-        last_image_processed = -1.0
-        self.node.get_logger().info('建图后台感知线程已启动：视觉与WTRAVEL并行运行')
-        while self._ready() and not self.perception_stop.is_set():
-            did_work = False
-            with self.lock:
-                images = list(self.image_history)
-            # 按时间升序处理，保证滤波器收到的时间戳单调递增
-            for timestamp, _, _ in sorted(images, key=lambda item: item[0]):
-                if timestamp <= last_image_processed:
-                    continue
-                try:
-                    pose = self._pose_for(timestamp)
-                    image_pair = self._image_for(timestamp)
-                except (ValueError, cv2.error) as error:
-                    self.last_tag_reason = f'图像或位姿无效：{error}'
-                    continue
-                if image_pair is None:
-                    # 图像时间配对可能在下一次回调才成立，暂不消费该帧。
-                    continue
-                last_image_processed = timestamp
-                # 标记识别失败不影响任务：真正的判定在 _read_tag() 里做
-                try:
-                    self._accept_tag_result(
-                        self._tag_measurement(image_pair, pose), timestamp)
-                except (ValueError, cv2.error) as error:
-                    self.last_tag_reason = f'标记处理失败：{error}'
-                did_work = True
-
-            pair = self._detection_pair()
-            if pair is not None:
-                left_message, right_message, timestamp = pair
-                if timestamp != getattr(self, '_pending_detection_stamp', None):
-                    self._pending_detection_stamp = timestamp
-                    self._pending_detection_since = time.monotonic()
-                    self.perception_stats['detection_pairs'] += 1
-                image_pair = self._image_for(timestamp)
-                if image_pair is None:
-                    if time.monotonic() - self._pending_detection_since >= 2.0:
-                        self.last_detection_stamp = timestamp
-                        self.perception_stats['image_unavailable'] += 1
-                        with self.lock:
-                            stamps = [item[0] for item in self.image_history]
-                        nearest = min((abs(s - timestamp) for s in stamps), default=None)
-                        self._emit('frame_rejected',
-                                   reason=f'等待图像2秒超时：缓存帧数={len(stamps)}，最近时间差={nearest}s',
-                                   measurement_stamp=timestamp)
-                else:
-                    try:
-                        pose = self._pose_for(timestamp)
-                        # 先推进游标，失败也不重复消费同一对检测
-                        self.last_detection_stamp = timestamp
-                        self._process_cone_pair(
-                            left_message, right_message, timestamp, image_pair, pose)
-                        self.perception_stats['processed_pairs'] += 1
-                    except (ValueError, cv2.error) as error:
-                        if 'pose' in str(error):
-                            self.perception_stats['pose_unavailable'] += 1
-                        self.last_detection_stamp = timestamp
-                        self._emit('frame_rejected', reason=str(error),
-                                   measurement_stamp=timestamp)
-                    did_work = True
-            if not did_work:
-                self.perception_stop.wait(0.03)
-        self.node.get_logger().info('建图后台感知线程已停止')
-
-    def _start_perception_worker(self):
-        """启动后台感知线程（幂等：已在运行则不重复启动）。"""
-        if self.perception_thread is not None and self.perception_thread.is_alive():
-            return
-        self.perception_stop.clear()
-        self.perception_thread = threading.Thread(
-            target=self._perception_loop, name='mapping-perception', daemon=True)
-        self.perception_thread.start()
-
-    def _stop_perception_worker(self):
-        """通知后台线程退出并回收（最多等 2s，避免任务结束时留下线程）。"""
-        self.perception_stop.set()
-        if self.perception_thread is not None:
-            self.perception_thread.join(timeout=2.0)
-            self.perception_thread = None
 
     def _read_tag(self):
-        """等待后台线程累计到足够的 AprilTag 有效观测。
-
-        主线程不重复扫描图像（那是后台线程的工作），只轮询 tag_filter 的
-        观测次数；每 3s 打印一次进度统计，超时则输出完整诊断（帧数/标记数/
-        ID 不匹配/无深度/最近原因/期望 ID/字典）。
-        """
+        """等待 camera 发布足够多的有效 AprilTag 观测。"""
         self.state = 'reading_tag'
         self.node.get_logger().info(
             f'开始识别池底标记：字典={self.params["tag_dictionary"]}，'
-            f'期望ID={self.params["tag_id"]}，图像={self.params["image_topic"]}；'
-            f'代码路径={__file__}')
+            f'期望ID={self.params["tag_id"]}，输入=/perception/mapping/observations')
         next_log = time.monotonic()
         end = min(self.deadline, time.monotonic() + float(self.params['tag_timeout']))
         while self._ready() and time.monotonic() < end:
             with self.lock:
                 tag_filter = getattr(self, 'tag_filter', None)
-                observations = tag_filter.observations if tag_filter else 0
+                observations = tag_filter.accepted if tag_filter else 0
             if observations >= int(self.params['min_observations']):
                 return True
             if time.monotonic() >= next_log:
@@ -1034,12 +569,57 @@ class MappingTask:
             time.sleep(0.05)
         self.node.get_logger().error(
             'AprilTag 识别超时: frames=%d markers=%d wrong_id=%d '
-            'no_depth=%d last=%s expected_id=%s families=%s' % (
+            'no_depth=%d last=%s expected_id=%s family=%s' % (
                 self.tag_scan_stats['frames'], self.tag_scan_stats['markers'],
                 self.tag_scan_stats['wrong_id'], self.tag_scan_stats['no_depth'],
                 self.last_tag_reason, self.params['tag_id'],
-                ','.join(name for name, _ in self.tag_detectors)))
-        return False
+                self.params['tag_dictionary']))
+        if not self._ready():
+            return False
+        self._assume_tag('AprilTag 识别超时')
+        return True
+
+    def _assume_tag(self, reason):
+        guessed_id = int(self.params['tag_id'])
+        if guessed_id < 0:
+            guessed_id = int(self.params.get('fallback_tag_id', 16))
+        self.fallback_tag = {
+            'id': guessed_id,
+            'position': [float(self.params['tag_x']), float(self.params['tag_y']),
+                         float(self.params['floor_z'])],
+            'covariance': None,
+            'observations': 0,
+            'source': 'fallback',
+        }
+        self.fallback_reason = reason
+        self.node.get_logger().warning(
+            f'标记识别失败，使用未验证的预设 ID={guessed_id} 和位置；'
+            '仅用于地图输出，不据此执行锥桶遍历')
+        self._emit('tag_fallback', **self.fallback_tag)
+        self.publish_map()
+
+    def _fill_fallback_assignment(self, assignment):
+        """保留视觉结论，仅对缺失的两方两圆用配置格点补齐。"""
+        result = dict(assignment)
+        for kind, key in ((0, 'fallback_square_cells'),
+                          (1, 'fallback_round_cells')):
+            candidates = list(self.params.get(key, ())) + list(range(9))
+            for cell in candidates:
+                if sum(value == kind for value in result.values()) >= 2:
+                    break
+                cell = int(cell)
+                if cell not in self.grid_centers or cell in result:
+                    continue
+                result[cell] = kind
+                self.fallback_cells.add(cell)
+        if self.fallback_cells:
+            self.fallback_reason = self.fallback_reason or '锥桶视觉观测不足'
+            self.node.get_logger().warning(
+                f'建图使用未验证的默认格点：{sorted(self.fallback_cells)}；'
+                '不会依据猜测地图自动遍历')
+            self._emit('map_fallback', cells=sorted(self.fallback_cells),
+                       assignment=result)
+        return result
 
     def _travel_to(self, position, label):
         """用 WTRAVEL 走到世界系 xy 位置。
@@ -1067,32 +647,40 @@ class MappingTask:
         """任务主流程（由 task_runner 调用，返回 True/False 表示成功/失败）。
 
         流程：
-          1. 等待左右相机内参和位姿就绪，建立双目标定与 SGBM（最多等 20s）；
-          2. 启动后台感知线程（此后视觉与运动并行）；
+          1. 等待 camera 的小型观测消息（最多 20s）；
+          2. camera 持续在独立线程处理图像，运动与感知并行；
           3. WTRAVEL 到池底标记附近并确认标记（触发器）；
           4. 按 visit_order 逐格：WTRAVEL 到理论格点中心 -> 等待观察时间 ->
              记录该格点观测统计。单格点观测不足只记警告并继续（空格是允许的）；
           5. 九格走完冻结地图，返回标记上方，先圆形后方形遍历已确认目标；
-          6. 任何异常（运动失败、标定失败、标记未确认）都置
-             state 并把 node.stopped 置位，安全中止整条任务链；
-          7. finally 中停止后台线程并再发布一次最终地图。
+          6. 视觉不足时发布明确标记的猜测地图并跳过遍历；运动失败或
+             未预期异常仍安全中止整条任务链；
+          7. finally 中再发布一次最终地图。
         """
         self._emit('started', model='best.pt', class_map={0: 'square_cone', 1: 'round_cone'},
                    depth_method='sgbm_mask_mode')
         try:
-            # 等待标定所需数据（CameraInfo 左右各一份 + 至少一条位姿）
+            # camera 只在标定和采集位姿可用后才发 processed=true。
             ready_end = min(self.deadline, time.monotonic() + 20.0)
+            ready = False
             while self._ready() and time.monotonic() < ready_end:
                 with self.lock:
-                    ready = len(self.camera_info) == 2 and bool(self.pose_history)
-                if ready and self._prepare_calibration():
+                    ready = (self.perception_stats['processed_frames'] > 0
+                             and bool(self.pose_history))
+                if ready:
                     break
                 time.sleep(0.05)
-            if self.calibration is None:
-                raise RuntimeError('camera calibration or pose unavailable')
-            self._emit('calibration_ready', baseline_m=self.calibration.baseline_m)
-            # 标定完成后立刻启动后台感知，移动途中产生的数据也能被利用
-            self._start_perception_worker()
+            if not ready:
+                if self.node.stopped or not rclpy.ok():
+                    raise RuntimeError('任务被停止')
+                self._assume_tag('相机建图观测或位姿不可用')
+                self.final_assignment = self._fill_fallback_assignment({})
+                self.state = 'fallback'
+                self._emit('completed_with_fallback',
+                           reason=self.fallback_reason,
+                           assignment=self.final_assignment)
+                return True
+            self._emit('calibration_ready', source='uv_camera')
             self.state = 'travel_to_tag'
             if not self._travel_to(
                     [self.params['tag_x'], self.params['tag_y']], 'mapping:travel_to_april_tag'):
@@ -1127,13 +715,22 @@ class MappingTask:
                         observation_ok=True, **observation)
                 # 每格完成后立刻刷新地图，便于现场实时观察进度
                 self.publish_map()
-            self._stop_perception_worker()
-            self.final_assignment = self._select_final_assignment()
+            self.final_assignment = self._fill_fallback_assignment(
+                self._select_final_assignment())
             confirmed = sorted(self.final_assignment)
             self.state = 'mapping_complete'
             self._emit('mapping_completed', confirmed_cells=confirmed,
-                       assignment=self.final_assignment, result_complete=len(confirmed) == 4)
+                       assignment=self.final_assignment,
+                       result_complete=(len(confirmed) == 4
+                                        and not self.fallback_cells
+                                        and self.fallback_tag is None))
             self.publish_map()
+            if self.fallback_tag or self.fallback_cells:
+                self.state = 'complete_with_fallback'
+                self._emit('traversal_skipped',
+                           reason='地图包含未验证猜测，禁止自动遍历')
+                self.publish_map()
+                return True
             self._traverse_cones()
             self.state = 'complete'
             self._emit('completed', confirmed_cells=confirmed,
@@ -1149,8 +746,7 @@ class MappingTask:
             self.node.stopped = True
             return False
         finally:
-            # 无论成功失败都要回收线程并发布最终地图
-            self._stop_perception_worker()
+            # camera 的感知线程与任务生命周期独立；这里只发布最终地图。
             self.publish_map()
 
     def _traverse_cones(self):
@@ -1307,7 +903,6 @@ class MappingTask:
 
     def destroy(self):
         """释放资源：停止感知线程、销毁定时器与所有订阅。"""
-        self._stop_perception_worker()
         self.node.destroy_timer(self.publish_timer)
         for subscription in self.subscriptions:
             self.node.destroy_subscription(subscription)

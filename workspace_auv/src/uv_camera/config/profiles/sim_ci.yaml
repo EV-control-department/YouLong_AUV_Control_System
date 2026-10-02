@@ -1,6 +1,10 @@
 /uv_camera:
   ros__parameters:
     sim_mode: true
+    enable_mapping_vision: true
+    mapping_tag_dictionary: "DICT_APRILTAG_16h5"
+    mapping_left_translation: [0.0, -0.05, 0.176]
+    mapping_right_translation: [0.0, 0.05, 0.176]
     inference_fps: 3.0
     inference_threads: 2
     confidence: 0.8

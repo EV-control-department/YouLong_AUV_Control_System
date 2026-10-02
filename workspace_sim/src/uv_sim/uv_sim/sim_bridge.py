@@ -103,12 +103,15 @@ class SimBridgeNode(Node):
         self._hil_mode = self.get_parameter('hil_mode').value
         self.declare_parameter('camera_stitch_fps', 10.0)
         self.declare_parameter('publish_raw_camera_topics', False)
+        self.declare_parameter('enable_camera_passthrough', False)
 
-        self.cam = CameraPassthrough(
-            self.get_parameter('camera_stitch_fps').value,
-            publish_raw_views=_as_bool(
-                self.get_parameter('publish_raw_camera_topics').value))
-        self.cam.bind(self)
+        self.cam = None
+        if _as_bool(self.get_parameter('enable_camera_passthrough').value):
+            self.cam = CameraPassthrough(
+                self.get_parameter('camera_stitch_fps').value,
+                publish_raw_views=_as_bool(
+                    self.get_parameter('publish_raw_camera_topics').value))
+            self.cam.bind(self)
 
         if self._hil_mode:
             self._init_hil()

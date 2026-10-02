@@ -76,8 +76,12 @@ class Ai:
         gate_feature_mode='auto',
         confidence=CONFIDENCE,
         device='auto',
+        mapping_callback=None,
+        turntable_callback=None,
     ):
         self.node = node                     # composed uv_camera rclpy Node
+        self._mapping_callback = mapping_callback
+        self._turntable_callback = turntable_callback
         self._update_annotated = update_annotated_fn  # node.update_annotated_stream
         self._active_cams = list(cameras)
         self._inference_period_s = (
@@ -378,6 +382,14 @@ class Ai:
                 left_name, header, stereo_pair_id)
             self._publish_empty_results(
                 right_name, right_header, stereo_pair_id)
+            if camera == 'down' and self._mapping_callback is not None:
+                self._mapping_callback(cv_img, header.stamp,
+                                       DetectionArray(), DetectionArray())
+            if camera == 'front' and self._turntable_callback is not None:
+                empty_left, empty_right = DetectionArray(), DetectionArray()
+                empty_left.header = header
+                empty_right.header = right_header
+                self._turntable_callback(empty_left, empty_right)
             return
         if not self._allow_inference(camera):
             return
@@ -394,6 +406,10 @@ class Ai:
             right_header, right_name, right_img, stereo_pair_id)
         self._pub_det[right_name].publish(det_r)
         self._pub_line[right_name].publish(line_r)
+        if camera == 'down' and self._mapping_callback is not None:
+            self._mapping_callback(cv_img, header.stamp, det_l, det_r)
+        if camera == 'front' and self._turntable_callback is not None:
+            self._turntable_callback(det_l, det_r)
         if annotate:
             ann_r = self._draw_boxes(right_img, det_r, polys_r, line_r, dbg_r)
 
@@ -413,6 +429,7 @@ class Ai:
         distortion_active = (
             ENABLE_UNDISTORT and K is not None and D is not None
             and bool(np.any(np.abs(D) > 1e-12))
+            and not (camera == 'down' and self._mapping_callback is not None)
         )
         if distortion_active:
             left_img = cv2.undistort(cv_img[:, :mid], K, D)
