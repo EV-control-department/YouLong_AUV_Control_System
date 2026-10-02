@@ -534,6 +534,12 @@ class MappingDashboard(QMainWindow):
                 axis.plot(line[:, 0], line[:, 1], [-floor, -floor], color=MUTED, alpha=0.6)
         trajectory = np.asarray(snapshot['trajectory'])
         planned = np.asarray(payload.get('traversal_path', []))
+        returning = np.asarray(payload.get('return_path', []))
+        if returning.size:
+            height = -snapshot['pose'][2] if snapshot['pose'] else -0.1
+            axis.plot(returning[:, 0], returning[:, 1],
+                      np.full(len(returning), height), ':s', color='#e879f9',
+                      linewidth=1.5, markersize=3, label='返回标记')
         if planned.size:
             height = -snapshot['pose'][2] if snapshot['pose'] else -0.1
             axis.plot(planned[:, 0], planned[:, 1], np.full(len(planned), height),
@@ -591,7 +597,9 @@ class MappingDashboard(QMainWindow):
         self.map_canvas.draw_idle()
         self.map_hint.setText(
             f"状态: {payload.get('state')}  |  已访问: {len(payload.get('visit_order', []))}/9  |  "
-            f"点集: {payload.get('measurement_count', 0)}  |  拒绝格点: {payload.get('observation_failures', [])}")
+            f"点集: {payload.get('measurement_count', 0)}  |  "
+            f"遍历格序: {payload.get('traversal_plan_cells', [])}  |  "
+            f"已到锥桶: {payload.get('traversal_order', [])}")
 
     def _update_table(self, payload, snapshot):
         cells = payload.get("cells", [])

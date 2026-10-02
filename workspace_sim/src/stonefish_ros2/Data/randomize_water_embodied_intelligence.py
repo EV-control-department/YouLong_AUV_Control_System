@@ -20,8 +20,9 @@ from pathlib import Path
 
 
 DEFAULT_SCENE = Path(__file__).with_name("water_embodied_intelligence_2026.scn")
+TAG_DICTIONARY = "DICT_APRILTAG_16h5"
 TAG_TEXTURES = {
-    tag_id: f"apriltag_36h11_id{tag_id}.png" for tag_id in range(7)
+    tag_id: f"apriltag_16h5_id{tag_id}.png" for tag_id in range(7)
 }
 
 # NED x is north and y is east. The grid is centered at (2,-4), with 2 m sides.
@@ -48,7 +49,10 @@ MAX_CELL_OFFSET = 0.05
 def ensure_tag_texture(directory: Path, tag_id: int) -> Path:
     """Generate an exact code with black border and white quiet zone."""
     import cv2
-    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36H11)
+    if tag_id not in TAG_TEXTURES:
+        raise ValueError("tag id must be between 0 and 6")
+    dictionary = cv2.aruco.getPredefinedDictionary(
+        getattr(cv2.aruco, TAG_DICTIONARY))
     marker = cv2.aruco.generateImageMarker(dictionary, tag_id, 640)
     texture = cv2.copyMakeBorder(marker, 80, 80, 80, 80,
                                 cv2.BORDER_CONSTANT, value=255)
@@ -201,8 +205,10 @@ def randomize_scene(
 
     selected_tag = tag_id if tag_id is not None else rng.randrange(7)
     _set_tag_texture(root, selected_tag)
-    # Assets are resolved relative to the source Data directory by Stonefish.
-    ensure_tag_texture(source.parent, selected_tag)
+    # 预备全部合法 ID；Stonefish 相对输出场景所在目录查找贴图。
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    for available_id in TAG_TEXTURES:
+        ensure_tag_texture(destination.parent, available_id)
     environment = _set_environment(
         root,
         rng,
@@ -212,7 +218,6 @@ def randomize_scene(
         jerlov_range,
     )
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(tree, space="\t")
     tree.write(destination, encoding="utf-8", xml_declaration=True)
     return selected_tag, placements, environment
