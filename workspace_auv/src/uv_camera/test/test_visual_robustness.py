@@ -287,6 +287,7 @@ def test_ai_process_frame_can_build_right_header_after_model_load():
     ai._front_D = None
     ai._save_dataset = False
     ai._aruco_detector = None
+    ai._turntable_callback = None
     ai._pub_det = {"front_left": SimpleNamespace(publish=lambda msg: None),
                    "front_right": SimpleNamespace(publish=lambda msg: None)}
     ai._pub_line = {"front_left": SimpleNamespace(publish=lambda msg: None),

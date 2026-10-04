@@ -179,13 +179,21 @@ Stonefish 会串行渲染相机，因此对应左右相机的时间戳可能相�
 
 ## 3. AI 推理与消息
 
-模型由参数 `model_path` 指定，当前任务默认使用：
+模型可由参数 `model_path` 指定。仿真默认使用 `best.pt`；真机默认使用
+`last.pt`，路径为：
 
 ```text
-workspace_auv/src/uv_camera/resource/best.pt
+workspace_auv/src/uv_camera/resource/last.pt
 ```
 
-类别映射由 `class_mapping_path` 指定，当前为 `weights/robotcup20260901.yaml`。当前模型是 segmentation 模型；检测消息除边界框外还可携带 `mask_x`、`mask_y`，供后续按掩膜提取 SGBM 深度的合理峰值。推理节流由 `inference_fps` 控制，默认值通常为 5 Hz。
+真机 `real.launch.py` 将 `UV_MODEL_MAPPING_FILE` 指向 `weights/real_last.yaml`；
+直接运行节点时须手动设置这个环境变量。`last.pt` 为 segmentation 模型，
+类别为方锥、圆锥、海参、转盘、平台，不含黄色标签。检测消息除边界框外
+还可携带 `mask_x`、`mask_y`；建图在 camera 内用掩膜中心与局部池底
+SGBM 深度估计锥桶中心，不再将顶部或裙边的单点深度当成目标位置。
+推理节流由 `inference_fps` 控制，默认值通常为 5 Hz。真机前视、下视拼接尺寸
+均固定 1280×480（每目 640×480），标定来源和待核验外参见
+`real_camera_and_physical_parameters.md`。
 
 AI 输出空的 `DetectionArray` 也属于有效输出，因此“没有检测到目标”和“没有收到图像”需要区分：前者仍会有 detection 消息，后者会使感知就绪检查一直等待。
 

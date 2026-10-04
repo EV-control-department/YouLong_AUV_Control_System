@@ -12,19 +12,19 @@ from uv_camera.model_classes import model_class_id
 
 
 _BALL_CLASS_IDS = {
-    'blue': model_class_id('impact_ball_blue'),
-    'impact_ball_blue': model_class_id('impact_ball_blue'),
-    'blue_ball': model_class_id('impact_ball_blue'),
+    'blue': model_class_id('impact_ball_blue', required=False),
+    'impact_ball_blue': model_class_id('impact_ball_blue', required=False),
+    'blue_ball': model_class_id('impact_ball_blue', required=False),
     # The active down-left detector labels the red ball as class 7.
-    'red': model_class_id('pink_golf'),
-    'impact_ball_red': model_class_id('pink_golf'),
-    'red_ball': model_class_id('pink_golf'),
-    'pink': model_class_id('pink_golf'),
-    'pink_golf': model_class_id('pink_golf'),
-    'pink_ball': model_class_id('pink_golf'),
-    'yellow': model_class_id('yellow_golf'),
-    'yellow_golf': model_class_id('yellow_golf'),
-    'yellow_ball': model_class_id('yellow_golf'),
+    'red': model_class_id('pink_golf', required=False),
+    'impact_ball_red': model_class_id('pink_golf', required=False),
+    'red_ball': model_class_id('pink_golf', required=False),
+    'pink': model_class_id('pink_golf', required=False),
+    'pink_golf': model_class_id('pink_golf', required=False),
+    'pink_ball': model_class_id('pink_golf', required=False),
+    'yellow': model_class_id('yellow_golf', required=False),
+    'yellow_golf': model_class_id('yellow_golf', required=False),
+    'yellow_ball': model_class_id('yellow_golf', required=False),
 }
 
 
@@ -46,8 +46,8 @@ class RB26GrabBallTask:
 
     # These are the same down-left calibration values used by arrow_surfacer,
     # line_follower, and object_localizer.py.
-    _IMAGE_WIDTH = 1280.0
-    _IMAGE_HEIGHT = 960.0
+    _IMAGE_WIDTH = 640.0
+    _IMAGE_HEIGHT = 480.0
     _HFOV_DEG = 87.19
     _FX = _IMAGE_WIDTH / (2.0 * math.tan(math.radians(_HFOV_DEG) / 2.0))
     _FY = _FX

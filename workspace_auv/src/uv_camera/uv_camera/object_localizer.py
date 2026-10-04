@@ -30,7 +30,7 @@ import math
 import os
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
@@ -86,7 +86,7 @@ FORM_DOWN_DIRECT = 4
 FORM_FRONT_BBOX_MODEL = 8
 UNASSIGNED_INSTANCE_ID = (1 << 32) - 1
 
-GATE_FRONT_CLASS_ID = model_class_id("gate_front")
+GATE_FRONT_CLASS_ID = model_class_id("gate_front", required=False)
 
 # Heights are scene depths in the project's NED convention, where positive Z
 # is down from the water surface.  They are converted to the local odom frame
@@ -494,8 +494,35 @@ class StereoCalibration:
     reprojection: np.ndarray
     baseline_m: float
 
+    def scaled(self, scale_x: float, scale_y: float) -> "StereoCalibration":
+        """Scale per-eye pixels without changing distortion or physical baseline."""
+        if not (np.isfinite(scale_x) and np.isfinite(scale_y)
+                and scale_x > 0.0 and scale_y > 0.0):
+            raise ValueError("calibration scale must be positive and finite")
+        image_scale = np.diag([scale_x, scale_y, 1.0])
+        disparity_unscale = np.diag([1.0 / scale_x, 1.0 / scale_y,
+                                      1.0 / scale_x, 1.0])
+        return replace(
+            self,
+            camera_matrix_left=image_scale @ self.camera_matrix_left,
+            camera_matrix_right=image_scale @ self.camera_matrix_right,
+            projection_left=image_scale @ self.projection_left,
+            projection_right=image_scale @ self.projection_right,
+            reprojection=self.reprojection @ disparity_unscale,
+        )
+
     @classmethod
     def load(cls, name: str, path: str) -> "StereoCalibration":
+        if Path(path).suffix.lower() == '.json':
+            from .down_calibration import load_real_down_json
+            width, height, k_left, d_left, k_right, d_right, rotation, translation = \
+                load_real_down_json(path)
+            r1, r2, p1, p2, q, _, _ = cv2.stereoRectify(
+                k_left, d_left, k_right, d_right, (width, height),
+                rotation, translation, flags=cv2.CALIB_ZERO_DISPARITY)
+            baseline = abs(float(p2[0, 3] / p2[0, 0]))
+            return cls(name, path, k_left, k_right, d_left, d_right,
+                       rotation, translation, p1, p2, r1, r2, q, baseline)
         required = (
             "camera_matrix_left", "camera_matrix_right",
             "dist_coeffs_left", "dist_coeffs_right",
@@ -844,10 +871,12 @@ class ObjectLocalizer(Node):
         self.declare_parameter(
             "down_right_camera_info_topic",
             "/sim/down_cam/right/camera_info")
-        self.declare_parameter("front_image_width", 1280)
-        self.declare_parameter("front_image_height", 960)
-        self.declare_parameter("down_image_width", 1280)
-        self.declare_parameter("down_image_height", 960)
+        self.declare_parameter("front_image_width", 640)
+        self.declare_parameter("front_image_height", 480)
+        self.declare_parameter("front_calibration_native_width", 1280)
+        self.declare_parameter("front_calibration_native_height", 960)
+        self.declare_parameter("down_image_width", 640)
+        self.declare_parameter("down_image_height", 480)
 
         self.declare_parameter("stereo_sync_slop_sec", 0.04)
         self.declare_parameter("stereo_pending_timeout_sec", 0.15)
@@ -1055,6 +1084,8 @@ class ObjectLocalizer(Node):
         }
         self.front_width = int(get("front_image_width").value)
         self.front_height = int(get("front_image_height").value)
+        self.front_native_width = int(get("front_calibration_native_width").value)
+        self.front_native_height = int(get("front_calibration_native_height").value)
         self.down_width = int(get("down_image_width").value)
         self.down_height = int(get("down_image_height").value)
 
@@ -1370,6 +1401,10 @@ class ObjectLocalizer(Node):
                 return str(path)
             raise FileNotFoundError(f"{name} calibration not found: {path}")
 
+        if name == 'down' and self.calibration_source != 'sim_camera_info':
+            from .down_calibration import real_down_calibration_path
+            return real_down_calibration_path()
+
         candidates = []
         try:
             candidates.append(
@@ -1391,6 +1426,13 @@ class ObjectLocalizer(Node):
         try:
             path = self._resolve_calibration_path(name, configured)
             calibration = StereoCalibration.load(name, path)
+            if name == "front":
+                if min(self.front_native_width, self.front_native_height,
+                       self.front_width, self.front_height) <= 0:
+                    raise ValueError("front calibration/image dimensions must be positive")
+                calibration = calibration.scaled(
+                    self.front_width / self.front_native_width,
+                    self.front_height / self.front_native_height)
             ratio = np.linalg.norm(calibration.translation) / calibration.baseline_m
             if ratio > 10.0:
                 self.get_logger().warn(

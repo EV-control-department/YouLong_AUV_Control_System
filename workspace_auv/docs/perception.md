@@ -16,16 +16,16 @@
 ```
 sim_bridge                          vision                              position
 ─────────                          ──────                              ────────
-front_cam/left ──┐                 ┌─ front_left  (1280×960) ── YOLO ──→ /perception/detection/front_left
-front_cam/right ─┼─ hstack(2560×960)┤                                         │
+front_cam/left ──┐                 ┌─ front_left  (640×480) ── YOLO ──→ /perception/detection/front_left
+front_cam/right ─┼─ hstack(1280×480)┤                                         │
                  └─ /auv/front_cam/stitched ──┤                             │
                                               ├─ split ──┤                  │
                  ┌─ /auv/down_cam/stitched  ──┤           │                  │
-down_cam/left  ─┼─ hstack(2560×960)          │  └─ front_right (1280×960) ──→ /perception/detection/front_right
+down_cam/left  ─┼─ hstack(1280×480)          │  └─ front_right (640×480) ──→ /perception/detection/front_right
 down_cam/right ─┘                            │                              │
-                                             │  ┌─ down_left  (1280×960) ──→ /perception/detection/down_left
+                                             │  ┌─ down_left  (640×480) ──→ /perception/detection/down_left
                                              └─┤                              │
-                                                └─ down_right (1280×960) ──→ /perception/detection/down_right
+                                                └─ down_right (640×480) ──→ /perception/detection/down_right
                                                                              │
 basic_motion ── /basic_motion/pose_info (30Hz) ─────────────────────────────┘
                                                                              │
@@ -48,14 +48,14 @@ basic_motion ── /basic_motion/pose_info (30Hz) ─────────�
 
 ### 功能
 
-订阅 sim_bridge 发布的拼接双目图像，从中线切开为左右独立图像（各 1280×960），分别运行 YOLO 检测，每个通道独立发布检测结果。
+仿真订阅 sim_bridge 发布的拼接双目图像，真机直接从 V4L2 取拼接图；从中线切开为左右独立图像（各 640×480），分别运行 YOLO 检测，每个通道独立发布检测结果。
 
 ### 订阅
 
 | 主题 | 类型 | 说明 |
 |------|------|------|
-| `/auv/front_cam/stitched` | `sensor_msgs/Image` | 前视双目拼接图 (2560×960, bgr8) |
-| `/auv/down_cam/stitched` | `sensor_msgs/Image` | 下视双目拼接图 (2560×960, bgr8) |
+| `/auv/front_cam/stitched` | `sensor_msgs/Image` | 仿真前视双目拼接图 (1280×480, bgr8) |
+| `/auv/down_cam/stitched` | `sensor_msgs/Image` | 仿真下视双目拼接图 (1280×480, bgr8) |
 
 ### 发布
 
@@ -103,13 +103,13 @@ go2rtc 视频流（默认端口 `1984`）：
 
 ### 图像拆分
 
-拼接图由 sim_bridge 通过 `np.hstack` 水平拼接左右目（各 1280×960）得到 2560×960。vision 从正中间切开：
+仿真拼接图由 sim_bridge 水平拼接左右目（各 640×480）得到 1280×480；真机采集端直接输出同样格式。camera 从正中间切开：
 
 ```python
 h, w = cv_img.shape[:2]
 mid = w // 2
-left_img = cv_img[:, :mid]    # 1280×960
-right_img = cv_img[:, mid:]   # 1280×960
+left_img = cv_img[:, :mid]    # 640×480
+right_img = cv_img[:, mid:]   # 640×480
 ```
 
 左右目各跑一次 YOLO，推理结果独立发布。camera_name 字段标记为 `"front_left"`, `"front_right"`, `"down_left"`, `"down_right"`。
@@ -156,11 +156,11 @@ right_img = cv_img[:, mid:]   # 1280×960
 
 | 参数 | 前视 | 下视 |
 |------|------|------|
-| 分辨率 (单目) | 1280×960 | 1280×960 |
-| 水平视场角 (HFOV) | 34.19° | 32.18° |
-| 焦距 fx=fy | 2158.4 | 2307.6 |
-| 光心 cx, cy | (640, 480) | (640, 480) |
-| 机体安装偏移 (x, y, z) | (0.25, -0.02825, 0.25) m | (0.0, 0.03765, 0.21) m |
+| 分辨率 (单目) | 640×480 | 640×480 |
+| 真机内参来源 | `front.npz` 原始每目 1280×960，运行时 K/P 缩放 0.5 | `down_real.json` 原始每目 1280×960，运行时 K 缩放 0.5 |
+| 单目左目 fx, fy | 约 (570.319, 570.323) px | 约 (579.550, 578.955) px |
+| 单目左目 cx, cy | 约 (295.431, 238.544) px | 约 (339.560, 255.336) px |
+| 机体安装偏移 | 以实机装配标定为准 | 以实机装配标定为准 |
 
 `object_localizer` 的全量跟踪/拒绝计数汇总日志默认关闭（`summary_period_sec: 0`），避免正常运行时刷屏；需要诊断时可设置为正数，例如 `5.0`。
 

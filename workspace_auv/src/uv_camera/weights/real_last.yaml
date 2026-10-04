@@ -1,0 +1,8 @@
+schema_version: 1
+model: last.pt
+classes:
+  - {id: 0, name: square_cone, object: square_cone, camera: any, multi_instance: true}
+  - {id: 1, name: round_cone, object: round_cone, camera: any, multi_instance: true}
+  - {id: 2, name: trepang, object: trepang, camera: any, multi_instance: true}
+  - {id: 3, name: wheel, object: wheel, camera: front, multi_instance: true}
+  - {id: 4, name: platform, object: platform, camera: any, multi_instance: false}

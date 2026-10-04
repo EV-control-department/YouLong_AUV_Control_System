@@ -66,12 +66,14 @@ from uv_camera.model_classes import model_class_id
 # tolerant of both forms because the localizer deliberately publishes front
 # and down estimates separately.
 _LOCALIZER_TARGET_CLASS_IDS = {
-    model_class_id('collection_frame_down'): 'collection_frame',
-    model_class_id('collection_frame_front'): 'collection_frame',
-    model_class_id('target_rack_down'): 'target_rack',
-    model_class_id('target_rack_front'): 'target_rack',
+    class_id: target for name, target in (
+        ('collection_frame_down', 'collection_frame'),
+        ('collection_frame_front', 'collection_frame'),
+        ('target_rack_down', 'target_rack'),
+        ('target_rack_front', 'target_rack'))
+    if (class_id := model_class_id(name, required=False)) is not None
 }
-_TARGET_RACK_DOWN_CLASS_ID = model_class_id('target_rack_down')
+_TARGET_RACK_DOWN_CLASS_ID = model_class_id('target_rack_down', required=False)
 _LOCALIZER_TARGET_ALIASES = {
     'collection_frame': 'collection_frame',
     'collection': 'collection_frame',
@@ -160,8 +162,8 @@ class TaskRunnerNode(Node):
         self.get_logger().info(f'比赛目标元数据：{self.target_id}')
 
         # Camera parameters (used by LineFollower sub-task via get_parameter)
-        self.declare_parameter('down_image_width', 1280.0)
-        self.declare_parameter('down_image_height', 960.0)
+        self.declare_parameter('down_image_width', 640.0)
+        self.declare_parameter('down_image_height', 480.0)
 
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {
@@ -431,6 +433,9 @@ class TaskRunnerNode(Node):
 
     def _down_visual_servo_target_rack(self, p: dict, target_z: float) -> bool:
         """Center target_rack_down in the down stereo image before lighting."""
+        if _TARGET_RACK_DOWN_CLASS_ID is None:
+            self.get_logger().error('当前 YOLO 模型没有 target_rack_down 类，无法执行目标架视觉伺服')
+            return False
         servo_timeout = max(
             1.0, float(p.get('down_visual_servo_timeout',
                              p.get('horizontal_servo_timeout', 30.0))))
@@ -1693,9 +1698,12 @@ class TaskRunnerNode(Node):
     def _task_release_sampler(self, p: dict) -> bool:
         """转向 → 对齐 START 标记 → 上浮靠岸 → 释放取水器。"""
         align_yaw = float(p.get('align_yaw', 180.0))
-        start_cid = model_class_id('guide_line')
+        start_cid = model_class_id('guide_line', required=False)
         if 'start_class_id' in p:
             start_cid = int(p['start_class_id'])
+        if start_cid is None:
+            self.get_logger().error('当前 YOLO 模型没有 guide_line 类，不能执行 release_sampler')
+            return False
         approach_z = float(p.get('approach_z', -0.3))
         approach_x = float(p.get('approach_x', -0.3))
         approach_timeout = float(p.get('approach_timeout', 15.0))

@@ -3,5 +3,23 @@
     sim_mode: false
     enable_mapping_vision: true
     mapping_tag_dictionary: "DICT_APRILTAG_16h5"
+    mapping_calibration_width: 640
+    mapping_calibration_height: 480
+    # 名义机体系外参：PDF Cd=(-0.130,0,0.0645)m；左右目按 JSON 基线对称展开。
+    # 左右顺序和实际相机安装仍须现场复核。
+    mapping_left_translation: [-0.130, -0.0305, 0.0645]
+    mapping_right_translation: [-0.130, 0.0305, 0.0645]
     enable_gortc: true
     stream_annotated: true
+/object_localizer:
+  ros__parameters:
+    front_image_width: 640
+    front_image_height: 480
+    down_image_width: 640
+    down_image_height: 480
+    down_left_translation: [-0.130, -0.0305, 0.0645]
+    down_right_translation: [-0.130, 0.0305, 0.0645]
+    front_left_translation: [0.230, -0.050, 0.076]
+    front_right_translation: [0.230, 0.050, 0.076]
+    front_left_rotation: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+    front_right_rotation: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]

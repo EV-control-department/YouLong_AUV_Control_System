@@ -105,6 +105,10 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     "turntable": {
         "allow_contact_motion": bool,
         "force_limited_control_confirmed": bool,
+        "disk_diameter_m": float,
+        "front_camera_center_x": float,
+        "front_camera_center_y": float,
+        "front_camera_center_z": float,
         "disk_center_x": float,
         "disk_center_y": float,
         "disk_center_z": float,
@@ -115,6 +119,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "rod_radius_m": float,
         "inner_radius_m": float,
         "outer_radius_m": float,
+        "spoke_width_m": float,
         "contact_radius_m": float,
         "label_to_hole_deg": float,
         "image_angle_to_disk_sign": int,
@@ -126,6 +131,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "drive_yaw_sign": int,
         "min_progress_deg": float,
         "max_disk_image_shift_px": float,
+        "max_disk_world_shift_m": float,
     },
     "26rb_find_collection_frame": {
         "platform_name": str,

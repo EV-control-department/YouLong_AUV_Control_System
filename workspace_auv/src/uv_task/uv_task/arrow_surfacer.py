@@ -22,8 +22,8 @@ from uv_camera.model_classes import configured_class_id
 # ==========================================================================
 
 _DOWN_HFOV = 87.19
-_DOWN_WIDTH = 1280
-_DOWN_HEIGHT = 960
+_DOWN_WIDTH = 640
+_DOWN_HEIGHT = 480
 _DOWN_FX = _DOWN_WIDTH / (2.0 * math.tan(math.radians(_DOWN_HFOV) / 2.0))
 _DOWN_FY = _DOWN_FX
 _DOWN_CX = _DOWN_WIDTH / 2.0

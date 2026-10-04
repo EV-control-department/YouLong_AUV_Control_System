@@ -9,6 +9,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     LogInfo,
     RegisterEventHandler,
+    SetEnvironmentVariable,
 )
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
@@ -100,6 +101,10 @@ def generate_launch_description():
         DeclareLaunchArgument("target_id", default_value="mapping_grid"),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         validate_profile(profile, "real"),
+        SetEnvironmentVariable(
+            'UV_MODEL_MAPPING_FILE',
+            PathJoinSubstitution([FindPackageShare('uv_camera'), 'weights',
+                                  'real_last.yaml'])),
         LogInfo(msg=["Real vehicle profile: ", profile]),
         hardware,
         control,

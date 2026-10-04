@@ -25,7 +25,7 @@ camera 生成的每帧观测使用 `uv_msgs/msg/MappingObservationArray`：
 `header.stamp` 是左目采集时间；`processed`/ `reason` 区分有效、标定缺失和位姿过期；
 数组同时带标记/锥桶候选数量及深度拒绝数量，方便区分“没识别”与“识别到但测距失败”。
 每个 `MappingObservation` 带 `kind=TAG/CONE`、标记 ID 或锥桶类 ID、
-置信度、深度米数、主峰有效像素数、`mapping_odom` 三维坐标和采集位姿时间差。
+置信度、深度米数、选中深度区域的有效像素数、`mapping_odom` 三维坐标和采集位姿时间差。
 空帧也发布数组，让任务能统计真实处理过的同步帧；不传图像和掩膜多边形。
 camera 使用采集时间查找最近 PoseInfo，默认最大位姿差 1 秒，超出时明确拒绝，
 不复用任意旧位姿。视觉线程采用 latest-wins 队列，不积压过时图像。
@@ -39,8 +39,12 @@ camera 感知线程独立运行，运动与观测并行；任务主流程仍串�
 2. camera 在校正后的下视左图解码 `DICT_APRILTAG_16h5`，允许 ID 0–6
    （任务 `tag_id=-1` 表示接收任意 ID，但同一条轨迹只融合同一个 ID）。
    多次观测确认后，依配置 `visit_order` 逐格巡检。
-3. camera 对 YOLO 0=方形、1=圆形的分割掩膜运行 SGBM 深度主峰，
-   以主峰像素中位数反投影并用采集时位姿换算世界坐标。
+3. camera 对 YOLO 0=方形、1=圆形的掩膜运行 SGBM，但不把顶部或裙边的
+   单个表面采样点当作锥桶中心。掩膜面积中心给出底面中心的图像位置；周围
+   环带的 SGBM 点结合采集位姿估计局部池底平面，与中心像素射线求交，
+   得到底面中心 XY。发布的三维中心 Z 为池底 Z 减去锥桶高度的一半。
+   周围池底数据不足时，退回掩膜内远处主峰估计底面高度，但仍使用掩膜
+   几何中心的像素，不使用峰值像素。AprilTag 保持原来的掩膜主峰算法。
    Task 按 XY 最近理论格关联，先做格位门限，再做静态目标滤波/离群剔除/类别投票。
 4. 空格或暂时无深度只记观测不足，仍访问剩余格子。运动失败或标记未确认
    才提前中止。九格后按“两方两圆”约束选最可信的部分/完整结果并发布地图。
@@ -59,22 +63,22 @@ camera 感知线程独立运行，运动与观测并行；任务主流程仍串�
 `workspace_auv/src/uv_task/config/tasks/mapping_grid.json` 只保留任务几何、
 巡检/遍历、滤波和目标数量参数。视觉参数在 `uv_camera` 节点：
 `mapping_tag_dictionary`、`mapping_tag_id`、`mapping_*depth*`、
-`mapping_sgbm_*`、`mapping_left/right_translation`、`mapping_camera_rotation`。
+`mapping_sgbm_*`、`mapping_cone_height_m`（默认 0.5 m）、
+`mapping_left/right_translation`、`mapping_camera_rotation`。
 仿真采用 Stonefish CameraInfo 及场景中的左右相机外参；默认基线 0.10 m。
 `sim_dev`/`sim_ci`/`hil_lab` 的下视相机平移必须与
 `xunyun_fixed.scn` 一致（左目 `[0,-0.05,0.176]`，右目 `[0,0.05,0.176]`）。
 位姿按左右相邻采样插值（yaw 使用最短角差），避免快速转向时用最近 30Hz
 离散姿态直接投影产生横向位置抖动。双目 SGBM 已直接提供深度，因此锥桶
 不再要求右目 YOLO 必须同时检出；观测消息分别统计低置信度、掩膜缺失和
-深度峰失败，便于判定观测停在哪一道检查。
+底面估计失败，便于判定观测停在哪一道检查。`depth_m` 对锥桶表示中心像素
+到估计池底的距离，`depth_samples` 为池底支持点数或回退主峰支持点数。
 
-真机使用 `mapping_calibration_file`（默认 `uv_camera/config/down.npz`）。
-现有 NPZ 对应的默认检查尺寸为每目 1280×960，而当前 V4L2 采集配置为
-每目 1920×1080；尺寸不匹配会发布 `processed=false` 和清晰错误，
-不会输出貌似正确的世界坐标。实机运行前必须在实际采集模式重新标定并设置
-`mapping_calibration_file`、`mapping_calibration_width`、
-`mapping_calibration_height`，或把采集模式改为标定时的模式并验证分辨率。
-仿真不受此 NPZ 限制。
+真机默认使用 `docs/stereo_parameters.json`（脱离源码部署时用包内
+`config/down_real.json`）。原始每目 1280×960 标定按两个方向各缩小 0.5，
+对应 V4L2 左右拼接 1280×480、每目 640×480。采集尺寸不符时启动预检报错，
+不输出貌似正确的世界坐标；详见 `real_camera_and_physical_parameters.md`。
+仿真仍使用 Stonefish CameraInfo。
 
 ## 上位机与日志
 

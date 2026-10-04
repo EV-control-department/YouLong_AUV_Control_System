@@ -111,6 +111,7 @@ class CameraAiNode(Node):
                 lambda _camera, work: self.mapping_vision.process(*work),
                 cameras=('down',), max_workers=1, log_warn=self._warn)
         self.turntable_vision = None
+        self._turntable_gate = None
         if params['enable_turntable_vision']:
             if 'front' not in active:
                 raise ValueError('转盘视觉需要启用前视相机')
@@ -119,6 +120,9 @@ class CameraAiNode(Node):
                 self.get_parameter('turntable_disk_class_id').value,
                 self.get_parameter('turntable_label_class_id').value,
                 self.get_parameter('turntable_min_confidence').value)
+            self._turntable_gate = FrameGate(
+                lambda _camera, work: self.turntable_vision.process(*work),
+                cameras=('front',), max_workers=1, log_warn=self._warn)
 
         # uv_ai (must be built before gate so gate.consumer is ready)
         self.ai = ai_mod.Ai(
@@ -135,7 +139,7 @@ class CameraAiNode(Node):
             confidence=params['confidence'],
             device=params['device'],
             mapping_callback=self._submit_mapping_frame if self.mapping_vision else None,
-            turntable_callback=(self.turntable_vision.process
+            turntable_callback=(self._submit_turntable_frame
                                 if self.turntable_vision else None))
         self._gate = FrameGate(self.ai.process, cameras=active,
                                max_workers=2, log_warn=self._warn)
@@ -217,10 +221,19 @@ class CameraAiNode(Node):
         self.declare_parameter('turntable_disk_class_id', -1)
         self.declare_parameter('turntable_label_class_id', -1)
         self.declare_parameter('turntable_min_confidence', 0.5)
+        self.declare_parameter('turntable_calibration_file', '')
+        self.declare_parameter('turntable_image_size', [640, 480])
+        self.declare_parameter('turntable_calibration_native_size', [1280, 960])
+        self.declare_parameter('turntable_left_translation', [0.230, -0.050, 0.076])
+        self.declare_parameter('turntable_right_translation', [0.230, 0.050, 0.076])
+        self.declare_parameter('turntable_camera_rotation',
+                               [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+        self.declare_parameter('turntable_black_threshold', 95)
+        self.declare_parameter('turntable_min_depth_points', 30)
         self.declare_parameter('enable_mapping_vision', False)
         self.declare_parameter('mapping_calibration_file', '')
-        self.declare_parameter('mapping_calibration_width', 1280)
-        self.declare_parameter('mapping_calibration_height', 960)
+        self.declare_parameter('mapping_calibration_width', 640)
+        self.declare_parameter('mapping_calibration_height', 480)
         self.declare_parameter('mapping_left_translation', [-0.13, -0.05, 0.2645])
         self.declare_parameter('mapping_right_translation', [-0.13, 0.05, 0.2645])
         self.declare_parameter('mapping_camera_rotation',
@@ -230,6 +243,7 @@ class CameraAiNode(Node):
         self.declare_parameter('mapping_min_depth_points', 20)
         self.declare_parameter('mapping_depth_bin_m', 0.02)
         self.declare_parameter('mapping_depth_peak_ratio', 0.12)
+        self.declare_parameter('mapping_cone_height_m', 0.5)
         self.declare_parameter('mapping_min_confidence', 0.35)
         self.declare_parameter('mapping_max_pose_age_s', 1.0)
         self.declare_parameter('mapping_tag_id', -1)
@@ -284,6 +298,9 @@ class CameraAiNode(Node):
 
     def _submit_mapping_frame(self, frame, stamp, left, right):
         self._mapping_gate.submit('down', (frame, stamp, left, right))
+
+    def _submit_turntable_frame(self, frame, left, right):
+        self._turntable_gate.submit('front', (frame, left, right))
 
     def report_camera_failure(self, camera, reason):
         """Report a persistent sensor failure and terminate recording safely."""
@@ -577,6 +594,8 @@ class CameraAiNode(Node):
         self._gate.shutdown()
         if self._mapping_gate is not None:
             self._mapping_gate.shutdown()
+        if self._turntable_gate is not None:
+            self._turntable_gate.shutdown()
         self.ai.shutdown()
         if self._gortc_process is not None and self._gortc_process.poll() is None:
             self._gortc_process.terminate()

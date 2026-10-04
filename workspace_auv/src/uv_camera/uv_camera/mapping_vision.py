@@ -2,14 +2,12 @@
 
 from collections import deque
 from bisect import bisect_right
-from pathlib import Path
 import math
 import threading
 import time
 
 import cv2
 import numpy as np
-from ament_index_python.packages import get_package_share_directory
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo
 from uv_msgs.msg import MappingObservation, MappingObservationArray, PoseInfo
@@ -63,7 +61,8 @@ class MappingVision:
         else:
             path = str(node.get_parameter('mapping_calibration_file').value).strip()
             if not path:
-                path = str(Path(get_package_share_directory('uv_camera')) / 'config/down.npz')
+                from .down_calibration import real_down_calibration_path
+                path = real_down_calibration_path()
             self.calibration = StereoCalibration.load('down_mapping', path)
             node.get_logger().info(f'建图视觉标定已加载：{path}')
 
@@ -79,6 +78,7 @@ class MappingVision:
         self.min_points = int(node.get_parameter('mapping_min_depth_points').value)
         self.bin_m = float(node.get_parameter('mapping_depth_bin_m').value)
         self.peak_ratio = float(node.get_parameter('mapping_depth_peak_ratio').value)
+        self.cone_height_m = float(node.get_parameter('mapping_cone_height_m').value)
         self.min_confidence = float(node.get_parameter('mapping_min_confidence').value)
         self.max_pose_age = float(node.get_parameter('mapping_max_pose_age_s').value)
         self.tag_id = int(node.get_parameter('mapping_tag_id').value)
@@ -210,6 +210,74 @@ class MappingVision:
         ys, xs = np.where(peak_mask)
         return float(np.median(selected)), (float(np.median(xs)), float(np.median(ys))), len(selected)
 
+    def _cone_center(self, polygon, depth, pose):
+        """Locate the cone axis above its base, not a visible surface patch."""
+        polygon = np.asarray(polygon, dtype=np.int32).reshape(-1, 2)
+        if len(polygon) < 3:
+            return None
+        mask = np.zeros(depth.shape, np.uint8)
+        cv2.fillPoly(mask, [polygon], 1)
+        moments = cv2.moments(mask)
+        if moments['m00'] <= 0:
+            return None
+        pixel = (moments['m10']/moments['m00'],
+                 moments['m01']/moments['m00'])
+        # The old dominant mode is a useful fallback estimate of base/floor
+        # height, but its pixel median is often on one side of the skirt.
+        reference = self._depth_mode(polygon, depth)
+        reference_z = (float(self._world(reference[1], reference[0], pose)[2])
+                       if reference is not None else None)
+        reference_count = reference[2] if reference is not None else 0
+
+        orientation = _rpy_matrix(pose.robot_roll, pose.robot_pitch,
+                                  pose.robot_yaw)
+        transform = (orientation @ self.camera_rotation @
+                     self.calibration.rectification_left.T)
+        camera_z = (pose.robot_z +
+                    float((orientation @ self.left_translation)[2]))
+        projection = self.calibration.projection_left
+        fx, fy = projection[0, 0], projection[1, 1]
+        cx, cy = projection[0, 2], projection[1, 2]
+
+        _, _, width, height = cv2.boundingRect(polygon)
+        radius = max(8, min(30, int(min(width, height)*0.15)))
+        outer = cv2.dilate(mask, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2*radius+1, 2*radius+1)))
+        inner = cv2.dilate(mask, np.ones((7, 7), np.uint8))
+        annulus = ((outer != 0) & (inner == 0) & np.isfinite(depth) &
+                   (depth >= self.min_depth) & (depth <= self.max_depth))
+        ys, xs = np.where(annulus)
+        floor_z, count = reference_z, reference_count
+        if len(xs) >= 80:
+            xs, ys = xs[::4], ys[::4]
+            distances = depth[ys, xs]
+            ray_z = (transform[2, 0]*(xs-cx)/fx +
+                     transform[2, 1]*(ys-cy)/fy + transform[2, 2])
+            floor_samples = camera_z + distances*ray_z
+            median = float(np.median(floor_samples))
+            residuals = np.abs(floor_samples - median)
+            mad = float(np.median(residuals))
+            inliers = residuals < max(0.06, 3*mad)
+            gap = median - reference_z if reference_z is not None else 0.0
+            if (int(inliers.sum()) >= 60 and mad <= 0.08
+                    and -0.15 <= gap <= 1.3*self.cone_height_m):
+                floor_z, count = float(np.median(floor_samples[inliers])), \
+                    int(inliers.sum())
+
+        if floor_z is None:
+            return None
+
+        center_ray_z = (transform[2, 0]*(pixel[0]-cx)/fx +
+                        transform[2, 1]*(pixel[1]-cy)/fy + transform[2, 2])
+        if center_ray_z <= 0.2:
+            return None
+        distance = (floor_z-camera_z)/center_ray_z
+        if not self.min_depth <= distance <= self.max_depth:
+            return None
+        world = self._world(pixel, distance, pose)
+        world[2] = floor_z - self.cone_height_m/2
+        return float(distance), pixel, count, world
+
     def _rectify_polygon(self, polygon):
         points = np.asarray(polygon, np.float32).reshape(-1, 1, 2)
         return cv2.undistortPoints(
@@ -232,7 +300,7 @@ class MappingVision:
         with self.debug_lock:
             return self.debug_frames.get(name)
 
-    def _update_debug(self, frame, left, disparity, depth, detections, stamp):
+    def _update_debug(self, frame, left, disparity, depth, detections, stamp, pose):
         if time.monotonic() - self.debug_stamp < 0.75:
             return
         self.debug_stamp = time.monotonic()
@@ -251,6 +319,15 @@ class MappingVision:
             overlay[mask != 0] = (0.55*overlay[mask != 0]
                                   + 0.45*np.asarray(color)).astype(np.uint8)
             cv2.polylines(overlay, [polygon], True, color, 2)
+            sample = self._cone_center(polygon, depth, pose)
+            if sample is not None:
+                distance, pixel, _, _ = sample
+                point = (int(round(pixel[0])), int(round(pixel[1])))
+                cv2.drawMarker(overlay, point, (255, 255, 255),
+                               cv2.MARKER_CROSS, 14, 2)
+                cv2.putText(overlay, f'base {distance:.2f}m',
+                            (point[0]+8, point[1]-8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
         def colorize(values, scale):
             finite = np.isfinite(values)
             image = np.zeros(values.shape, np.uint8)
@@ -317,15 +394,20 @@ class MappingVision:
                     points = self._rectify_polygon(polygon)
                 else:
                     points = polygon
-                sample = self._depth_mode(points, depth)
+                sample = (self._cone_center(points, depth, pose)
+                          if kind == MappingObservation.CONE else
+                          self._depth_mode(points, depth))
                 if sample is None:
                     if kind == MappingObservation.TAG:
                         result.tag_depth_rejected += 1
                     else:
                         result.cone_depth_rejected += 1
                     return
-                distance, pixel, count = sample
-                world = self._world(pixel, distance, pose)
+                if kind == MappingObservation.CONE:
+                    distance, pixel, count, world = sample
+                else:
+                    distance, pixel, count = sample
+                    world = self._world(pixel, distance, pose)
                 if not np.all(np.isfinite(world)):
                     if kind == MappingObservation.TAG:
                         result.tag_depth_rejected += 1
@@ -386,7 +468,7 @@ class MappingVision:
             if result.processed:
                 try:
                     self._update_debug(
-                        frame, left, disparity, depth, left_detections, stamp)
+                        frame, left, disparity, depth, left_detections, stamp, pose)
                 except (cv2.error, ValueError, TypeError) as error:
                     self.node.get_logger().warning(
                         f'建图可视化快照更新失败（观测已发布）：{error}')

@@ -13,6 +13,7 @@ import time
 from types import SimpleNamespace
 
 from uv_msgs.action import BasicMotion
+from uv_camera.down_calibration import load_real_down_json, real_down_calibration_path
 
 
 RB26GrabBallTask = import_module('uv_task.26rb_grab_ball').RB26GrabBallTask
@@ -63,8 +64,8 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._ascent_tolerance = float(params.get('ascent_tolerance_m', 0.015))
         self._max_failed_attempts = int(params.get('max_failed_attempts', 3))
         self._pixel_tolerance = float(params.get('pixel_tolerance_fraction', 0.035))
-        width = float(params.get('image_width', 1280.0))
-        height = float(params.get('image_height', 960.0))
+        width = float(params.get('image_width', 640.0))
+        height = float(params.get('image_height', 480.0))
         if (width <= 0 or height <= 0 or self._target_count <= 0
                 or self._count_frames < 2 or self._count_timeout <= 0
                 or self._total_timeout <= 0 or self._drop_timeout <= 0
@@ -75,12 +76,15 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                 or self._ascent_step_timeout <= 0
                 or not 0 <= self._ascent_pause <= 5.0):
             raise ValueError('抓海参上浮步长、容差或等待参数无效')
-        # 抓球类的视觉步进使用像素内参；按实际下视左目尺寸缩放。
-        scale = width / self._IMAGE_WIDTH
-        self._FX = self._FX * scale
-        self._FY = self._FY * height / self._IMAGE_HEIGHT
-        self._CX = width / 2.0
-        self._CY = height / 2.0
+        # 真机左目像素伺服必须使用与当前采集模式一致的实测 K，不再沿用
+        # 抓球任务由名义 HFOV 推算的焦距。
+        cal_width, cal_height, left_k, _, _, _, _, _ = \
+            load_real_down_json(real_down_calibration_path())
+        if (width, height) != (cal_width, cal_height):
+            raise ValueError(
+                f'抓海参图像应为每目 {cal_width}x{cal_height}，收到 {width}x{height}')
+        self._FX, self._FY = float(left_k[0, 0]), float(left_k[1, 1])
+        self._CX, self._CY = float(left_k[0, 2]), float(left_k[1, 2])
         self.confirmed_removed = 0
         self.delivery_commands = 0
 

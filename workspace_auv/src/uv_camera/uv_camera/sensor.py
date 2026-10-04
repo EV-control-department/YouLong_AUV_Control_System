@@ -145,6 +145,11 @@ class Sensor:
         for camera, path, cap in opened:
             try:
                 initial_frame = self._probe_first_frame(cap, camera, path)
+                if initial_frame.shape[:2] != (480, 1280):
+                    raise RuntimeError(
+                        f'{camera} 相机实际输出 {initial_frame.shape[1]}x{initial_frame.shape[0]}，'
+                        '但双目拼接尺寸统一为 1280x480；'
+                        '请调整 V4L2 模式或重新标定，不能复用当前内参')
                 probed.append((camera, path, cap, initial_frame))
             except Exception as error:
                 failures.append(str(error))
@@ -273,6 +278,14 @@ class Sensor:
                         failure_reported = True
                     time.sleep(0.05)
                     continue
+
+                if normalized.shape[:2] != (480, 1280):
+                    self._report_camera_failure(
+                        camera, f'图像尺寸在采集中改变为 '
+                        f'{normalized.shape[1]}x{normalized.shape[0]}，'
+                        '预期双目拼接 1280x480；停止使用错误内参 '
+                        f'(path={path})')
+                    return
 
                 if failure_started is not None:
                     self.node.get_logger().info(

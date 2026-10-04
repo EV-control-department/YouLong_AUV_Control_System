@@ -36,7 +36,7 @@ from .common import (
     image_msg_to_bgr,
     normalize_frame,
 )
-from .model_classes import MODEL_MAPPING_PATH, model_class_id
+from .model_classes import DEFAULT_CLASS_NAMES, MODEL_MAPPING_PATH, model_class_id
 from .dataset_recorder import DatasetRecorder
 
 
@@ -45,7 +45,7 @@ from .dataset_recorder import DatasetRecorder
 FEATURE_BBOX_CENTER = 0
 FEATURE_GATE_CENTERLINE = 1
 FEATURE_GATE_SEGMENTATION = 2
-GATE_FRONT_CLASS_ID = model_class_id('gate_front')
+GATE_FRONT_CLASS_ID = model_class_id('gate_front', required=False)
 
 
 def _ros_time(value):
@@ -80,6 +80,7 @@ class Ai:
         turntable_callback=None,
     ):
         self.node = node                     # composed uv_camera rclpy Node
+        self._sim_mode = bool(node.get_parameter('sim_mode').value)
         self._mapping_callback = mapping_callback
         self._turntable_callback = turntable_callback
         self._update_annotated = update_annotated_fn  # node.update_annotated_stream
@@ -150,6 +151,13 @@ class Ai:
 
         self._front_K, self._front_D = self._load_calib('front')
         self._down_K, self._down_D = self._load_calib('down')
+        self._down_right_K, self._down_right_D = self._down_K, self._down_D
+        if not self._sim_mode:
+            from .down_calibration import load_real_down_json, real_down_calibration_path
+            path = real_down_calibration_path()
+            _, _, self._down_K, self._down_D, self._down_right_K, \
+                self._down_right_D, _, _ = load_real_down_json(path)
+            node.get_logger().info(f'下视双目内参已加载：{path}（Camera1/Camera2 独立）')
 
         self._active_channels = set()
         for cam in self._active_cams:
@@ -232,33 +240,24 @@ class Ai:
                 # old ``workspace_auv/src/datas`` path did not contain the
                 # deployed model, which made Edge silently run without AI.
                 module_path = Path(__file__).resolve()
+                filename = DEFAULT_MODEL_FILENAME if self._sim_mode else 'last.pt'
                 candidates = []
                 for parent in (module_path.parent, *module_path.parents):
                     candidates.extend((
-                        parent / 'weights' / DEFAULT_MODEL_FILENAME,
+                        parent / 'resource' / filename,
+                        parent / 'weights' / filename,
                         parent / 'workspace_auv' / 'src' / 'uv_camera' /
-                        'weights' / DEFAULT_MODEL_FILENAME,
-                        parent / 'workspace_auv' / 'src' / 'datas' / DEFAULT_MODEL_FILENAME,
-                        parent / 'datas' / DEFAULT_MODEL_FILENAME,
+                        'resource' / filename,
                     ))
                 candidates.append(
                     Path.cwd() / 'workspace_auv' / 'src' / 'uv_camera' /
-                    'weights' / DEFAULT_MODEL_FILENAME)
-                candidates.append(
-                    Path.cwd() / 'workspace_auv' / 'src' / 'uv_camera' /
-                    'resource' / DEFAULT_MODEL_FILENAME)
-                candidates.append(
-                    Path.cwd() / 'workspace_auv' / 'src' / 'datas' / DEFAULT_MODEL_FILENAME)
-                candidates.append(Path.cwd() / 'datas' / DEFAULT_MODEL_FILENAME)
+                    'resource' / filename)
                 try:
                     from ament_index_python.packages import (
                         get_package_share_directory)
                     candidates.append(
                         Path(get_package_share_directory('uv_camera')) /
-                        'weights' / DEFAULT_MODEL_FILENAME)
-                    candidates.append(
-                        Path(get_package_share_directory('uv_camera')) /
-                        'resource' / DEFAULT_MODEL_FILENAME)
+                        'resource' / filename)
                 except Exception:
                     # Keep model discovery usable for offline/unit-test imports.
                     pass
@@ -270,6 +269,12 @@ class Ai:
 
             if model_path and os.path.isfile(model_path):
                 self._model = YOLO(str(model_path))
+                names = self._model.names
+                actual = tuple(str(names[index]) for index in range(len(names)))
+                if not self._sim_mode and actual != DEFAULT_CLASS_NAMES:
+                    raise ValueError(
+                        f'YOLO类别{actual}与映射{DEFAULT_CLASS_NAMES}不一致；'
+                        f'检查 UV_MODEL_MAPPING_FILE={MODEL_MAPPING_PATH}')
                 # Move the model explicitly so the first inference cannot
                 # silently initialize on CPU.  The call site also passes the
                 # device because Ultralytics may recreate its predictor.
@@ -389,7 +394,7 @@ class Ai:
                 empty_left, empty_right = DetectionArray(), DetectionArray()
                 empty_left.header = header
                 empty_right.header = right_header
-                self._turntable_callback(empty_left, empty_right)
+                self._turntable_callback(cv_img, empty_left, empty_right)
             return
         if not self._allow_inference(camera):
             return
@@ -409,7 +414,7 @@ class Ai:
         if camera == 'down' and self._mapping_callback is not None:
             self._mapping_callback(cv_img, header.stamp, det_l, det_r)
         if camera == 'front' and self._turntable_callback is not None:
-            self._turntable_callback(det_l, det_r)
+            self._turntable_callback(cv_img, det_l, det_r)
         if annotate:
             ann_r = self._draw_boxes(right_img, det_r, polys_r, line_r, dbg_r)
 
@@ -425,15 +430,19 @@ class Ai:
 
         K = self._front_K if camera == 'front' else self._down_K
         D = self._front_D if camera == 'front' else self._down_D
+        right_K = self._front_K if camera == 'front' else self._down_right_K
+        right_D = self._front_D if camera == 'front' else self._down_right_D
         mid = cv_img.shape[1] // 2
         distortion_active = (
             ENABLE_UNDISTORT and K is not None and D is not None
             and bool(np.any(np.abs(D) > 1e-12))
-            and not (camera == 'down' and self._mapping_callback is not None)
+            # Detection coordinates must match the raw stitched image.
+            # Mapping, localizer and turntable each rectify with per-eye K/D.
+            and camera not in ('front', 'down')
         )
         if distortion_active:
             left_img = cv2.undistort(cv_img[:, :mid], K, D)
-            right_img = cv2.undistort(cv_img[:, mid:], K, D)
+            right_img = cv2.undistort(cv_img[:, mid:], right_K, right_D)
         else:
             left_img = cv_img[:, :mid]
             right_img = cv_img[:, mid:]

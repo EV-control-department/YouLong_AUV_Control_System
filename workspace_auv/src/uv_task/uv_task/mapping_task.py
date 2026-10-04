@@ -658,7 +658,7 @@ class MappingTask:
           7. finally 中再发布一次最终地图。
         """
         self._emit('started', model='best.pt', class_map={0: 'square_cone', 1: 'round_cone'},
-                   depth_method='sgbm_mask_mode')
+                   depth_method='sgbm_local_floor_cone_center')
         try:
             # camera 只在标定和采集位姿可用后才发 processed=true。
             ready_end = min(self.deadline, time.monotonic() + 20.0)

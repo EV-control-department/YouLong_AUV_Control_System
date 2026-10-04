@@ -29,6 +29,7 @@ class _Node:
             'mapping_min_depth_points': 20,
             'mapping_depth_bin_m': 0.02,
             'mapping_depth_peak_ratio': 0.12,
+            'mapping_cone_height_m': 0.5,
             'mapping_min_confidence': 0.35,
             'mapping_max_pose_age_s': 1.0,
             'mapping_tag_id': -1,
@@ -70,6 +71,14 @@ def test_stereo_segmentation_publishes_world_observation():
     pose.robot_roll = pose.robot_pitch = pose.robot_yaw = 0.
     vision._pose_cb(pose)
 
+    class _Disparity:
+        def compute(self, _left, _right):
+            disparity = np.full((480, 640), 40*16, np.int16)
+            disparity[215:265, 285:335] = 80*16
+            return disparity
+
+    vision.sgbm = _Disparity()
+
     rng = np.random.default_rng(7)
     gray = rng.integers(0, 256, (480, 640), dtype=np.uint8)
     left = np.repeat(gray[:, :, None], 3, axis=2)
@@ -93,9 +102,71 @@ def test_stereo_segmentation_publishes_world_observation():
     assert len(cones) == 1
     assert cones[0].class_id == 0
     assert cones[0].depth_samples >= 20
-    assert 4.0 < cones[0].depth_m < 6.0
+    assert 0.98 < cones[0].depth_m < 1.02
+    assert 1.00 < cones[0].world_z < 1.03
     assert cones[0].header.stamp.sec == 10
     for name in ('input', 'overlay', 'disparity', 'depth', 'histogram'):
         jpeg, stamp = vision.debug_jpeg(name)
         assert jpeg.startswith(b'\xff\xd8')
         assert stamp.sec == 10
+
+
+def test_cone_center_uses_mask_center_not_near_surface():
+    vision = MappingVision(_Node(), sim_mode=True)
+    vision._info_cb('left', _info())
+    vision._info_cb('right', _info())
+    assert vision._prepare((480, 640))
+    pose = PoseInfo()
+    depth = np.full((480, 640), 1.12, np.float32)
+    polygon = [[260, 190], [360, 190], [360, 290], [260, 290]]
+    depth[190:291, 260:361] = 1.0
+    depth[215:265, 285:335] = 0.5
+    sample = vision._cone_center(polygon, depth, pose)
+    assert sample is not None
+    distance, pixel, count, world = sample
+    assert 1.10 < distance < 1.14
+    assert np.allclose(pixel, (310, 240), atol=0.5)
+    assert count >= 20
+    assert 1.12 < world[2] < 1.15
+
+
+def test_cone_center_falls_back_when_surrounding_floor_is_missing():
+    vision = MappingVision(_Node(), sim_mode=True)
+    vision._info_cb('left', _info())
+    vision._info_cb('right', _info())
+    assert vision._prepare((480, 640))
+    depth = np.full((480, 640), np.nan, np.float32)
+    depth[190:291, 260:361] = 1.0
+    polygon = [[260, 190], [360, 190], [360, 290], [260, 290]]
+    sample = vision._cone_center(polygon, depth, PoseInfo())
+    assert sample is not None
+    assert np.allclose(sample[1], (310, 240), atol=0.5)
+    assert 0.98 < sample[0] < 1.02
+
+
+def test_cone_center_prefers_visible_floor_when_top_depth_dominates():
+    vision = MappingVision(_Node(), sim_mode=True)
+    vision._info_cb('left', _info())
+    vision._info_cb('right', _info())
+    assert vision._prepare((480, 640))
+    depth = np.ones((480, 640), np.float32)
+    depth[190:291, 260:361] = 0.5
+    polygon = [[260, 190], [360, 190], [360, 290], [260, 290]]
+    sample = vision._cone_center(polygon, depth, PoseInfo())
+    assert sample is not None
+    assert 0.98 < sample[0] < 1.02
+    assert 1.00 < sample[3][2] < 1.03
+
+
+def test_cone_center_uses_floor_when_mask_has_no_stereo_depth():
+    vision = MappingVision(_Node(), sim_mode=True)
+    vision._info_cb('left', _info())
+    vision._info_cb('right', _info())
+    assert vision._prepare((480, 640))
+    depth = np.ones((480, 640), np.float32)
+    depth[190:291, 260:361] = np.nan
+    polygon = [[260, 190], [360, 190], [360, 290], [260, 290]]
+    sample = vision._cone_center(polygon, depth, PoseInfo())
+    assert sample is not None
+    assert np.allclose(sample[1], (310, 240), atol=0.5)
+    assert 0.98 < sample[0] < 1.02

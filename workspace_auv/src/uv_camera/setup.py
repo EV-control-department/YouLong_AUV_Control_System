@@ -8,6 +8,7 @@ weight_files = [
     path for path in (
         'weights/robotcup20260901.pt',
         'weights/robotcup20260901.yaml',
+        'weights/real_last.yaml',
     ) if os.path.isfile(path)
 ]
 
@@ -15,11 +16,13 @@ data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml', 'GO2RTC.md']),
     ('share/' + package_name + '/resource',
-     ['resource/best.pt'] if os.path.isfile('resource/best.pt') else []),
+     [path for path in ('resource/best.pt', 'resource/last.pt')
+      if os.path.isfile(path)]),
     ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
     ('share/' + package_name + '/weights', weight_files),
     ('share/' + package_name + '/config', [
         'config/front.npz', 'config/down.npz',
+        'config/down_real.json',
         'config/robotcup_front.npz', 'config/robotcup_down.npz',
         'config/object_localizer_sim.yaml',
     ]),

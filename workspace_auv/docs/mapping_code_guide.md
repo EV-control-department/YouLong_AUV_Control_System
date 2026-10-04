@@ -7,7 +7,7 @@
 | [uv_camera/sensor.py](../src/uv_camera/uv_camera/sensor.py) | 真机 V4L2 采集；仿真直接订阅 Stonefish 左右目并在进程内配对 |
 | [uv_camera/composed.py](../src/uv_camera/uv_camera/composed.py) | 进程内 FrameGate、模型与 mapping_vision 组装、HTTP 推流 |
 | [uv_camera/ai.py](../src/uv_camera/uv_camera/ai.py) | 同帧左右目 YOLO-Seg；保留普通检测话题给其他消费者 |
-| [uv_camera/mapping_vision.py](../src/uv_camera/uv_camera/mapping_vision.py) | 标定、立体校正、SGBM、Tag、掩膜深度峰、世界坐标换算、小型观测发布 |
+| [uv_camera/mapping_vision.py](../src/uv_camera/uv_camera/mapping_vision.py) | 标定、立体校正、SGBM、Tag、锥桶中心/池底投影、小型观测发布 |
 | [uv_task/mapping_task.py](../src/uv_task/uv_task/mapping_task.py) | 格位关联、观测池、Kalman、类别投票、巡检/遍历状态机 |
 | [uv_msgs/msg/MappingObservation.msg](../src/uv_msgs/msg/MappingObservation.msg) | 单次带采集时间和质量的 Tag/锥桶测量 |
 | [visualization/mapping_visualizer.py](../../../visualization/mapping_visualizer.py) | DDS 地图/事件/位姿 + camera HTTP 视觉快照，不做 SGBM |
@@ -21,7 +21,7 @@ Stonefish 四路原始 DDS Image 或真机两路 V4L2
   → Ai._process_frame：同帧 YOLO-Seg 左右检测
   → MappingVision.process：最近采集位姿 + 标定/校正 + SGBM
       ├─ 左目 AprilTag 16h5：0–6 ID → 深度主峰 → 世界位置
-      └─ 左目锥桶掩膜、右目同类确认 → 深度主峰 → 世界位置
+      └─ 左目锥桶掩膜 → 掩膜几何中心 + 周围池底深度 → 锥桶轴线中点
   → /perception/mapping/observations (MappingObservationArray)
   → MappingTask._observation_cb
       ├─ Tag：同 ID 静态滤波，满足次数才允许离开标记
@@ -32,14 +32,15 @@ Stonefish 四路原始 DDS Image 或真机两路 V4L2
 `MappingObservationArray.header.stamp` 是相机左目采集时间；
 `processed=false` 带原因，表示标定/位姿/图像处理失败。
 数组还带 Tag/锥桶候选数和深度拒绝数；即使没有目标但帧处理成功，仍发空数组。
-每个观测包含 kind、ID/类、置信度、深度、深度主峰点数、odom 三维位置和位姿时间差。
+每个观测包含 kind、ID/类、置信度、深度、支持点数、odom 三维位置和位姿时间差。
 不在 DDS 上传图像、分割轮廓或视差图。真机视觉链路全在 uv_camera 进程内；
 仿真唯一不可避免的大图 DDS 跳是 Stonefish 自带的原始相机接口。
 sim_bridge 默认不再二次发布 stitched 图像。
 
-CameraInfo 只供 uv_camera 内部在仿真初始化标定。真机通过 NPZ 标定；当前
-`down.npz` 的 1280×960 与 V4L2 当前每目 1920×1080 不一致时拒绝输出，
-必须换实际分辨率的标定或采集模式。实际下水前还需实测外参与时间同步。
+CameraInfo 只供 uv_camera 内部在仿真初始化标定。真机下视使用
+`docs/stereo_parameters.json` 原始每目 1280×960 标定，等比缩放至每目
+640×480；V4L2 左右拼接必须是 1280×480，尺寸不符即拒绝启动。实际下水前
+仍需核验左右目顺序、机体外参及时间同步。
 
 ## 任务状态机
 
