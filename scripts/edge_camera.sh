@@ -9,8 +9,8 @@ source "${SCRIPT_DIR}/source_workspace.sh"
 sim_mode="${UV_CAMERA_SIM_MODE:-false}"
 enable_front="${UV_CAMERA_ENABLE_FRONT:-true}"
 enable_down="${UV_CAMERA_ENABLE_DOWN:-true}"
-front_device="${UV_CAMERA_FRONT_DEVICE:-/dev/video0}"
-down_device="${UV_CAMERA_DOWN_DEVICE:-/dev/video2}"
+front_device="${UV_CAMERA_FRONT_DEVICE:-/dev/video2}"
+down_device="${UV_CAMERA_DOWN_DEVICE:-/dev/video0}"
 
 normalize_bool() {
     case "${1,,}" in

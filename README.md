@@ -88,6 +88,8 @@ ros2 launch uv_sim sim.launch.py \
   world:=guoshui_2026/cruise_seeded vehicle:=youlong
 ```
 
+真机默认映射为前视 `/dev/video2`、下视 `/dev/video0`；前视左右目图像会分别旋转 180°。
+
 `uv_sim_assets` 是 Stonefish 资源的唯一维护入口：`vehicles/` 保存车辆，
 `worlds/` 保存环境，`objects/` 和 `textures/` 保存可复用比赛物体。旧脚本仍可
 调用 `uv_sim_bringup sim.launch.py scenario_desc:=...`；旧的场景 basename 会映射到

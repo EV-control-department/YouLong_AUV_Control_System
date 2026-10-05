@@ -34,12 +34,12 @@ modes:
     camera_info_topics:
       left: /auv/sensors/camera/front/left/camera_info
       right: /auv/sensors/camera/front/right/camera_info
-    device: /dev/video0
+    device: /dev/video2
     calibration_source: yaml
     intrinsics:
       left:
-        matrix: [[1140.637671, 0.0, 590.862280], [0.0, 1140.646235, 477.087131], [0.0, 0.0, 1.0]]
-        distortion: [-0.353065, 0.135745, -0.000473, 0.001185, 0.0]
+        matrix: [[1140.637671, 0.0, 688.137720], [0.0, 1140.646235, 481.912869], [0.0, 0.0, 1.0]]
+        distortion: [-0.353065, 0.135745, 0.000473, -0.001185, 0.0]
       right:
-        matrix: [[1136.709271, 0.0, 594.942213], [0.0, 1137.248996, 466.207301], [0.0, 0.0, 1.0]]
-        distortion: [-0.358259, 0.152337, 0.000314, 0.001654, 0.0]
+        matrix: [[1136.709271, 0.0, 684.057787], [0.0, 1137.248996, 492.792699], [0.0, 0.0, 1.0]]
+        distortion: [-0.358259, 0.152337, -0.000314, -0.001654, 0.0]

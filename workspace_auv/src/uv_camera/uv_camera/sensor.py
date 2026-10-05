@@ -339,6 +339,14 @@ class Sensor:
 
     def _submit_frame(self, camera, frame, stamp, right_stamp=None,
                       stereo_pair_id=0):
+        if camera == 'front' and not self._sim_mode:
+            # Rotate each eye independently so the stitched stereo pair keeps
+            # its left/right ordering while correcting the front image roll.
+            split = frame.shape[1] // 2
+            frame = np.hstack((
+                cv2.rotate(frame[:, :split], cv2.ROTATE_180),
+                cv2.rotate(frame[:, split:], cv2.ROTATE_180),
+            ))
         self._frame_callback(
             camera, frame, stamp, right_stamp=right_stamp,
             stereo_pair_id=stereo_pair_id)
