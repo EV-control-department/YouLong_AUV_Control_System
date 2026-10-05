@@ -123,11 +123,11 @@ def generate_launch_description():
             enable_ai="true", enable_nav="false", enable_task="false",
             enable_motion="true",
         ),
-        *declare_observability_arguments(),
         DeclareLaunchArgument(
             "camera_stitch_fps", default_value="5.0",
             description="Default source-camera frame rate used by the recorder",
         ),
+        *declare_observability_arguments(),
         DeclareLaunchArgument(
             "enable_stream", default_value="true",
             description="Launch go2rtc preview streams; raw recording can run with this disabled",

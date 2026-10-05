@@ -131,12 +131,12 @@ def generate_launch_description():
         *declare_feature_arguments(
             enable_ai='false', enable_nav='false', enable_task='false',
             enable_motion='false'),
-        *declare_observability_arguments(),
-        DeclareLaunchArgument('enable_stream', default_value='true'),
         *declare_simulation_arguments(
             scenario_default='underwater_xunyun.scn',
             window_width_default='1280', window_height_default='720',
             render_quality_default='high', camera_stitch_fps_default='10.0'),
+        *declare_observability_arguments(),
+        DeclareLaunchArgument('enable_stream', default_value='true'),
         configure_simulator_gpu_environment(
             LaunchConfiguration('gpu'), LaunchConfiguration('gpu_backend')),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
