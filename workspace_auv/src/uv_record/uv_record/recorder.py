@@ -78,6 +78,24 @@ def _mcap_storage_available() -> bool:
         return False
 
 
+def _rosbag2_py_available() -> bool:
+    """Return whether the optional Python rosbag2 API is importable."""
+    try:
+        import rosbag2_py  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _session_mcap_unavailable_reason() -> str | None:
+    """Explain why the optional merged MCAP cannot be produced."""
+    if not _mcap_storage_available():
+        return 'rosbag2_storage_mcap is not installed'
+    if not _rosbag2_py_available():
+        return 'rosbag2_py is not importable'
+    return None
+
+
 def _select_bag_storage(requested: str) -> str:
     requested = str(requested or 'auto').strip().lower()
     if requested not in ('auto', 'sqlite3', 'mcap'):
@@ -405,15 +423,6 @@ class Recorder:
         if self.record_mode not in ('raw', 'go2rtc'):
             raise ValueError('record_mode must be raw or go2rtc')
         self.raw_recorder: RawFrameRecorder | None = None
-        if not _mcap_storage_available():
-            raise RuntimeError(
-                'uv_record final session.mcap requires '
-                'rosbag2_storage_mcap in the active ROS environment')
-        try:
-            import rosbag2_py  # noqa: F401
-        except ImportError as error:
-            raise RuntimeError(
-                'uv_record final session.mcap requires rosbag2_py') from error
         self.bag_storage = _select_bag_storage(
             getattr(args, 'bag_storage', 'auto'))
         self._bag_record_help = _rosbag_record_help()
@@ -781,15 +790,33 @@ class Recorder:
                 'recording writers did not stop cleanly: {}'.format(
                     '; '.join(child_failures)))
 
-        print(
-            'uv_record: finalizing session.mcap from bag and camera recordings',
-            flush=True)
-        from .mcap_export import export_session_mcap
-        final_mcap = export_session_mcap(
-            self.paths.root, self.record_mode,
-            fps=float(getattr(self.args, 'video_fps', 10.0)),
-            segment_duration=float(getattr(
-                self.args, 'segment_duration', 2.0)))
+        final_mcap = None
+        mcap_skip_reason = _session_mcap_unavailable_reason()
+        if mcap_skip_reason is None:
+            print(
+                'uv_record: finalizing session.mcap from bag and camera recordings',
+                flush=True)
+            from .mcap_export import export_session_mcap
+            final_mcap = export_session_mcap(
+                self.paths.root, self.record_mode,
+                fps=float(getattr(self.args, 'video_fps', 10.0)),
+                segment_duration=float(getattr(
+                    self.args, 'segment_duration', 2.0)))
+        else:
+            # Foxy normally has the sqlite3 rosbag backend but no MCAP storage
+            # plugin or Python rosbag2 API. The bag parts remain complete and
+            # playable, so lack of the optional merged artifact is not a
+            # recording failure.
+            final_mcap = {
+                'status': 'unavailable',
+                'reason': mcap_skip_reason,
+                'storage': self.bag_storage,
+                'path': None,
+            }
+            print(
+                'uv_record: session.mcap skipped ({}); keeping bag parts '
+                'and camera files'.format(mcap_skip_reason),
+                flush=True)
 
         alignment = {'status': 'aligned', 'mode': self.record_mode}
         if self.raw_recorder is not None:
@@ -826,18 +853,25 @@ class Recorder:
                 },
             },
         )
-        append_event(self.paths.root, {
-            'event': 'session_mcap_created',
-            'path': final_mcap['path'],
-            'messages': final_mcap['messages'],
-            'camera_frames': final_mcap['camera_frames'],
-        })
+        if final_mcap.get('status') == 'unavailable':
+            append_event(self.paths.root, {
+                'event': 'session_mcap_skipped',
+                'reason': final_mcap['reason'],
+                'bag_storage': self.bag_storage,
+            })
+        else:
+            append_event(self.paths.root, {
+                'event': 'session_mcap_created',
+                'path': final_mcap['path'],
+                'messages': final_mcap['messages'],
+                'camera_frames': final_mcap['camera_frames'],
+            })
+            print(
+                'uv_record: created {} ({} messages, {} camera frames)'.format(
+                    final_mcap['path'], final_mcap['messages'],
+                    final_mcap['camera_frames']),
+                flush=True)
         append_event(self.paths.root, {'event': 'recorder_stopped'})
-        print(
-            'uv_record: created {} ({} messages, {} camera frames)'.format(
-                final_mcap['path'], final_mcap['messages'],
-                final_mcap['camera_frames']),
-            flush=True)
 
 
 def _parse_args():
@@ -854,8 +888,8 @@ def _parse_args():
     parser.add_argument(
         '--bag-storage', choices=('auto', 'sqlite3', 'mcap'), default='auto',
         help=(
-            'ROS bag segment backend. Final session.mcap export requires '
-            'rosbag2_storage_mcap; auto selects MCAP for supported ROS versions'))
+            'ROS bag segment backend. auto selects MCAP when available and '
+            'falls back to sqlite3 on Foxy; merged session.mcap is optional'))
     parser.add_argument(
         '--go2rtc-video-format', dest='video_format', choices=('jpeg', 'ts'), default='jpeg',
         help=(

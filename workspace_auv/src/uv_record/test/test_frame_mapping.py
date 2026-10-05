@@ -11,7 +11,7 @@ from uv_record.mjpeg_proxy import (
 )
 from uv_record.player import RawFrameVideo
 from uv_record.raw_recorder import RawFrameRecorder
-from uv_record.recorder import Recorder, RAW_STREAMS
+from uv_record.recorder import Recorder, RAW_STREAMS, _select_bag_storage
 
 
 def _message(instance, pts, stamp, epoch=0, sequence=0):
@@ -146,6 +146,12 @@ def test_recorded_stream_choice_is_exclusive():
     recorder.record_mode = 'go2rtc'
     recorder.args = SimpleNamespace(go2rtc_stream_mode='unannotated')
     assert recorder._recorded_streams() == RAW_STREAMS
+
+
+def test_auto_bag_storage_falls_back_to_sqlite3_without_mcap(monkeypatch):
+    monkeypatch.setattr(
+        'uv_record.recorder._mcap_storage_available', lambda: False)
+    assert _select_bag_storage('auto') == 'sqlite3'
 
 
 def test_unmapped_go2rtc_frame_is_explicitly_degraded():

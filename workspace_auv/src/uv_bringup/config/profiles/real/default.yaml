@@ -13,4 +13,4 @@ arguments:
   record_mode: go2rtc
   go2rtc_stream_mode: unannotated
   go2rtc_video_format: jpeg
-  record_use_sim_time: false
+uuv   record_use_sim_time: false
