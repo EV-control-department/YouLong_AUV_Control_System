@@ -2,7 +2,7 @@ schema_version: 1
 model: robotcup20260901.pt
 
 # The detector class ID is the array index used by robotcup20260901.pt.
-# Every uv_* package must resolve IDs through uv_perception.model_classes.
+# Runtime consumers receive this ID mapping over a static ROS topic.
 classes:
   - id: 0
     name: collection_frame_down

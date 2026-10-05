@@ -11,7 +11,10 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
+        ('share/' + package_name + '/launch', [
+            'launch/perception_launch.py',
+            'launch/model_mapping_launch.py',
+        ]),
         ('share/' + package_name + '/weights', glob('weights/*')),
     ],
     install_requires=['setuptools', 'numpy', 'PyYAML'],
@@ -27,6 +30,7 @@ setup(
             'object_localizer = uv_perception.object_localizer:main',
             'object_estimator = uv_perception.object_estimator:main',
             'perception_gui = uv_perception.perception_gui:main',
+            'model_class_publisher = uv_perception.model_class_publisher:main',
         ],
     },
 )

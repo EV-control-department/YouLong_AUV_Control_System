@@ -116,6 +116,7 @@ def generate_launch_description():
     down_image_input = _ConditionalTopic(
         enable_degradation, SIM_DEGRADED_DOWN_STITCHED, DOWN_STITCHED)
 
+    model_mapping = _include('uv_perception', 'model_mapping_launch.py', {})
     description = _include('uv_sim_description', 'description.launch.py', {
         'use_sim_time': 'true',
     })
@@ -256,7 +257,7 @@ def generate_launch_description():
         LogInfo(msg=['Simulation profile: ', profile]),
         prepare_scene(
             scenario_desc=scenario, scene_seed=seed, launch_file=__file__,
-            start_actions=[description, localization, stonefish_gpu,
+            start_actions=[model_mapping, description, localization, stonefish_gpu,
                            stonefish_nogpu, bridge, degradation,
                            control, camera, perception, stream, planning, task,
                            observability, evaluation]),

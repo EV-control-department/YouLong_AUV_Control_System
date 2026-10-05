@@ -405,6 +405,15 @@ class Recorder:
         if self.record_mode not in ('raw', 'go2rtc'):
             raise ValueError('record_mode must be raw or go2rtc')
         self.raw_recorder: RawFrameRecorder | None = None
+        if not _mcap_storage_available():
+            raise RuntimeError(
+                'uv_record final session.mcap requires '
+                'rosbag2_storage_mcap in the active ROS environment')
+        try:
+            import rosbag2_py  # noqa: F401
+        except ImportError as error:
+            raise RuntimeError(
+                'uv_record final session.mcap requires rosbag2_py') from error
         self.bag_storage = _select_bag_storage(
             getattr(args, 'bag_storage', 'auto'))
         self._bag_record_help = _rosbag_record_help()
@@ -497,6 +506,7 @@ class Recorder:
                 lambda n=name, p=path, d=directory:
                 self._video_command(n, p, d),
                 self.paths.logs / 'nodes' / f'video_{name}.log',
+                stop_signal=signal.SIGINT,
             )
             self.children.append(child)
 
@@ -545,7 +555,7 @@ class Recorder:
         endpoint = f'http://{self.args.host}:{self.args.port}/api/streams'
         deadline = time.monotonic() + timeout
         last_error = None
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self.stop_event.is_set():
             try:
                 with urlopen(endpoint, timeout=1.0) as response:
                     if response.status == 200:
@@ -554,14 +564,16 @@ class Recorder:
                         f'go2rtc returned HTTP {response.status}')
             except Exception as error:
                 last_error = error
-            time.sleep(0.25)
+            self.stop_event.wait(0.25)
+        if self.stop_event.is_set():
+            return
         raise RuntimeError(
             f'go2rtc mode requires an available HTTP API at {endpoint}: '
             f'{last_error}')
 
     def _wait_for_video_frames(self, timeout: float = 20.0):
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self.stop_event.is_set():
             ready = True
             for directory in self.video_directories:
                 try:
@@ -575,7 +587,9 @@ class Recorder:
                     break
             if ready and self.video_directories:
                 return
-            time.sleep(0.25)
+            self.stop_event.wait(0.25)
+        if self.stop_event.is_set():
+            return
         raise RuntimeError(
             'go2rtc mode requires a live frame from every selected stream; '
             'check stream names, HTTP port, and uv_stream status')
@@ -719,19 +733,64 @@ class Recorder:
             return
         self._stopped = True
         self.stop_event.set()
+
+        # Signal all writers first so they can flush/finalize concurrently.
         for child in self.children:
             child.stop()
+        raw_stopped = True
         if self.raw_recorder is not None:
-            self.raw_recorder.stop()
+            raw_stopped = self.raw_recorder.stop(timeout=5.0)
+
+        child_failures = []
         for child in self.children:
             if child.is_alive():
-                child.join(timeout=8.0)
+                child.join(timeout=20.0)
+            if child.is_alive():
+                child_failures.append(child.name_label)
+
         self.syncer.stop()
         if self.syncer.is_alive():
-            self.syncer.join(timeout=3.0)
+            self.syncer.join(timeout=5.0)
+        if self.syncer.is_alive():
+            child_failures.append('segment-syncer')
         self.syncer.sync_all()
         if self.heartbeat_thread.is_alive():
             self.heartbeat_thread.join(timeout=2.0)
+
+        shutdown_warnings = []
+        if self.raw_recorder is not None and self.raw_recorder.error is not None:
+            shutdown_warnings.append(
+                'raw-camera: {}'.format(self.raw_recorder.error))
+        if not raw_stopped:
+            child_failures.append('raw-camera reader threads')
+
+        if child_failures:
+            update_manifest(
+                self.paths.root,
+                recording_health={
+                    'sync_errors': self.syncer.errors,
+                    'health_errors': self.health_errors,
+                    'children': {
+                        child.name_label: child.snapshot()
+                        for child in self.children
+                    },
+                    'shutdown_errors': child_failures,
+                },
+            )
+            raise RuntimeError(
+                'recording writers did not stop cleanly: {}'.format(
+                    '; '.join(child_failures)))
+
+        print(
+            'uv_record: finalizing session.mcap from bag and camera recordings',
+            flush=True)
+        from .mcap_export import export_session_mcap
+        final_mcap = export_session_mcap(
+            self.paths.root, self.record_mode,
+            fps=float(getattr(self.args, 'video_fps', 10.0)),
+            segment_duration=float(getattr(
+                self.args, 'segment_duration', 2.0)))
+
         alignment = {'status': 'aligned', 'mode': self.record_mode}
         if self.raw_recorder is not None:
             raw_status = self.raw_recorder.snapshot()
@@ -753,12 +812,32 @@ class Recorder:
                     status.get('alignment_status') != 'aligned'
                     for status in video_statuses)):
                 alignment['status'] = 'degraded'
-        update_manifest(self.paths.root, timestamp_alignment=alignment,
-                        recording_health={
-            'sync_errors': self.syncer.errors, 'health_errors': self.health_errors,
-            'children': {child.name_label: child.snapshot() for child in self.children},
+        update_manifest(
+            self.paths.root,
+            timestamp_alignment=alignment,
+            final_mcap=final_mcap,
+            recording_health={
+                'sync_errors': self.syncer.errors,
+                'health_errors': self.health_errors,
+                'shutdown_warnings': shutdown_warnings,
+                'children': {
+                    child.name_label: child.snapshot()
+                    for child in self.children
+                },
+            },
+        )
+        append_event(self.paths.root, {
+            'event': 'session_mcap_created',
+            'path': final_mcap['path'],
+            'messages': final_mcap['messages'],
+            'camera_frames': final_mcap['camera_frames'],
         })
         append_event(self.paths.root, {'event': 'recorder_stopped'})
+        print(
+            'uv_record: created {} ({} messages, {} camera frames)'.format(
+                final_mcap['path'], final_mcap['messages'],
+                final_mcap['camera_frames']),
+            flush=True)
 
 
 def _parse_args():
@@ -775,8 +854,8 @@ def _parse_args():
     parser.add_argument(
         '--bag-storage', choices=('auto', 'sqlite3', 'mcap'), default='auto',
         help=(
-            'ROS bag storage backend. auto selects MCAP when the plugin is '
-            'installed, otherwise sqlite3 for ROS 2 Foxy compatibility'))
+            'ROS bag segment backend. Final session.mcap export requires '
+            'rosbag2_storage_mcap; auto selects MCAP for supported ROS versions'))
     parser.add_argument(
         '--go2rtc-video-format', dest='video_format', choices=('jpeg', 'ts'), default='jpeg',
         help=(
@@ -822,6 +901,8 @@ def main():
 
     def request_stop(_signum, _frame):
         stop_requested.set()
+        if recorder is not None:
+            recorder.stop_event.set()
 
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
@@ -829,6 +910,8 @@ def main():
     try:
         paths = _session_from_args(args)
         recorder = Recorder(paths, args)
+        if stop_requested.is_set():
+            recorder.stop_event.set()
         recorder.start()
         print(f'uv_record: recording session {paths.root}', flush=True)
         while not stop_requested.wait(0.5):
@@ -840,15 +923,29 @@ def main():
         print('uv_record: recording stopped cleanly', flush=True)
         return 0
     except KeyboardInterrupt:
+        stop_error = None
         if recorder is not None:
-            recorder.stop()
+            try:
+                recorder.stop()
+            except Exception as error:
+                stop_error = error
+                print(
+                    'uv_record: shutdown failed: {}'.format(error),
+                    file=sys.stderr, flush=True)
         if paths is not None:
-            finish_session(paths.root, 'STOPPED')
-        return 0
+            finish_session(
+                paths.root, 'FAILED' if stop_error else 'STOPPED',
+                error=str(stop_error) if stop_error else None)
+        return 1 if stop_error else 0
     except Exception as error:
         print(f'uv_record: recorder failed: {error}', flush=True)
         if recorder is not None:
-            recorder.stop()
+            try:
+                recorder.stop()
+            except Exception as stop_error:
+                print(
+                    'uv_record: shutdown cleanup failed: {}'.format(stop_error),
+                    file=sys.stderr, flush=True)
         if paths is not None:
             finish_session(paths.root, 'FAILED', error=str(error))
         return 1

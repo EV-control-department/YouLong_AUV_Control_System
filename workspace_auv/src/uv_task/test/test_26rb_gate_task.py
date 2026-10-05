@@ -61,9 +61,10 @@ def test_stereo_gate_uses_front_extrinsics_for_body_geometry():
 
 def test_detection_candidates_accept_small_gate_without_extent_rejection():
     task = GateTask.__new__(GateTask)
+    task._gate_front_class_id = 7
     task._detection_min_confidence = 0.02
     detection = type('Detection', (), {
-        'class_id': _gate._GATE_FRONT_CLASS_ID,
+        'class_id': task._gate_front_class_id,
         'confidence': 0.5,
         'bbox_x1': 100.0,
         'bbox_y1': 100.0,

@@ -13,7 +13,6 @@ from typing import Any
 
 import yaml
 
-from uv_perception.model_classes import CLASS_METADATA
 
 
 class ConfigError(ValueError):
@@ -464,7 +463,8 @@ def _type_name(expected: Any) -> str:
     return expected.__name__
 
 
-def _validate_params(task_name: str, params: dict[str, Any]) -> dict[str, Any]:
+def _validate_params(task_name: str, params: dict[str, Any],
+                     class_registry=None) -> dict[str, Any]:
     if task_name not in TASK_SCHEMAS:
         raise ConfigError(f"未知任务：{task_name!r}")
     flattened = _flatten_params(
@@ -480,28 +480,30 @@ def _validate_params(task_name: str, params: dict[str, Any]) -> dict[str, Any]:
             raise ConfigError(
                 f"参数 {key!r} 的类型为 {type(value).__name__}；"
                 f"应为 {_type_name(expected)}")
-    if task_name == "26rb_hit_balls" and "order" in flattened:
+    if (class_registry is not None
+            and task_name == "26rb_hit_balls" and "order" in flattened):
         values = flattened["order"]
         values = values if isinstance(values, list) else [values]
         allowed = {
-            entry["name"] for entry in CLASS_METADATA.values()
-            if str(entry.get("object", "")).startswith("impact_ball_")
+            entry.name for entry in getattr(class_registry, "entries", ())
+            if entry.object.startswith("impact_ball_")
         }
         if any(value not in allowed for value in values):
             raise ConfigError(
-                "26rb_hit_balls.order 必须使用 robotcup20260901.yaml "
-                "中的 canonical impact-ball class name")
-    if task_name == "26rb_grab_ball" and "ball_color" in flattened:
+                "26rb_hit_balls.order 必须使用共享模型映射中的 "
+                "canonical impact-ball class name")
+    if (class_registry is not None
+            and task_name == "26rb_grab_ball" and "ball_color" in flattened):
         allowed = {
-            entry["name"] for entry in CLASS_METADATA.values()
-            if entry.get("object") in {
+            entry.name for entry in getattr(class_registry, "entries", ())
+            if entry.object in {
                 "impact_ball_blue", "impact_ball_red", "pink_golf", "yellow_golf"
             }
         }
         if flattened["ball_color"] not in allowed:
             raise ConfigError(
-                "26rb_grab_ball.ball_color 必须使用 robotcup20260901.yaml "
-                "中的 canonical class name")
+                "26rb_grab_ball.ball_color 必须使用共享模型映射中的 "
+                "canonical class name")
     return flattened
 
 
@@ -531,7 +533,7 @@ def _load_task_defaults(path: Path, task_name: str) -> dict[str, Any]:
     return params
 
 
-def load_task(path: str | Path) -> list[dict[str, Any]]:
+def load_task(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
     """Load one standalone task YAML as a one-item runner task list."""
     task_path = Path(path).expanduser().resolve()
     data = _read_yaml(task_path)
@@ -547,10 +549,11 @@ def load_task(path: str | Path) -> list[dict[str, Any]]:
     if not isinstance(params, dict):
         raise ConfigError(f"{task_path}：params 必须是 YAML 映射")
 
-    return [{"name": task_name, "params": _validate_params(task_name, params)}]
+    return [{"name": task_name, "params": _validate_params(
+        task_name, params, class_registry)}]
 
 
-def load_mission(path: str | Path) -> list[dict[str, Any]]:
+def load_mission(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
     """Load a mission with initial and one-hop failure overrides.
 
     ``params`` is retained as a legacy spelling for a mission-level initial
@@ -653,9 +656,10 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
 
         task_path = _resolve_task_config(mission_path, config, task_name)
         defaults = _validate_params(
-            task_name, _load_task_defaults(task_path, task_name))
-        overrides = _validate_params(task_name, overrides)
-        initial_params = _validate_params(task_name, initial_params)
+            task_name, _load_task_defaults(task_path, task_name), class_registry)
+        overrides = _validate_params(task_name, overrides, class_registry)
+        initial_params = _validate_params(
+            task_name, initial_params, class_registry)
         entries_data.append({
             "index": index,
             "name": task_name,
@@ -676,7 +680,8 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
         merged.update(item["initial_params"])
         task = {
             "name": item["name"],
-            "params": _validate_params(item["name"], merged),
+            "params": _validate_params(
+                item["name"], merged, class_registry),
         }
         if item["initial_pose"] is not None:
             task["initial_pose"] = item["initial_pose"]
@@ -696,7 +701,7 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
                 normalized = {}
                 if failure_params:
                     normalized["params"] = _validate_params(
-                        next_name, failure_params)
+                        next_name, failure_params, class_registry)
                 elif "params" in profile:
                     normalized["params"] = {}
                 if profile["pose"] is not None:
@@ -708,7 +713,8 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
     return tasks
 
 
-def load_mission_or_task(path: str | Path) -> list[dict[str, Any]]:
+def load_mission_or_task(path: str | Path,
+                         class_registry=None) -> list[dict[str, Any]]:
     """Load either a mission YAML or one standalone task YAML.
 
     ``mission_file`` is kept as the public ROS parameter name for backwards
@@ -719,8 +725,8 @@ def load_mission_or_task(path: str | Path) -> list[dict[str, Any]]:
     if "mission" in data and "task" in data:
         raise ConfigError(f"{config_path}：不能同时包含 mission 和 task 根节点")
     if "task" in data:
-        return load_task(config_path)
-    return load_mission(config_path)
+        return load_task(config_path, class_registry)
+    return load_mission(config_path, class_registry)
 
 
 def default_mission_path() -> Path:

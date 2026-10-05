@@ -113,6 +113,14 @@ NVIDIA Container Toolkit 时，设置 YOULONG_GPU=nvidia 启用 GPU：
 真实硬件和 GPU 选项可以组合，例如设置 YOULONG_RUNTIME=real 和
 YOULONG_GPU=nvidia 后再运行启动脚本。
 
+### 可选 Foxglove Bridge
+
+默认不安装、不启动。需要时执行 `INSTALL_FOXGLOVE_BRIDGE=1 docker compose build auv`，
+启动 `auv` 并等待工作空间准备完成，再执行
+`docker compose --profile tools up -d foxglove_bridge`。
+客户端连接 `ws://<AUV_IP>:8765`。构建步骤、Foxy 兼容说明和容器验证结果见
+[Foxglove Bridge](tools/foxglove_bridge/README.md)。
+
 ### 整机启动 profile
 
 uv_bringup 真机入口以及 uv_sim_bringup 的 SIL/HIL 入口使用 profile 选择整机启停组合。真机 default 保留基础启动组合并关闭 navigation；record 关闭 AI 和 task，保留 motion 并采集 raw 源帧；debug 启动 AI、motion 和 go2rtc 录制，不自动启动 task；task 启动 AI、motion、task runner，默认自动执行完整 robocup_26.yaml mission。真机所有 profile 默认关闭尚未形成闭环的 navigation，需要时可显式传 enable_nav:=true。

@@ -41,6 +41,14 @@ ros2 launch uv_sim_bringup sim.launch.py \
 
 ## 会话管理
 
+按 Ctrl+C 正常停止时，录制器会先关闭相机和 rosbag 写入器，再生成
+session.mcap。这个文件合并 ROS 话题、相机压缩帧和逐帧对齐元数据；
+相机帧位于 /auv/record/camera/<流名>/compressed，元数据位于对应的
+frame_metadata 话题。raw 使用 PNG，go2rtc JPEG 归档保持 JPEG；TS 模式
+同时将 MPEG-TS 分段和逐帧对齐记录写入 MCAP。导出完成后，player 会优先读取这个
+合并后的 MCAP。运行环境需要安装 ROS 2 的 rosbag2_py 和
+rosbag2_storage_mcap 插件；缺少任一依赖时，录制器会在开始前报错。
+
 默认输出位置为 `records/sessions/<时间戳>/`，包含 `bag/`、`video/`、
 `camera/raw/`（仅 raw 模式）、`logs/`、`metadata/` 和 `manifest.json`。
 `recover` 与 `player` 保留对旧 `uv_log` session 格式的读取能力：

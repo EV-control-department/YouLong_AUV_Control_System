@@ -19,12 +19,15 @@ import numpy as np
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
+)
 from std_msgs.msg import Float32, UInt8
 from std_srvs.srv import Trigger
 
 from zit6_interfaces.msg import ZitStatus
 from auv_protocol.topics import (
-    BASIC_MOTION, PERCEPTION_DETECTIONS, TRACKS, STATE_ODOM,
+    BASIC_MOTION, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, TRACKS, STATE_ODOM,
     ZIT6_STATUS, ZIT6_LIGHT, ZIT6_SERVO,
     MISSION_RUN, MISSION_STOP, MISSION_EXECUTE, MISSION_STATUS,
     LEGACY_TASK_RUN, LEGACY_TASK_STOP, LEGACY_TASK_EXECUTE,
@@ -34,6 +37,7 @@ from auv_protocol.topics import (
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import (
     DetectionArray,
+    ModelClassMapping,
     ObjectTrack,
     ObjectTrackArray,
     PoseInfo,
@@ -68,20 +72,13 @@ RB26DropBeaconTask = import_module(
 from uv_task.line_follower import LineFollower
 from uv_camera.camera_tf import CameraExtrinsicsProvider, CameraExtrinsicsUnavailable
 from uv_camera.camera_config import camera_mode_for_sim_mode, load_camera_config
-from uv_perception.model_classes import model_class_id
+from auv_protocol.model_mapping import ModelClassRegistry
 
 
 # object_estimator publishes one persistent track per physical class on
 # /auv/perception/tracks, while class_name remains the detector label
 # including a view suffix (for example ``collection_frame_front``);
 # physical_class_name is the canonical class when available.
-_LOCALIZER_TARGET_CLASS_IDS = {
-    model_class_id('collection_frame_down'): 'collection_frame',
-    model_class_id('collection_frame_front'): 'collection_frame',
-    model_class_id('target_rack_down'): 'target_rack',
-    model_class_id('target_rack_front'): 'target_rack',
-}
-_TARGET_RACK_DOWN_CLASS_ID = model_class_id('target_rack_down')
 _LOCALIZER_TARGET_ALIASES = {
     'collection_frame': 'collection_frame',
     'collection': 'collection_frame',
@@ -127,6 +124,10 @@ class TaskRunnerNode(Node):
         self._cmd_z = 0.0
         self._cmd_yaw = 0.0
         self.object_tracks = ObjectTrackArray()
+        self._model_mapping = ModelClassRegistry.empty()
+        self._model_mapping_ready = threading.Event()
+        self._localizer_target_class_ids = {}
+        self._target_rack_down_class_id = None
 
         # ── 下视感知（release_sampler 对齐用）──
         self._perception_lock = threading.RLock()
@@ -255,6 +256,13 @@ class TaskRunnerNode(Node):
             self.get_logger().error('BasicMotion 动作服务器不可用！')
 
         # Subscribers
+        mapping_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(
+            ModelClassMapping, MODEL_CLASS_MAPPING,
+            self._model_mapping_cb, mapping_qos)
         self.create_subscription(
             ObjectTrackArray, TRACKS, self._tracks_cb, 10)
         self.create_subscription(
@@ -293,6 +301,37 @@ class TaskRunnerNode(Node):
 
         self.get_logger().info('TaskRunner 节点已启动')
         self.get_logger().info(f'调试模式：{self._debug_mode}')
+
+    def _model_mapping_cb(self, message):
+        try:
+            registry = ModelClassRegistry.from_message(message)
+            self._model_mapping = registry
+            self._localizer_target_class_ids = {}
+            for class_name, target_name in (
+                    ('collection_frame_down', 'collection_frame'),
+                    ('collection_frame_front', 'collection_frame'),
+                    ('target_rack_down', 'target_rack'),
+                    ('target_rack_front', 'target_rack')):
+                class_id = registry.model_class_id(class_name, required=False)
+                if class_id is not None:
+                    self._localizer_target_class_ids[class_id] = target_name
+            self._target_rack_down_class_id = registry.model_class_id(
+                'target_rack_down', required=False)
+            self._model_mapping_ready.set()
+            self.get_logger().info(
+                'task_runner received model mapping {}'.format(registry.model))
+        except Exception as error:
+            self.get_logger().error(
+                'invalid model class mapping: {}'.format(error))
+
+    def wait_for_model_mapping(self, timeout_sec=10.0):
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        while not self._model_mapping_ready.is_set() and rclpy.ok():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            rclpy.spin_once(self, timeout_sec=min(0.1, remaining))
+        return self._model_mapping_ready.is_set()
 
     def _tracks_cb(self, msg: ObjectTrackArray):
         with self._perception_lock:
@@ -512,7 +551,7 @@ class TaskRunnerNode(Node):
         last_log = float('-inf')
         self.get_logger().info(
             '26rb_drop_ball_target_rack：开始下视双目视觉伺服；'
-            f'class_id={_TARGET_RACK_DOWN_CLASS_ID}，'
+            f'class_id={self._target_rack_down_class_id}，'
             f'像素容差={pixel_tolerance:.3f}，'
             f'极线容差={epipolar_tolerance:.3f}，'
             f'稳定时间={stable_seconds:.1f}s')
@@ -520,13 +559,14 @@ class TaskRunnerNode(Node):
         while not self.stopped and time.monotonic() < deadline:
             now = time.monotonic()
             pair = self._down_visual_pair(
-                _TARGET_RACK_DOWN_CLASS_ID,
+                self._target_rack_down_class_id,
                 detection_timeout,
                 epipolar_tolerance,
             )
             # Validate the same detection with TF-derived stereo rays before
             # allowing the pixel servo to command motion.
-            stereo_target = self._triangulate(_TARGET_RACK_DOWN_CLASS_ID)
+            stereo_target = self._triangulate(
+                self._target_rack_down_class_id)
             if pair is None or stereo_target is None:
                 stable_since = None
                 if now - last_log >= 1.0:
@@ -723,7 +763,8 @@ class TaskRunnerNode(Node):
 
     def load_tasks(self, path: str) -> list:
         """Load a mission YAML or standalone task YAML."""
-        tasks = load_mission_or_task(path)
+        tasks = load_mission_or_task(
+            path, class_registry=self._model_mapping)
         self.get_logger().info(f'已从 {path} 加载 {len(tasks)} 个任务')
         return tasks
 
@@ -1595,14 +1636,14 @@ class TaskRunnerNode(Node):
 
     # ── 撞球任务 ──────────────────────────────────────────────────
 
-    @staticmethod
-    def _normalize_impact_ball_name(value):
-        """Accept only canonical impact-ball names from the model registry."""
+    def _normalize_impact_ball_name(self, value):
+        """Accept only canonical impact-ball names from the received registry."""
         if not isinstance(value, str):
             return None
         name = value.strip()
         return (name if name in {'impact_ball_blue', 'impact_ball_red'}
-                and model_class_id(name, required=False) is not None else None)
+                and self._model_mapping.model_class_id(
+                    name, required=False) is not None else None)
 
     def _impact_ball_order(self, params: dict) -> list[str]:
         """Read the requested canonical detector class-name order."""
@@ -1618,7 +1659,7 @@ class TaskRunnerNode(Node):
         if not result:
             self.get_logger().error(
                 'hit_balls：撞球顺序中没有有效目标；请使用 '
-                'robotcup20260901.yaml 中的 canonical class name')
+                '共享模型映射中存在的 canonical class name')
         return result
 
     def _best_impact_ball_target(self, name: str, params: dict):
@@ -1628,7 +1669,7 @@ class TaskRunnerNode(Node):
         marks them stale.  The estimate can still be valuable for the task;
         freshness is not a task-level validity condition.
         """
-        class_id = model_class_id(name)
+        class_id = self._model_mapping.model_class_id(name)
         min_confidence = float(params.get('min_confidence', 0.05))
         min_observations = int(params.get('min_observations', 1))
         with self._perception_lock:
@@ -1949,11 +1990,10 @@ class TaskRunnerNode(Node):
 
     # ── 置物台 / target-rack 搜索任务 ─────────────────────────────
 
-    @staticmethod
-    def _normalize_localizer_target_name(value):
-        """Normalize object_localizer labels to the two task target names."""
+    def _normalize_localizer_target_name(self, value):
+        """Normalize object_localizer labels using the received class mapping."""
         if isinstance(value, (int, np.integer)):
-            return _LOCALIZER_TARGET_CLASS_IDS.get(int(value))
+            return self._localizer_target_class_ids.get(int(value))
 
         text = str(value or '').strip().lower()
         if not text:
@@ -1967,18 +2007,17 @@ class TaskRunnerNode(Node):
                 break
         return _LOCALIZER_TARGET_ALIASES.get(text)
 
-    @classmethod
-    def _localizer_target_name(cls, target):
+    def _localizer_target_name(self, target):
         """Return a canonical name for one ObjectTrack message."""
-        physical_name = cls._normalize_localizer_target_name(
+        physical_name = self._normalize_localizer_target_name(
             getattr(target, 'physical_class_name', ''))
         if physical_name is not None:
             return physical_name
-        class_name = cls._normalize_localizer_target_name(
+        class_name = self._normalize_localizer_target_name(
             getattr(target, 'class_name', ''))
         if class_name is not None:
             return class_name
-        return cls._normalize_localizer_target_name(
+        return self._normalize_localizer_target_name(
             getattr(target, 'class_id', -1))
 
     def _track_measurement_age(self, track):
@@ -2179,6 +2218,10 @@ class TaskRunnerNode(Node):
         if not self._ensure_camera_extrinsics():
             return TaskOutcome.failed(
                 '26rb_drop_ball_target_rack.camera_tf', '下视相机 TF 未就绪')
+        if self._target_rack_down_class_id is None:
+            return TaskOutcome.failed(
+                '26rb_drop_ball_target_rack.mapping',
+                '共享类别映射中没有 target_rack_down')
         target_name = self._normalize_localizer_target_name(
             p.get('frame_name', p.get('target_name', 'target_rack')))
         if target_name is None:
@@ -2301,9 +2344,12 @@ class TaskRunnerNode(Node):
     def _task_release_sampler(self, p: dict) -> bool:
         """转向 → 对齐 START 标记 → 上浮靠岸 → 释放取水器。"""
         align_yaw = float(p.get('align_yaw', 180.0))
-        start_cid = model_class_id('guide_line')
-        if 'start_class_id' in p:
-            start_cid = int(p['start_class_id'])
+        try:
+            start_cid = self._model_mapping.configured_class_id(
+                p, 'start_class_id', 'guide_line')
+        except ValueError as error:
+            self.get_logger().error(f'release_sampler：{error}')
+            return False
         approach_z = float(p.get('approach_z', -0.3))
         approach_x = float(p.get('approach_x', -0.3))
         approach_timeout = float(p.get('approach_timeout', 15.0))
@@ -2502,6 +2548,12 @@ class TaskRunnerNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = TaskRunnerNode()
+    if not node.wait_for_model_mapping():
+        node.get_logger().fatal(
+            '未收到 /auv/perception/model_classes；任务执行器拒绝启动')
+        node.destroy_node()
+        rclpy.try_shutdown()
+        raise SystemExit(2)
 
     if not node._debug_mode:
         # Normal mode: load the selected YAML mission and start immediately.

@@ -10,8 +10,14 @@ import time
 
 import numpy as np
 
-from auv_protocol.topics import MEASUREMENTS, TRACKS
-from uv_msgs.msg import ObjectMeasurementArray, ObjectTrack, ObjectTrackArray
+from rclpy.qos import (
+    DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
+)
+from auv_protocol.model_mapping import ModelClassRegistry
+from auv_protocol.topics import MEASUREMENTS, MODEL_CLASS_MAPPING, TRACKS
+from uv_msgs.msg import (
+    ModelClassMapping, ObjectMeasurementArray, ObjectTrack, ObjectTrackArray,
+)
 from .localization.geometry import minimum_cost_assignment
 
 
@@ -76,6 +82,14 @@ class ObjectEstimator:
         self.anchor_sigma_default_m = max(0.0, float(node.declare_parameter(
             'anchor_sigma_default_m', 0.10).value))
         self.anchor_sigma_by_class = self._declare_anchor_sigmas(node)
+        self._mapping_registry = ModelClassRegistry.empty()
+        mapping_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        node.create_subscription(
+            ModelClassMapping, MODEL_CLASS_MAPPING,
+            self._mapping_callback, mapping_qos)
         self.max_instance_association_m = max(0.1, float(node.declare_parameter(
             'instance_association_distance_m', 1.5).value))
         self.stable_covariance_trace_m2 = max(0.0, float(node.declare_parameter(
@@ -102,12 +116,7 @@ class ObjectEstimator:
             'gate': 0.10,
             'guide_line': 0.16,
         }
-        try:
-            from .model_classes import CLASS_METADATA
-            names = {str(entry.get('object', '')).strip().lower()
-                     for entry in CLASS_METADATA.values()}
-        except Exception:
-            names = set(defaults)
+        names = set(defaults)
         values = {}
         for name in sorted(name for name in names if name):
             param = 'anchor_sigma_{}_m'.format(
@@ -115,6 +124,18 @@ class ObjectEstimator:
             value = defaults.get(name, self.anchor_sigma_default_m)
             values[name] = max(0.0, float(node.declare_parameter(param, value).value))
         return values
+
+    def _mapping_callback(self, message):
+        try:
+            self._mapping_registry = ModelClassRegistry.from_message(message)
+            for entry in self._mapping_registry.entries:
+                name = entry.object
+                if name:
+                    self.anchor_sigma_by_class.setdefault(
+                        name, self.anchor_sigma_default_m)
+        except Exception as error:
+            self.node.get_logger().error(
+                'invalid model class mapping: {}'.format(error))
 
     @staticmethod
     def _finite(values):

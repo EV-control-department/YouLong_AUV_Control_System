@@ -13,12 +13,15 @@ import numpy as np
 from rclpy.qos import (
     QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy,
 )
+from auv_protocol.model_mapping import ModelClassRegistry
 from auv_protocol.topics import (
     DOWN_LEFT_INFO, DOWN_RIGHT_INFO, FRONT_LEFT_INFO, FRONT_RIGHT_INFO,
-    MEASUREMENTS, PERCEPTION_DETECTIONS,
+    MEASUREMENTS, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS,
 )
 from sensor_msgs.msg import CameraInfo
-from uv_msgs.msg import DetectionArray, ObjectMeasurement, ObjectMeasurementArray
+from uv_msgs.msg import (
+    DetectionArray, ModelClassMapping, ObjectMeasurement, ObjectMeasurementArray,
+)
 
 from .localization.geometry import bbox_is_localizable, minimum_cost_assignment
 from .localization.stereo import camera_ray
@@ -67,6 +70,14 @@ class ObjectLocalizer:
         self._id_prefix = (uuid.uuid4().int >> 96) & 0xffffffff
         self._observation_counter = 0
         self._detection_counter = 0
+        self._mapping_registry = ModelClassRegistry.empty()
+        mapping_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        node.create_subscription(
+            ModelClassMapping, MODEL_CLASS_MAPPING,
+            self._mapping_callback, mapping_qos)
         info_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST, depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -80,6 +91,13 @@ class ObjectLocalizer:
         node.create_subscription(DetectionArray, PERCEPTION_DETECTIONS,
                                  self._detections, 10)
         self.timer = node.create_timer(0.02, self._flush)
+
+    def _mapping_callback(self, message):
+        try:
+            self._mapping_registry = ModelClassRegistry.from_message(message)
+        except Exception as error:
+            self.node.get_logger().error(
+                'invalid model class mapping: {}'.format(error))
 
     def _info(self, name, message):
         with self._lock:
@@ -113,18 +131,12 @@ class ObjectLocalizer:
         for pending in ready:
             self._publish_pending(pending, infos)
 
-    @staticmethod
-    def _class_metadata(class_id):
-        try:
-            from uv_perception.model_classes import (
-                CLASS_METADATA, model_class_name, physical_class_name,
-            )
-            entry = CLASS_METADATA.get(int(class_id), {})
-            return (model_class_name(class_id), physical_class_name(class_id),
-                    bool(entry.get('multi_instance', False)))
-        except Exception:
+    def _class_metadata(self, class_id):
+        entry = self._mapping_registry.class_info(class_id)
+        if entry is None:
             fallback = f'class_{int(class_id)}'
             return fallback, fallback, False
+        return entry.name, entry.object, entry.multi_instance
 
     def _eligible(self, message, info):
         if info is None or int(info.width) <= 0 or int(info.height) <= 0:

@@ -1,7 +1,7 @@
-"""Load the shared detector class-ID mapping for all ``uv_*`` packages from the perception package.
+"""Read the installed detector class mapping for the ROS topic publisher.
 
-The mapping is installed with the detector weights in ``uv_perception``.
-Task and perception code import this module so model IDs have one source of truth.
+Runtime consumers receive the mapping through the latched ROS topic. The
+helpers below remain useful to offline tools inspecting installed metadata.
 """
 
 from __future__ import annotations

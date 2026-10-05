@@ -49,6 +49,7 @@ def DETECTIONS(camera_channel):
 # DETECTIONS(camera_channel) remains available for the legacy consumers until
 # their launch files have moved to uv_perception.
 PERCEPTION_DETECTIONS = f'{ROOT}/perception/detections'
+MODEL_CLASS_MAPPING = f'{ROOT}/perception/model_classes'
 MEASUREMENTS = f'{ROOT}/perception/measurements'
 TRACKS = f'{ROOT}/perception/tracks'
 STREAM_FRAME_INFO = f'{ROOT}/stream/frame_info'

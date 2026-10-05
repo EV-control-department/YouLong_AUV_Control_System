@@ -10,6 +10,9 @@ services:
       dockerfile: Dockerfile
       args:
         YOULONG_ROS_DISTRO: "${YOULONG_ROS_DISTRO:-foxy}"
+        INSTALL_PLOTJUGGLER: "${INSTALL_PLOTJUGGLER:-false}"
+        INSTALL_FOXGLOVE_BRIDGE: "${INSTALL_FOXGLOVE_BRIDGE:-0}"
+        FOXGLOVE_BRIDGE_BUILD_JOBS: "${FOXGLOVE_BRIDGE_BUILD_JOBS:-2}"
         HOST_UID: "${HOST_UID:-1000}"
         HOST_GID: "${HOST_GID:-1000}"
         HOST_USER: "${HOST_USER:-${USER:-dev}}"
@@ -40,6 +43,7 @@ services:
 
     environment:
       ROS_DISTRO: "${YOULONG_ROS_DISTRO:-foxy}"
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
       DISPLAY: "${DISPLAY:-:1}"
       XAUTHORITY: /tmp/.Xauthority
       HOME: "/home/${HOST_USER:-${USER:-dev}}"
@@ -91,4 +95,28 @@ services:
         # per-user Xauthority file. GDM users can set XAUTHORITY_HOST if needed.
         source: "${XAUTHORITY_HOST:-${XAUTHORITY:-${HOME:-/tmp}/.Xauthority}}"
         target: /tmp/.Xauthority
+        read_only: true
+
+  # Opt-in debug tool: build auv with INSTALL_FOXGLOVE_BRIDGE=1 first,
+  # wait for workspace preparation, then enable the tools profile.
+  foxglove_bridge:
+    profiles: ["tools"]
+    image: youlong_auv:${YOULONG_ROS_DISTRO:-foxy}
+    init: true
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /workspace
+    entrypoint: ["bash", "/workspace/scripts/run_foxglove_bridge.sh"]
+    network_mode: host
+    environment:
+      ROS_DISTRO: "${YOULONG_ROS_DISTRO:-foxy}"
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+      ROS_HOME: /tmp/foxglove/ros
+      ROS_LOG_DIR: /tmp/foxglove/log
+      FASTDDS_BUILTIN_TRANSPORTS: "${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}"
+      FOXGLOVE_BRIDGE_PORT: "${FOXGLOVE_BRIDGE_PORT:-8765}"
+      FOXGLOVE_BRIDGE_ADDRESS: "${FOXGLOVE_BRIDGE_ADDRESS:-0.0.0.0}"
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
         read_only: true

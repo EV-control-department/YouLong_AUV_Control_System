@@ -24,14 +24,11 @@ from uv_task.task_outcome import TaskOutcome
 from uv_msgs.msg import DetectionArray
 from auv_protocol.topics import PERCEPTION_DETECTIONS
 from uv_camera.camera_config import CameraConfig
-from uv_perception.model_classes import model_class_id
 
 
 # 锁定后允许同一门框在连续图像中的中心变化范围。超过这个范围时视为
 # 原目标丢失，不切换到另一个门框。
 _LOCK_MAX_CENTER_DELTA_FRACTION = 0.35
-
-_GATE_FRONT_CLASS_ID = model_class_id('gate_front')
 
 
 @dataclass(frozen=True)
@@ -185,6 +182,8 @@ class RB26GateTask:
     def __init__(self, node, params: dict):
         self._node = node
         self._params = params
+        self._gate_front_class_id = node._model_mapping.model_class_id(
+            'gate_front', required=False)
         self._logger = node.get_logger()
         self._lock = threading.RLock()
         self._latest_left: tuple[float, np.ndarray] | None = None
@@ -784,7 +783,8 @@ class RB26GateTask:
         candidates = []
         for det in getattr(message, 'detections', []):
             try:
-                if (int(det.class_id) != _GATE_FRONT_CLASS_ID
+                if (self._gate_front_class_id is None
+                        or int(det.class_id) != self._gate_front_class_id
                         or float(det.confidence) < self._detection_min_confidence):
                     continue
                 x1, y1 = float(det.bbox_x1), float(det.bbox_y1)

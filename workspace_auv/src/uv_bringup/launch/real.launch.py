@@ -46,6 +46,7 @@ def generate_launch_description():
     camera_config_dir = LaunchConfiguration("camera_config_dir")
     enable_stream = LaunchConfiguration("enable_stream")
 
+    model_mapping = _include("uv_perception", "model_mapping_launch.py", {})
     description = _include("auv_description", "description.launch.py", {
         "use_sim_time": "false",
     })
@@ -139,6 +140,7 @@ def generate_launch_description():
         ),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         LogInfo(msg=["Real vehicle profile: ", profile]),
+        model_mapping,
         description,
         localization,
         hardware,

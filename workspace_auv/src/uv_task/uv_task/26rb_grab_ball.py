@@ -6,7 +6,6 @@ import math
 import time
 
 from uv_msgs.action import BasicMotion
-from uv_perception.model_classes import model_class_id
 from uv_task.task_outcome import TaskOutcome
 
 
@@ -87,12 +86,11 @@ class RB26GrabBallTask:
         self._max_grab_retries = max(
             0, int(params.get('max_grab_retries', 2)))
 
-    @staticmethod
-    def _parse_ball_color(value) -> int | None:
+    def _parse_ball_color(self, value) -> int | None:
         if not isinstance(value, str):
             return None
         name = value.strip()
-        class_id = model_class_id(name, required=False)
+        class_id = self._node._model_mapping.model_class_id(name, required=False)
         return class_id if name in {
             'impact_ball_blue', 'impact_ball_red', 'pink_golf', 'yellow_golf'
         } and class_id is not None else None

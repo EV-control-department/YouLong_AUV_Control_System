@@ -109,6 +109,8 @@ class RawFrameRecorder:
                         if timestamp_ns <= 0:
                             self.unaligned[camera] += 1
                     frame_sequence += 1
+                index.flush()
+                os.fsync(index.fileno())
         except Exception as error:
             if not self.stop_event.is_set() or not isinstance(error, Iceoryx2Error):
                 with self.lock:
@@ -133,10 +135,17 @@ class RawFrameRecorder:
                     not counts[camera] for camera in self.cameras)) else 'aligned'),
         }
 
-    def stop(self):
+    def stop(self, timeout: float = 5.0):
+        # Iceoryx2 receive polls every few milliseconds. Let each reader thread
+        # leave read() and close its own native subscriber; mutating the binding
+        # from this thread can deadlock while receive() is in progress.
         self.stop_event.set()
-        for reader in tuple(self.readers.values()):
-            reader.close()
+        deadline = time.monotonic() + max(0.0, float(timeout))
         for thread in self.threads:
             if thread.is_alive():
-                thread.join(timeout=2.0)
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        alive = [thread.name for thread in self.threads if thread.is_alive()]
+        if alive and self.error is None:
+            self.error = TimeoutError(
+                'raw camera reader did not stop: {}'.format(', '.join(alive)))
+        return not alive

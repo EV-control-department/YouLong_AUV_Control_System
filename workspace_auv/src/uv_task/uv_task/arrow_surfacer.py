@@ -15,7 +15,6 @@ from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, PoseInfo
 from auv_protocol.topics import ARUCO_IDS, PERCEPTION_DETECTIONS, STATE_ODOM
 from std_msgs.msg import Int32MultiArray
-from uv_perception.model_classes import configured_class_id
 
 
 # ==========================================================================
@@ -105,17 +104,17 @@ class ArrowSurfacer:
 
         # 默认从统一模型元数据读取。当前 robotcup 模型没有箭头/彩色扇区
         # 类别，因此不会再误用旧模型的 0/1/2/3；旧场景可显式传入覆盖值。
-        self._arrow_cid = configured_class_id(
+        self._arrow_cid = node._model_mapping.configured_class_id(
             params, 'arrow_class_id', 'arrow', required=False)
 
         # ── 扇区参数 ──
         self._sector_x = float(params.get('sector_x', 0.0))
         self._sector_y = float(params.get('sector_y', 0.0))
-        self._yellow_cid = configured_class_id(
+        self._yellow_cid = node._model_mapping.configured_class_id(
             params, 'yellow_class_id', 'yellow', required=False)
-        self._red_cid = configured_class_id(
+        self._red_cid = node._model_mapping.configured_class_id(
             params, 'red_class_id', 'red', required=False)
-        self._green_cid = configured_class_id(
+        self._green_cid = node._model_mapping.configured_class_id(
             params, 'green_class_id', 'green', required=False)
         self._view_yaw = float(params.get('view_yaw', 90.0))
         # 指定投掷扇区：'yellow' / 'green' / 'red'，空=ArUco 读取映射

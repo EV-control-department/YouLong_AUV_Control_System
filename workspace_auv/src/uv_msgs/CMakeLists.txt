@@ -34,6 +34,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TaskStatus.msg"
   "msg/PoseInfo.msg"
   "msg/LineState.msg"
+  "msg/ModelClassMapping.msg"
   "msg/DvlVelocity.msg"
   "msg/DvlAltitude.msg"
   "msg/UsblMeasurement.msg"

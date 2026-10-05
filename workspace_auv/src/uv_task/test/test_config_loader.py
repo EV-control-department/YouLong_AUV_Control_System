@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from auv_protocol.model_mapping import ClassInfo, ModelClassRegistry
 from uv_task.config_loader import (
     ConfigError,
     load_mission,
@@ -419,5 +420,9 @@ def test_ball_parameters_reject_semantic_colour_aliases(tmp_path):
         encoding="utf-8",
     )
 
+    registry = ModelClassRegistry(entries=(
+        ClassInfo(0, "impact_ball_blue", "impact_ball_blue", None, False),
+        ClassInfo(1, "impact_ball_red", "impact_ball_red", None, False),
+    ))
     with pytest.raises(ConfigError, match="canonical impact-ball"):
-        load_mission_or_task(task_file)
+        load_mission_or_task(task_file, class_registry=registry)

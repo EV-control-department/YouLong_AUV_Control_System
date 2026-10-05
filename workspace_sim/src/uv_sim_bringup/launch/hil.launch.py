@@ -52,6 +52,7 @@ def generate_launch_description():
     mission_file = LaunchConfiguration('mission_file')
     enable_stream = LaunchConfiguration('enable_stream')
 
+    model_mapping = _include('uv_perception', 'model_mapping_launch.py', {})
     description = _include('uv_sim_description', 'description.launch.py', {
         'use_sim_time': 'true',
     })
@@ -145,7 +146,7 @@ def generate_launch_description():
         LogInfo(msg=['HIL profile: ', profile]),
         prepare_scene(
             scenario_desc=scenario, scene_seed=seed, launch_file=__file__,
-            start_actions=[description, localization, stonefish_gpu,
+            start_actions=[model_mapping, description, localization, stonefish_gpu,
                            stonefish_nogpu, bridge,
                            agent, control, camera, perception, stream,
                            planning, task, observability]),

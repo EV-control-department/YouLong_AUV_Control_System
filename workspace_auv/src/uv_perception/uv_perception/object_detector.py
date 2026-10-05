@@ -12,11 +12,15 @@ import cv2
 import numpy as np
 
 from std_msgs.msg import Int32MultiArray
+from rclpy.qos import (
+    DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
+)
+from auv_protocol.model_mapping import ModelClassRegistry
 from auv_protocol.topics import (
     ARUCO_IDS, ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT, LINES,
-    PERCEPTION_DETECTIONS,
+    MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS,
 )
-from uv_msgs.msg import Detection, DetectionArray, LineState
+from uv_msgs.msg import Detection, DetectionArray, LineState, ModelClassMapping
 
 from .detector.yolo_detector import YoloDetector
 from uv_image_transport.iceoryx2 import Iceoryx2Reader
@@ -70,10 +74,17 @@ class ObjectDetector:
         self._aruco_publisher = node.create_publisher(Int32MultiArray, ARUCO_IDS, 10)
         aruco_fps = max(0.1, float(node.declare_parameter('aruco_fps', 10.0).value))
         self._aruco_period_s = 1.0 / aruco_fps
-        self._guide_line_class_id = int(
-            node.declare_parameter('guide_line_class_id', 4).value)
-        self._gate_front_class_id = int(
-            node.declare_parameter('gate_front_class_id', 3).value)
+        self._guide_line_class_id = None
+        self._gate_front_class_id = None
+        self._mapping_registry = None
+        self._mapping_ready = threading.Event()
+        mapping_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        node.create_subscription(
+            ModelClassMapping, MODEL_CLASS_MAPPING,
+            self._mapping_callback, mapping_qos)
         self._gate_feature_mode = str(
             node.declare_parameter('gate_feature_mode', 'auto').value).strip().lower()
         if self._gate_feature_mode not in {'auto', 'bbox', 'centerline', 'segmentation'}:
@@ -149,11 +160,28 @@ class ObjectDetector:
         except Exception as error:
             self.node.get_logger().warning(f'ArUco frame processing failed: {error}')
 
+    def _mapping_callback(self, message):
+        try:
+            registry = ModelClassRegistry.from_message(message)
+            self._mapping_registry = registry
+            self._guide_line_class_id = registry.model_class_id(
+                'guide_line', required=False)
+            self._gate_front_class_id = registry.model_class_id(
+                'gate_front', required=False)
+            self._mapping_ready.set()
+            self.node.get_logger().info(
+                'object_detector received model mapping {}'.format(registry.model))
+        except Exception as error:
+            self.node.get_logger().error(
+                'invalid model class mapping: {}'.format(error))
+
     def _read_loop(self, camera, service):
         reader = None
         try:
             reader = Iceoryx2Reader(service)
             while not self._stop.is_set():
+                if not self._mapping_ready.wait(timeout=0.1):
+                    continue
                 packet = reader.read()
                 if packet is None:
                     return

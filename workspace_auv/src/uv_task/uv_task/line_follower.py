@@ -14,7 +14,6 @@ import numpy as np
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, LineState, PoseInfo
 from auv_protocol.topics import PERCEPTION_DETECTIONS, LINES, STATE_ODOM
-from uv_perception.model_classes import configured_class_id
 
 
 # ==========================================================================
@@ -250,9 +249,9 @@ class LineFollower:
 
         # 标记 class_id 默认从统一模型元数据读取。当前模型没有 triangle /
         # square，因此没有显式覆盖时安全地禁用这两段旧标记逻辑。
-        self._triangle_cid = configured_class_id(
+        self._triangle_cid = node._model_mapping.configured_class_id(
             params, 'triangle_class_id', 'triangle', required=False)
-        self._square_cid = configured_class_id(
+        self._square_cid = node._model_mapping.configured_class_id(
             params, 'square_class_id', 'square', required=False)
         if self._triangle_cid is None or self._square_cid is None:
             self._logger.warning(

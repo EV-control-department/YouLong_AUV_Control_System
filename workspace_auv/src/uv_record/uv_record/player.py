@@ -97,7 +97,9 @@ class BagPlayback:
             self._deserialize_message,
             self._get_message,
         ) = _rosbag_modules()
-        self._parts = _bag_part_paths(self.bag_root)
+        self._parts = (
+            [self.bag_root] if self.bag_root.is_file()
+            else _bag_part_paths(self.bag_root))
         self._part_index = 0
         self._reader = None
         self._reader_path = None
@@ -1052,7 +1054,11 @@ def _manifest_bool(manifest: dict, key: str, fallback: bool = False) -> bool:
 
 def _open_bag_playback(session_dir: Path):
     """Create the optional ROS publisher node for a session's rosbag."""
-    if not _bag_part_paths(session_dir / 'bag'):
+    combined_mcap = session_dir / 'session.mcap'
+    bag_source = (
+        combined_mcap if combined_mcap.is_file() else session_dir / 'bag')
+    if (bag_source.is_file() and bag_source.suffix.lower() != '.mcap') or (
+            bag_source.is_dir() and not _bag_part_paths(bag_source)):
         return None, None, None, False
     try:
         rclpy, _rosbag2_py, _deserialize, _get_message = _rosbag_modules()
@@ -1062,7 +1068,7 @@ def _open_bag_playback(session_dir: Path):
             owns_context = True
         node = rclpy.create_node('uv_record_player')
         try:
-            bag = BagPlayback(session_dir / 'bag', node)
+            bag = BagPlayback(bag_source, node)
         except Exception:
             node.destroy_node()
             if owns_context and rclpy.ok():
