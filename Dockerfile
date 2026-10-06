@@ -2,16 +2,19 @@ ARG YOULONG_ROS_DISTRO=foxy
 FROM osrf/ros:${YOULONG_ROS_DISTRO}-desktop
 
 ARG YOULONG_ROS_DISTRO
-ARG INSTALL_PLOTJUGGLER=false
 ENV ROS_DISTRO=${YOULONG_ROS_DISTRO}
 ARG STONEFISH_COMMIT=b21eb8e194c570ff2f61e91aeffb38d73dc25f42
 ARG STONEFISH_BUILD_JOBS=1
 
 # stonefish_ros2 is only the ROS wrapper; the Stonefish 1.6 core library is
 # an external dependency and is not included in the official ROS image.
-# Optional PlotJuggler GUI and ROS 2 integration can be enabled at build time.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        software-properties-common; \
+    add-apt-repository -y universe; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         cmake \
@@ -31,30 +34,30 @@ RUN apt-get update \
         python3-pybind11 \
         libsdl2-dev \
         ffmpeg \
-        python3-colcon-common-extensions \
         python3-numpy \
         python3-opencv \
         python3-pil \
         python3-tk \
         python3-venv \
         python3-yaml \
-        pkg-config \
-    && if [ "${INSTALL_PLOTJUGGLER}" = "true" ]; then \
-        apt-get install -y --no-install-recommends \
-            ros-${YOULONG_ROS_DISTRO}-plotjuggler \
-            ros-${YOULONG_ROS_DISTRO}-plotjuggler-ros; \
-    fi \
-    && git clone https://github.com/patrykcieslak/stonefish.git /opt/stonefish \
-    && git -C /opt/stonefish checkout --detach "${STONEFISH_COMMIT}" \
-    && cmake -S /opt/stonefish -B /opt/stonefish/build \
+        python3-pip \
+        pkg-config; \
+    python3 -m pip install --no-cache-dir \
+        colcon-common-extensions; \
+    git clone --depth 1 https://github.com/patrykcieslak/stonefish.git /opt/stonefish; \
+    git -C /opt/stonefish fetch --depth 1 origin "${STONEFISH_COMMIT}"; \
+    git -C /opt/stonefish checkout --detach "${STONEFISH_COMMIT}"; \
+    cmake -S /opt/stonefish -B /opt/stonefish/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DBUILD_TESTS=OFF \
-        -DEMBED_RESOURCES=OFF \
-    && cmake --build /opt/stonefish/build --parallel "${STONEFISH_BUILD_JOBS}" \
-    && cmake --install /opt/stonefish/build \
-    && ldconfig \
-    && rm -rf /opt/stonefish/.git /var/lib/apt/lists/*
+        -DEMBED_RESOURCES=OFF; \
+    cmake --build /opt/stonefish/build \
+        --parallel "${STONEFISH_BUILD_JOBS}"; \
+    cmake --install /opt/stonefish/build; \
+    ldconfig; \
+    rm -rf /opt/stonefish/.git /var/lib/apt/lists/*
+
 
 # iceoryx2 v0.10 uses Rust 1.89 and the Python binding is built from the
 # checked-out submodule at container preparation time.  Keep the toolchain in
@@ -180,13 +183,6 @@ ENV QT_QPA_PLATFORM=xcb \
     QT_X11_NO_MITSHM=1 \
     SDL_VIDEODRIVER=x11 \
     SDL_VIDEO_X11_FORCE_EGL=0
-
-# Optional debugging bridge. The Foxy source adapter is isolated in /opt;
-# newer distributions install their official ROS binary package.
-ARG INSTALL_FOXGLOVE_BRIDGE=0
-ARG FOXGLOVE_BRIDGE_BUILD_JOBS=2
-COPY tools/foxglove_bridge/ /opt/foxglove_bridge_build/
-RUN bash /opt/foxglove_bridge_build/install.sh
 
 ARG HOST_UID=1000
 ARG HOST_GID=1000

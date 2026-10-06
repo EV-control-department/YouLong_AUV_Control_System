@@ -123,26 +123,39 @@ class StreamMetadataBridge:
                   file=sys.stderr, flush=True)
             return
 
+        # Raw video does not need the optional ROS frame-metadata channel.
+        # Avoid creating another Fast DDS publisher for every go2rtc exec
+        # process; on Foxy this can fail when several simulator processes share
+        # the same domain/resources and would otherwise kill the video pipe.
+        if mode != 'annotated':
+            return
+
         self.rclpy = rclpy
-        if not rclpy.ok():
-            rclpy.init(args=None)
-        self.node = rclpy.create_node('camera_streamer_frame_metadata')
-        # Keep depth below Fast DDS Foxy's default per-instance sample limit
-        # (400); a depth of 8192 makes publisher creation fail on the Edge.
-        qos = QoSProfile(depth=128)
-        qos.reliability = ReliabilityPolicy.RELIABLE
-        self.publisher = self.node.create_publisher(
-            CameraStreamFrameInfo, STREAM_FRAME_INFO, qos)
-        if mode == 'annotated':
+        try:
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self.node = rclpy.create_node('camera_streamer_frame_metadata')
+            qos = QoSProfile(depth=8192)
+            qos.reliability = ReliabilityPolicy.RELIABLE
+            self.publisher = self.node.create_publisher(
+                CameraStreamFrameInfo, STREAM_FRAME_INFO, qos)
             self.node.create_subscription(
                 DetectionArray, PERCEPTION_DETECTIONS,
                 self.detection_cache.add, qos_profile_sensor_data)
-        self.message_type = CameraStreamFrameInfo
-        self.executor = SingleThreadedExecutor()
-        self.executor.add_node(self.node)
-        self._thread = threading.Thread(
-            target=self._spin, name='camera-streamer-ros', daemon=True)
-        self._thread.start()
+            self.message_type = CameraStreamFrameInfo
+            self.executor = SingleThreadedExecutor()
+            self.executor.add_node(self.node)
+            self._thread = threading.Thread(
+                target=self._spin, name='camera-streamer-ros', daemon=True)
+            self._thread.start()
+        except Exception as error:
+            # Metadata/overlay is optional; the encoded stream must remain
+            # available even when DDS cannot allocate another publisher.
+            print(
+                f'camera_streamer: metadata disabled because ROS publisher '
+                f'could not be created: {error}',
+                file=sys.stderr, flush=True)
+            self.close()
 
     def _spin(self):
         try:

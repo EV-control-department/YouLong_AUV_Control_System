@@ -187,6 +187,28 @@ ROS_DOMAIN_ID=41 ros2 launch uv_sim_bringup sim.launch.py scene_seed:=1
 ROS_DOMAIN_ID=42 ros2 launch uv_sim_bringup sim.launch.py scene_seed:=2
 ```
 
+## 无 CUDA / 非 NVIDIA 电脑启动
+
+原有 `compose.yaml` 面向 NVIDIA Container Toolkit；没有 N 系显卡时请使用下面的独立配置，
+它不会声明 NVIDIA runtime、CUDA 环境变量或固定 GPU 设备：
+
+```bash
+# 自动选择：有 /dev/dri 时叠加 Mesa，无则使用纯 CPU 图形配置
+./scripts/compose_nocuda_up.sh up --build
+
+# 启动仿真（无 CUDA 默认不安装 ultralytics/torch）
+./scripts/compose_nocuda_up.sh run --rm auv sim profile:=sim_dev
+
+# 需要真实硬件时
+YOULONG_RUNTIME=real ./scripts/compose_nocuda_up.sh up --build
+
+# 如需额外安装 AI Python 依赖，需关闭严格 nocuda 依赖保护；
+# 这只代表安装 Python 包，不保证其底层 torch wheel 不含 CUDA
+YOULONG_NOCUDA=false INSTALL_WORKSPACE_AI=true ./scripts/compose_nocuda_up.sh up --build
+```
+
+`YOULONG_MESA=0` 可强制不映射 `/dev/dri`，`YOULONG_JOYSTICK=0` 可禁用手柄设备映射。
+
 ## 一键部署到 AUV 电脑
 
 项目提供了基于 `rsync` 的部署脚本，默认同步到 `nvidia@192.168.16.10:~/YouLong_AUV_Control_System`：

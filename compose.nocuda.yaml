@@ -1,0 +1,72 @@
+name: youlong-auv
+
+# CPU/OpenGL 系统渲染配置：不依赖 NVIDIA Container Toolkit、CUDA 或固定
+# /dev/dri。若宿主机有 Mesa 图形设备，可额外叠加 compose.nocuda.mesa.yaml。
+services:
+  auv:
+    image: youlong_auv:${YOULONG_ROS_DISTRO:-foxy}
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        YOULONG_ROS_DISTRO: "${YOULONG_ROS_DISTRO:-foxy}"
+        HOST_UID: "${HOST_UID:-1000}"
+        HOST_GID: "${HOST_GID:-1000}"
+        HOST_USER: "${HOST_USER:-${USER:-dev}}"
+        STONEFISH_BUILD_JOBS: "${STONEFISH_BUILD_JOBS:-1}"
+
+    container_name: youlong_auv_nocuda
+    init: true
+    user: "${CONTAINER_USER:-${HOST_USER:-${USER:-dev}}}"
+    working_dir: /workspace
+    entrypoint: ["/workspace/scripts/docker_entrypoint.sh"]
+    command: ["idle"]
+    network_mode: host
+    # 工作区准备失败时不要无限重启，直接保留错误现场。
+    restart: "no"
+    stdin_open: true
+    tty: true
+    shm_size: "1g"
+
+    environment:
+      ROS_DISTRO: "${YOULONG_ROS_DISTRO:-foxy}"
+      DISPLAY: "${DISPLAY:-:0}"
+      XAUTHORITY: /tmp/.Xauthority
+      QT_QPA_PLATFORM: xcb
+      QT_QPA_FONTDIR: /usr/share/fonts/opentype/noto
+      QT_X11_NO_MITSHM: "1"
+      QT_SCALE_FACTOR: "${QT_SCALE_FACTOR:-1.0}"
+      SDL_VIDEODRIVER: x11
+      SDL_VIDEO_X11_FORCE_EGL: "0"
+      # 无 CUDA 模式由 prepare_workspace.sh 强制跳过 AI/CUDA 依赖。
+      # 如确实需要 CPU 版 AI，显式设置 INSTALL_WORKSPACE_AI=true；
+      # 仍不会启用 GPU，只是安装 Python AI 包。
+      YOULONG_NOCUDA: "true"
+      INSTALL_WORKSPACE_AI: "${INSTALL_WORKSPACE_AI:-false}"
+      FORCE_ICEORYX2_BUILD: "${FORCE_ICEORYX2_BUILD:-false}"
+      YOLO_CONFIG_DIR: "/workspace/.docker/ultralytics"
+      FASTDDS_BUILTIN_TRANSPORTS: "${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}"
+      UV_RUNTIME_MODE: "${UV_RUNTIME_MODE:-sim}"
+      # Standalone `ros2 launch uv_camera camera_launch.py` uses Stonefish
+      # shared-memory frames in the desktop nocuda profile.
+      UV_CAMERA_SIM_MODE: "${UV_CAMERA_SIM_MODE:-true}"
+      HOME: "/home/${HOST_USER:-${USER:-dev}}"
+      ROS_HOME: "/workspace/.docker/ros/${YOULONG_ROS_DISTRO:-foxy}/ros"
+      ROS_LOG_DIR: "/workspace/.docker/ros/${YOULONG_ROS_DISTRO:-foxy}/log/ros"
+      XDG_RUNTIME_DIR: "/tmp/runtime-${HOST_UID:-1000}"
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      PYTHONPATH: "/workspace/workspace_auv/.venv/lib/python3.8/site-packages:/workspace/workspace_auv/.venv/lib/python3.12/site-packages:/usr/local/lib/python3.8/dist-packages:/usr/local/lib/python3.12/dist-packages"
+
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+      - type: bind
+        source: /tmp/.X11-unix
+        target: /tmp/.X11-unix
+      - type: bind
+        source: "${XAUTHORITY_HOST:-${XAUTHORITY:-${HOME:-/tmp}/.Xauthority}}"
+        target: /tmp/.Xauthority
+        read_only: true

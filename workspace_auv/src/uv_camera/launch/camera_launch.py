@@ -2,13 +2,20 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('sim_mode', default_value='false'),
+        # In the nocuda desktop profile, a standalone camera launch should
+        # consume Stonefish shared-memory frames rather than probe /dev/video*.
+        # Explicit sim_mode:=true/false always takes precedence.
+        DeclareLaunchArgument(
+            'sim_mode',
+            default_value=EnvironmentVariable(
+                'UV_CAMERA_SIM_MODE', default_value='false'),
+        ),
         DeclareLaunchArgument('enable_front', default_value='true'),
         DeclareLaunchArgument('enable_down', default_value='true'),
         DeclareLaunchArgument(

@@ -10,7 +10,8 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools', 'numpy', 'opencv-python'],
+    # OpenCV is provided by the ROS image as python3-opencv (cv2).
+    install_requires=['setuptools', 'numpy'],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',

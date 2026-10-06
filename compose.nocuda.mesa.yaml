@@ -1,0 +1,8 @@
+services:
+  auv:
+    # 仅在宿主机存在 /dev/dri 时叠加此文件，使用 Intel/AMD Mesa 系统 OpenGL。
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-109}"
+      - "${VIDEO_GID:-44}"

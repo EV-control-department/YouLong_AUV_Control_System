@@ -61,7 +61,17 @@ ensure_iceoryx_submodule() {
 ensure_workspace_python() {
     # This script is intentionally called with the ROS system Python first, so
     # the venv inherits cv_bridge/rclpy from the ROS image.
-    INSTALL_WORKSPACE_AI="${INSTALL_WORKSPACE_AI:-true}" \
+    #
+    # Nocuda mode deliberately does not install requirements-ai.txt.  On Linux,
+    # installing ultralytics can pull a CUDA-enabled torch wheel even when the
+    # application itself never requests a GPU.
+    local install_ai="${INSTALL_WORKSPACE_AI:-false}"
+    if [[ "${YOULONG_NOCUDA:-false}" == "true" ]]; then
+        install_ai="false"
+        log 'YOULONG_NOCUDA=true：跳过 AI/CUDA 相关 Python 依赖'
+    fi
+
+    INSTALL_WORKSPACE_AI="${install_ai}" \
         "${REPO_ROOT}/scripts/setup_workspace_python.sh"
 }
 
@@ -78,26 +88,51 @@ ensure_iceoryx_python() {
         return 0
     fi
 
-    log "构建 iceoryx2 Python binding (${revision:0:12})"
-    "${VENV_PYTHON}" -m pip install \
-        --disable-pip-version-check --quiet 'maturin>=1.8,<2'
-
-    rm -f -- "${ICEORYX_DIST}"/iceoryx2-*.whl
-    "${VENV_PYTHON}" -m maturin build --release \
-        --manifest-path "${ICEORYX_MANIFEST}" \
-        --target-dir "${ICEORYX_TARGET}" \
-        --out "${ICEORYX_DIST}"
-
     local wheel
     wheel="$(find "${ICEORYX_DIST}" -maxdepth 1 -type f \
         -name 'iceoryx2-*.whl' -print | sort | tail -n 1)"
-    if [[ -z "${wheel}" ]]; then
-        log 'maturin 没有生成 iceoryx2 wheel'
-        exit 1
+
+    if [[ -n "${wheel}" && "${FORCE_ICEORYX2_BUILD:-false}" != 'true' ]]; then
+        # The wheel is stored in the bind-mounted workspace. Reuse it first so
+        # startup does not depend on PyPI being reachable; this is important on
+        # machines where pypi.org TLS is intercepted or unavailable.
+        log "复用已有 iceoryx2 wheel: $(basename "${wheel}")"
+    else
+        log "构建 iceoryx2 Python binding (${revision:0:12})"
+        "${VENV_PYTHON}" -m pip install \
+            --disable-pip-version-check --quiet 'maturin>=1.8,<2'
+
+        rm -f -- "${ICEORYX_DIST}"/iceoryx2-*.whl
+        "${VENV_PYTHON}" -m maturin build --release \
+            --manifest-path "${ICEORYX_MANIFEST}" \
+            --target-dir "${ICEORYX_TARGET}" \
+            --out "${ICEORYX_DIST}"
+
+        wheel="$(find "${ICEORYX_DIST}" -maxdepth 1 -type f \
+            -name 'iceoryx2-*.whl' -print | sort | tail -n 1)"
+        if [[ -z "${wheel}" ]]; then
+            log 'maturin 没有生成 iceoryx2 wheel'
+            exit 1
+        fi
     fi
 
+    # Install the pinned Python dependency from the bind-mounted cache first.
+    # This keeps startup independent of PyPI/TLS connectivity.
+    local flatbuffers_wheel
+    flatbuffers_wheel="$(find "${ICEORYX_DIST}" -maxdepth 1 -type f \
+        -name 'flatbuffers-25.12.19-*.whl' -print | sort | tail -n 1)"
+    if [[ -z "${flatbuffers_wheel}" ]]; then
+        log '缺少离线依赖 flatbuffers==25.12.19，请将对应 wheel 放入 .docker/iceoryx2/dist/'
+        exit 1
+    fi
     "${VENV_PYTHON}" -m pip install \
-        --disable-pip-version-check --force-reinstall "${wheel}"
+        --disable-pip-version-check --no-index --force-reinstall \
+        "${flatbuffers_wheel}"
+
+    # The wheel metadata still declares flatbuffers; --no-deps prevents pip
+    # from contacting PyPI a second time while installing the local binding.
+    "${VENV_PYTHON}" -m pip install \
+        --disable-pip-version-check --no-index --no-deps --force-reinstall "${wheel}"
 
     # iceoryx2 v0.10 advertises the abi3/3.8 wheel, but its pure-Python
     # extensions use builtin generic annotations (list[str], dict[int, ...]).
@@ -116,6 +151,8 @@ if sys.version_info < (3, 9):
         raise SystemExit("installed iceoryx2 package directory not found")
     for path in roots[0].glob("*.py"):
         text = path.read_text()
+        # Python 3.8 evaluates list[str]/dict[str, ...] at import time.
+        # Add the future import before importing any iceoryx2 module.
         if "from __future__ import annotations" not in text:
             path.write_text("from __future__ import annotations\n\n" + text)
 '
@@ -155,52 +192,25 @@ build_workspaces() {
     source install/setup.bash
     set -u
 
-    if [[ -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces" ]]; then
-        local zit6_paths=(
-            "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces"
-        )
-        local zit6_packages=(zit6_interfaces)
-        local upper_config="${REPO_ROOT}/third_party/AUV_zit6_cmake/UserApp/Config/config.json"
-
-        # upper_examples needs a machine-local ZIT6 configuration that is not
-        # checked into git. Keep the ROS interface build portable, and include
-        # the application only after its local configuration has been supplied.
-        case "${BUILD_ZIT6_UPPER_EXAMPLES:-auto}" in
-            true)
-                if [[ ! -f "${upper_config}" ]]; then
-                    log "缺少 ${upper_config}; BUILD_ZIT6_UPPER_EXAMPLES=true 无法继续"
-                    exit 1
-                fi
-                zit6_paths+=("${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples")
-                zit6_packages+=(upper_examples)
-                ;;
-            auto)
-                if [[ -f "${upper_config}" ]]; then
-                    zit6_paths+=("${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples")
-                    zit6_packages+=(upper_examples)
-                elif [[ -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples" ]]; then
-                    log '跳过 upper_examples（未找到本机 UserApp/Config/config.json）；需要时设置 BUILD_ZIT6_UPPER_EXAMPLES=true'
-                fi
-                ;;
-            false)
-                if [[ -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples" ]]; then
-                    log '按 BUILD_ZIT6_UPPER_EXAMPLES=false 跳过 upper_examples'
-                fi
-                ;;
-            *)
-                log 'BUILD_ZIT6_UPPER_EXAMPLES 只接受 auto、true 或 false'
-                exit 2
-                ;;
-        esac
-
-        log "构建 ZIT6 ROS 包: ${zit6_packages[*]}"
-        colcon build --symlink-install --parallel-workers "${workers}" \
-            --base-paths "${zit6_paths[@]}" \
-            --packages-select "${zit6_packages[@]}"
-        # shellcheck disable=SC1091
-        set +u
-        source install/setup.bash
-        set -u
+    if [[ -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples" \
+          && -d "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces" ]]; then
+        if [[ -f "${REPO_ROOT}/third_party/AUV_zit6_cmake/UserApp/Config/config.json" ]]; then
+            log '构建 ZIT6 ROS 接口'
+            colcon build --symlink-install --parallel-workers "${workers}" \
+                --base-paths \
+                    "${REPO_ROOT}/third_party/AUV_zit6_cmake/upper_examples" \
+                    "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces" \
+                --packages-select zit6_interfaces upper_examples
+            # shellcheck disable=SC1091
+            set +u
+            source install/setup.bash
+            set -u
+        else
+            log '跳过 upper_examples：缺少 UserApp/Config/config.json'
+            colcon build --symlink-install --parallel-workers "${workers}" \
+                --base-paths "${REPO_ROOT}/third_party/AUV_zit6_cmake/zit6_interfaces" \
+                --packages-select zit6_interfaces
+        fi
     fi
 
     log '构建 workspace_sim'

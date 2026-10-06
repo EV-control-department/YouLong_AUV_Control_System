@@ -21,6 +21,40 @@ if [[ ! -x "${venv_dir}/bin/python" ]]; then
     python3 -m venv --system-site-packages "${venv_dir}"
 fi
 
+# The Ubuntu 20.04/Foxy image may create the venv with an old pip.  That pip
+# does not recognize modern manylinux tags such as manylinux_2_28, causing the
+# iceoryx2 abi3 wheel produced by maturin to be reported as unsupported.
+# pip 25.0.1 is the last compatible line for Python 3.8. Do not contact
+# PyPI when a sufficiently new pip is already present: some target machines
+# have restricted or intercepted TLS access to pypi.org.
+if ! "${venv_dir}/bin/python" - <<'PY'
+import pip
+from pip._vendor.packaging.version import Version
+raise SystemExit(0 if Version(pip.__version__) >= Version("25.0") else 1)
+PY
+then
+    "${venv_dir}/bin/python" -m pip install \
+        --disable-pip-version-check --upgrade 'pip<25.1'
+fi
+
+"${venv_dir}/bin/python" - <<'PY'
+import sys
+import pip
+from pip._vendor.packaging.tags import sys_tags
+
+if sys.version_info < (3, 8):
+    raise SystemExit(f"Python 3.8 or newer is required, got {sys.version}")
+
+# Tags include the interpreter/ABI prefix, for example:
+# cp38-abi3-manylinux_2_28_x86_64.
+supported = {str(tag) for tag in sys_tags()}
+if not any("manylinux_2_28_x86_64" in tag for tag in supported):
+    raise SystemExit("pip cannot install manylinux_2_28 x86_64 wheels")
+
+print(f"workspace pip {pip.__version__}")
+print("manylinux_2_28_x86_64 wheel tag: supported")
+PY
+
 "${venv_dir}/bin/python" -m pip install --disable-pip-version-check \
     --requirement "${requirements_file}"
 

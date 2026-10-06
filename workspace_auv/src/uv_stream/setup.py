@@ -12,7 +12,10 @@ setup(
         ('share/' + package_name + '/config', ['config/go2rtc.yaml']),
         ('share/' + package_name + '/launch', ['launch/stream_launch.py']),
     ],
-    install_requires=['setuptools', 'numpy', 'opencv-python'],
+    # OpenCV is provided by the ROS image as python3-opencv (cv2). Do not
+    # declare pip's opencv-python distribution here: pkg_resources would then
+    # reject the ROS-provided cv2 at runtime.
+    install_requires=['setuptools', 'numpy'],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',
