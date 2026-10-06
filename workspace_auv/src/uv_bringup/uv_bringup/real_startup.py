@@ -37,7 +37,10 @@ from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, qos_profile_sensor_data,
     QoSProfile, ReliabilityPolicy,
 )
-from rclpy.signals import SignalHandlerOptions
+try:
+    from rclpy.signals import SignalHandlerOptions
+except ImportError:  # Foxy predates SignalHandlerOptions.
+    SignalHandlerOptions = None
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import UInt32
 from std_srvs.srv import Trigger
@@ -1347,9 +1350,18 @@ def main(argv=None):
         # Keep the ROS context alive while cleanup calls the mission-stop and
         # BasicMotion safe-stop services. The Python handlers above turn Ctrl-C
         # into an orderly exit instead of shutting ROS down before cleanup.
-        rclpy.init(
-            args=ros_args, signal_handler_options=SignalHandlerOptions.NO)
+        if SignalHandlerOptions is None:
+            rclpy.init(args=ros_args)
+        else:
+            rclpy.init(
+                args=ros_args, signal_handler_options=SignalHandlerOptions.NO)
         manager = RealStartupManager(args)
+        # Foxy installs its SIGINT guard when the global executor is created.
+        # Re-apply our orderly-shutdown handlers afterward so Ctrl-C leaves
+        # the ROS context alive for the safe-stop request and child cleanup.
+        rclpy.get_global_executor()
+        for signum in managed_signals:
+            signal.signal(signum, request_orderly_shutdown)
         if signal_state['requested']:
             manager._shutdown_requested = True
         try:
@@ -1396,6 +1408,12 @@ def main(argv=None):
                 manager.get_logger().error(
                     f'owned-process cleanup raised unexpectedly: {exc}')
             finally:
+                try:
+                    # Foxy's ActionClient destructor accesses its parent node;
+                    # explicitly destroy it before destroying that node.
+                    manager.action.destroy()
+                except Exception:
+                    pass
                 try:
                     manager.destroy_node()
                 except Exception:

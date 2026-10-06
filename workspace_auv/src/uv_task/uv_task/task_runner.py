@@ -28,7 +28,8 @@ from std_srvs.srv import Trigger
 
 from zit6_interfaces.msg import ZitStatus
 from auv_protocol.topics import (
-    BASIC_MOTION, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, TRACKS, STATE_ODOM,
+    BASIC_MOTION, MEASUREMENTS, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS,
+    TRACKS, STATE_ODOM,
     ZIT6_STATUS, ZIT6_LIGHT, ZIT6_SERVO,
     MISSION_RUN, MISSION_STOP, MISSION_EXECUTE, MISSION_STATUS,
     LEGACY_TASK_RUN, LEGACY_TASK_STOP, LEGACY_TASK_EXECUTE,
@@ -39,6 +40,7 @@ from uv_msgs.action import BasicMotion
 from uv_msgs.msg import (
     DetectionArray,
     ModelClassMapping,
+    ObjectMeasurementArray,
     ObjectTrack,
     ObjectTrackArray,
     PoseInfo,
@@ -126,6 +128,7 @@ class TaskRunnerNode(Node):
         self._cmd_z = 0.0
         self._cmd_yaw = 0.0
         self.object_tracks = ObjectTrackArray()
+        self._impact_ball_observations = {}
         self._model_mapping = ModelClassRegistry.empty()
         self._model_mapping_ready = threading.Event()
         self._localizer_target_class_ids = {}
@@ -279,6 +282,9 @@ class TaskRunnerNode(Node):
         self.create_subscription(
             ObjectTrackArray, TRACKS, self._tracks_cb, 10)
         self.create_subscription(
+            ObjectMeasurementArray, MEASUREMENTS,
+            self._measurements_cb, 10)
+        self.create_subscription(
             DetectionArray, PERCEPTION_DETECTIONS, self._det_cb, 10)
         self.create_subscription(
             PoseInfo, STATE_ODOM, self._pose_cb, 10)
@@ -349,6 +355,46 @@ class TaskRunnerNode(Node):
     def _tracks_cb(self, msg: ObjectTrackArray):
         with self._perception_lock:
             self.object_tracks = msg
+
+    def _measurements_cb(self, msg: ObjectMeasurementArray):
+        """Cache fresh front-camera rays and positions for impact-ball search."""
+        received_at = time.monotonic()
+        latest_by_class = {}
+        for measurement in msg.measurements:
+            source = str(measurement.source_camera).strip().lower()
+            if not source.startswith('front'):
+                continue
+            has_ray = bool(measurement.has_ray)
+            has_position = bool(measurement.has_position)
+            if not has_ray and not has_position:
+                continue
+            confidence = float(measurement.confidence)
+            if not math.isfinite(confidence):
+                continue
+            class_id = int(measurement.class_id)
+            observation = {
+                'received_at': received_at,
+                'confidence': confidence,
+                'source': source,
+                'has_ray': has_ray,
+                'ray_direction': (
+                    float(measurement.ray_direction_x),
+                    float(measurement.ray_direction_y),
+                    float(measurement.ray_direction_z),
+                ),
+                'has_position': has_position,
+                'position': (
+                    float(measurement.world_x),
+                    float(measurement.world_y),
+                    float(measurement.world_z),
+                ),
+            }
+            previous = latest_by_class.get(class_id)
+            if previous is None or confidence >= previous['confidence']:
+                latest_by_class[class_id] = observation
+        if latest_by_class:
+            with self._perception_lock:
+                self._impact_ball_observations.update(latest_by_class)
 
     def _det_cb(self, msg: DetectionArray):
         camera_name = str(msg.camera_name).strip().lower()
@@ -1693,6 +1739,62 @@ class TaskRunnerNode(Node):
                 '共享模型映射中存在的 canonical class name')
         return result
 
+    def _latest_impact_ball_observation(
+            self, name: str, params: dict, *, after_received=None,
+            max_age: float = 0.75):
+        """Return a fresh front observation and its world-frame bearing."""
+        class_id = self._model_mapping.model_class_id(name, required=False)
+        if class_id is None:
+            return None
+        min_confidence = float(params.get('min_confidence', 0.05))
+        now = time.monotonic()
+        with self._perception_lock:
+            cached = self._impact_ball_observations.get(int(class_id))
+            pose = self._robot_pose
+        if cached is None:
+            return None
+        received_at = float(cached['received_at'])
+        if (now - received_at > max(0.0, float(max_age))
+                or (after_received is not None
+                    and received_at <= float(after_received))
+                or cached['confidence'] < min_confidence):
+            return None
+
+        yaw = None
+        if cached['has_ray']:
+            ray_x, ray_y, _ray_z = cached['ray_direction']
+            if math.isfinite(ray_x) and math.isfinite(ray_y):
+                if math.hypot(ray_x, ray_y) > 1e-6:
+                    yaw = math.degrees(math.atan2(ray_y, ray_x))
+        if yaw is None and cached['has_position']:
+            if pose is None:
+                pose = (self._cmd_x, self._cmd_y, self._cmd_z,
+                        0.0, 0.0, self._cmd_yaw)
+            x, y, _z = cached['position']
+            dx, dy = x - float(pose[0]), y - float(pose[1])
+            if (math.isfinite(dx) and math.isfinite(dy)
+                    and math.hypot(dx, dy) > 1e-6):
+                yaw = math.degrees(math.atan2(dy, dx))
+        if yaw is None or not math.isfinite(yaw):
+            return None
+        return {**cached, 'yaw_deg': self._wrap_yaw_degrees(yaw)}
+
+    def _wait_for_impact_ball_observation(
+            self, name: str, params: dict, *, timeout: float,
+            after_received=None):
+        """Wait briefly for a new front observation at the current heading."""
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while rclpy.ok() and not self.stopped:
+            observation = self._latest_impact_ball_observation(
+                name, params, after_received=after_received)
+            if observation is not None:
+                return observation
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(0.05, remaining))
+        return None
+
     def _best_impact_ball_target(self, name: str, params: dict):
         """Return a usable estimate for one suspended impact ball.
 
@@ -1787,52 +1889,87 @@ class TaskRunnerNode(Node):
         return success
 
     def _active_localize_impact_balls(self, order: list[str], params: dict):
-        """Actively scan 360 degrees and collect both ball estimates."""
-        step = float(params.get('search_yaw_step_deg', 30.0))
+        """Search a narrow left/right arc, align to a ray, and localize."""
+        step = float(params.get('search_yaw_step_deg', 15.0))
         step = min(180.0, max(5.0, abs(step)))
         settle_time = max(0.0, float(params.get('search_settle_time', 0.4)))
         rotate_timeout = max(
             1.0, float(params.get('search_rotate_timeout', 10.0)))
         search_timeout = max(0.0, float(params.get('search_timeout', 60.0)))
-        headings = max(1, int(math.ceil(360.0 / step)))
-        start_yaw = self._cmd_yaw
         found = {}
-        deadline = time.monotonic() + search_timeout
+        for name in order:
+            search_deadline = time.monotonic() + search_timeout
+            start_yaw = self._wrap_yaw_degrees(
+                float(self._latest_robot_pose()[5]))
+            task_started_at = time.monotonic()
+            observation = self._latest_impact_ball_observation(name, params)
+            if observation is None and settle_time > 0.0:
+                observation = self._wait_for_impact_ball_observation(
+                    name, params, timeout=settle_time,
+                    after_received=task_started_at)
 
-        self.get_logger().info(
-            f'hit_balls：主动定位扫描开始，共 {headings} 个方向，'
-            f'步进 {step:.1f}°')
-        for index in range(headings):
-            if not rclpy.ok() or self.stopped or time.monotonic() >= deadline:
-                break
-            heading = start_yaw + index * step
-            # The first sample uses the current heading; subsequent samples
-            # rotate in place so the front stereo pair observes all azimuths.
-            if index > 0 and not self._rotate_for_impact_scan(
-                    heading,
-                    min(rotate_timeout,
-                        max(1.0, deadline - time.monotonic()))):
-                continue
-            if settle_time > 0.0:
-                remaining = deadline - time.monotonic()
+            if observation is None:
+                self.get_logger().info(
+                    f'hit_balls：当前方向未看到 {name}，开始左右各 '
+                    f'{step:.1f}°搜索')
+                # Positive yaw is left in the odom convention: left 15°,
+                # return to center, right 15°, then return to center.
+                for offset_deg in (step, 0.0, -step, 0.0):
+                    if (not rclpy.ok() or self.stopped
+                            or time.monotonic() >= search_deadline):
+                        break
+                    heading = self._wrap_yaw_degrees(
+                        start_yaw + offset_deg)
+                    if not self._rotate_for_impact_scan(
+                            heading, rotate_timeout):
+                        continue
+                    arrived_at = time.monotonic()
+                    remaining = max(0.0, search_deadline - arrived_at)
+                    observation = self._wait_for_impact_ball_observation(
+                        name, params,
+                        timeout=min(settle_time, remaining),
+                        after_received=arrived_at)
+                    if observation is not None:
+                        break
+
+            if observation is None:
+                self.set_light(
+                    self.LIGHT_RED, f'{name} 搜索失败')
+                self.get_logger().error(
+                    f'hit_balls：左右各 {step:.1f}°扫描后仍未看到 {name}')
+                return None
+
+            ray_yaw = float(observation['yaw_deg'])
+            if not self._rotate_for_impact_scan(ray_yaw, rotate_timeout):
+                self.get_logger().error(
+                    f'hit_balls：无法将艇首对准 {name} 的观测射线')
+                return None
+            self.get_logger().info(
+                f'hit_balls：看到 {name}，观测射线偏航角='
+                f'{ray_yaw:.1f}°，保持观察 2 秒')
+            observe_deadline = time.monotonic() + 2.0
+            while rclpy.ok() and not self.stopped:
+                remaining = observe_deadline - time.monotonic()
                 if remaining <= 0.0:
                     break
-                time.sleep(min(settle_time, remaining))
-            for name in order:
-                if name not in found:
-                    target = self._best_impact_ball_target(name, params)
-                    if target is not None:
-                        found[name] = target
-                        self.get_logger().info(
-                            f'hit_balls：主动扫描找到 {name}，'
-                            f'位置=({target["x"]:.2f}, {target["y"]:.2f}, '
-                            f'{target["z"]:.2f})')
-            if len(found) == len(order):
-                break
+                time.sleep(min(0.1, remaining))
+            if not rclpy.ok() or self.stopped:
+                return None
+
+            target = self._best_impact_ball_target(name, params)
+            if target is None:
+                target = self._wait_for_impact_ball(name, params)
+            if target is None:
+                self.set_light(self.LIGHT_RED, f'{name} 定位失败')
+                return None
+            found[name] = target
+            self.get_logger().info(
+                f'hit_balls：{name} 定位完成，位置='
+                f'({target["x"]:.2f}, {target["y"]:.2f}, '
+                f'{target["z"]:.2f})')
 
         self.get_logger().info(
-            f'hit_balls：主动定位扫描完成，已找到={list(found.keys())}，'
-            f'缺少={[name for name in order if name not in found]}')
+            f'hit_balls：搜索与定位完成，已找到={list(found.keys())}')
         return found
 
     def _travel_to_impact_point(self, x: float, y: float, z: float,

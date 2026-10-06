@@ -77,7 +77,9 @@ def generate_launch_description():
         package='uv_bringup', executable='real_startup',
         name='real_startup_manager', exec_name='real_startup_manager',
         arguments=manager_arguments, output='screen',
-        sigterm_timeout=22.0, sigkill_timeout=5.0,
+        # Foxy normalizes these as launch substitutions (an iterable), not
+        # numeric Python values. Keep them as strings for Foxy compatibility.
+        sigterm_timeout='22', sigkill_timeout='5',
         remappings=[('/tf', '/auv/tf'), ('/tf_static', '/auv/tf_static')],
     )
     return LaunchDescription([*declarations, manager])

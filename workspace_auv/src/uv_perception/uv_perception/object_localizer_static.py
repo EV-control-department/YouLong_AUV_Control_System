@@ -42,7 +42,7 @@ class ObjectLocalizer:
     def __init__(self, node):
         self.node = node
         self.publisher = node.create_publisher(ObjectMeasurementArray, MEASUREMENTS, 10)
-        self.pair_timeout_s = float(node.declare_parameter('pair_timeout_s', 0.05).value)
+        self.pair_timeout_s = float(node.declare_parameter('pair_timeout_s', 0.1).value)
         self.world_frame = str(node.declare_parameter('world_frame', 'odom').value)
         self.edge_margin_px = float(node.declare_parameter('edge_margin_px', 8.0).value)
         self.edge_margin_ratio = float(

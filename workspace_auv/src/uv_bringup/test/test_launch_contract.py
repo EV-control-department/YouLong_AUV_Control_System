@@ -61,9 +61,12 @@ def test_real_startup_contract_is_staged_and_task_launch_is_deferred():
     assert "Initial component decisions" in startup
     assert "no later phase will be started" in startup
     assert "SignalHandlerOptions.NO" in startup
+    assert "except ImportError" in startup
+    assert "rclpy.get_global_executor()" in startup
+    assert "manager.action.destroy()" in startup
     assert "_terminate_owned_process_groups" in startup
     assert "start_new_session=True" in startup
-    assert "sigterm_timeout=22.0" in _source("real.launch.py")
+    assert "sigterm_timeout='22'" in _source("real.launch.py")
     assert "auto_start" in task_launch
     assert "node._auto_start" in task_runner
 

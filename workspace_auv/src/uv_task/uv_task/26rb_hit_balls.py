@@ -51,18 +51,10 @@ class RB26HitBallsTask:
         active_localization = bool(params.get('active_localization', True))
         if active_localization:
             found = node._active_localize_impact_balls(order, params)
-            # Complete localization before starting the impact run.
-            for name in order:
-                if name in found:
-                    continue
-                node.get_logger().info(
-                    f'hit_balls：等待完成 {name} 的定位')
-                target = node._wait_for_impact_ball(name, params)
-                if target is None:
-                    return TaskOutcome.failed(
-                        '26rb_hit_balls.localization',
-                        f'无法完成 {name} 的定位')
-                found[name] = target
+            if found is None or any(name not in found for name in order):
+                return TaskOutcome.failed(
+                    '26rb_hit_balls.localization',
+                    '左右各 15°扫描后未能完成撞球目标定位')
 
         impact_mode = str(params.get('impact_mode', '')).strip().lower()
         if impact_mode == 'staged_charge_return':

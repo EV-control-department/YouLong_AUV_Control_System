@@ -8,7 +8,7 @@ params:
 
   # 主动搜索参数。
   search:
-    yaw_step_deg: 30.0             # 每次旋转角度，单位：度。
+    yaw_step_deg: 15.0              # 搜索时向左右各旋转的角度，单位：度。
     settle_time: 0.4               # 旋转后等待视觉稳定，单位：秒。
     timeout: 60.0                  # 单个目标搜索最长时间，单位：秒。
     rotate_timeout: 10.0           # 单次搜索旋转位置环超时，单位：秒。
