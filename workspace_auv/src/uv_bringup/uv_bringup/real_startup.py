@@ -27,11 +27,12 @@ from auv_protocol.topics import (
     PLANNING_STATUS, STATE_HEALTH,
     STATE_ODOM, TRACKS, ZIT6_HEARTBEAT_STATE, ZIT6_STATUS,
 )
+from rcl_interfaces.msg import Parameter as ParameterMsg
+from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.parameter_client import AsyncParameterClient
 from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, qos_profile_sensor_data,
     QoSProfile, ReliabilityPolicy,
@@ -298,31 +299,50 @@ class RealStartupManager(Node):
     def _parameters_match(self, node_name, expected):
         if not expected:
             return True, 'node discovered; no component-specific parameters'
-        client = AsyncParameterClient(self, node_name)
-        if not client.wait_for_services(timeout_sec=min(3.0, self.timeout)):
-            return False, f'{node_name} parameter service unavailable'
-        future = client.get_parameters(list(expected))
-        rclpy.spin_until_future_complete(
-            self, future, timeout_sec=min(4.0, self.timeout))
-        if not future.done() or future.exception() is not None:
-            return False, f'{node_name} effective parameters could not be read'
-        actual = future.result()
-        for name, wanted in expected.items():
-            try:
-                value = Parameter.from_parameter_msg(actual[list(expected).index(name)]).value
-            except (AttributeError, IndexError, TypeError):
-                return False, f'{node_name} does not expose parameter {name}'
-            if name == 'mission_file' and not str(value or '').strip():
-                value = str(default_mission_path().resolve())
-            elif name == 'mission_file' and value:
-                value = str(Path(str(value)).expanduser().resolve())
-            if isinstance(wanted, float):
-                matches = isinstance(value, (int, float)) and abs(value - wanted) < 1e-6
-            else:
-                matches = value == wanted
-            if not matches:
-                return False, f'{node_name}.{name}={value!r}, expected {wanted!r}'
-        return True, 'effective parameters match'
+        service_name = node_name.rstrip('/') + '/get_parameters'
+        client = self.create_client(GetParameters, service_name)
+        try:
+            if not client.wait_for_service(timeout_sec=min(3.0, self.timeout)):
+                return False, f'{node_name} parameter service unavailable'
+            request = GetParameters.Request()
+            request.names = list(expected)
+            future = client.call_async(request)
+            # A node can appear in the ROS graph before its executor is
+            # spinning. Give slow initializers (for example YOLO model load)
+            # the configured startup readiness window to answer.
+            response_timeout = max(0.1, float(self.timeout))
+            rclpy.spin_until_future_complete(
+                self, future, timeout_sec=response_timeout)
+            if not future.done():
+                return False, (
+                    f'{node_name} parameter response timed out after '
+                    f'{response_timeout:.1f}s')
+            service_error = future.exception()
+            if service_error is not None:
+                return False, (
+                    f'{node_name} parameter request failed: {service_error}')
+            response = future.result()
+            for index, (name, wanted) in enumerate(expected.items()):
+                try:
+                    parameter_msg = ParameterMsg()
+                    parameter_msg.name = name
+                    parameter_msg.value = response.values[index]
+                    value = Parameter.from_parameter_msg(parameter_msg).value
+                except (AttributeError, IndexError, TypeError):
+                    return False, f'{node_name} does not expose parameter {name}'
+                if name == 'mission_file' and not str(value or '').strip():
+                    value = str(default_mission_path().resolve())
+                elif name == 'mission_file' and value:
+                    value = str(Path(str(value)).expanduser().resolve())
+                if isinstance(wanted, float):
+                    matches = isinstance(value, (int, float)) and abs(value - wanted) < 1e-6
+                else:
+                    matches = value == wanted
+                if not matches:
+                    return False, f'{node_name}.{name}={value!r}, expected {wanted!r}'
+            return True, 'effective parameters match'
+        finally:
+            self.destroy_client(client)
 
     def _launch(self, component, command, expected_nodes=(), params=None):
         matches = {name: self._matching_nodes(name) for name in expected_nodes}
@@ -407,9 +427,36 @@ class RealStartupManager(Node):
         if now - self._last_dashboard < 1.0:
             return
         self._last_dashboard = now
-        rows = [f'{name:18} {state}'
+        color_enabled = (
+            'NO_COLOR' not in os.environ
+            and (sys.stdout.isatty()
+                 or bool(os.environ.get('FORCE_COLOR'))
+                 or os.environ.get('TERM', '') not in ('', 'dumb')))
+
+        def colored_row(name, state, *, mission=False):
+            normalized = str(state).upper()
+            if any(token in normalized for token in (
+                    'BLOCKED', 'ERROR', 'FAILED', 'EXITED', 'CONFLICT',
+                    'DEGRADED', 'UNAVAILABLE', 'FAULT', 'LATCHED',
+                    'UNVERIFIED')):
+                color = '\033[31m'  # red: failed or unsafe
+            elif mission and normalized == 'WAITING':
+                color = '\033[90m'  # gray: mission not started
+            elif any(token in normalized for token in (
+                    'STARTING', 'WAITING', 'DEFERRED', 'PAUSED', 'RETRY')):
+                color = '\033[33m'  # yellow: startup/readiness in progress
+            elif any(token in normalized for token in (
+                    'READY', 'REUSED', 'COMPLETE', 'TRIGGERED',
+                    'ATTACHED', 'RUNNING', 'DONE', 'HEALTHY')):
+                color = '\033[32m'  # green: active and healthy
+            else:
+                color = '\033[90m'  # gray: disabled, missing, or not started
+            row = f'{name:18} {state}'
+            return f'{color}{row}\033[0m' if color_enabled else row
+
+        rows = [colored_row(name, state)
                 for name, state in sorted(self.component_state.items())]
-        mission_state = 'WAITING'
+        mission_state = 'WAITING' if self.args.enable_task else 'NOT STARTED'
         if self._task_status is not None:
             labels = {
                 TaskStatus.STATUS_IDLE: 'IDLE',
@@ -422,12 +469,15 @@ class RealStartupManager(Node):
                 int(self._task_status.status), 'UNKNOWN')
             if self._task_status.current_task_name:
                 mission_state += f' ({self._task_status.current_task_name})'
-        rows.append(f'{"mission":18} {mission_state}')
+        rows.append(colored_row('mission', mission_state, mission=True))
         discovered = ', '.join(sorted(
             name for name in self._node_names()
             if name != '/real_startup_manager')) or '(none)'
         rows.append(f'{"ROS nodes":18} {discovered}')
-        table = '\n'.join(['REAL STARTUP STATUS', *rows])
+        title = 'REAL STARTUP STATUS'
+        if color_enabled:
+            title = f'\033[1;36m{title}\033[0m'
+        table = '\n'.join([title, *rows])
         if sys.stdout.isatty():
             print('\033[2J\033[H' + table, flush=True)
         else:

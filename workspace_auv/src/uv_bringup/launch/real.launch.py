@@ -24,6 +24,7 @@ def generate_launch_description():
         *profile_actions,
         declare_mission_file(),
         *features,
+        DeclareLaunchArgument('camera_stitch_fps', default_value='5.0'),
         *observability,
         DeclareLaunchArgument(
             'startup_mode', default_value='auto',
@@ -42,7 +43,6 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_stream', default_value='true'),
         DeclareLaunchArgument('enable_perception_gui', default_value='false'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
-        DeclareLaunchArgument('camera_stitch_fps', default_value='5.0'),
     ]
 
     manager_arguments = [
