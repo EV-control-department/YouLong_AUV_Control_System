@@ -14,6 +14,7 @@ def generate_launch_description():
     mission_file = LaunchConfiguration("mission_file")
     camera_mode = LaunchConfiguration("camera_mode")
     camera_config_dir = LaunchConfiguration("camera_config_dir")
+    auto_start = LaunchConfiguration("auto_start")
 
     def _nodes(context):
         parameters = []
@@ -22,6 +23,7 @@ def generate_launch_description():
             parameters.append(parameter_file)
         task_parameters = {
             "mission_file": mission_file,
+            "auto_start": auto_start,
         }
         requested_camera_mode = camera_mode.perform(context).strip()
         if requested_camera_mode and requested_camera_mode.lower() != "auto":
@@ -46,6 +48,10 @@ def generate_launch_description():
         DeclareLaunchArgument("params_file", default_value=""),
         DeclareLaunchArgument("camera_mode", default_value="auto"),
         DeclareLaunchArgument("camera_config_dir", default_value=""),
+        DeclareLaunchArgument(
+            "auto_start", default_value="false",
+            description="Automatically execute the loaded mission on startup",
+        ),
         DeclareLaunchArgument(
             "mission_file",
             default_value=PathJoinSubstitution([

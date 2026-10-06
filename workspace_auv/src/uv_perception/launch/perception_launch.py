@@ -9,6 +9,9 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument('enable_detector', default_value='true'),
+        DeclareLaunchArgument('enable_localizer', default_value='true'),
+        DeclareLaunchArgument('enable_estimator', default_value='true'),
         DeclareLaunchArgument('model_path', default_value=''),
         DeclareLaunchArgument('confidence', default_value='0.5'),
         DeclareLaunchArgument('world_frame', default_value='odom'),
@@ -43,7 +46,7 @@ def generate_launch_description():
             respawn_delay=1.0, parameters=[{
                 'model_path': LaunchConfiguration('model_path'),
                 'confidence': LaunchConfiguration('confidence'),
-            }]),
+            }], condition=IfCondition(LaunchConfiguration('enable_detector'))),
         Node(
             package='uv_perception', executable='object_localizer',
             name='object_localizer', output='both', respawn=True,
@@ -57,7 +60,7 @@ def generate_launch_description():
                     LaunchConfiguration('stereo_max_ray_gap_m'),
                 'stereo_min_parallax_deg':
                     LaunchConfiguration('stereo_min_parallax_deg'),
-            }]),
+            }], condition=IfCondition(LaunchConfiguration('enable_localizer'))),
         Node(
             package='uv_perception', executable='object_estimator',
             name='object_estimator', output='both', respawn=True,
@@ -87,7 +90,7 @@ def generate_launch_description():
                     LaunchConfiguration('stable_covariance_trace_m2'),
                 'instance_association_distance_m':
                     LaunchConfiguration('instance_association_distance_m'),
-            }]),
+            }], condition=IfCondition(LaunchConfiguration('enable_estimator'))),
         Node(
             package='uv_perception', executable='perception_gui',
             name='perception_gui', output='both',

@@ -105,6 +105,16 @@ _UniqueKeyLoader.add_constructor(
 # spelling for a value consumed as ``float(1)`` by the existing task code.
 TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     "start": {},
+    "basic_motion_test": {
+        "stage": str, "reset_origin": bool, "test_depth": bool,
+        "distance_m": float, "depth_delta_m": float, "yaw_delta_deg": float,
+        "speed_mps": float, "yaw_rate_deg_s": float, "pulse_seconds": float,
+        "action_timeout": float, "settle_seconds": float,
+        "feedback_timeout": float, "horizontal_limit_m": float,
+        "vertical_limit_m": float, "min_battery_voltage": float,
+        "external_battery_voltage": float,
+        "max_speed_mps": float,
+    },
     "return_origin": {
         "state_settle_time": float,
         "timeout": float,

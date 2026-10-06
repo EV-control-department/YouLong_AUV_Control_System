@@ -96,14 +96,14 @@ def test_urdf_remains_the_source_of_stereo_baselines():
             "downward_left_camera_mount", "downward_right_camera_mount",
         }
     }
-    assert origins["front_left_camera_mount"][1] == pytest.approx(-0.05)
-    assert origins["front_right_camera_mount"][1] == pytest.approx(0.05)
-    assert origins["downward_left_camera_mount"][1] == pytest.approx(-0.05)
-    assert origins["downward_right_camera_mount"][1] == pytest.approx(0.05)
+    assert origins["front_left_camera_mount"][1] == pytest.approx(-0.03)
+    assert origins["front_right_camera_mount"][1] == pytest.approx(0.03)
+    assert origins["downward_left_camera_mount"][1] == pytest.approx(-0.03)
+    assert origins["downward_right_camera_mount"][1] == pytest.approx(0.03)
     for left, right in (("front_left_camera_mount", "front_right_camera_mount"),
                         ("downward_left_camera_mount", "downward_right_camera_mount")):
         baseline = sum((a - b) ** 2 for a, b in zip(origins[left], origins[right])) ** 0.5
-        assert baseline == pytest.approx(0.1)
+        assert baseline == pytest.approx(0.06)
 
 
 def test_camera_calibration_files_are_installed_under_stereos():

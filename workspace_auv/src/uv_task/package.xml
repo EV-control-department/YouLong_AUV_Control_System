@@ -16,6 +16,8 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>zit6_interfaces</depend>
   <depend>uv_msgs</depend>
   <depend>auv_protocol</depend>
   <depend>uv_camera</depend>

@@ -1,3 +1,25 @@
+# 真机任务模式：启动硬件、定位、运动控制、相机、完整 AI 感知、go2rtc、录制和 uv_task，
+# 并自动执行 mission。适合：确认车辆、电源、急停、ZIT6 状态、相机和感知全部正常后，
+# 正式运行竞赛任务。
+#
+# 调用方式：
+#   ros2 launch uv_bringup real.launch.py profile:=task
+#
+# 启动的主要节点/进程：
+#   - model_class_publisher：发布类别映射，task_runner 启动前必须收到该消息。
+#   - robot_state_publisher：发布真实 URDF 和相机静态 TF。
+#   - uv_localization：发布 /auv/state/odom 和动态 TF。
+#   - hw_manager：发布 ZIT6 heartbeat，并监控 MCU 是否进入 ARMED/RUNNING 状态。
+#   - basic_motion：提供 /auv/basic_motion Action Server，接收 task_runner 的运动目标。
+#   - uv_camera：打开真实前视/下视相机。
+#   - object_detector、object_localizer、object_estimator：提供检测、目标定位和轨迹。
+#   - uv_stream/go2rtc：提供视频预览。
+#   - uv_record_recorder：录制 go2rtc 视频、rosbag 和运行日志。
+#   - task_runner：读取 mission_file；默认是 uv_task/config/missions/robocup_26.yaml，
+#     加载成功后自动从第一个 start 任务开始执行，不是只启动一个空闲节点。
+#
+# 安全注意：profile:=task 会直接让 AUV 进入任务流程；下水/解锁前必须确认任务文件、
+# 运动空间、ZIT6 状态、急停和 heartbeat 均正常。导航仍由 enable_nav=false 关闭。
 schema_version: 1
 runtime: real
 profile: task
@@ -6,6 +28,7 @@ arguments:
   enable_hardware: true
   enable_ai: true
   enable_motion: true
+  enable_camera: true
   enable_nav: false
   enable_task: true
   enable_stream: true

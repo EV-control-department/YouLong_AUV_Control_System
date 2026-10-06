@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import replace
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from uv_msgs.msg import SensorHealth
 
-from auv_protocol.topics import ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT
+from auv_protocol.topics import (
+    CAMERA_HEALTH, ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT,
+)
 from uv_image_transport.iceoryx2 import (
     CAMERA_DOWN, CAMERA_FRONT, FrameHeader, Iceoryx2Publisher,
 )
@@ -30,6 +34,7 @@ class CameraDriver(Node):
         self.declare_parameter('front_camera_device', '')
         self.declare_parameter('down_camera_device', '')
         self.declare_parameter('camera_startup_timeout_sec', 5.0)
+        self.declare_parameter('camera_reconnect_interval_sec', 1.0)
         self.declare_parameter('camera_info_version', 1)
         sim_mode = bool(self.get_parameter('sim_mode').value)
         enable_front = bool(self.get_parameter('enable_front').value)
@@ -62,12 +67,21 @@ class CameraDriver(Node):
                 ICEORYX_CAMERA_DOWN)
         self._capture_id = 0
         self._lock = threading.Lock()
+        self._status_lock = threading.Lock()
+        self._camera_errors = {}
+        self._frame_health_lock = threading.Lock()
+        self._camera_frame_count = {'front': 0, 'down': 0}
+        self._camera_last_frame_at = {'front': 0.0, 'down': 0.0}
         self._status = self.create_publisher(String, '/auv/camera/status', 10)
+        self._health = self.create_publisher(SensorHealth, CAMERA_HEALTH, 10)
+        self._health_timer = self.create_timer(0.5, self._publish_camera_health)
         self._sensor = Sensor(
             self, sim_mode=sim_mode, enable_front=enable_front,
             enable_down=enable_down,
             startup_timeout_s=float(self.get_parameter(
                 'camera_startup_timeout_sec').value),
+            reconnect_interval_s=float(self.get_parameter(
+                'camera_reconnect_interval_sec').value),
             camera_configs=self._configs, frame_callback=self._on_frame)
         try:
             self._sensor.start()
@@ -78,7 +92,7 @@ class CameraDriver(Node):
         self.get_logger().info(
             'uv_camera started: two stitched raw services '
             'youlong/camera/front and youlong/camera/down')
-        self._publish_status('running')
+        self._publish_camera_status()
 
     def _on_frame(self, camera, frame, stamp, right_stamp=None,
                   stereo_pair_id=0):
@@ -90,6 +104,9 @@ class CameraDriver(Node):
         if image.ndim != 3 or image.shape[2] != 3:
             self.get_logger().error(f'{camera} frame is not BGR8: {image.shape}')
             return
+        with self._frame_health_lock:
+            self._camera_frame_count[camera] += 1
+            self._camera_last_frame_at[camera] = time.monotonic()
         with self._lock:
             self._capture_id += 1
             capture_id = self._capture_id
@@ -114,8 +131,49 @@ class CameraDriver(Node):
         self._status.publish(message)
 
     def report_camera_failure(self, camera, reason):
-        self._publish_status(f'{camera}: {reason}')
-        self.get_logger().error(reason)
+        with self._status_lock:
+            self._camera_errors[camera] = reason
+        self._publish_camera_status()
+        self.get_logger().error(f'{camera} camera failure: {reason}')
+
+    def report_camera_recovered(self, camera, elapsed_s):
+        message = f'{camera} camera recovered after {elapsed_s:.1f}s'
+        with self._status_lock:
+            self._camera_errors.pop(camera, None)
+        self._publish_camera_status()
+        self.get_logger().info(message)
+
+    def _publish_camera_status(self):
+        with self._status_lock:
+            if self._camera_errors:
+                value = '; '.join(
+                    f'{camera}: error: {reason}'
+                    for camera, reason in sorted(self._camera_errors.items()))
+            else:
+                value = 'running'
+        self._publish_status(value)
+
+    def _publish_camera_health(self):
+        now = time.monotonic()
+        with self._status_lock:
+            errors = dict(self._camera_errors)
+        with self._frame_health_lock:
+            frames = dict(self._camera_frame_count)
+            last_frames = dict(self._camera_last_frame_at)
+        for camera in ('front', 'down'):
+            age = now - last_frames[camera]
+            available = (
+                camera not in errors and frames[camera] >= 2
+                and age <= 2.0)
+            message = SensorHealth()
+            message.header.stamp = self.get_clock().now().to_msg()
+            message.sensor_name = f'camera/{camera}'
+            message.available = available
+            message.quality = 1.0 if available else 0.0
+            message.detail = (
+                f'frames={frames[camera]} age={age:.2f}s'
+                if camera not in errors else f'error: {errors[camera]}')
+            self._health.publish(message)
 
     def destroy_node(self):
         try:

@@ -19,6 +19,7 @@ import numpy as np
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
 )
@@ -54,6 +55,7 @@ from uv_task.mission_policy import (
     select_failure_override,
 )
 from uv_task.task_outcome import TaskOutcome
+from uv_task.basic_motion_test import RosMotionTest
 
 from uv_task.arrow_surfacer import (
     _euler_to_rotation_matrix, _ray_intersection_midpoint,
@@ -146,6 +148,7 @@ class TaskRunnerNode(Node):
         self._last_motion_failure_message = ''
         self._last_failure_code = ''
         self._last_failure_message = ''
+        self._mission_status_code = TaskStatus.STATUS_IDLE
 
         # Debug mode
         self.declare_parameter('debug_mode', False)
@@ -153,9 +156,16 @@ class TaskRunnerNode(Node):
         self.declare_parameter('mission_file', '')
         self.mission_file = self.get_parameter(
             'mission_file').get_parameter_value().string_value
+        self.declare_parameter('auto_start', False)
+        auto_start_value = self.get_parameter('auto_start').value
+        self._auto_start = (
+            auto_start_value if isinstance(auto_start_value, bool)
+            else str(auto_start_value).strip().lower()
+            in ('1', 'true', 'yes', 'on'))
         self._debug_task_name = None
         self._debug_executing = False
         self._debug_timeout = -1.0
+        self._last_basic_motion_test_outcome = None
 
         self.declare_parameter('camera_mode', 'auto')
         self.declare_parameter('camera_config_dir', '')
@@ -193,6 +203,7 @@ class TaskRunnerNode(Node):
         # Task map (shared by _execute_task and _exec_task_cb)
         self.task_map = {
             'start': self._task_start,
+            'basic_motion_test': self._task_basic_motion_test,
             'setx': self._task_setx,
             'sety': self._task_sety,
             'setz': self._task_setz,
@@ -254,6 +265,8 @@ class TaskRunnerNode(Node):
         self._action_client = ActionClient(self, BasicMotion, BASIC_MOTION)
         if not self._action_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('BasicMotion 动作服务器不可用！')
+
+        self._basic_motion_test = RosMotionTest(self)
 
         # Subscribers
         mapping_qos = QoSProfile(
@@ -363,7 +376,7 @@ class TaskRunnerNode(Node):
         self._active_goal_handle = None
         if goal_handle is not None:
             try:
-                self._action_client.async_cancel_goal(goal_handle)
+                goal_handle.cancel_goal_async()
                 self.get_logger().warning(
                     '任务执行器关闭：已请求取消当前 BasicMotion 目标')
             except Exception as exc:
@@ -885,6 +898,7 @@ class TaskRunnerNode(Node):
     def run_task_list(self):
         """Execute all tasks sequentially."""
         self.running = True
+        self._mission_status_code = TaskStatus.STATUS_RUNNING
         self.stopped = False
         self.current_index = 0
         self._last_failure_code = ''
@@ -953,6 +967,12 @@ class TaskRunnerNode(Node):
             self.current_index += 1
 
         self.running = False
+        if self.stopped:
+            self._mission_status_code = TaskStatus.STATUS_PAUSED
+        elif self._last_failure_code:
+            self._mission_status_code = TaskStatus.STATUS_ERROR
+        else:
+            self._mission_status_code = TaskStatus.STATUS_DONE
         self._current_task_name = ''
         self._current_task_step = 0
         if self.stopped:
@@ -972,6 +992,7 @@ class TaskRunnerNode(Node):
             if not outcome:
                 return outcome
 
+        self._last_basic_motion_test_outcome = None
         handler = self.task_map.get(name)
         if handler is None:
             self.get_logger().warn(f'未知任务：{name}')
@@ -1166,6 +1187,16 @@ class TaskRunnerNode(Node):
         while time.time() < deadline and not skip.is_set():
             time.sleep(min(0.1, deadline - time.time()))
         return skip.is_set()
+
+    def _task_basic_motion_test(self, p: dict) -> TaskOutcome:
+        outcome = self._basic_motion_test.run(p)
+        self._last_basic_motion_test_outcome = outcome
+        if not outcome:
+            # End a containing mission as well; never continue after this test fails.
+            self.stopped = True
+            self.get_logger().error(
+                f'basic_motion_test FAIL: {outcome.failure_code}: {outcome.message}')
+        return outcome
 
     def _task_start(self, p: dict) -> bool:
         # ── 后台监听 Enter 键跳过准备 ──
@@ -2390,6 +2421,10 @@ class TaskRunnerNode(Node):
 
     def _run_task_cb(self, request, response):
         if request.start:
+            if self.running or self._debug_executing:
+                response.success = False
+                response.message = '已有任务正在执行；请等待结束或先停止'
+                return response
             path = self._resolve_mission_path(request.task_name)
 
             self.get_logger().info(f'服务 /auv/mission/run：从 {path} 开始执行任务')
@@ -2401,8 +2436,13 @@ class TaskRunnerNode(Node):
                 self.get_logger().error(response.message)
                 return response
             if self.tasks:
+                self.mission_file = path
+                self.set_parameters([
+                    Parameter('mission_file', value=path)])
                 self._motion_stop_sent = False
                 self.stopped = False
+                self._mission_status_code = TaskStatus.STATUS_RUNNING
+                self.running = True
                 thread = threading.Thread(target=self.run_task_list, daemon=True)
                 thread.start()
                 response.success = True
@@ -2432,7 +2472,7 @@ class TaskRunnerNode(Node):
             self.get_logger().warn('/auv/mission/execute 被调用，但调试模式未开启')
             return response
 
-        if self._debug_executing:
+        if self._debug_executing or self.running:
             response.success = False
             response.message = (
                 f'任务“{self._debug_task_name}”已在运行。'
@@ -2467,6 +2507,9 @@ class TaskRunnerNode(Node):
             f'调试执行：{task_name}，参数={params}，超时={timeout:.0f}s'
         )
 
+        self._debug_executing = True
+        self.running = True
+        self._debug_task_name = task_name
         # Execute in daemon thread (same pattern as run_task_list)
         thread = threading.Thread(
             target=self._debug_exec_single, args=(task_name, params),
@@ -2517,7 +2560,7 @@ class TaskRunnerNode(Node):
     def _publish_status(self):
         msg = TaskStatus()
 
-        if self._debug_executing or (self._debug_mode and self.running):
+        if self._debug_executing:
             # Debug mode: single task executing
             msg.status = TaskStatus.STATUS_RUNNING
             msg.current_task_name = self._debug_task_name or 'unknown'
@@ -2534,10 +2577,22 @@ class TaskRunnerNode(Node):
             msg.error_message = (
                 f'{self._last_failure_code}: {self._last_failure_message}'
                 if self._last_failure_code else '')
+        elif self._last_basic_motion_test_outcome is not None:
+            outcome = self._last_basic_motion_test_outcome
+            msg.status = (TaskStatus.STATUS_DONE if outcome.success
+                          else TaskStatus.STATUS_ERROR)
+            msg.current_task_name = 'basic_motion_test'
+            msg.total_tasks = 1
+            msg.error_message = ('' if outcome.success else
+                                 f'{outcome.failure_code}: {outcome.message}')
         elif self.stopped:
             msg.status = TaskStatus.STATUS_PAUSED
+            msg.current_task_index = self.current_index
+            msg.total_tasks = len(self.tasks)
         else:
-            msg.status = TaskStatus.STATUS_IDLE
+            msg.status = self._mission_status_code
+            msg.current_task_index = self.current_index
+            msg.total_tasks = len(self.tasks)
             if self._debug_mode:
                 msg.error_message = '[调试模式：空闲，等待 /auv/mission/execute]'
 
@@ -2556,7 +2611,9 @@ def main(args=None):
         raise SystemExit(2)
 
     if not node._debug_mode:
-        # Normal mode: load the selected YAML mission and start immediately.
+        # Load and validate the selected mission before exposing its services.
+        # The real bringup supervisor leaves auto_start disabled and releases
+        # the mission only after all upstream readiness gates pass.
         default_path = node.mission_file or str(default_mission_path())
         try:
             node.tasks = node.load_tasks(default_path)
@@ -2565,10 +2622,13 @@ def main(args=None):
             node.destroy_node()
             rclpy.try_shutdown()
             raise SystemExit(2) from exc
-        if node.tasks:
+        if node.tasks and node._auto_start:
             thread = threading.Thread(target=node.run_task_list, daemon=True)
             thread.start()
             node.get_logger().info(f'已自动启动任务列表（共 {len(node.tasks)} 个任务）')
+        elif node.tasks:
+            node.get_logger().info(
+                f'已加载任务列表（共 {len(node.tasks)} 个任务），等待 /auv/mission/run')
     else:
         node.get_logger().info(
             '调试模式已开启：跳过自动启动。'

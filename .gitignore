@@ -85,3 +85,5 @@ Thumbs.db
 
 # LaTeX documentation build output
 /docs/latex/build/
+
+workspace_auv/src/uv_perception/weights

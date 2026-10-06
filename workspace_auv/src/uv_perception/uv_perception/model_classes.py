@@ -17,7 +17,7 @@ except ImportError as error:  # pragma: no cover - exercised in bad installs
         "uv_perception requires PyYAML to load the shared model mapping") from error
 
 
-DEFAULT_MAPPING_FILENAME = "robotcup20260901.yaml"
+DEFAULT_MAPPING_FILENAME = "HQQ6_aug.yaml"
 
 
 def _normalize_name(value) -> str:

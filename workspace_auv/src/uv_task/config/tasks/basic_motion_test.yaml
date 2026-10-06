@@ -1,0 +1,22 @@
+# 仅在静水、推进器完全浸没、回收绳和实体停机已准备好时手动运行。
+# 第一次运行 hold；后续用 /auv/mission/execute 分阶段执行。
+# 从甲板移到水中后，本文件的 START 将以当前水下位姿建立原点。
+task: basic_motion_test
+params:
+  stage: hold # hold / set / bmove / wmove / travel / velocity / all
+  reset_origin: true # 本文件初始化；后续 execute 默认 false，保持同一原点
+  test_depth: false # 1.1m 浅水池默认关闭 Z 动作；确认上下净空后手动开启
+  distance_m: 0.25 # 各次水平测试位移；成功后 SET 回到本轮进入位姿
+  depth_delta_m: 0.15 # z 向下为正；返回进入测试时的深度
+  yaw_delta_deg: 10.0 # 正偏航测试
+  speed_mps: 0.05 # BODY_VELOCITY 平移测试，单位 m/s
+  yaw_rate_deg_s: 3.0
+  pulse_seconds: 1.0
+  action_timeout: 20.0 # 每个位置动作的超时，不是整轮测试超时
+  settle_seconds: 2.0
+  feedback_timeout: 1.0
+  horizontal_limit_m: 1.0 # 相对本轮进入位姿的估计偏移范围
+  vertical_limit_m: 0.25
+  min_battery_voltage: 21.0 # 本次 6S 电池测试下限；按电池标签/厂家要求核对
+  external_battery_voltage: 0.0 # MCU 电压固定 0 时，本轮填写现场实测总压；默认拒绝运动
+  max_speed_mps: 0.20 # 实测线速度超过此值时请求取消；不是固件速度限幅

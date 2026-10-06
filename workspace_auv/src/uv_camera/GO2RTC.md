@@ -43,6 +43,12 @@ MPEG-TS/H.264。默认 `jpeg` 模式解码为带源帧时间戳映射的 JPEG �
 H.264，并输出 MPEG-TS 分段及 HLS `.m3u8` 清单。两条录制路径均不依赖 RTSP 8554。
 go2rtc 的 `/api/stream.mjpeg` 只输出 MJPEG/JPEG 编码源；本项目的 H.264 源不会自动转码为 MJPEG。
 
+实机相机连接具有单路容错：`uv_camera` 为 front 和 down 各启动一个采集线程。启动时某一路
+打不开、运行中 `read()` 连续失败或返回无效帧时，只会记录该路错误并按间隔重新打开；另一
+路继续发布 iceoryx2 帧。设备重新插入并收到有效帧后，会记录恢复日志并发布恢复状态。
+默认无有效帧 5 秒后判定为掉线，每 1 秒重试一次，可通过
+`camera_startup_timeout_sec` 和 `camera_reconnect_interval_sec` 调整。
+
 raw 录制使用统一入口并直接保存 iceoryx2 源帧，不依赖推流：
 
 ```bash

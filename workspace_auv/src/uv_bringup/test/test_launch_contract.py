@@ -29,14 +29,39 @@ def test_formal_mode_entries_exist():
                 "auv_sim.urdf").exists()
 
 
-def test_mode_entries_do_not_define_component_nodes():
+def test_real_mode_delegates_only_to_startup_coordinator():
     tree = ast.parse(_source("real.launch.py"), filename="real.launch.py")
-    called_names = {
-        node.func.id
+    node_calls = [
+        node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "Node" not in called_names
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Node"
+    ]
+    assert len(node_calls) == 1
+    keywords = {item.arg: item.value for item in node_calls[0].keywords}
+    assert ast.literal_eval(keywords["package"]) == "uv_bringup"
+    assert ast.literal_eval(keywords["executable"]) == "real_startup"
+
+
+def test_real_startup_contract_is_staged_and_task_launch_is_deferred():
+    startup = (PACKAGE_ROOT / "uv_bringup" / "real_startup.py").read_text(
+        encoding="utf-8")
+    task_launch = (AUV_SOURCE_ROOT / "uv_task" / "launch" /
+                   "task_launch.py").read_text(encoding="utf-8")
+    task_runner = (AUV_SOURCE_ROOT / "uv_task" / "uv_task" /
+                   "task_runner.py").read_text(encoding="utf-8")
+    assert "_start_core()" in startup
+    assert "_start_motion_and_reset_origin()" in startup
+    assert "_start_camera_perception()" in startup
+    assert "_start_navigation()" in startup
+    assert "_start_or_adopt_task()" in startup
+    assert "startup_mode" in startup
+    assert "startup_sequence_complete" in startup
+    assert "Initial component decisions" in startup
+    assert "no later phase will be started" in startup
+    assert "auto_start" in task_launch
+    assert "node._auto_start" in task_runner
 
 
 def test_bringup_uses_the_invoking_terminal():
@@ -76,6 +101,7 @@ def test_real_profiles_have_expected_startup_combinations():
         assert payload["arguments"].get("enable_nav") is False
 
     record = loaded["record"]["arguments"]
+    assert record["enable_camera"] is True
     assert record["enable_ai"] is False
     assert record["enable_motion"] is True
     assert record["enable_task"] is False
@@ -83,6 +109,7 @@ def test_real_profiles_have_expected_startup_combinations():
     assert record["record_session"] is True
 
     debug = loaded["debug"]["arguments"]
+    assert debug["enable_camera"] is True
     assert debug["enable_ai"] is True
     assert debug["enable_motion"] is True
     assert debug["enable_task"] is False
@@ -90,10 +117,14 @@ def test_real_profiles_have_expected_startup_combinations():
     assert debug["enable_stream"] is True
 
     task = loaded["task"]["arguments"]
+    assert task["enable_camera"] is True
     assert task["enable_ai"] is True
     assert task["enable_motion"] is True
     assert task["enable_task"] is True
     assert task["record_mode"] == "go2rtc"
+
+    default = loaded["default"]["arguments"]
+    assert default["enable_camera"] is False
 
 
 def test_sim_and_hil_profile_combinations_remain_available():

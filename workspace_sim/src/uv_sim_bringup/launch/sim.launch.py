@@ -185,6 +185,7 @@ def generate_launch_description():
         'enable_task': enable_task,
         'camera_mode': 'sim', 'camera_config_dir': camera_dir,
         'params_file': '', 'mission_file': mission_file,
+        'auto_start': 'true',
     })
     observability = _include('uv_bringup', 'observability.launch.py', {
         'enable_preview': LaunchConfiguration('enable_preview'),

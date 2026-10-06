@@ -18,9 +18,11 @@ from rclpy.qos import (
 from auv_protocol.model_mapping import ModelClassRegistry
 from auv_protocol.topics import (
     ARUCO_IDS, ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT, LINES,
-    MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS,
+    MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, PERCEPTION_HEALTH,
 )
-from uv_msgs.msg import Detection, DetectionArray, LineState, ModelClassMapping
+from uv_msgs.msg import (
+    Detection, DetectionArray, LineState, ModelClassMapping, SensorHealth,
+)
 
 from .detector.yolo_detector import YoloDetector
 from uv_image_transport.iceoryx2 import Iceoryx2Reader
@@ -31,7 +33,7 @@ def _model_default() -> str:
     if override:
         return override
 
-    model_filename = 'robotcup20260901.pt'
+    model_filename = 'HQQ6_aug.pt'
     source_candidate = (Path(__file__).resolve().parents[1] / 'weights' /
                         model_filename)
     if source_candidate.is_file():
@@ -67,6 +69,7 @@ class ObjectDetector:
     def __init__(self, node):
         self.node = node
         self.publisher = node.create_publisher(DetectionArray, PERCEPTION_DETECTIONS, 10)
+        self._health_pub = node.create_publisher(SensorHealth, PERCEPTION_HEALTH, 10)
         self._line_publishers = {
             name: node.create_publisher(LineState, LINES(name), 10)
             for name in ('front_left', 'front_right', 'down_left', 'down_right')
@@ -108,6 +111,9 @@ class ObjectDetector:
         self._aruco_detector = self._make_aruco_detector()
         self._stop = threading.Event()
         self._threads = []
+        self._frame_health_lock = threading.Lock()
+        self._last_frame_at = {'front': 0.0, 'down': 0.0}
+        self._health_timer = node.create_timer(0.5, self._publish_health)
         for camera, service in (('front', ICEORYX_CAMERA_FRONT),
                                 ('down', ICEORYX_CAMERA_DOWN)):
             thread = threading.Thread(target=self._read_loop,
@@ -196,11 +202,33 @@ class ObjectDetector:
                     else:
                         results, polygons = (), ()
                     self._publish(camera, side, packet, eye, results, polygons)
+                with self._frame_health_lock:
+                    self._last_frame_at[camera] = time.monotonic()
         except Exception as error:
             self.node.get_logger().error(f'{camera} detector loop stopped: {error}')
         finally:
             if reader is not None:
                 reader.close()
+
+    def _publish_health(self):
+        now = time.monotonic()
+        with self._frame_health_lock:
+            last_frame = dict(self._last_frame_at)
+        for camera in ('front', 'down'):
+            age = now - last_frame[camera]
+            model_loaded = self._detector is not None
+            available = (
+                model_loaded and self._mapping_registry is not None
+                and age <= 2.0)
+            message = SensorHealth()
+            message.header.stamp = self.node.get_clock().now().to_msg()
+            message.sensor_name = f'detector/{camera}'
+            message.available = available
+            message.quality = 1.0 if available else 0.0
+            message.detail = (
+                f'model_loaded={model_loaded} frame_age={age:.2f}s '
+                f'mapping_ready={self._mapping_registry is not None}')
+            self._health_pub.publish(message)
 
     def _publish(self, camera, side, packet, image, results, polygons):
         message = DetectionArray()

@@ -1,3 +1,28 @@
+# 真机默认运行模式：启动基础控制、定位、AI 感知和视频服务，
+# 但不打开相机设备、不启动导航和任务执行器。适合相机物理连接不稳定时，
+# 先让底层节点稳定运行，再在另一个终端单独启动 uv_camera。
+#
+# 调用方式：
+#   ros2 launch uv_bringup real.launch.py profile:=default
+#
+# 该 profile 由 real.launch.py 解释。无论 profile 如何选择，real.launch.py
+# 都会按开关组合以下基础组件：
+#   - model_class_publisher：发布感知模型类别映射；uv_task 启动时会等待它。
+#   - robot_state_publisher：发布真实 AUV URDF 和相机静态 TF。
+#   - uv_localization：读取 ZIT6/传感器状态，发布 /auv/state/odom、/auv/tf。
+#   - uv_camera：本 profile 通过 enable_camera=false 跳过；需要时单独启动。
+# 本文件中的 enable_hardware、enable_motion、enable_camera、enable_ai、
+# enable_nav、enable_task
+# 决定是否额外启用：
+#   - hw_manager（硬件心跳、ZIT6 状态适配和 watchdog）。
+#   - basic_motion（/auv/basic_motion Action Server，接收运动目标）。
+#   - object_detector、object_localizer、object_estimator（AI 检测、几何定位和跟踪）。
+#   - uv_planning/uv_nav（导航；本模式关闭）。
+#   - task_runner（任务；本模式关闭）。
+# enable_stream=true 时还会启动 go2rtc 视频服务；它用于预览，不是运动控制的硬依赖。
+# record_session=false 表示不启动 uv_record 录制节点。
+# 单独启动相机：
+#   ros2 launch uv_camera camera_launch.py sim_mode:=false camera_mode:=real
 schema_version: 1
 runtime: real
 profile: default
@@ -6,6 +31,7 @@ arguments:
   enable_hardware: true
   enable_ai: true
   enable_motion: true
+  enable_camera: false
   enable_nav: false
   enable_task: false
   enable_stream: true
@@ -13,4 +39,4 @@ arguments:
   record_mode: go2rtc
   go2rtc_stream_mode: unannotated
   go2rtc_video_format: jpeg
-uuv   record_use_sim_time: false
+  record_use_sim_time: false

@@ -5,14 +5,20 @@ Uses perception data for obstacle positions, basic_motion for movement execution
 
 import math
 import threading
+import time
 
 import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
-from uv_msgs.msg import ObjectTrack, ObjectTrackArray, PoseInfo, Waypoint, WaypointPath
+from uv_msgs.msg import (
+    ObjectTrack, ObjectTrackArray, PoseInfo, SensorHealth, Waypoint,
+    WaypointPath,
+)
 from uv_msgs.srv import RunTask
-from auv_protocol.topics import TRACKS, STATE_ODOM, TRAJECTORY
+from auv_protocol.topics import (
+    PLANNING_STATUS, TRACKS, STATE_ODOM, TRAJECTORY,
+)
 
 from uv_nav.astar import AStarPlanner
 
@@ -31,6 +37,8 @@ class NavigatorNode(Node):
         self.state = PoseInfo()
         self.obstacles = []  # list of (x, y)
         self._state_lock = threading.Lock()
+        self._last_odom_at = 0.0
+        self._last_tracks_at = 0.0
 
         self.planner = AStarPlanner(resolution=0.5, safe_radius=2.0)
 
@@ -40,18 +48,23 @@ class NavigatorNode(Node):
 
         # Publishers
         self.pub_path = self.create_publisher(WaypointPath, TRAJECTORY, 10)
+        self._health_pub = self.create_publisher(
+            SensorHealth, PLANNING_STATUS, 10)
 
         # Services
         self.create_service(RunTask, '/auv/planning/navigate_to', self._navigate_to_cb)
+        self.create_timer(0.5, self._publish_health)
 
         self.get_logger().info('Navigator node started')
 
     def _state_cb(self, msg: PoseInfo):
         with self._state_lock:
             self.state = msg
+            self._last_odom_at = time.monotonic()
 
     def _tracks_cb(self, msg: ObjectTrackArray):
         """Update obstacle list from perception."""
+        self._last_tracks_at = time.monotonic()
         self.obstacles = []
         for track in msg.tracks:
             if int(track.status) == int(ObjectTrack.STATUS_LOST):
@@ -59,6 +72,21 @@ class NavigatorNode(Node):
             x, y = float(track.world_x), float(track.world_y)
             if math.isfinite(x) and math.isfinite(y):
                 self.obstacles.append((x, y))
+
+    def _publish_health(self):
+        now = time.monotonic()
+        odom_age = now - self._last_odom_at
+        tracks_age = now - self._last_tracks_at
+        healthy = odom_age <= 2.0 and tracks_age <= 2.0
+        msg = SensorHealth()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.sensor_name = 'navigator'
+        msg.available = healthy
+        msg.quality = 1.0 if healthy else 0.0
+        msg.detail = (
+            'fresh odometry and tracks' if healthy else
+            f'odom_age={odom_age:.2f}s tracks_age={tracks_age:.2f}s')
+        self._health_pub.publish(msg)
 
     def navigate_to(self, goal_x: float, goal_y: float,
                     goal_z: float = None, goal_yaw: float = None) -> bool:

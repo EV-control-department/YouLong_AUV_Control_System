@@ -27,6 +27,8 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>zit6_interfaces</exec_depend>
   <exec_depend>uv_msgs</exec_depend>
   <exec_depend>auv_protocol</exec_depend>
   <exec_depend>auv_description</exec_depend>

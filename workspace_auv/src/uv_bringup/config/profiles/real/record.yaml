@@ -1,3 +1,24 @@
+# 真机原始数据采集模式：保留硬件、定位、运动控制和相机，关闭 AI、导航、任务和 go2rtc，
+# 并启动 uv_record 采集 raw 源图像、rosbag 和运行日志。适合：采集训练/回放数据、
+# 相机标定检查、记录未经过 AI/视频编码处理的原始传感器输入。
+#
+# 调用方式：
+#   ros2 launch uv_bringup real.launch.py profile:=record
+#
+# 启动的主要节点/进程：
+#   - model_class_publisher：仍会启动，但本模式没有 AI 检测节点消费它。
+#   - robot_state_publisher：发布真实 URDF 和静态 TF。
+#   - uv_localization：读取硬件状态并发布 /auv/state/odom。
+#   - hw_manager：发布 ZIT6 heartbeat，转发硬件状态并执行 watchdog 监控。
+#   - basic_motion：保留运动控制，便于台架上检查控制状态；本模式不会启动任务。
+#   - uv_camera：打开真实前视/下视相机，提供 raw 采集源。
+#   - uv_record_recorder：record_session=true 时启动，record_mode=raw 表示采集原始帧。
+#
+# 关闭的组件：
+#   - enable_ai=false：不启动 object_detector、object_localizer、object_estimator。
+#   - enable_nav=false：不启动导航。
+#   - enable_task=false：不启动 task_runner。
+#   - enable_stream=false：不启动 go2rtc，避免预览编码占用资源。
 schema_version: 1
 runtime: real
 profile: record
@@ -6,6 +27,7 @@ arguments:
   enable_hardware: true
   enable_ai: false
   enable_motion: true
+  enable_camera: true
   enable_nav: false
   enable_task: false
   enable_stream: false

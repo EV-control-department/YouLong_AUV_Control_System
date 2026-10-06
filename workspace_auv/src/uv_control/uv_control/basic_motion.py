@@ -52,13 +52,13 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
    - 适用于已知精确目标位置的场景
 
 2. WMOVE / BMOVE 系列 (步进移动)
-   - WMOVE: 世界系步进，参数为世界系偏移量
+   - WMOVE: 世界系步进，参数为 odom 系绝对目标
    - BMOVE: 机体系步进，参数为机体系偏移量，内部转世界系
    - 使用动态步进算法：把长距离拆成小段逐段发送
    - 步长根据当前误差动态调整
 
 3. TRAVEL 系列 (直线移动)
-   - WTRAVEL: 世界系直线移动
+   - WTRAVEL: 移动到 odom 系绝对目标，先转向目标方向
    - BTRAVEL: 机体系直线移动
    - 先转向目标方向，再沿 body-X 轴前进
    - 适用于需要直线轨迹的任务（过门、巡线等）
@@ -80,9 +80,11 @@ from rclpy.action import ActionServer, GoalResponse, CancelResponse
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from geometry_msgs.msg import TwistWithCovarianceStamped
-from std_msgs.msg import Empty
+from std_msgs.msg import Bool, Empty
+from std_srvs.srv import Trigger
 from auv_protocol.topics import (
-    BASIC_MOTION, LEGACY_BASIC_MOTION, LEGACY_POSE_INFO,
+    BASIC_MOTION, BASIC_MOTION_CLEAR_SAFE_STOP, BASIC_MOTION_SAFE_STOP,
+    BASIC_MOTION_SAFE_STOP_STATE, LEGACY_BASIC_MOTION, LEGACY_POSE_INFO,
     LEGACY_ZIT6_SETPOINT, STATE_ODOM, STATE_RESET, STATE_TWIST,
     ZIT6_SETPOINT,
     ZIT6_STATUS,
@@ -162,6 +164,7 @@ class BasicMotionNode(Node):
         self._state_lock = threading.Lock()
         self._velocity_lock = threading.Lock()
         self._shutdown_requested = False
+        self._safe_stop_latched = False
         self._timers = []
         self._velocity_active = False
         self._velocity_deadline = 0.0
@@ -206,6 +209,10 @@ class BasicMotionNode(Node):
         self._timers.append(self.create_timer(0.5, self._action_feedback_cb))
         self._timers.append(self.create_timer(
             VELOCITY_WATCHDOG_PERIOD, self._velocity_watchdog_cb))
+        self.create_service(Trigger, BASIC_MOTION_SAFE_STOP,
+                            self._safe_stop_cb)
+        self.create_service(Trigger, BASIC_MOTION_CLEAR_SAFE_STOP,
+                            self._clear_safe_stop_cb)
 
         # ``/auv/state/odom`` and ``/auv/tf`` belong exclusively to
         # uv_localization.  BasicMotion keeps the old PoseInfo stream only as
@@ -213,7 +220,10 @@ class BasicMotionNode(Node):
         self.pub_pose_legacy = self.create_publisher(
             PoseInfo, LEGACY_POSE_INFO, 10)
         self.pub_state_reset = self.create_publisher(Empty, STATE_RESET, 10)
+        self._safe_stop_state_pub = self.create_publisher(
+            Bool, BASIC_MOTION_SAFE_STOP_STATE, 10)
         self._timers.append(self.create_timer(1.0 / 30.0, self._publish_pose_info))
+        self._timers.append(self.create_timer(0.5, self._publish_safe_stop_state))
         self.context.on_shutdown(self._on_context_shutdown)
 
         self.get_logger().info('BasicMotion node started')
@@ -413,9 +423,16 @@ class BasicMotionNode(Node):
             if self._origin is not None:
                 self.get_logger().info(
                     'odom origin already set, updating to current map pose')
+            # The real estimator's origin may have been recorded before
+            # lowering the vehicle into water. START must anchor at the current
+            # measured map pose so a zero odom target holds the current depth.
+            origin = self._state_origin
+            if not self._sim_mode:
+                origin = self._state_origin.to_world_frame(Coordinate(
+                    x=self.pose.x, y=self.pose.y, z=self.pose.z,
+                    rz=self.pose.rz))
             self._origin = Coordinate(
-                x=self._state_origin.x, y=self._state_origin.y,
-                z=self._state_origin.z, rz=self._state_origin.rz)
+                x=origin.x, y=origin.y, z=origin.z, rz=origin.rz)
             self.get_logger().info(
                 f'DEBUG estimator origin: x={self._origin.x:.4f}, '
                 f'y={self._origin.y:.4f}, z={self._origin.z:.4f}, '
@@ -542,7 +559,38 @@ class BasicMotionNode(Node):
     def _is_cancelled(self) -> bool:
         """检查当前 action goal 是否被取消（线程安全）。"""
         gh = self._action_goal_handle
-        return gh is not None and gh.is_cancel_requested
+        return (self._safe_stop_latched
+                or (gh is not None and gh.is_cancel_requested))
+
+    def _safe_stop_cb(self, _request, response):
+        """Latch motion inhibition and leave the vehicle holding safely."""
+        self._safe_stop_latched = True
+        try:
+            # A zero body-velocity setpoint stops any leased velocity mode;
+            # position control then remains at its last commanded hold point.
+            self._publish_body_velocity()
+            response.success = True
+            response.message = 'safe stop latched; motion goals are inhibited'
+        except Exception as exc:
+            response.success = False
+            response.message = f'safe stop latched, neutral command failed: {exc}'
+        self.get_logger().error(response.message)
+        return response
+
+    def _publish_safe_stop_state(self):
+        if self._shutdown_requested:
+            return
+        state = Bool()
+        state.data = bool(self._safe_stop_latched)
+        self._publish_while_running(self._safe_stop_state_pub, state)
+
+    def _clear_safe_stop_cb(self, _request, response):
+        """Require an explicit operator request before accepting motion again."""
+        self._safe_stop_latched = False
+        response.success = True
+        response.message = 'safe stop cleared by explicit request'
+        self.get_logger().warning(response.message)
+        return response
 
     def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, timeout):
         """完成步进移动的最后一步，等待到达目标位置。"""
@@ -959,6 +1007,10 @@ class BasicMotionNode(Node):
     # ═════════════════════════════════════════════════════════════════════════
 
     def _action_goal_cb(self, goal_request):
+        if self._safe_stop_latched:
+            self.get_logger().error(
+                'Rejecting BasicMotion goal: safe-stop latch is active')
+            return GoalResponse.REJECT
         self.get_logger().info(
             f'Action goal received: cmd_type={goal_request.cmd_type}, '
             f'axes="{goal_request.axes}", target={list(goal_request.target)}, '
@@ -978,7 +1030,10 @@ class BasicMotionNode(Node):
 
     def _action_execute_cb(self, goal_handle):
         req = goal_handle.request
-        self._action_goal_handle = goal_handle
+        # A short velocity goal must not hide a position goal's cancellation
+        # handle. In particular the test runner sends neutral after cancel.
+        if req.cmd_type != BasicMotion.Goal.BODY_VELOCITY:
+            self._action_goal_handle = goal_handle
 
         # START: 初始化 odom 原点，不需要任何前置校验
         if req.cmd_type == BasicMotion.Goal.START:
@@ -1009,7 +1064,6 @@ class BasicMotionNode(Node):
                     'BODY_VELOCITY target needs 4 values '
                     '[vx, vy, vz, yaw_rate_deg_s]')
                 goal_handle.abort()
-                self._action_goal_handle = None
                 return result
             vx, vy, vz, yaw_rate_deg_s = req.target[:4]
             self._publish_body_velocity(
@@ -1022,7 +1076,6 @@ class BasicMotionNode(Node):
             result.success = True
             result.message = ''
             goal_handle.succeed()
-            self._action_goal_handle = None
             return result
 
         # ── 参数校验 ──────────────────────────────────────────

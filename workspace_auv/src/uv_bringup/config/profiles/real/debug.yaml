@@ -1,3 +1,26 @@
+# 真机调试模式：启动硬件、定位、运动控制、相机、完整 AI 感知、go2rtc 和会话录制，
+# 但不启动导航和 uv_task。适合：需要观察视觉结果、视频流、ROS 日志和 rosbag，
+# 并准备稍后在另一个终端单独启动 uv_task 的联调场景。
+#
+# 调用方式：
+#   ros2 launch uv_bringup real.launch.py profile:=debug
+#
+# 启动的主要节点/进程：
+#   - model_class_publisher：发布模型类别映射。
+#   - robot_state_publisher：发布真实 URDF 和相机静态 TF。
+#   - uv_localization：发布 /auv/state/odom 和动态 TF。
+#   - hw_manager：持续发布 ZIT6 heartbeat，适配硬件状态并监控 watchdog。
+#   - basic_motion：提供 /auv/basic_motion Action Server。
+#   - uv_camera：打开真实前视/下视相机。
+#   - object_detector：从相机帧生成目标检测和特征线结果。
+#   - object_localizer：结合双目内参、TF 和检测结果生成几何观测。
+#   - object_estimator：维护目标轨迹，向任务层发布 /auv/perception/tracks。
+#   - uv_stream/go2rtc：提供视频预览。
+#   - uv_record_recorder：record_session=true 时创建会话并录制 go2rtc 视频、rosbag 和日志。
+#
+# enable_task=false 很重要：本模式不会自动执行 mission；可确认节点和数据就绪后，
+# 再单独执行：
+#   ros2 launch uv_task task_launch.py camera_mode:=real
 schema_version: 1
 runtime: real
 profile: debug
@@ -6,6 +29,7 @@ arguments:
   enable_hardware: true
   enable_ai: true
   enable_motion: true
+  enable_camera: true
   enable_nav: false
   enable_task: false
   enable_stream: true

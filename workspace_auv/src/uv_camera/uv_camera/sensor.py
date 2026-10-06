@@ -33,7 +33,8 @@ class Sensor:
     """Frame producer with a callback-compatible output boundary."""
 
     def __init__(self, node, sim_mode=False, enable_front=True,
-                 enable_down=True, startup_timeout_s=5.0, camera_configs=None,
+                 enable_down=True, startup_timeout_s=5.0,
+                 reconnect_interval_s=1.0, camera_configs=None,
                  frame_callback=None):
         if not callable(frame_callback):
             raise ValueError("frame_callback must be callable")
@@ -43,6 +44,7 @@ class Sensor:
         self._enable_front = enable_front
         self._enable_down = enable_down
         self._startup_timeout_s = max(1.0, float(startup_timeout_s))
+        self._reconnect_interval_s = max(0.1, float(reconnect_interval_s))
         self._camera_configs = dict(camera_configs or {})
         missing = [camera for camera in ('front', 'down')
                    if camera not in self._camera_configs]
@@ -121,59 +123,26 @@ class Sensor:
         if self._enable_down:
             config = self._camera_configs['down']
             specs.append(('down', config.device, config.capture_resolution))
-        if any(path is None for _, path, _ in specs):
-            raise RuntimeError('real camera profile must define device paths')
-
-        # Open and probe every enabled camera before starting either capture
-        # thread. This prevents a partial recording containing only one side.
-        opened = []
-        failures = []
+        # Each camera owns an independent worker. A missing or disconnected
+        # camera must not prevent the other camera from publishing frames.
+        # Workers keep retrying the device so a cable that is reseated while
+        # the vehicle is running can recover without restarting uv_camera.
         for camera, path, resolution in specs:
-            try:
-                cap = self._open_cap(path, resolution)
-                if cap is None or not cap.isOpened():
-                    failures.append(f'{camera} camera cannot be opened: {path}')
-                    if cap is not None:
-                        cap.release()
-                    continue
-                opened.append((camera, path, cap))
-            except Exception as error:
-                failures.append(
-                    f'{camera} camera open failed ({path}): {error}')
-
-        probed = []
-        for camera, path, cap in opened:
-            try:
-                initial_frame = self._probe_first_frame(cap, camera, path)
-                probed.append((camera, path, cap, initial_frame))
-            except Exception as error:
-                failures.append(str(error))
-
-        if failures:
-            for _, _, cap in opened:
-                cap.release()
-            self._front_cap = None
-            self._down_cap = None
-            message = 'camera preflight failed; recording not started: ' + '; '.join(failures)
-            self.node.get_logger().error(message)
-            raise RuntimeError(message)
-
-        for camera, path, cap, initial_frame in probed:
-            if camera == 'front':
-                self._front_cap = cap
-            else:
-                self._down_cap = cap
+            if not path:
+                self._report_camera_failure(
+                    camera, 'camera device path is empty; retry disabled')
+                continue
             thread = threading.Thread(
-                target=self._capture_loop,
-                args=(cap, camera, initial_frame, path),
+                target=self._capture_worker,
+                args=(camera, path, resolution),
                 name=f'capture-{camera}', daemon=True)
             self._capture_threads.append(thread)
             thread.start()
 
-        summary = ', '.join(
-            f'{camera}={path} shape={frame.shape}'
-            for camera, path, _, frame in probed)
-        self.node.get_logger().info(f'uv_camera preflight passed: {summary}')
+        summary = ', '.join(f'{camera}={path}' for camera, path, _ in specs)
+        self.node.get_logger().info(
+            f'uv_camera capture workers started: {summary or "none"}; '
+            f'reconnect_interval={self._reconnect_interval_s:.1f}s')
         self.node.get_logger().info(
             'uv_camera started (real mode: '
             f"front={self._camera_configs['front'].device}, "
@@ -240,6 +209,8 @@ class Sensor:
         deadline = time.monotonic() + self._startup_timeout_s
         attempts = 0
         while True:
+            if self._capture_stop.is_set():
+                raise RuntimeError('camera capture stopped during probe')
             attempts += 1
             ret, frame = cap.read()
             if ret:
@@ -251,27 +222,91 @@ class Sensor:
                     f'{camera} camera opened but produced no valid frame '
                     f'within {self._startup_timeout_s:.1f}s '
                     f'(path={path}, attempts={attempts})')
-            time.sleep(0.05)
+            self._capture_stop.wait(0.05)
 
-    # ── v4l2 capture loop ───────────────────────────────────────────────
-    def _capture_loop(self, cap, camera, initial_frame=None, path=''):
+    # ── v4l2 capture and reconnect loop ─────────────────────────────────
+    def _capture_worker(self, camera, path, resolution):
+        """Capture one camera and reconnect it without affecting its peer."""
+        cap = None
+        initial_frame = None
         read_failures = 0
         failure_started = None
         last_failure_log = 0.0
         failure_reported = False
-        frame = initial_frame
         try:
             while not self._capture_stop.is_set():
-                if frame is not None:
-                    ret, current = True, frame
-                    frame = None
+                if cap is None:
+                    try:
+                        cap = self._open_cap(path, resolution)
+                        if cap is None or not cap.isOpened():
+                            raise RuntimeError(
+                                f'camera cannot be opened (path={path})')
+                        initial_frame = self._probe_first_frame(
+                            cap, camera, path)
+                        if camera == 'front':
+                            self._front_cap = cap
+                        else:
+                            self._down_cap = cap
+                        self.node.get_logger().info(
+                            f'{camera} camera connected: path={path}, '
+                            f'shape={initial_frame.shape}')
+                    except Exception as error:
+                        if cap is not None:
+                            try:
+                                cap.release()
+                            except Exception:
+                                pass
+                        cap = None
+                        initial_frame = None
+                        if camera == 'front':
+                            self._front_cap = None
+                        else:
+                            self._down_cap = None
+                        now = time.monotonic()
+                        if failure_started is None:
+                            failure_started = now
+                        if (not failure_reported
+                                or now - last_failure_log >= 5.0):
+                            self._report_camera_failure(
+                                camera,
+                                f'camera open/probe failed; retrying every '
+                                f'{self._reconnect_interval_s:.1f}s: {error} '
+                                f'(path={path})')
+                            failure_reported = True
+                            last_failure_log = now
+                        self._capture_stop.wait(self._reconnect_interval_s)
+                        continue
+
+                    if failure_started is not None:
+                        self._report_camera_recovered(
+                            camera, time.monotonic() - failure_started)
+                        failure_started = None
+                        failure_reported = False
+                        last_failure_log = 0.0
+
+                if initial_frame is not None:
+                    ret, current = True, initial_frame
+                    initial_frame = None
                 else:
                     try:
                         ret, current = cap.read()
                     except Exception as error:
                         self._report_camera_failure(
                             camera, f'camera read raised {error} (path={path})')
-                        return
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                        cap = None
+                        if camera == 'front':
+                            self._front_cap = None
+                        else:
+                            self._down_cap = None
+                        failure_started = time.monotonic()
+                        failure_reported = True
+                        last_failure_log = failure_started
+                        self._capture_stop.wait(self._reconnect_interval_s)
+                        continue
 
                 if not ret:
                     now = time.monotonic()
@@ -291,7 +326,21 @@ class Sensor:
                             f'no valid frame for {now - failure_started:.1f}s '
                             f'(path={path})')
                         failure_reported = True
-                    time.sleep(min(0.5, 0.01 * (2 ** read_failures)))
+                    if (now - failure_started >= self._startup_timeout_s):
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                        cap = None
+                        if camera == 'front':
+                            self._front_cap = None
+                        else:
+                            self._down_cap = None
+                        read_failures = 0
+                        self._capture_stop.wait(self._reconnect_interval_s)
+                    else:
+                        self._capture_stop.wait(
+                            min(0.5, 0.01 * (2 ** read_failures)))
                     continue
 
                 normalized = normalize_frame(current)
@@ -311,13 +360,25 @@ class Sensor:
                             f'camera returned invalid frames for '
                             f'{now - failure_started:.1f}s (path={path})')
                         failure_reported = True
-                    time.sleep(0.05)
+                    if (now - failure_started >= self._startup_timeout_s):
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                        cap = None
+                        if camera == 'front':
+                            self._front_cap = None
+                        else:
+                            self._down_cap = None
+                        read_failures = 0
+                        self._capture_stop.wait(self._reconnect_interval_s)
+                    else:
+                        self._capture_stop.wait(0.05)
                     continue
 
                 if failure_started is not None:
-                    self.node.get_logger().info(
-                        f'{camera} camera recovered after '
-                        f'{time.monotonic() - failure_started:.1f}s')
+                    self._report_camera_recovered(
+                        camera, time.monotonic() - failure_started)
                     failure_started = None
                     failure_reported = False
                     last_failure_log = 0.0
@@ -329,6 +390,16 @@ class Sensor:
         except Exception as error:
             self._report_camera_failure(
                 camera, f'capture loop stopped unexpectedly: {error} (path={path})')
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            if camera == 'front':
+                self._front_cap = None
+            else:
+                self._down_cap = None
 
     def _report_camera_failure(self, camera, reason):
         report = getattr(self.node, 'report_camera_failure', None)
@@ -336,6 +407,14 @@ class Sensor:
             report(camera, reason)
         else:
             self.node.get_logger().error(f'{camera} camera failure: {reason}')
+
+    def _report_camera_recovered(self, camera, elapsed_s):
+        report = getattr(self.node, 'report_camera_recovered', None)
+        if report is not None:
+            report(camera, elapsed_s)
+        else:
+            self.node.get_logger().info(
+                f'{camera} camera recovered after {elapsed_s:.1f}s')
 
     def _submit_frame(self, camera, frame, stamp, right_stamp=None,
                       stereo_pair_id=0):

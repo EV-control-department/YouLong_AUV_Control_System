@@ -16,7 +16,14 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_config_dir', default_value=''),
         DeclareLaunchArgument('front_camera_device', default_value=''),
         DeclareLaunchArgument('down_camera_device', default_value=''),
-        DeclareLaunchArgument('camera_startup_timeout_sec', default_value='5.0'),
+        DeclareLaunchArgument(
+            'camera_startup_timeout_sec', default_value='5.0',
+            description=(
+                'Seconds without a valid frame before reporting a loss and '
+                'reopening that camera')),
+        DeclareLaunchArgument(
+            'camera_reconnect_interval_sec', default_value='1.0',
+            description='Delay between camera reopen attempts'),
         Node(
             package='uv_camera', executable='uv_camera', name='uv_camera',
             output='both',
@@ -30,6 +37,8 @@ def generate_launch_description():
                 'down_camera_device': LaunchConfiguration('down_camera_device'),
                 'camera_startup_timeout_sec': LaunchConfiguration(
                     'camera_startup_timeout_sec'),
+                'camera_reconnect_interval_sec': LaunchConfiguration(
+                    'camera_reconnect_interval_sec'),
             }],
         ),
     ])

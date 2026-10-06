@@ -30,6 +30,7 @@
   </link>
 
   <!-- Real vehicle geometry from docs/auv元件说明和标定数据_第四版.pdf.
+       Camera stereo baselines are 0.06 m per measurement.
        Coordinates are body-FRD metres: x forward, y right, z down. -->
   <link name="front_camera_link"><visual><geometry><box size="0.09 0.14 0.055"/></geometry><material name="Sensor Housing"/></visual></link>
   <joint name="front_camera_mount" type="fixed">
@@ -41,13 +42,13 @@
   <joint name="front_left_camera_mount" type="fixed">
     <parent link="front_camera_link"/>
     <child link="front_left_camera_optical_frame"/>
-    <origin xyz="0 -0.05 0" rpy="-1.5708 0 -1.5708"/>
+    <origin xyz="0 -0.03 0" rpy="-1.5708 0 -1.5708"/>
   </joint>
   <link name="front_right_camera_optical_frame"><visual><geometry><cylinder radius="0.014" length="0.014"/></geometry><material name="Lens Glass"/></visual></link>
   <joint name="front_right_camera_mount" type="fixed">
     <parent link="front_camera_link"/>
     <child link="front_right_camera_optical_frame"/>
-    <origin xyz="0 0.05 0" rpy="-1.5708 0 -1.5708"/>
+    <origin xyz="0 0.03 0" rpy="-1.5708 0 -1.5708"/>
   </joint>
 
   <link name="downward_camera_link"><visual><geometry><box size="0.075 0.14 0.045"/></geometry><material name="Sensor Housing"/></visual></link>
@@ -60,13 +61,13 @@
   <joint name="downward_left_camera_mount" type="fixed">
     <parent link="downward_camera_link"/>
     <child link="downward_left_camera_optical_frame"/>
-    <origin xyz="0 -0.05 0" rpy="0 0 -1.5708"/>
+    <origin xyz="0 -0.03 0" rpy="0 0 -1.5708"/>
   </joint>
   <link name="downward_right_camera_optical_frame"><visual><geometry><cylinder radius="0.013" length="0.012"/></geometry><material name="Lens Glass"/></visual></link>
   <joint name="downward_right_camera_mount" type="fixed">
     <parent link="downward_camera_link"/>
     <child link="downward_right_camera_optical_frame"/>
-    <origin xyz="0 0.05 0" rpy="0 0 -1.5708"/>
+    <origin xyz="0 0.03 0" rpy="0 0 -1.5708"/>
   </joint>
 
   <link name="imu_link"><visual><geometry><box size="0.075 0.075 0.04"/></geometry><material name="Sensor Metal"/></visual></link>

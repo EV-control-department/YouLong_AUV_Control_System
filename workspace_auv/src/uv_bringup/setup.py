@@ -29,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'wait_for_sim = uv_bringup.wait_for_sim:main',
+            'real_startup = uv_bringup.real_startup:main',
         ],
     },
 )

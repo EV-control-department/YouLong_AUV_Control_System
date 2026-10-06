@@ -115,6 +115,7 @@ def generate_launch_description():
         'enable_task': LaunchConfiguration('enable_task'),
         'camera_mode': 'sim', 'camera_config_dir': camera_dir,
         'params_file': '', 'mission_file': mission_file,
+        'auto_start': 'true',
     })
     agent = ExecuteProcess(
         cmd=[LaunchConfiguration('agent_executable'), 'serial', '-D',
