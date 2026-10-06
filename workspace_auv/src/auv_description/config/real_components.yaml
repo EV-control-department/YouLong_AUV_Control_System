@@ -1,5 +1,5 @@
 schema_version: 1
-source: docs/auv元件说明和标定数据_第四版.pdf
+source: docs/auv元件说明和标定数据_第五版.pdf
 coordinate_frame:
   name: body_frd
   origin: drawing_black_triangle
@@ -23,7 +23,7 @@ reference_points:
     position_body: null
     orientation_status: not_defined_in_pdf
     note: >-
-      PDF v4 does not define the DVL installation pose. Do not publish a
+      PDF v5 does not define the DVL installation pose. Do not publish a
       real dvl_link transform until a measured calibration is supplied.
   usbl_core:
     position_body: [0.160, 0.000, 0.0235]
@@ -33,6 +33,24 @@ reference_points:
     a1: [0.030, -0.100, 0.105]
     a2: [0.030, 0.100, 0.105]
     a3: [0.230, 0.100, 0.105]
+grippers:
+  G1_disc_claw:
+    name: disc_claw
+    position_body: [-0.430, 0.000, 0.290]
+    body_R_gripper:
+      - [0.000, 0.000, 1.000]
+      - [0.000, -1.000, 0.000]
+      - [1.000, 0.000, 0.000]
+    orientation_status: specified_in_pdf_v5
+  G2_hairpin_claw:
+    name: hairpin_claw
+    component_type: printed_part
+    position_body: [0.080, 0.000, 0.130]
+    body_R_gripper:
+      - [0.000, 0.000, 1.000]
+      - [0.000, -1.000, 0.000]
+      - [1.000, 0.000, 0.000]
+    orientation_status: specified_in_pdf_v5
 
 thrusters:
   order: [M0, M1, M2, M3, M4, M5]

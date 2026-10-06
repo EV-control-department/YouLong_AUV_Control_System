@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import time
 
 from uv_msgs.action import BasicMotion
 from uv_task.task_outcome import TaskOutcome
@@ -170,10 +171,9 @@ class RB26HitBallsTask:
             return TaskOutcome.failed(
                 '26rb_hit_balls.approach', '撞球接近位置移动失败')
 
-        refreshed = node._best_impact_ball_target(name, params)
-        if refreshed is not None:
-            target = refreshed
-        if not node._hold_impact_alignment(name, target, params):
+        arrived_at = time.monotonic()
+        if not node._hold_impact_alignment(
+                name, params, after_received=arrived_at):
             return TaskOutcome.failed(
                 '26rb_hit_balls.approach', '撞球对准失败')
 

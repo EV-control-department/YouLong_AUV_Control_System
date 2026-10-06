@@ -631,7 +631,7 @@ class RealStartupManager(Node):
             components.append((
                 'hardware', ['ros2', 'launch', 'uv_hm', 'hardware_launch.py',
                              'enable_hardware:=true'], ['/hw_manager'],
-                {'/hw_manager': {'arm_mode': 1, 'heartbeat_rate': 5.0,
+                {'/hw_manager': {'arm_mode': 1, 'heartbeat_rate': 15.0,
                                  'watchdog_timeout': 7.0,
                                  'legacy_state_topics': True}}))
         for name, command, nodes, params in components:

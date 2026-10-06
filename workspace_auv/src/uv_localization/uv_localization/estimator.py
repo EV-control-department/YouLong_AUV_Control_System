@@ -376,9 +376,18 @@ class EstimatorNode(Node):
             transform.transform.translation.x = state.x
             transform.transform.translation.y = state.y
             transform.transform.translation.z = state.z
-            half = state.yaw / 2.0
-            transform.transform.rotation.z = math.sin(half)
-            transform.transform.rotation.w = math.cos(half)
+            # Internal pose angles are radians. Publish the full body attitude
+            # using the ROS roll-pitch-yaw convention (Rz(yaw) * Ry(pitch) * Rx(roll)).
+            half_roll = state.roll / 2.0
+            half_pitch = state.pitch / 2.0
+            half_yaw = state.yaw / 2.0
+            cr, sr = math.cos(half_roll), math.sin(half_roll)
+            cp, sp = math.cos(half_pitch), math.sin(half_pitch)
+            cy, sy = math.cos(half_yaw), math.sin(half_yaw)
+            transform.transform.rotation.x = sr * cp * cy - cr * sp * sy
+            transform.transform.rotation.y = cr * sp * cy + sr * cp * sy
+            transform.transform.rotation.z = cr * cp * sy - sr * sp * cy
+            transform.transform.rotation.w = cr * cp * cy + sr * sp * sy
             self._tf_pub.publish(TFMessage(transforms=[transform]))
 
 

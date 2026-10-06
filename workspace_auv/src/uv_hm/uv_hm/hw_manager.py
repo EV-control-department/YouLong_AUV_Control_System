@@ -1,7 +1,7 @@
 """Hardware manager node: heartbeat, state monitoring.
 
 Responsibilities:
-- Own the MCU arm heartbeat (5Hz default) on /zit6/cmd/agxhbt
+- Own the MCU arm heartbeat (15Hz default) on /zit6/cmd/agxhbt
 - Forward canonical servo/light commands to the firmware endpoints
 - Subscribe to /auv/hardware/zit6/state/status, heartbeat, and thruster state
 - Adapt legacy servo target state into the canonical hardware namespace
@@ -76,7 +76,7 @@ class HwManagerNode(Node):
         super().__init__('hw_manager')
 
         # ── Parameters ───────────────────────────────────────────
-        self.declare_parameter('heartbeat_rate', 5.0)
+        self.declare_parameter('heartbeat_rate', 15.0)
         self.declare_parameter('watchdog_timeout', 7.0)
         self.declare_parameter('arm_mode', 1)  # 1=normal, 3=force
         self.declare_parameter('battery_low_threshold', 14.0)

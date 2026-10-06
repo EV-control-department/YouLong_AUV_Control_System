@@ -171,11 +171,12 @@ class Sensor:
         if camera in self._published_info_cameras:
             return
         config = self._camera_configs[camera]
+        frame_prefix = 'downward' if camera == 'down' else camera
         for side, info_publisher in self._real_info_publishers.get(
                 camera, {}).items():
             header = Header()
             header.stamp = stamp
-            header.frame_id = f'{camera}_{side}_camera_optical_frame'
+            header.frame_id = f'{frame_prefix}_{side}_camera_optical_frame'
             info = CameraInfo()
             info.header = header
             info.width = config.width
@@ -419,13 +420,9 @@ class Sensor:
     def _submit_frame(self, camera, frame, stamp, right_stamp=None,
                       stereo_pair_id=0):
         if camera in ('front', 'down') and not self._sim_mode:
-            # Rotate each eye independently so the stitched stereo pair keeps
-            # its left/right ordering while correcting the camera image roll.
-            split = frame.shape[1] // 2
-            frame = np.hstack((
-                cv2.rotate(frame[:, :split], cv2.ROTATE_180),
-                cv2.rotate(frame[:, split:], cv2.ROTATE_180),
-            ))
+            # Rotate the full stereo frame so each eye is corrected and the
+            # reversed input eye order is restored to left-then-right.
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
         self._frame_callback(
             camera, frame, stamp, right_stamp=right_stamp,
             stereo_pair_id=stereo_pair_id)

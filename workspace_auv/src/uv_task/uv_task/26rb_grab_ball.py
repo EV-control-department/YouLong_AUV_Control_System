@@ -134,9 +134,9 @@ class RB26GrabBallTask:
         """Convert down-left pixel error into one bounded world XY step."""
         px = float(detection.pixel_x)
         py = float(detection.pixel_y)
-        # Down-left optical axes are mapped to body (-y, +x, +z).  Therefore
-        # a target to the right of image centre requires body +y motion, while
-        # a target below image centre requires body -x motion.
+        # PDF v5 maps down-camera x_optical to +y_body and y_optical to
+        # -x_body. Therefore a target right of image centre requires body +y
+        # motion, while a target below image centre requires body -x motion.
         du = (px - self._cx) / self._fx
         dv = (py - self._cy) / self._fy
         body_dx = -dv * self._projection_depth * self._servo_gain

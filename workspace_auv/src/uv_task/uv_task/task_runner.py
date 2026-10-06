@@ -361,7 +361,7 @@ class TaskRunnerNode(Node):
             self.object_tracks = msg
 
     def _measurements_cb(self, msg: ObjectMeasurementArray):
-        """Cache fresh front-camera rays and positions for impact-ball search."""
+        """Cache fresh front-camera measurement rays for impact-ball search."""
         received_at = time.monotonic()
         latest_by_class = {}
         for measurement in msg.measurements:
@@ -369,8 +369,7 @@ class TaskRunnerNode(Node):
             if not source.startswith('front'):
                 continue
             has_ray = bool(measurement.has_ray)
-            has_position = bool(measurement.has_position)
-            if not has_ray and not has_position:
+            if not has_ray:
                 continue
             confidence = float(measurement.confidence)
             if not math.isfinite(confidence):
@@ -380,17 +379,10 @@ class TaskRunnerNode(Node):
                 'received_at': received_at,
                 'confidence': confidence,
                 'source': source,
-                'has_ray': has_ray,
                 'ray_direction': (
                     float(measurement.ray_direction_x),
                     float(measurement.ray_direction_y),
                     float(measurement.ray_direction_z),
-                ),
-                'has_position': has_position,
-                'position': (
-                    float(measurement.world_x),
-                    float(measurement.world_y),
-                    float(measurement.world_z),
                 ),
             }
             previous = latest_by_class.get(class_id)
@@ -571,7 +563,7 @@ class TaskRunnerNode(Node):
     def _down_visual_body_step(du: float, dv: float, projection_depth: float,
                                gain: float, max_step: float):
         """Map down-view normalized image error to a bounded body XY step."""
-        # The calibrated down optical frame maps to body (-y, +x, +z).
+        # PDF v5 maps down-camera x_optical to +y_body and y_optical to -x_body.
         body_dx = -float(dv) * float(projection_depth) * float(gain)
         body_dy = float(du) * float(projection_depth) * float(gain)
         norm = math.hypot(body_dx, body_dy)
@@ -1750,7 +1742,7 @@ class TaskRunnerNode(Node):
     def _latest_impact_ball_observation(
             self, name: str, params: dict, *, after_received=None,
             max_age: float = 0.75):
-        """Return a fresh front observation and its world-frame bearing."""
+        """Return a fresh front measurement ray and its world-frame yaw."""
         class_id = self._model_mapping.model_class_id(name, required=False)
         if class_id is None:
             return None
@@ -1758,7 +1750,6 @@ class TaskRunnerNode(Node):
         now = time.monotonic()
         with self._perception_lock:
             cached = self._impact_ball_observations.get(int(class_id))
-            pose = self._robot_pose
         if cached is None:
             return None
         received_at = float(cached['received_at'])
@@ -1768,23 +1759,11 @@ class TaskRunnerNode(Node):
                 or cached['confidence'] < min_confidence):
             return None
 
-        yaw = None
-        if cached['has_ray']:
-            ray_x, ray_y, _ray_z = cached['ray_direction']
-            if math.isfinite(ray_x) and math.isfinite(ray_y):
-                if math.hypot(ray_x, ray_y) > 1e-6:
-                    yaw = math.degrees(math.atan2(ray_y, ray_x))
-        if yaw is None and cached['has_position']:
-            if pose is None:
-                pose = (self._cmd_x, self._cmd_y, self._cmd_z,
-                        0.0, 0.0, self._cmd_yaw)
-            x, y, _z = cached['position']
-            dx, dy = x - float(pose[0]), y - float(pose[1])
-            if (math.isfinite(dx) and math.isfinite(dy)
-                    and math.hypot(dx, dy) > 1e-6):
-                yaw = math.degrees(math.atan2(dy, dx))
-        if yaw is None or not math.isfinite(yaw):
+        ray_x, ray_y, _ray_z = cached['ray_direction']
+        if (not math.isfinite(ray_x) or not math.isfinite(ray_y)
+                or math.hypot(ray_x, ray_y) <= 1e-6):
             return None
+        yaw = math.degrees(math.atan2(ray_y, ray_x))
         return {**cached, 'yaw_deg': self._wrap_yaw_degrees(yaw)}
 
     def _wait_for_impact_ball_observation(
@@ -2041,84 +2020,55 @@ class TaskRunnerNode(Node):
             self._wrap_yaw_degrees(yaw),
         )
 
-    def _hold_impact_alignment(self, name: str, target: dict, params: dict):
-        """Continuously refresh the position/yaw target during the alignment hold."""
+    def _hold_impact_alignment(self, name: str, params: dict, *,
+                               after_received=None):
+        """Align yaw from fresh measurement rays while holding position."""
         duration = max(
             0.0, float(params.get('position_correction_duration', 30.0)))
         period = max(0.05, float(params.get('position_correction_period', 0.20)))
         command_timeout = max(
             0.20, float(params.get('position_correction_command_timeout', 10.0)))
-        min_update_m = max(
-            0.0, float(params.get('position_correction_min_update_m', 0.03)))
         min_update_yaw_deg = max(
             0.0, float(params.get('position_correction_min_update_deg', 1.0)))
-        staging_distance = max(
-            0.0, float(params.get('approach_distance', 0.5)))
-        min_clearance = max(0.0, float(params.get('min_clearance', 0.05)))
-        z_offset = float(params.get('z_offset', 0.2))
 
         deadline = time.monotonic() + duration
-        last_target = target
-        last_sent_staging = None
+        last_observation_received = after_received
+        last_sent_yaw = None
         while rclpy.ok() and not self.stopped:
-            latest = self._best_impact_ball_target(name, params)
-            if latest is not None:
-                last_target = latest
-
-            pose = self._latest_robot_pose()
-            distance = math.hypot(
-                float(last_target['x']) - pose[0],
-                float(last_target['y']) - pose[1],
-            )
-            effective_distance = min(
-                staging_distance,
-                max(0.0, distance - min_clearance),
-            )
-            staging = self._impact_staging_pose(
-                last_target, effective_distance, z_offset)
             remaining = deadline - time.monotonic()
             if remaining <= 0.0:
                 break
-
-            # BasicMotion keeps the last position target active.  Re-sending
-            # an identical SET goal every 200 ms only creates action-server
-            # work and can starve the simulator/perception executor.  Check
-            # the target at the configured period, but send a new goal only
-            # after a meaningful position or yaw change.
-            if last_sent_staging is not None:
-                position_delta = max(
-                    abs(staging[index] - last_sent_staging[index])
-                    for index in range(3))
-                yaw_delta = abs(self._wrap_yaw_degrees(
-                    staging[3] - last_sent_staging[3]))
-                if (position_delta < min_update_m
-                        and yaw_delta < min_update_yaw_deg):
-                    time.sleep(min(period, remaining))
-                    continue
-
+            observation = self._wait_for_impact_ball_observation(
+                name, params,
+                timeout=min(period, remaining),
+                after_received=last_observation_received)
+            if observation is None:
+                continue
+            last_observation_received = observation['received_at']
+            yaw = float(observation['yaw_deg'])
+            if (last_sent_yaw is not None
+                    and abs(self._wrap_yaw_degrees(
+                        yaw - last_sent_yaw)) < min_update_yaw_deg):
+                continue
             success, message = self._send_action_goal(
                 BasicMotion.Goal.SET,
-                list(staging),
-                'xyzrz',
+                [self._cmd_x, self._cmd_y, self._cmd_z, yaw],
+                'rz',
                 timeout=min(command_timeout, max(0.20, remaining)),
                 quiet=True,
                 task_context=self._format_motion_context(
-                    f'{name}持续位置姿态修正'),
+                    f'{name} measurement 射线偏航对准'),
             )
             if success:
-                self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = staging
-                last_sent_staging = list(staging)
+                self._cmd_yaw = yaw
+                last_sent_yaw = yaw
             elif not rclpy.ok() or self.stopped:
                 return False
             else:
                 self.get_logger().warning(
-                    f'hit_balls：{name} 对准修正失败：{message}')
+                    f'hit_balls：{name} 射线偏航对准失败：{message}')
 
-            remaining = deadline - time.monotonic()
-            if remaining > 0.0:
-                time.sleep(min(period, remaining))
-
-        return rclpy.ok() and not self.stopped
+        return rclpy.ok() and not self.stopped and last_sent_yaw is not None
 
     def _charge_forward(self, params: dict) -> bool:
         """Run the body-X velocity loop for a fixed short impact charge."""
