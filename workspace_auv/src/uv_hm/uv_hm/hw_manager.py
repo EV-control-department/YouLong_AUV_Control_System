@@ -2,7 +2,9 @@
 
 Responsibilities:
 - Own the MCU arm heartbeat (5Hz default) on /zit6/cmd/agxhbt
+- Forward canonical servo/light commands to the firmware endpoints
 - Subscribe to /auv/hardware/zit6/state/status, heartbeat, and thruster state
+- Adapt legacy servo target state into the canonical hardware namespace
 - Parse and log MCU state in human-readable format
 - Watchdog: heartbeat timeout (7s), battery low, error flags, thrust sat
 - INS startup sequence tracking
@@ -15,18 +17,19 @@ import threading
 import rclpy
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray, UInt32
+from std_msgs.msg import Float32MultiArray, UInt8, UInt32
 
-from zit6_interfaces.msg import ZitStatus
+from zit6_interfaces.msg import ZitServo, ZitServoState, ZitStatus
 from zit6_interfaces.msg import ZitUsbl
 from uv_msgs.msg import UsblMeasurement
 from auv_protocol.topics import (
     LEGACY_ZIT6_HEARTBEAT,
     LEGACY_ZIT6_HEARTBEAT_STATE, LEGACY_ZIT6_POSITION,
+    LEGACY_ZIT6_LIGHT, LEGACY_ZIT6_SERVO, LEGACY_ZIT6_SERVO_STATE,
     LEGACY_ZIT6_STATUS, LEGACY_ZIT6_THRUSTER, LEGACY_ZIT6_USBL,
     LEGACY_ZIT6_VELOCITY,
     ZIT6_STATUS, ZIT6_HEARTBEAT_STATE, ZIT6_THRUSTER,
-    ZIT6_POSITION, ZIT6_VELOCITY,
+    ZIT6_LIGHT, ZIT6_POSITION, ZIT6_SERVO, ZIT6_SERVO_STATE, ZIT6_VELOCITY,
     USBL_MEASUREMENT,
 )
 
@@ -103,6 +106,8 @@ class HwManagerNode(Node):
         # ── MCU state subscriptions ──────────────────────────────
         self._state_publishers = {
             'status': self.create_publisher(ZitStatus, ZIT6_STATUS, 10),
+            'servo': self.create_publisher(
+                ZitServoState, ZIT6_SERVO_STATE, 10),
             'position': self.create_publisher(
                 Float32MultiArray, ZIT6_POSITION, 10),
             'velocity': self.create_publisher(
@@ -114,6 +119,17 @@ class HwManagerNode(Node):
             'usbl': self.create_publisher(
                 UsblMeasurement, USBL_MEASUREMENT, 10),
         }
+
+        # Canonical actuator commands are adapted to the firmware endpoints.
+        self._servo_command_pub = self.create_publisher(
+            ZitServo, LEGACY_ZIT6_SERVO, 10)
+        self._light_command_pub = self.create_publisher(
+            UInt8, LEGACY_ZIT6_LIGHT, 10)
+        self._servo_command_sub = self.create_subscription(
+            ZitServo, ZIT6_SERVO, self._servo_command_cb, 10)
+        self._light_command_sub = self.create_subscription(
+            UInt8, ZIT6_LIGHT, self._light_command_cb, 10)
+
         if bool(self.get_parameter('legacy_state_topics').value):
             self._status_sub = self.create_subscription(
                 ZitStatus, LEGACY_ZIT6_STATUS,
@@ -133,6 +149,9 @@ class HwManagerNode(Node):
             self._usbl_sub = self.create_subscription(
                 ZitUsbl, LEGACY_ZIT6_USBL,
                 self._legacy_usbl_cb, 10)
+            self._servo_state_sub = self.create_subscription(
+                ZitServoState, LEGACY_ZIT6_SERVO_STATE,
+                self._legacy_servo_state_cb, 10)
         else:
             self._status_sub = self.create_subscription(
                 ZitStatus, ZIT6_STATUS, self._status_cb, 10)
@@ -166,6 +185,14 @@ class HwManagerNode(Node):
         arm_mode = self.get_parameter('arm_mode').value
         msg.data = arm_mode
         self._heartbeat_pub.publish(msg)
+
+    def _servo_command_cb(self, msg: ZitServo):
+        """Forward the canonical servo command to the firmware topic."""
+        self._servo_command_pub.publish(msg)
+
+    def _light_command_cb(self, msg: UInt8):
+        """Forward the canonical light command to the firmware topic."""
+        self._light_command_pub.publish(msg)
 
     # ── State callbacks ──────────────────────────────────────────
 
@@ -247,6 +274,10 @@ class HwManagerNode(Node):
 
     def _legacy_velocity_cb(self, msg: Float32MultiArray):
         self._state_publishers['velocity'].publish(msg)
+
+    def _legacy_servo_state_cb(self, msg: ZitServoState):
+        """Adapt the firmware's accepted servo targets to the /auv contract."""
+        self._state_publishers['servo'].publish(msg)
 
     def _legacy_usbl_cb(self, msg: ZitUsbl):
         """Adapt the embedded USBL frame into the canonical measurement msg."""

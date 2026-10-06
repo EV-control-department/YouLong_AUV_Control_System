@@ -23,10 +23,10 @@ from rclpy.parameter import Parameter
 from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
 )
-from std_msgs.msg import Float32, UInt8
+from std_msgs.msg import UInt8
 from std_srvs.srv import Trigger
 
-from zit6_interfaces.msg import ZitStatus
+from zit6_interfaces.msg import ZitServo, ZitStatus
 from auv_protocol.topics import (
     BASIC_MOTION, MEASUREMENTS, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS,
     TRACKS, STATE_ODOM,
@@ -110,6 +110,10 @@ class TaskRunnerNode(Node):
     LIGHT_YELLOW = 1
     LIGHT_GREEN = 2
     LIGHT_RED = 3
+
+    # Firmware logical servo channels.
+    SERVO_ID_GOLF = 1
+    SERVO_ID_RING = 2
 
     # ── 舵机角度 (/auv/hardware/zit6/cmd/servo, rad) ───────────────
     ANGLE_DROP_BEACON = 90       #   投信标
@@ -300,7 +304,7 @@ class TaskRunnerNode(Node):
         self.pub_status_legacy = self.create_publisher(
             TaskStatus, LEGACY_TASK_STATUS, 10)
         self.pub_light = self.create_publisher(UInt8, ZIT6_LIGHT, 10)
-        self.pub_servo = self.create_publisher(Float32, ZIT6_SERVO, 10)
+        self.pub_servo = self.create_publisher(ZitServo, ZIT6_SERVO, 10)
         # A task runner can be interrupted while BasicMotion is still
         # executing a goal.  Cancel the goal; BasicMotion owns the neutral
         # velocity stop and its velocity lease watchdog.
@@ -443,11 +447,15 @@ class TaskRunnerNode(Node):
         self.pub_light.publish(msg)
         self.get_logger().info('💡 灯光已关闭')
 
-    def set_servo(self, angle_rad: float, label: str):
-        msg = Float32(data=float(angle_rad))
+    def set_servo(self, angle_rad: float, label: str,
+                  servo_id: int = SERVO_ID_GOLF):
+        msg = ZitServo()
+        msg.servo_id = int(servo_id)
+        msg.angle = float(angle_rad)
         self.pub_servo.publish(msg)
         self.get_logger().info(
-            f'⚙️  舵机：{label}（角度={angle_rad:.2f} rad）')
+            f'⚙️  舵机：{label}（编号={msg.servo_id}，'
+            f'角度={angle_rad:.2f} rad）')
 
     # ── 下视对齐工具 ───────────────────────────────────────────────
 

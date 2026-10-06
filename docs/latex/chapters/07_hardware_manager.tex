@@ -18,10 +18,12 @@
     \topic{/auv/hardware/zit6/cmd/setpoint} & \code{ZitSetpoint} & 位置、速度或力设定值。 \\
     \topic{/zit6/cmd/agxhbt} & \code{UInt32} & 由 \code{hw_manager} 默认以 5Hz 发送；数据为 \code{arm_mode}。 \\
     \topic{/auv/hardware/zit6/cmd/ins} & \code{UInt8} & INS/DVL 控制。 \\
-    \topic{/auv/hardware/zit6/cmd/light}、\code{/servo} & 基础标量消息 & 灯光和舵机设备命令。 \\
+    \topic{/auv/hardware/zit6/cmd/light} & \code{UInt8} & 经 \code{hw_manager} 转发到固件的灯光命令。 \\
+    \topic{/auv/hardware/zit6/cmd/servo} & \code{ZitServo} & 经 \code{hw_manager} 转发的舵机命令；\code{servo_id} 为 1 或 2，角度单位为弧度。 \\
     \topic{/auv/hardware/zit6/state/status} & \code{ZitStatus} & 布防、INS、控制级别、电池和错误状态。 \\
     \topic{/auv/hardware/zit6/state/position} & \code{Float32MultiArray} & 兼容的原始位置状态。 \\
     \topic{/auv/hardware/zit6/state/velocity} & \code{Float32MultiArray} & 兼容的原始速度状态。 \\
+    \topic{/auv/hardware/zit6/state/servo} & \code{ZitServoState} & 两路舵机最近被固件接受的目标角，不代表实测物理角度。 \\
     \topic{/auv/hardware/zit6/get_params}、\code{/update_params} & ZIT6 Service & PID/控制参数在线查询和更新。 \\
     \bottomrule
   \end{tabularx}

@@ -30,7 +30,7 @@
 2. **已解锁后把 `arm_mode` 改为 0 不会立即上锁。** 固件在已解锁分支只检查心跳超时。停止所有心跳发布者后，仓库固件约 1s 后上锁；`hw_manager.watchdog_timeout=7s` 是上位机监控阈值，两者不是同一个时间。
 3. `profile:=task` 默认自动执行比赛 mission。测试采用 `profile:=debug enable_task:=false`，然后单独启动处于 `debug_mode=true` 的任务节点。
 4. 真机固件发布 `/zit6/state/*`，`hw_manager` 将状态适配到 `/auv/hardware/zit6/state/*`。`basic_motion` 同时发布新旧 setpoint；解锁心跳由 `hw_manager` 直接发送到 `/zit6/cmd/agxhbt`。原 `/auv/hardware/zit6/cmd/heartbeat` 和 `/zit6/cmd/heartbeat` 已弃用，不再发布或转发。
-5. 当前灯/舵机/INS 的 canonical 指令没有在 `hw_manager` 中完成转发。固件舵机订阅的是 `/zit6/cmd/servo` 的 `zit6_interfaces/msg/ZitServo`，而现有比赛任务使用 canonical `Float32`。本指导用固件实际接口做硬件验证；在比赛任务里使用舵机前，还需要完成应用接口适配。
+5. canonical 灯光和舵机命令由 `hw_manager` 转发到固件 `/zit6/cmd/light`、`/zit6/cmd/servo`；舵机命令类型为 `zit6_interfaces/msg/ZitServo`（`servo_id` 为 1 或 2，`angle` 单位为弧度）。固件 `/zit6/state/servo` 的已接受目标角会适配到 `/auv/hardware/zit6/state/servo`；它不是物理角度测量。INS 命令仍需使用固件实际接口。
 6. 相机像素经 `youlong/camera/front`、`youlong/camera/down` 共享内存服务传输。没有 ROS `Image` 持续发布不代表相机坏了。相机状态和 CameraInfo 当前也不是周期健康心跳，不能用它们的频率来验收持续采集。
 7. real 定位主要读取 MCU 的位置/速度反馈。当前 real bringup 没有额外启动独立 IMU、DVL、压力 ROS 驱动；不能要求这些 canonical 原始传感器 topic 一定有发布者。需要通过 MCU 诊断/日志及位置速度变化验证，额外安装了 ROS 驱动时再检查其原始 topic。
 8. `/auv/hardware/zit6/state/thruster` 的六个数是 `[Fx,Fy,Fz,Mroll,Mpitch,Myaw]` 控制力/矩，不是 M0–M5 的独立 RPM/电流反馈。
@@ -209,28 +209,30 @@ CameraInfo 在 real 采集首帧时发布一次；若启动后才订阅而看不
 
 ### 6.2 灯光
 
-核对固件接口有订阅者后，逐个检查 1/2/3 状态与最终关闭，记录颜色/状态的实物对应：
+确认 canonical 命令由 `hw_manager` 订阅、固件端点有订阅者后，逐个检查 1/2/3 状态与最终关闭，记录颜色/状态的实物对应：
 
 ```bash
+ros2 topic info /auv/hardware/zit6/cmd/light -v
 ros2 topic info /zit6/cmd/light -v
-ros2 topic pub --once /zit6/cmd/light std_msgs/msg/UInt8 "{data: 1}"
-ros2 topic pub --once /zit6/cmd/light std_msgs/msg/UInt8 "{data: 2}"
-ros2 topic pub --once /zit6/cmd/light std_msgs/msg/UInt8 "{data: 3}"
-ros2 topic pub --once /zit6/cmd/light std_msgs/msg/UInt8 "{data: 0}"
+ros2 topic pub --once /auv/hardware/zit6/cmd/light std_msgs/msg/UInt8 "{data: 1}"
+ros2 topic pub --once /auv/hardware/zit6/cmd/light std_msgs/msg/UInt8 "{data: 2}"
+ros2 topic pub --once /auv/hardware/zit6/cmd/light std_msgs/msg/UInt8 "{data: 3}"
+ros2 topic pub --once /auv/hardware/zit6/cmd/light std_msgs/msg/UInt8 "{data: 0}"
 ```
 
 ### 6.3 舵机 1/2、释放机构
 
 ```bash
+ros2 topic info /auv/hardware/zit6/cmd/servo -v
 ros2 topic info /zit6/cmd/servo -v
-ros2 topic echo /zit6/state/servo
+ros2 topic echo /auv/hardware/zit6/state/servo
 ```
 
 固件命令为 `{servo_id: 1或2, angle: 弧度}`。先根据实物当前角和机械限位选择测试角，只做小幅变化，例如在已确认安全角范围内改变 0.05rad；分别确认两个物理通道，再恢复。发送形式如下，先填写实际安全角：
 
 ```bash
 # 示例结构：把 TEST_ANGLE_RAD 改成根据实物选定的弧度数值。
-ros2 topic pub --once /zit6/cmd/servo zit6_interfaces/msg/ZitServo \
+ros2 topic pub --once /auv/hardware/zit6/cmd/servo zit6_interfaces/msg/ZitServo \
   "{servo_id: 1, angle: TEST_ANGLE_RAD}"
 ```
 

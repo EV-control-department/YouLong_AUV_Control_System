@@ -21,9 +21,9 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import FluidPressure
 from geometry_msgs.msg import TwistWithCovarianceStamped
-from std_msgs.msg import Float32, UInt8, UInt32, Float32MultiArray, String
+from std_msgs.msg import UInt8, UInt32, Float32MultiArray, String
 
-from zit6_interfaces.msg import ZitSetpoint, ZitStatus
+from zit6_interfaces.msg import ZitServo, ZitSetpoint, ZitStatus
 from zit6_interfaces.srv import GetParams, UpdateParams
 from uv_msgs.msg import DvlAltitude, DvlVelocity, PoseInfo
 from auv_protocol.topics import (
@@ -179,7 +179,7 @@ class SimBridgeNode(Node):
 
         # === Subscriptions ===
         self.create_subscription(ZitSetpoint, ZIT6_SETPOINT, self._setpoint_cb, 10)
-        self.create_subscription(Float32, ZIT6_SERVO, self._servo_cb, 10)
+        self.create_subscription(ZitServo, ZIT6_SERVO, self._servo_cb, 10)
         self.create_subscription(UInt8, ZIT6_LIGHT, self._light_cb, 10)
         self.create_subscription(PoseInfo, STATE_ODOM, self._state_odom_cb, 10)
         self.create_subscription(
@@ -298,8 +298,9 @@ class SimBridgeNode(Node):
         except Exception as e:
             self.get_logger().error(f"core.update_setpoint failed: {e}")
 
-    def _servo_cb(self, msg: Float32) -> None:
-        self.get_logger().info(f"Servo: {msg.data:.3f} rad")
+    def _servo_cb(self, msg: ZitServo) -> None:
+        self.get_logger().info(
+            f"Servo {msg.servo_id}: {msg.angle:.3f} rad")
 
     def _light_cb(self, msg: UInt8) -> None:
         colors = {1: "red", 2: "yellow", 3: "green"}

@@ -9,12 +9,15 @@ import threading
 import time
 
 import numpy as np
+from std_msgs.msg import Empty
 
 from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
 )
 from auv_protocol.model_mapping import ModelClassRegistry
-from auv_protocol.topics import MEASUREMENTS, MODEL_CLASS_MAPPING, TRACKS
+from auv_protocol.topics import (
+    MEASUREMENTS, MODEL_CLASS_MAPPING, STATE_RESET, TRACKS,
+)
 from uv_msgs.msg import (
     ModelClassMapping, ObjectMeasurementArray, ObjectTrack, ObjectTrackArray,
 )
@@ -101,10 +104,12 @@ class ObjectEstimator:
         self._tracks = {}
         self._pool_track_ids = {}        # pool key -> persistent track IDs
         self._next_id = 1
+        self._reset_stamp_ns = 0
         self._warned_frames = set()
         self._last_log_ns = {}
         node.create_subscription(ObjectMeasurementArray, MEASUREMENTS,
                                  self._measurements, 10)
+        node.create_subscription(Empty, STATE_RESET, self._reset_callback, 10)
         self.timer = node.create_timer(0.1, self._publish)
 
     def _declare_anchor_sigmas(self, node):
@@ -217,7 +222,14 @@ class ObjectEstimator:
         factors = [factor for factor in factors if factor is not None]
         if not factors:
             return
+        stamp = message.header.stamp
+        message_stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
         with self._lock:
+            # Queued measurements captured before an odom reset are expressed
+            # in the old frame and must not seed the newly cleared estimator.
+            if (self._reset_stamp_ns > 0
+                    and message_stamp_ns <= self._reset_stamp_ns):
+                return
             for factor in factors:
                 key = (factor['view'], factor['physical_class_name'])
                 pool = self._pools.setdefault(key, [])
@@ -234,6 +246,27 @@ class ObjectEstimator:
                     for ray in evicted:
                         seen_ids.difference_update(ray['source_detection_ids'])
                 self._dirty_pools.add(key)
+
+    def _reset_callback(self, _message):
+        """Clear world-frame estimates when BasicMotion redefines odom."""
+        now = self.node.get_clock().now()
+        reset_stamp_ns = int(getattr(now, 'nanoseconds', 0))
+        if reset_stamp_ns <= 0:
+            stamp = now.to_msg()
+            reset_stamp_ns = (int(stamp.sec) * 1_000_000_000
+                              + int(stamp.nanosec))
+        with self._lock:
+            self._reset_stamp_ns = reset_stamp_ns
+            self._pools.clear()
+            self._pool_source_ids.clear()
+            self._dirty_pools.clear()
+            self._tracks.clear()
+            self._pool_track_ids.clear()
+            self._last_log_ns.clear()
+            # Keep _next_id monotonic so consumers never see reused track IDs.
+        self.node.get_logger().info(
+            'ObjectEstimator cleared ray pools and tracks after STATE_RESET')
+        self._publish()
 
     def _seed_candidates(self, rays):
         if len(rays) > self.seed_ray_limit:

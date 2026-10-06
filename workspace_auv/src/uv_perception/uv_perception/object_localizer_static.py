@@ -10,13 +10,14 @@ import time
 import uuid
 
 import numpy as np
+from std_msgs.msg import Empty
 from rclpy.qos import (
     QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy,
 )
 from auv_protocol.model_mapping import ModelClassRegistry
 from auv_protocol.topics import (
     DOWN_LEFT_INFO, DOWN_RIGHT_INFO, FRONT_LEFT_INFO, FRONT_RIGHT_INFO,
-    MEASUREMENTS, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS,
+    MEASUREMENTS, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, STATE_RESET,
 )
 from sensor_msgs.msg import CameraInfo
 from uv_msgs.msg import (
@@ -64,6 +65,7 @@ class ObjectLocalizer:
         self._lock = threading.Lock()
         self._id_lock = threading.Lock()
         self._pending: dict[tuple[str, int, int], PendingPair] = {}
+        self._reset_stamp_ns = 0
         self._infos = {}
         self._warned_tf_frames = set()
         # Distinguish IDs produced by separate localizer process lifetimes.
@@ -90,6 +92,7 @@ class ObjectLocalizer:
                                      info_qos)
         node.create_subscription(DetectionArray, PERCEPTION_DETECTIONS,
                                  self._detections, 10)
+        node.create_subscription(Empty, STATE_RESET, self._reset_callback, 10)
         self.timer = node.create_timer(0.02, self._flush)
 
     def _mapping_callback(self, message):
@@ -103,11 +106,31 @@ class ObjectLocalizer:
         with self._lock:
             self._infos[name] = message
 
+    def _reset_callback(self, _message):
+        """Discard camera pairs captured before an odom-frame reset."""
+        now = self.node.get_clock().now()
+        reset_stamp_ns = int(getattr(now, 'nanoseconds', 0))
+        if reset_stamp_ns <= 0:
+            stamp = now.to_msg()
+            reset_stamp_ns = (int(stamp.sec) * 1_000_000_000
+                              + int(stamp.nanosec))
+        with self._lock:
+            pending_count = len(self._pending)
+            self._pending.clear()
+            self._reset_stamp_ns = reset_stamp_ns
+        self.node.get_logger().info(
+            'ObjectLocalizer discarded {} pending camera pairs after '
+            'STATE_RESET'.format(pending_count))
+
     def _detections(self, message):
         camera_name = str(message.camera_name).strip().lower()
         group = camera_name.split('_', 1)[0]
         key = (group, int(message.capture_id), int(message.stereo_pair_id))
         with self._lock:
+            message_stamp_ns = _stamp_ns(message.header.stamp)
+            if (self._reset_stamp_ns > 0
+                    and message_stamp_ns <= self._reset_stamp_ns):
+                return
             pending = self._pending.setdefault(key, PendingPair(time.monotonic_ns()))
             with self._id_lock:
                 ids = []
@@ -187,6 +210,12 @@ class ObjectLocalizer:
                 pending.detection_ids.get(left_name, []),
                 pending.detection_ids.get(right_name, [])))
         if output.measurements:
+            # A pair may have been removed from _pending just as reset arrived.
+            # Do not publish its geometry in the previous odom frame.
+            reset_stamp_ns = getattr(self, '_reset_stamp_ns', 0)
+            if (reset_stamp_ns > 0
+                    and _stamp_ns(output.header.stamp) <= reset_stamp_ns):
+                return
             self.publisher.publish(output)
 
     def _stereo_measurements(self, group, left_message, right_message,
@@ -447,4 +476,3 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-
