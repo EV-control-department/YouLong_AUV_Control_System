@@ -31,6 +31,25 @@ def test_config_dir_accepts_package_root():
     assert config.calibration_source == "sim_camera_info"
 
 
+def test_down_real_intrinsics_match_latest_stereo_calibration():
+    config = load_camera_config("down", "real")
+    left = config.side("left")
+    right = config.side("right")
+    assert left.matrix[0, 0] == pytest.approx(1159.0997987420169)
+    assert left.matrix[0, 1] == pytest.approx(0.6582010360123447)
+    assert left.distortion.tolist() == pytest.approx([
+        -0.36428009567333464, 0.12966969145467228,
+        0.0019532488954503787, -0.0000080454778884803021,
+        0.1236567536694326,
+    ])
+    assert right.matrix[0, 0] == pytest.approx(1151.5984326373555)
+    assert right.distortion.tolist() == pytest.approx([
+        -0.36148274221566018, 0.1698694617848012,
+        0.0019289386344567849, 0.0026311467098986264,
+        -0.0449759012771526,
+    ])
+
+
 def test_front_sim_registry_topics_match_expected_names():
     config = load_camera_config("front", "sim")
     assert config.eye_image_topics == {
@@ -98,12 +117,17 @@ def test_urdf_remains_the_source_of_stereo_baselines():
     }
     assert origins["front_left_camera_mount"][1] == pytest.approx(-0.03)
     assert origins["front_right_camera_mount"][1] == pytest.approx(0.03)
-    assert origins["downward_left_camera_mount"][1] == pytest.approx(-0.03)
-    assert origins["downward_right_camera_mount"][1] == pytest.approx(0.03)
-    for left, right in (("front_left_camera_mount", "front_right_camera_mount"),
-                        ("downward_left_camera_mount", "downward_right_camera_mount")):
-        baseline = sum((a - b) ** 2 for a, b in zip(origins[left], origins[right])) ** 0.5
-        assert baseline == pytest.approx(0.06)
+    assert origins["downward_left_camera_mount"][1] == pytest.approx(
+        -0.03058633655786893)
+    assert origins["downward_right_camera_mount"][1] == pytest.approx(
+        0.03058633655786893)
+    for left, right, expected_baseline in (
+            ("front_left_camera_mount", "front_right_camera_mount", 0.06),
+            ("downward_left_camera_mount", "downward_right_camera_mount",
+             0.06117267311573786)):
+        baseline = sum((a - b) ** 2 for a, b in
+                       zip(origins[left], origins[right])) ** 0.5
+        assert baseline == pytest.approx(expected_baseline)
 
 
 def test_camera_calibration_files_are_installed_under_stereos():

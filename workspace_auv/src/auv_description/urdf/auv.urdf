@@ -30,8 +30,9 @@
   </link>
 
   <!-- Real vehicle geometry from docs/auv元件说明和标定数据_第四版.pdf.
-       Camera stereo baselines are 0.06 m per measurement.
-       Coordinates are body-FRD metres: x forward, y right, z down. -->
+       Coordinates are body-FRD metres: x forward, y right, z down.
+       The down-camera baseline is the norm of the latest stereo calibration
+       translation (61.172673 mm); the front baseline remains 60 mm. -->
   <link name="front_camera_link"><visual><geometry><box size="0.09 0.14 0.055"/></geometry><material name="Sensor Housing"/></visual></link>
   <joint name="front_camera_mount" type="fixed">
     <parent link="base_link"/>
@@ -61,13 +62,13 @@
   <joint name="downward_left_camera_mount" type="fixed">
     <parent link="downward_camera_link"/>
     <child link="downward_left_camera_optical_frame"/>
-    <origin xyz="0 -0.03 0" rpy="0 0 -1.5708"/>
+    <origin xyz="0 -0.03058633655786893 0" rpy="0 0 -1.5708"/>
   </joint>
   <link name="downward_right_camera_optical_frame"><visual><geometry><cylinder radius="0.013" length="0.012"/></geometry><material name="Lens Glass"/></visual></link>
   <joint name="downward_right_camera_mount" type="fixed">
     <parent link="downward_camera_link"/>
     <child link="downward_right_camera_optical_frame"/>
-    <origin xyz="0 0.03 0" rpy="0 0 -1.5708"/>
+    <origin xyz="0 0.03058633655786893 0" rpy="0 0 -1.5708"/>
   </joint>
 
   <link name="imu_link"><visual><geometry><box size="0.075 0.075 0.04"/></geometry><material name="Sensor Metal"/></visual></link>
