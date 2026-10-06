@@ -26,10 +26,10 @@
 
 ## 2. 当前软件接口中要先弄清的事实
 
-1. `hw_manager` 默认 `arm_mode=1`，持续发送 15Hz 心跳；仓库固件满足约 1s、至少 10 次心跳且导航有效后会自动解锁。首次陆上检查使用下方的 `test_disarmed.yaml`，同时物理隔离推进器动力。
+1. `hw_manager` 默认 `arm_mode=1`，启动后直接向 `/zit6/cmd/agxhbt` 发送 5Hz `UInt32` 心跳，`data` 为 `arm_mode`；仓库固件要求至少 10 次心跳、持续至少 1s 且导航有效，5Hz 下通常约 2s 后会自动解锁。首次陆上检查使用下方的 `test_disarmed.yaml`，同时物理隔离推进器动力。
 2. **已解锁后把 `arm_mode` 改为 0 不会立即上锁。** 固件在已解锁分支只检查心跳超时。停止所有心跳发布者后，仓库固件约 1s 后上锁；`hw_manager.watchdog_timeout=7s` 是上位机监控阈值，两者不是同一个时间。
 3. `profile:=task` 默认自动执行比赛 mission。测试采用 `profile:=debug enable_task:=false`，然后单独启动处于 `debug_mode=true` 的任务节点。
-4. 真机固件发布 `/zit6/state/*`，`hw_manager` 将状态适配到 `/auv/hardware/zit6/state/*`。`basic_motion` 同时发布新旧 setpoint，心跳也同时发布新旧接口。
+4. 真机固件发布 `/zit6/state/*`，`hw_manager` 将状态适配到 `/auv/hardware/zit6/state/*`。`basic_motion` 同时发布新旧 setpoint；解锁心跳由 `hw_manager` 直接发送到 `/zit6/cmd/agxhbt`。原 `/auv/hardware/zit6/cmd/heartbeat` 和 `/zit6/cmd/heartbeat` 已弃用，不再发布或转发。
 5. 当前灯/舵机/INS 的 canonical 指令没有在 `hw_manager` 中完成转发。固件舵机订阅的是 `/zit6/cmd/servo` 的 `zit6_interfaces/msg/ZitServo`，而现有比赛任务使用 canonical `Float32`。本指导用固件实际接口做硬件验证；在比赛任务里使用舵机前，还需要完成应用接口适配。
 6. 相机像素经 `youlong/camera/front`、`youlong/camera/down` 共享内存服务传输。没有 ROS `Image` 持续发布不代表相机坏了。相机状态和 CameraInfo 当前也不是周期健康心跳，不能用它们的频率来验收持续采集。
 7. real 定位主要读取 MCU 的位置/速度反馈。当前 real bringup 没有额外启动独立 IMU、DVL、压力 ROS 驱动；不能要求这些 canonical 原始传感器 topic 一定有发布者。需要通过 MCU 诊断/日志及位置速度变化验证，额外安装了 ROS 驱动时再检查其原始 topic。
@@ -121,7 +121,7 @@ ros2 topic info /zit6/cmd/agxhbt -v
 | 节点/进程 | 检查依据 | 通过标准 |
 |---|---|---|
 | MCU `zit6_node` + Agent | `/zit6/state/zithbt`、`status`、`pos`、`vel`、`/zit6/log` | 连接稳定，约 1Hz 心跳、10Hz 状态、30Hz 位姿速度；无持续重连 |
-| `hw_manager` | canonical 状态与 legacy 对照、15Hz `agxhbt` | 数值一致、时间连续；未解锁测试时 `is_armed=false` |
+| `hw_manager` | canonical 状态与 legacy 对照、5Hz `/zit6/cmd/agxhbt` | 数值一致、时间连续；未解锁测试时 `is_armed=false` |
 | `uv_localization` | odom、twist、`/auv/state/health` | 约 30Hz；健康 `available=true`；原始反馈停更不能仅凭 odom 仍有发布判定正常 |
 | `basic_motion` | `/auv/basic_motion` Action、setpoint 连接 | server 唯一；功能按第 7 节实际动作验证 |
 | `robot_state_publisher` | `/auv/tf_static`、`/auv/tf` | `odom→base_link→相机光学帧` 可查询；没有伪造 DVL 安装外参 |

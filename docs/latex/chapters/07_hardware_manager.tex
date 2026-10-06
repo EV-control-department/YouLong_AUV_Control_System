@@ -2,21 +2,21 @@
 \label{ch:hardware-manager}
 
 \section{边界职责}
-\pkg{uv_hm} 是 ROS 侧的硬件管理节点，当前职责包括：以固定频率发送心跳/布防命令；订阅 ZIT6 状态、心跳和推进器状态；执行电池、错误标志、通信超时和推力饱和监控；将已有旧 \topic{/zit6/state/*} 数据适配到 \topic{/auv/hardware/zit6/state/*}。
+\pkg{uv_hm} 是 ROS 侧的硬件管理节点，当前职责包括：启动后默认以 5Hz 直接向 MCU 的 \topic{/zit6/cmd/agxhbt} 发送心跳/布防命令；订阅 ZIT6 状态、心跳和推进器状态；执行电池、错误标志、通信超时和推力饱和监控；将已有旧 \topic{/zit6/state/*} 数据适配到 \topic{/auv/hardware/zit6/state/*}。
 
 它不是一个把所有底层设备细节都塞进来的“大硬件类”。真实 MCU 的固件控制核、传感器驱动和串口传输属于 MCU/外部 micro-ROS 通道；ROS 节点只依赖稳定的 ZIT6 Topic/Service 边界。
 
 \section{ZIT6 命令与状态}
 \begin{table}[H]
   \centering
-  \caption{ZIT6 Canonical 接口}
+  \caption{ZIT6 命令与状态接口}
   \label{tab:zit6-interface}
   \begin{tabularx}{\textwidth}{p{0.37\textwidth}p{0.24\textwidth}X}
     \toprule
     Topic/Service & 类型 & 语义 \\
     \midrule
     \topic{/auv/hardware/zit6/cmd/setpoint} & \code{ZitSetpoint} & 位置、速度或力设定值。 \\
-    \topic{/auv/hardware/zit6/cmd/heartbeat} & \code{UInt32} & 心跳和布防模式。 \\
+    \topic{/zit6/cmd/agxhbt} & \code{UInt32} & 由 \code{hw_manager} 默认以 5Hz 发送；数据为 \code{arm_mode}。 \\
     \topic{/auv/hardware/zit6/cmd/ins} & \code{UInt8} & INS/DVL 控制。 \\
     \topic{/auv/hardware/zit6/cmd/light}、\code{/servo} & 基础标量消息 & 灯光和舵机设备命令。 \\
     \topic{/auv/hardware/zit6/state/status} & \code{ZitStatus} & 布防、INS、控制级别、电池和错误状态。 \\
@@ -28,7 +28,7 @@
 \end{table}
 
 \section{心跳与 watchdog}
-心跳发送器按硬件管理器参数发布命令；默认参数保存在 \pathref{workspace_auv/src/uv_hm/config/default.yaml}，组件 launch 的 \code{params_file} 可用于显式覆盖。硬件管理器记录 MCU 上行心跳和状态最后到达时间。超过 watchdog 阈值时进入 degraded 记录并发出错误日志。电池低于阈值、状态错误标志非零或推进器接近饱和时，系统应进入人工检查流程，而不是继续假设车辆健康。
+心跳由硬件管理器自行生成并直接发送到 MCU；原 \topic{/auv/hardware/zit6/cmd/heartbeat} 命令接口已弃用，没有订阅或转发。心跳发送器按硬件管理器参数发布命令；默认参数保存在 \pathref{workspace_auv/src/uv_hm/config/default.yaml}，组件 launch 的 \code{params_file} 可用于显式覆盖。硬件管理器记录 MCU 上行心跳和状态最后到达时间。超过 watchdog 阈值时进入 degraded 记录并发出错误日志。电池低于阈值、状态错误标志非零或推进器接近饱和时，系统应进入人工检查流程，而不是继续假设车辆健康。
 
 \section{SIL 中的等价边界}
 SIL 的 \pkg{uv_sim_bridge} 模拟 ZIT6 的 Topic/Service 行为，使用 \pkg{zit6_control_core} 的 Host 控制核产生 6-DOF 力，再用推进器 mixer 连接 Stonefish。这样控制、任务和状态消费方看到的接口与真机一致，而底层执行介质不同。

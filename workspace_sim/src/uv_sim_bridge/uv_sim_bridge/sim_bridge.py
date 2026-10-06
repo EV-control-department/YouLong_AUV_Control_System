@@ -29,7 +29,7 @@ from uv_msgs.msg import DvlAltitude, DvlVelocity, PoseInfo
 from auv_protocol.topics import (
     DVL_ALTITUDE, DVL_VELOCITY, PRESSURE, STATE_ODOM, STATE_TWIST,
     ZIT6_GET_PARAMS, ZIT6_UPDATE_PARAMS,
-    ZIT6_HEARTBEAT, ZIT6_INS, ZIT6_LIGHT, ZIT6_SERVO, ZIT6_SETPOINT,
+    LEGACY_ZIT6_HEARTBEAT, ZIT6_INS, ZIT6_LIGHT, ZIT6_SERVO, ZIT6_SETPOINT,
     ZIT6_STATUS, ZIT6_THRUSTER,
     ZIT6_HEARTBEAT_STATE, ZIT6_SIM_NAV,
     SIM_CONTROL_PERFORMANCE,
@@ -188,7 +188,8 @@ class SimBridgeNode(Node):
         self.sensor_adapter = SensorAdapter(
             self, self.dvl_velocity_pub, self.dvl_altitude_pub)
         self.create_subscription(FluidPressure, PRESSURE, self._pressure_cb, 10)
-        self.create_subscription(UInt32, ZIT6_HEARTBEAT, self._agxhbt_cb, 10)
+        self.create_subscription(
+            UInt32, LEGACY_ZIT6_HEARTBEAT, self._agxhbt_cb, 10)
         self.create_subscription(UInt8, ZIT6_INS, self._ins_cb, 10)
 
         # === Services ===

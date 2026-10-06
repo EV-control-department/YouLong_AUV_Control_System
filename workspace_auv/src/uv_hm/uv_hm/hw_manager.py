@@ -1,7 +1,7 @@
 """Hardware manager node: heartbeat, state monitoring.
 
 Responsibilities:
-- Configurable heartbeat (15Hz default) on /auv/hardware/zit6/cmd/heartbeat
+- Own the MCU arm heartbeat (5Hz default) on /zit6/cmd/agxhbt
 - Subscribe to /auv/hardware/zit6/state/status, heartbeat, and thruster state
 - Parse and log MCU state in human-readable format
 - Watchdog: heartbeat timeout (7s), battery low, error flags, thrust sat
@@ -25,7 +25,7 @@ from auv_protocol.topics import (
     LEGACY_ZIT6_HEARTBEAT_STATE, LEGACY_ZIT6_POSITION,
     LEGACY_ZIT6_STATUS, LEGACY_ZIT6_THRUSTER, LEGACY_ZIT6_USBL,
     LEGACY_ZIT6_VELOCITY,
-    ZIT6_HEARTBEAT, ZIT6_STATUS, ZIT6_HEARTBEAT_STATE, ZIT6_THRUSTER,
+    ZIT6_STATUS, ZIT6_HEARTBEAT_STATE, ZIT6_THRUSTER,
     ZIT6_POSITION, ZIT6_VELOCITY,
     USBL_MEASUREMENT,
 )
@@ -73,7 +73,7 @@ class HwManagerNode(Node):
         super().__init__('hw_manager')
 
         # ── Parameters ───────────────────────────────────────────
-        self.declare_parameter('heartbeat_rate', 15.0)
+        self.declare_parameter('heartbeat_rate', 5.0)
         self.declare_parameter('watchdog_timeout', 7.0)
         self.declare_parameter('arm_mode', 1)  # 1=normal, 3=force
         self.declare_parameter('battery_low_threshold', 14.0)
@@ -96,8 +96,6 @@ class HwManagerNode(Node):
 
         # ── Heartbeat publisher ──────────────────────────────────
         self._heartbeat_pub = self.create_publisher(
-            UInt32, ZIT6_HEARTBEAT, 10)
-        self._legacy_heartbeat_pub = self.create_publisher(
             UInt32, LEGACY_ZIT6_HEARTBEAT, 10)
         hb_rate = self.get_parameter('heartbeat_rate').value
         self._hb_timer = self.create_timer(1.0 / hb_rate, self._heartbeat_cb)
@@ -152,7 +150,8 @@ class HwManagerNode(Node):
 
         self.get_logger().info('HW Manager started')
         self.get_logger().info(
-            f'  heartbeat_rate={hb_rate} Hz, '
+            f'  heartbeat_topic={LEGACY_ZIT6_HEARTBEAT}, '
+            f'heartbeat_rate={hb_rate} Hz, '
             f'arm_mode={self.get_parameter("arm_mode").value}')
         self.get_logger().info(
             f'  watchdog_timeout='
@@ -167,7 +166,6 @@ class HwManagerNode(Node):
         arm_mode = self.get_parameter('arm_mode').value
         msg.data = arm_mode
         self._heartbeat_pub.publish(msg)
-        self._legacy_heartbeat_pub.publish(msg)
 
     # ── State callbacks ──────────────────────────────────────────
 

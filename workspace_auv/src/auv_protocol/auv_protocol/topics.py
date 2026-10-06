@@ -117,7 +117,6 @@ MISSION_EXECUTE = f'{ROOT}/mission/execute'
 ZIT6_SETPOINT = f'{ROOT}/hardware/zit6/cmd/setpoint'
 ZIT6_SERVO = f'{ROOT}/hardware/zit6/cmd/servo'
 ZIT6_LIGHT = f'{ROOT}/hardware/zit6/cmd/light'
-ZIT6_HEARTBEAT = f'{ROOT}/hardware/zit6/cmd/heartbeat'
 ZIT6_INS = f'{ROOT}/hardware/zit6/cmd/ins'
 ZIT6_STATUS = f'{ROOT}/hardware/zit6/state/status'
 ZIT6_POSITION = f'{ROOT}/hardware/zit6/state/position'
@@ -156,12 +155,16 @@ SIM_DEGRADED_USBL = f'{ROOT}/sim/degraded/usbl/measurement'
 SIM_DEGRADED_FRONT_STITCHED = f'{ROOT}/sim/degraded/camera/front/image_stitched'
 SIM_DEGRADED_DOWN_STITCHED = f'{ROOT}/sim/degraded/camera/downward/image_stitched'
 
+# The MCU arm heartbeat is generated directly by hw_manager.
+# Keep the legacy constant name for the firmware endpoint; it has no
+# canonical command counterpart.
+LEGACY_ZIT6_HEARTBEAT = '/zit6/cmd/agxhbt'
+
 # Temporary compatibility endpoints.  New nodes must not use these as their
 # primary interface; they are intentionally kept in one place for bridges.
 LEGACY_BASIC_MOTION = '/basic_motion'
 LEGACY_POSE_INFO = '/basic_motion/pose_info'
 LEGACY_ZIT6_SETPOINT = '/zit6/cmd/setpoint'
-LEGACY_ZIT6_HEARTBEAT = '/zit6/cmd/heartbeat'
 LEGACY_ZIT6_POSITION = '/zit6/state/pos'
 LEGACY_ZIT6_VELOCITY = '/zit6/state/vel'
 LEGACY_ZIT6_THRUSTER = '/zit6/state/thr'

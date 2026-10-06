@@ -37,6 +37,7 @@ from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, qos_profile_sensor_data,
     QoSProfile, ReliabilityPolicy,
 )
+from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import UInt32
 from std_srvs.srv import Trigger
@@ -54,6 +55,10 @@ from zit6_interfaces.msg import ZitStatus
 
 class StartupBlocked(RuntimeError):
     """A safety/readiness gate failed; already-started processes are retained."""
+
+
+class ShutdownRequested(Exception):
+    """Ctrl-C/SIGTERM requested an orderly shutdown."""
 
 
 CAMERA_INFO_TOPICS = {
@@ -97,6 +102,7 @@ class RealStartupManager(Node):
     def __init__(self, args):
         super().__init__('real_startup_manager')
         self.args = args
+        self._shutdown_requested = False
         self.timeout = float(args.ready_timeout)
         self.max_age = float(args.max_age)
         if self.timeout <= 0 or self.max_age <= 0:
@@ -311,8 +317,10 @@ class RealStartupManager(Node):
             # spinning. Give slow initializers (for example YOLO model load)
             # the configured startup readiness window to answer.
             response_timeout = max(0.1, float(self.timeout))
-            rclpy.spin_until_future_complete(
-                self, future, timeout_sec=response_timeout)
+            self._wait_for(
+                future.done,
+                f'{node_name} parameter response',
+                duration=response_timeout)
             if not future.done():
                 return False, (
                     f'{node_name} parameter response timed out after '
@@ -410,11 +418,14 @@ class RealStartupManager(Node):
 
     def _wait_for(self, predicate, description, duration=None):
         deadline = time.monotonic() + (self.timeout if duration is None else duration)
-        while rclpy.ok() and time.monotonic() < deadline:
+        while (rclpy.ok() and not self._shutdown_requested
+               and time.monotonic() < deadline):
             self._spin()
             self._check_children()
             if predicate():
                 return
+        if self._shutdown_requested:
+            raise ShutdownRequested('shutdown requested')
         raise StartupBlocked(f'timed out waiting for {description}')
 
     def _spin(self):
@@ -617,7 +628,7 @@ class RealStartupManager(Node):
             components.append((
                 'hardware', ['ros2', 'launch', 'uv_hm', 'hardware_launch.py',
                              'enable_hardware:=true'], ['/hw_manager'],
-                {'/hw_manager': {'arm_mode': 1, 'heartbeat_rate': 15.0,
+                {'/hw_manager': {'arm_mode': 1, 'heartbeat_rate': 5.0,
                                  'watchdog_timeout': 7.0,
                                  'legacy_state_topics': True}}))
         for name, command, nodes, params in components:
@@ -936,8 +947,9 @@ class RealStartupManager(Node):
         self._phase(
             'final mission gate', self._healthy_for_mission_start,
             'fresh backend/armed BasicMotion and enabled camera, perception, navigation')
-        if not self._mission_run.wait_for_service(timeout_sec=self.timeout):
-            raise StartupBlocked('/auv/mission/run service unavailable')
+        self._wait_for(
+            self._mission_run.service_is_ready,
+            '/auv/mission/run service', duration=self.timeout)
         self._spin()
         if (self._task_status is None
                 or time.monotonic() - self._task_status_at > self.max_age
@@ -1165,39 +1177,119 @@ class RealStartupManager(Node):
         task_running = (
             self._task_status is not None
             and int(self._task_status.status) == TaskStatus.STATUS_RUNNING)
-        if task_running and owned_names.intersection(
-                {'task_runner', 'basic_motion', 'hardware', 'localization'}):
-            self._request_trigger(self._mission_stop, 'owned mission shutdown')
-        owns_active_task_dependency = task_running and bool(
-            owned_names.intersection(
-                {'task_runner', 'basic_motion', 'hardware', 'localization'}))
-        if ('basic_motion' in owned_names or owns_active_task_dependency) \
-                and not self.runtime_fault:
-            self._request_trigger(
-                self._safe_stop, 'owned BasicMotion shutdown')
-        elif self.runtime_fault:
-            if not self._mission_stop_applied:
-                self._request_trigger(self._mission_stop, 'final mission stop retry')
-            if not self._motion_stop_applied:
-                self._request_trigger(self._safe_stop, 'final BasicMotion safe-stop retry')
-        for _name, process, log_file in reversed(self.children):
-            if process.poll() is None:
+        if rclpy.ok():
+            owns_active_task_dependency = task_running and bool(
+                owned_names.intersection(
+                    {'task_runner', 'basic_motion', 'hardware', 'localization'}))
+            owns_task_control = (
+                'task_runner' in owned_names or owns_active_task_dependency)
+            safety_requests = []
+            if owns_task_control:
+                safety_requests.append(
+                    (self._mission_stop, 'owned mission shutdown'))
+            if ((('basic_motion' in owned_names or owns_active_task_dependency)
+                 and not self.runtime_fault)
+                    or (self.runtime_fault and not self._motion_stop_applied)):
+                safety_requests.append(
+                    (self._safe_stop, 'owned BasicMotion safe-stop'))
+            if self.runtime_fault and not self._mission_stop_applied \
+                    and not owns_task_control:
+                safety_requests.append(
+                    (self._mission_stop, 'final mission stop retry'))
+
+            # Treat the service calls as independent best-effort requests: a
+            # failed mission stop must not prevent BasicMotion safe-stop, and
+            # neither may prevent process-group cleanup.
+            for client, description in safety_requests:
                 try:
-                    os.killpg(process.pid, signal.SIGINT)
-                    process.wait(timeout=8.0)
-                except (ProcessLookupError, subprocess.TimeoutExpired):
-                    try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                        process.wait(timeout=3.0)
-                    except (ProcessLookupError, subprocess.TimeoutExpired):
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                    self._request_trigger(client, description)
+                except Exception as exc:
+                    self.get_logger().error(
+                        f'{description}: request raised {exc}; continuing '
+                        'shutdown cleanup')
+
+        self._terminate_owned_process_groups()
+
+    @staticmethod
+    def _process_group_exists(pgid):
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def _wait_for_groups(self, children, timeout):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            remaining = []
+            for component, process, _log_file in children:
+                process.poll()  # Reap an exited group leader when possible.
+                if self._process_group_exists(process.pid):
+                    remaining.append((component, process, _log_file))
+            if not remaining:
+                return []
+            time.sleep(0.1)
+        return [entry for entry in children
+                if self._process_group_exists(entry[1].pid)]
+
+    def _terminate_owned_process_groups(self):
+        """Stop only dedicated sessions created by this manager.
+
+        Each child launch is started with ``start_new_session=True``, so its
+        process group cannot contain a node that was already running before
+        bringup. Check the whole group, not just the ros2-launch leader: the
+        leader can exit while one of its launched nodes is still alive.
+        """
+        children = list(reversed(self.children))
+        for component, process, _log_file in children:
+            try:
+                os.killpg(process.pid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                self.get_logger().error(
+                    f'{component}: SIGINT to owned process group failed: {exc}')
+
+        remaining = self._wait_for_groups(children, timeout=8.0)
+        for component, process, _log_file in remaining:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                self.get_logger().error(
+                    f'{component}: SIGTERM to owned process group failed: {exc}')
+
+        remaining = self._wait_for_groups(remaining, timeout=3.0)
+        for component, process, _log_file in remaining:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                self.get_logger().error(
+                    f'{component}: SIGKILL to owned process group failed: {exc}')
+
+        still_running = self._wait_for_groups(remaining, timeout=0.5)
+        for component, process, _log_file in still_running:
+            self.get_logger().error(
+                f'{component}: owned process group {process.pid} still exists '
+                'after SIGKILL')
+
+        for component, process, log_file in children:
+            try:
+                process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self.get_logger().error(
+                    f'{component}: process leader did not exit after SIGKILL')
             try:
                 log_file.close()
             except Exception:
                 pass
+            self.component_state[component] = 'STOPPED (owned by bringup)'
+        self.children.clear()
 
 
 def _parse_args(argv=None):
@@ -1237,12 +1329,34 @@ def _parse_args(argv=None):
 
 def main(argv=None):
     args, ros_args = _parse_args(argv)
-    rclpy.init(args=ros_args)
     manager = None
+    signal_state = {'requested': False}
+    managed_signals = (signal.SIGINT, signal.SIGTERM)
+    previous_handlers = {}
+
+    def request_orderly_shutdown(signum, _frame):
+        signal_state['requested'] = True
+        signal_state['signal'] = signum
+        if manager is not None:
+            manager._shutdown_requested = True
+
     try:
+        for signum in managed_signals:
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, request_orderly_shutdown)
+        # Keep the ROS context alive while cleanup calls the mission-stop and
+        # BasicMotion safe-stop services. The Python handlers above turn Ctrl-C
+        # into an orderly exit instead of shutting ROS down before cleanup.
+        rclpy.init(
+            args=ros_args, signal_handler_options=SignalHandlerOptions.NO)
         manager = RealStartupManager(args)
+        if signal_state['requested']:
+            manager._shutdown_requested = True
         try:
-            manager.run_startup()
+            if not manager._shutdown_requested:
+                manager.run_startup()
+        except ShutdownRequested:
+            manager.get_logger().info('shutdown requested during startup')
         except StartupBlocked as exc:
             manager.startup_blocked = True
             manager.component_state['startup'] = 'BLOCKED'
@@ -1269,17 +1383,27 @@ def main(argv=None):
                 manager._trigger_safe_stop(
                     f'startup failed while an existing mission was running: {exc}')
             manager._dashboard()
-        while rclpy.ok():
+        while rclpy.ok() and not manager._shutdown_requested:
             rclpy.spin_once(manager, timeout_sec=0.2)
             manager.monitor()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
         if manager is not None:
-            manager.cleanup_owned()
-            manager.destroy_node()
+            try:
+                manager.cleanup_owned()
+            except Exception as exc:
+                manager.get_logger().error(
+                    f'owned-process cleanup raised unexpectedly: {exc}')
+            finally:
+                try:
+                    manager.destroy_node()
+                except Exception:
+                    pass
         if rclpy.ok():
             rclpy.shutdown()
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     return 0
 
 
