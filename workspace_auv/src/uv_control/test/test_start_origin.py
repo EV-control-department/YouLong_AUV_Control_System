@@ -67,7 +67,8 @@ def node():
         _heartbeat_enabled=False, _active_origin_generation=None,
         _status_received_at=float('-inf'), _odom_received_at=float('-inf'),
         _nav_sample_at=float('-inf'), _nav_sample_key=None, _state_timeout=1.0,
-        _start_timeout=0.15, _arm_mode=1, _origin_initialized=False,
+        _start_timeout=0.15, _arm_confirmation_timeout=0.15,
+        _arm_mode=1, _origin_initialized=False,
         _nav_valid=True, _origin_generation=0, _nav_timestamp_ms=0,
         _reset_request_id=500, _pending_reset_id=None, _reset_result=None, _reset_invalidated=False,
         _start_waiter=None, _velocity_active=False, _velocity_deadline=0.0,
@@ -173,6 +174,42 @@ def test_start_cancellation_after_origin_before_armed_stops_heartbeat(node):
         await tick(node)
         assert not (await task).success
         assert not node._heartbeat_enabled
+    asyncio.run(scenario())
+
+
+def test_arm_confirmation_has_its_own_timeout_and_keeps_heartbeat_enabled(node):
+    async def scenario():
+        goal = Goal(timeout=0.1)
+        node._arm_confirmation_timeout = 0.35
+        task, request_id = await begin_reset(node, goal)
+        node._state_reset_result_cb(NS(request_id=request_id, success=True,
+                                      origin_generation=8, message=''))
+        await tick(node)
+        refresh(node, origin=True, generation=8)
+        await tick(node)
+        assert node._heartbeat_enabled
+        arm_started_at = time.monotonic()
+
+        for _ in range(3):
+            node._heartbeat_cb()
+            await asyncio.sleep(0.06)
+            await tick(node)
+
+        # The overall pre-ARM timeout has expired, but ARM still has its own
+        # 20-second production budget (shortened here for the unit test).
+        assert time.monotonic() - arm_started_at > goal.request.timeout
+        assert not task.done()
+        assert node._heartbeat_enabled
+        assert [msg.data for msg in node.pub_arm_heartbeat.messages] == [1, 1, 1]
+
+        while not task.done():
+            await asyncio.sleep(0.005)
+            await tick(node)
+        result = await task
+        assert not result.success
+        assert 'armed confirmation timed out' in result.message
+        assert not node._heartbeat_enabled
+
     asyncio.run(scenario())
 
 

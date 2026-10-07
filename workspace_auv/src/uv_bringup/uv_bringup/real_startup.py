@@ -668,7 +668,8 @@ class RealStartupManager(Node):
              'enable_motion:=true', 'sim_mode:=false'],
             ['/basic_motion'],
             {'/basic_motion': {'sim_mode': False, 'arm_mode': 1,
-                               'heartbeat_rate': 15.0, 'start_timeout': 10.0}})
+                               'heartbeat_rate': 15.0, 'start_timeout': 10.0,
+                               'arm_confirmation_timeout': 20.0}})
         if self.args.startup_mode == 'adopt' \
                 and self.component_state.get('basic_motion') != 'REUSED':
             raise StartupBlocked('adopt mode requires an existing BasicMotion server')

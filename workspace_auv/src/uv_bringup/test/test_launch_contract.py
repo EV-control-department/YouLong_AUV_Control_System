@@ -242,6 +242,7 @@ def test_component_profiles_and_old_pid_files_are_removed():
     assert control_params["arm_mode"] == 1
     assert control_params["heartbeat_rate"] == 15.0
     assert control_params["start_timeout"] == 10.0
+    assert control_params["arm_confirmation_timeout"] == 20.0
     assert params["watchdog_timeout"] == 7.0
     assert params["battery_low_threshold"] == 14.0
     hm_setup = (hm_root / "setup.py").read_text(encoding="utf-8")

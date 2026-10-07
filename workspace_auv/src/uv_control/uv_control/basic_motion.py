@@ -175,14 +175,18 @@ class BasicMotionNode(Node):
         self.declare_parameter('heartbeat_rate', 15.0)
         self.declare_parameter('arm_mode', 1)
         self.declare_parameter('start_timeout', 10.0)
+        self.declare_parameter('arm_confirmation_timeout', 20.0)
         self.declare_parameter('state_timeout', 1.0)
         self._sim_mode = _as_bool(self.get_parameter('sim_mode').value)
         self._arm_mode = int(self.get_parameter('arm_mode').value)
         self._start_timeout = float(self.get_parameter('start_timeout').value)
+        self._arm_confirmation_timeout = float(
+            self.get_parameter('arm_confirmation_timeout').value)
         self._state_timeout = float(self.get_parameter('state_timeout').value)
         heartbeat_rate = float(self.get_parameter('heartbeat_rate').value)
         if (not all(math.isfinite(value) and value > 0.0 for value in
-                    (heartbeat_rate, self._start_timeout, self._state_timeout))
+                    (heartbeat_rate, self._start_timeout,
+                     self._arm_confirmation_timeout, self._state_timeout))
                 or self._arm_mode not in (0, 1, 3)):
             raise ValueError('invalid heartbeat/start/state timeout or arm_mode')
         self._started = False
@@ -622,10 +626,13 @@ class BasicMotionNode(Node):
                 self._active_origin_generation = generation
                 self._heartbeat_enabled = True
             arming_at = time.monotonic()
-            self.get_logger().info(f'START: origin generation {generation} ready; arming')
+            arm_deadline = arming_at + self._arm_confirmation_timeout
+            self.get_logger().info(
+                f'START: origin generation {generation} ready; arming '
+                f'(confirmation timeout {self._arm_confirmation_timeout:.1f}s)')
             if not await self._wait_start_condition(
                     lambda: self._start_armed_ready(arming_at, generation),
-                    goal_handle, deadline):
+                    goal_handle, arm_deadline):
                 raise RuntimeError('START: armed confirmation timed out or interrupted')
             if goal_handle.is_cancel_requested or self._safe_stop_latched or self._shutdown_requested:
                 raise RuntimeError('START interrupted')

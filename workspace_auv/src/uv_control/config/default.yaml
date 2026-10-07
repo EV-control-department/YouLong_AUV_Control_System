@@ -3,4 +3,5 @@
     heartbeat_rate: 15.0
     arm_mode: 1
     start_timeout: 10.0
+    arm_confirmation_timeout: 20.0
     state_timeout: 1.0
