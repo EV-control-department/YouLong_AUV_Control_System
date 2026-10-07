@@ -114,6 +114,10 @@ class RealStartupManager(Node):
             raise ValueError('startup-mode must be auto, adopt, or managed')
         if args.enable_task and not args.enable_motion:
             raise ValueError('enable_task requires enable_motion=true')
+        if not args.check_backend_health:
+            self.get_logger().warning(
+                'Backend-health gates are disabled in real_startup; '
+                'BasicMotion START/ARM checks and other stop paths remain active')
 
         self.mission_path = _resolve_mission(args.mission_file)
         if not self.mission_path.is_file():
@@ -513,6 +517,8 @@ class RealStartupManager(Node):
                     f'{component} launch process exited with status {code}')
 
     def _healthy_backend(self):
+        if not self.args.check_backend_health:
+            return True
         now = time.monotonic()
         status = self._mcu_status
         mcu_ok = (
@@ -527,6 +533,9 @@ class RealStartupManager(Node):
         return mcu_ok and hb_ok and odom_ok and loc_ok
 
     def _healthy_armed(self):
+        if not self.args.check_backend_health:
+            return (self._mcu_status is not None
+                    and bool(self._mcu_status.is_armed))
         return (self._healthy_backend() and self._mcu_status is not None
                 and bool(self._mcu_status.navigation_ready)
                 and bool(self._mcu_status.is_armed))
@@ -560,7 +569,8 @@ class RealStartupManager(Node):
         return detector_ok and detections_ok and tracks_ok
 
     def _healthy_for_mission_start(self):
-        if not self._healthy_backend():
+        if (self.args.check_backend_health
+                and not self._healthy_backend()):
             return False
         if self.args.enable_motion and (
                 not self.action.server_is_ready() or not self._healthy_armed()):
@@ -654,8 +664,14 @@ class RealStartupManager(Node):
                              or self.component_state.get('hardware') == 'REUSED'))
             if not required:
                 raise StartupBlocked('adopt mode cannot start missing core nodes')
-        self._phase('backend gate', self._healthy_backend,
-                    'fresh healthy MCU status, heartbeat, localization, and odom')
+        if self.args.check_backend_health:
+            self._phase(
+                'backend gate', self._healthy_backend,
+                'fresh healthy MCU status, heartbeat, localization, and odom')
+        else:
+            self.component_state['backend gate'] = (
+                'SKIPPED (check_backend_health=false)')
+            self._dashboard()
 
     def _start_motion_and_reset_origin(self):
         if not self.args.enable_motion:
@@ -673,10 +689,16 @@ class RealStartupManager(Node):
         if self.args.startup_mode == 'adopt' \
                 and self.component_state.get('basic_motion') != 'REUSED':
             raise StartupBlocked('adopt mode requires an existing BasicMotion server')
-        self._phase('motion ready gate',
-                    lambda: self.action.server_is_ready() and self._healthy_backend()
-                    and bool(self._mcu_status.navigation_ready),
-                    'BasicMotion Action Server and fresh navigation before START')
+        self._phase(
+            'motion ready gate',
+            lambda: (self.action.server_is_ready()
+                     and (not self.args.check_backend_health
+                          or (self._healthy_backend()
+                              and self._mcu_status is not None
+                              and bool(self._mcu_status.navigation_ready)))),
+            ('BasicMotion Action Server and fresh navigation before START'
+             if self.args.check_backend_health else
+             'BasicMotion Action Server before START; backend health gate disabled'))
         # Deliberately sent exactly once, even when the Action Server and/or a
         # task_runner were already present.  An ambiguous timeout is fatal;
         # this goal is never retried by the coordinator.
@@ -1180,8 +1202,10 @@ class RealStartupManager(Node):
                         and not has_node('/hw_manager'))
                     or not self.action.server_is_ready()):
                 self._trigger_safe_stop('a critical task dependency disappeared or became stale')
-            elif not self._healthy_backend():
-                self._trigger_safe_stop('hardware/localization/odom data stale or unhealthy')
+            elif (self.args.check_backend_health
+                  and not self._healthy_backend()):
+                self._trigger_safe_stop(
+                    'hardware/localization/odom data stale or unhealthy')
             elif (self.args.enable_ai and self.args.enable_perception_gate
                   and not self._healthy_cameras()):
                 self._trigger_safe_stop('no calibrated camera stream is currently healthy')
@@ -1324,6 +1348,7 @@ def _parse_args(argv=None):
     parser.add_argument('--mission-file', default='')
     for name, default in (
         ('enable_hardware', True), ('enable_motion', True),
+        ('check_backend_health', False),
         ('enable_camera', False), ('enable_ai', True),
         ('enable_perception_gate', False), ('enable_nav', False),
         ('enable_task', False), ('enable_stream', True),
@@ -1344,8 +1369,9 @@ def _parse_args(argv=None):
     parser.add_argument('--record-image-topics', default='false')
     parser.add_argument('--preview-port', default='1984')
     args, ros_args = parser.parse_known_args(argv)
-    for name in ('enable_hardware', 'enable_motion', 'enable_camera', 'enable_ai',
-                 'enable_perception_gate', 'enable_nav', 'enable_task',
+    for name in ('enable_hardware', 'enable_motion', 'check_backend_health',
+                 'enable_camera', 'enable_ai', 'enable_perception_gate',
+                 'enable_nav', 'enable_task',
                  'enable_stream',
                  'enable_perception_gui', 'record_session'):
         setattr(args, name, _as_bool(getattr(args, name)))

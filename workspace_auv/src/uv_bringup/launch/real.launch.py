@@ -34,6 +34,10 @@ def generate_launch_description():
                 'managed refuses all pre-existing component nodes')),
         DeclareLaunchArgument('ready_timeout', default_value='120.0'),
         DeclareLaunchArgument('readiness_max_age', default_value='2.0'),
+        DeclareLaunchArgument(
+            'check_backend_health', default_value='false',
+            description=(
+                'Enable real_startup MCU/localization/odom health gates.')),
         DeclareLaunchArgument('enable_hardware', default_value='true'),
         DeclareLaunchArgument(
             'enable_camera', default_value='false',
@@ -55,6 +59,7 @@ def generate_launch_description():
         '--startup-mode', LaunchConfiguration('startup_mode'),
         '--ready-timeout', LaunchConfiguration('ready_timeout'),
         '--max-age', LaunchConfiguration('readiness_max_age'),
+        '--check-backend-health', LaunchConfiguration('check_backend_health'),
         '--mission-file', LaunchConfiguration('mission_file'),
         '--enable-hardware', LaunchConfiguration('enable_hardware'),
         '--enable-motion', LaunchConfiguration('enable_motion'),

@@ -959,7 +959,7 @@ class BasicMotionNode(Node):
             timeout: 超时秒数
 
         Returns:
-            True = 收敛, False = 超时
+            True = 收敛, False = 超时或动作中断
         """
         start = time.monotonic()
         min_wait = STEP_PERIOD * 0.5
@@ -1084,6 +1084,11 @@ class BasicMotionNode(Node):
             # 保留一个很小的下限，避免剩余时间过小时进入无意义的等待。
             step_timeout = max(0.1, remaining)
             if not self._wait_step_convergence(move_angle, timeout=step_timeout):
+                if self._action_abort_reason is not None:
+                    self.get_logger().warning(
+                        f'步进第{step_no}步未收敛: 动作中断: '
+                        f'{self._action_abort_reason}')
+                    return False
                 self.get_logger().warning(f'步进第{step_no}步收敛超时')
 
         # 最终目标
