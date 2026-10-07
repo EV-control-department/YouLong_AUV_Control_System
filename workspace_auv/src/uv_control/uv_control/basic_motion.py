@@ -245,6 +245,7 @@ class BasicMotionNode(Node):
         self._action_goal_handle = None
         self._action_target = None       # 绝对目标 {x, y, z, yaw}，用于反馈
         self._action_axes = None         # 当前 action 的生效轴，用于反馈
+        self._action_abort_reason = None # 首个导致当前位置动作中断的原因
         self._timers.append(self.create_timer(0.5, self._action_feedback_cb))
         self._timers.append(self.create_timer(
             VELOCITY_WATCHDOG_PERIOD, self._velocity_watchdog_cb))
@@ -330,8 +331,9 @@ class BasicMotionNode(Node):
     def _send_setpoint(self, control_key: int, type_mask: int,
                        x: float, y: float, z: float, yaw_rad: float):
         """Send an MCU odom target unchanged; yaw is radians on the wire."""
-        if not self._motion_ready():
-            raise RuntimeError('motion inhibited: START/armed/fresh navigation required')
+        blockers = self._motion_block_reasons()
+        if blockers:
+            raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
         # A position command supersedes any leased body-velocity command.
         with self._velocity_lock:
             self._velocity_active = False
@@ -347,8 +349,9 @@ class BasicMotionNode(Node):
         msg.pitch = 0.0
         msg.seq = 0
         with self._state_lock:
-            if not self._motion_ready_locked():
-                raise RuntimeError('motion inhibited: START/armed/fresh navigation required')
+            blockers = self._motion_block_reasons_locked()
+            if blockers:
+                raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
             self._target = Coordinate(
                 x=x, y=y, z=z, rz=math.degrees(yaw_rad))
             self._publish_while_running(self.pub_setpoint, msg)
@@ -375,8 +378,10 @@ class BasicMotionNode(Node):
             raise ValueError('body velocity command must be finite')
 
         is_zero = max(abs(value) for value in values) <= 1e-6
-        if not is_zero and not self._motion_ready():
-            raise RuntimeError('motion inhibited: START/armed/fresh navigation required')
+        if not is_zero:
+            blockers = self._motion_block_reasons()
+            if blockers:
+                raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
         with self._velocity_lock:
             if is_zero:
                 self._velocity_active = False
@@ -398,8 +403,10 @@ class BasicMotionNode(Node):
         msg.yaw = math.radians(values[3])
         msg.seq = 0
         with self._state_lock:
-            if not is_zero and not self._motion_ready_locked():
-                raise RuntimeError('motion inhibited: START/armed/fresh navigation required')
+            if not is_zero:
+                blockers = self._motion_block_reasons_locked()
+                if blockers:
+                    raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
             self._publish_while_running(self.pub_setpoint, msg)
 
     def _velocity_watchdog_cb(self):
@@ -485,13 +492,52 @@ class BasicMotionNode(Node):
                 and (not require_origin or self._origin_initialized))
 
     def _motion_ready_locked(self):
-        return (self._started and self._heartbeat_enabled
-                and not self._start_in_progress
-                and not self._safe_stop_latched
-                and not self._shutdown_requested
-                and self._state_ready_locked()
-                and self._origin_generation == self._active_origin_generation
-                and bool(self.status.is_armed))
+        return not self._motion_block_reasons_locked()
+
+    def _motion_block_reasons_locked(self):
+        """Return every current reason position/velocity motion is inhibited.
+
+        Caller must hold ``_state_lock``. Keeping the checks in one place lets
+        action results explain why readiness was lost instead of reporting a
+        generic cancellation or timeout.
+        """
+        reasons = []
+        if self._safe_stop_latched:
+            reasons.append('safe stop latched')
+        if self._shutdown_requested:
+            reasons.append('node is shutting down')
+        if self._start_in_progress:
+            reasons.append('START is in progress')
+        if not self._started:
+            reasons.append('START has not completed')
+        if not self._heartbeat_enabled:
+            reasons.append('ARM heartbeat is disabled')
+
+        now = time.monotonic()
+        for label, stamp in (
+                ('ZIT6 status', self._status_received_at),
+                ('odom', self._odom_received_at),
+                ('navigation sample', self._nav_sample_at)):
+            age = now - stamp
+            if age > self._state_timeout:
+                reasons.append(
+                    f'{label} stale ({age:.2f}s; limit {self._state_timeout:.2f}s)')
+        if not self._nav_valid:
+            reasons.append('navigation is invalid')
+        if not self._origin_initialized:
+            reasons.append('odom origin is not initialized')
+        if self._origin_generation != self._active_origin_generation:
+            reasons.append(
+                'origin generation mismatch '
+                f'(state={self._origin_generation}, '
+                f'active={self._active_origin_generation})')
+        if not self.status.is_armed:
+            reasons.append('MCU is not armed')
+        return reasons
+
+    def _motion_block_reasons(self):
+        with self._state_lock:
+            return self._motion_block_reasons_locked()
 
     def _motion_ready(self):
         with self._state_lock:
@@ -763,11 +809,17 @@ class BasicMotionNode(Node):
     # ═════════════════════════════════════════════════════════════════════════
 
     def _is_cancelled(self) -> bool:
-        """检查当前 action goal 是否被取消（线程安全）。"""
+        """检查客户端取消或运动就绪条件失效，并记住首次原因。"""
         gh = self._action_goal_handle
-        return (self._safe_stop_latched or self._shutdown_requested
-                or not self._motion_ready()
-                or (gh is not None and gh.is_cancel_requested))
+        if gh is not None and gh.is_cancel_requested:
+            self._action_abort_reason = 'client requested cancellation'
+            return True
+        blockers = self._motion_block_reasons()
+        if blockers:
+            if self._action_abort_reason is None:
+                self._action_abort_reason = '; '.join(blockers)
+            return True
+        return False
 
     def _safe_stop_cb(self, _request, response):
         """Latch motion inhibition and leave the vehicle holding safely."""
@@ -1250,12 +1302,14 @@ class BasicMotionNode(Node):
             return await self._execute_start(goal_handle)
         if req.cmd_type != BasicMotion.Goal.BODY_VELOCITY:
             self._action_goal_handle = goal_handle
+            self._action_abort_reason = None
         try:
             return self._execute_motion(goal_handle)
         except Exception as exc:
             result = BasicMotion.Result()
             result.success = False
             result.message = str(exc)
+            self.get_logger().error(f'Action failed: {result.message}')
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
             else:
@@ -1271,10 +1325,12 @@ class BasicMotionNode(Node):
 
     def _execute_motion(self, goal_handle):
         req = goal_handle.request
-        if not self._motion_ready():
+        blockers = self._motion_block_reasons()
+        if blockers:
             result = BasicMotion.Result()
             result.success = False
-            result.message = 'motion inhibited: START/armed/fresh navigation required'
+            result.message = f'motion inhibited: {"; ".join(blockers)}'
+            self.get_logger().error(f'Action rejected: {result.message}')
             goal_handle.abort()
             return result
 
@@ -1416,10 +1472,15 @@ class BasicMotionNode(Node):
             result.message = "cancelled"
             self.get_logger().info(f'Action {type_name}: CANCELLED')
             goal_handle.canceled()
+        elif self._action_abort_reason is not None:
+            result.message = f'motion interrupted: {self._action_abort_reason}'
+            self.get_logger().error(f'Action {type_name}: {result.message}')
+            goal_handle.abort()
         else:
-            result.message = ('preempted by START' if self._start_in_progress else
-                              'motion timeout' if self._motion_ready() else
-                              'motion state unavailable or inhibited')
+            blockers = self._motion_block_reasons()
+            result.message = (
+                f'motion inhibited: {"; ".join(blockers)}'
+                if blockers else 'motion timeout')
             self.get_logger().error(f'Action {type_name}: {result.message}')
             goal_handle.abort()
         return result
