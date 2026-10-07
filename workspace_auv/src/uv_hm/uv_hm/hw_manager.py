@@ -1,7 +1,7 @@
 """Hardware manager node: heartbeat, state monitoring.
 
 Responsibilities:
-- 10Hz heartbeat on /zit6/cmd/agxhbt to keep MCU armed
+- 15Hz heartbeat on /zit6/cmd/agxhbt; MCU independently disarms after 1s loss
 - Subscribe to /zit6/state/status, /zit6/state/zithbt, /zit6/state/thr
 - Parse and log MCU state in human-readable format
 - Watchdog: heartbeat timeout (7s), battery low, error flags, thrust sat
@@ -11,12 +11,17 @@ Responsibilities:
 from __future__ import annotations
 
 import threading
+import math
 
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, UInt32
 
 from zit6_interfaces.msg import ZitStatus
+try:
+    from zit6_interfaces.msg import ZitOdom
+except ImportError:
+    ZitOdom = None  # 旧固件/接口仍可使用心跳；新接口构建后启用原点诊断。
 
 
 # ── INS state → human-readable name ─────────────────────────────
@@ -63,7 +68,7 @@ class HwManagerNode(Node):
         # ── Parameters ───────────────────────────────────────────
         self.declare_parameter('heartbeat_rate', 15.0)
         self.declare_parameter('watchdog_timeout', 7.0)
-        self.declare_parameter('arm_mode', 1)  # 1=normal, 3=force
+        self.declare_parameter('arm_mode', 1)  # 1=normal, 3=remote (仍要求MCU原点)
         self.declare_parameter('battery_low_threshold', 14.0)
         self.declare_parameter('cycle_time_warn_threshold', 100.0)
 
@@ -77,11 +82,16 @@ class HwManagerNode(Node):
         self._last_thr_forces = [0.0] * 6
         self._startup_phase = self.PHASE_INIT
         self._prev_armed = False
+        self._odom = None
 
         # ── Heartbeat publisher ──────────────────────────────────
         self._heartbeat_pub = self.create_publisher(
             UInt32, '/zit6/cmd/agxhbt', 10)
         hb_rate = self.get_parameter('heartbeat_rate').value
+        if not math.isfinite(float(hb_rate)) or not 10.0 <= hb_rate <= 100.0:
+            raise ValueError('heartbeat_rate 必须在 10~100 Hz：新固件解锁要求至少10包且持续1秒')
+        if self.get_parameter('arm_mode').value not in (1, 3):
+            raise ValueError('arm_mode 只支持1（导航正常模式）或3（遥控模式）')
         self._hb_timer = self.create_timer(1.0 / hb_rate, self._heartbeat_cb)
 
         # ── MCU state subscriptions ──────────────────────────────
@@ -91,6 +101,11 @@ class HwManagerNode(Node):
             UInt32, '/zit6/state/zithbt', self._mcu_hb_cb, 10)
         self._thr_sub = self.create_subscription(
             Float32MultiArray, '/zit6/state/thr', self._thr_cb, 10)
+        if ZitOdom is not None:
+            self._odom_sub = self.create_subscription(
+                ZitOdom, '/zit6/state/odom', self._odom_cb, 10)
+        else:
+            self.get_logger().warning('未构建 ZitOdom 接口，MCU原点诊断不可用；请重新构建 zit6_interfaces')
 
         # ── Timers ───────────────────────────────────────────────
         self._summary_timer = self.create_timer(1.0, self._summary_cb)
@@ -103,15 +118,22 @@ class HwManagerNode(Node):
             f'  watchdog_timeout='
             f'{self.get_parameter("watchdog_timeout").value}s')
         self._startup_phase = self.PHASE_WAITING_INS
+        self.get_logger().warning(
+            '本节点持续发送解锁心跳；请关闭rqt/GUI/CLI中的其他心跳发布器。'
+            '新固件需在未解锁且导航有效时显式调用 /zit6/cmd/setorigin；本节点不会自动重置零点。')
 
     # ── Heartbeat ────────────────────────────────────────────────
 
     def _heartbeat_cb(self):
-        """10Hz: send heartbeat to MCU."""
+        """按配置频率发送心跳；关闭节点后由MCU的1秒租约负责上锁。"""
         msg = UInt32()
         arm_mode = self.get_parameter('arm_mode').value
         msg.data = arm_mode
         self._heartbeat_pub.publish(msg)
+
+    def _odom_cb(self, msg):
+        with self._status_lock:
+            self._odom = msg
 
     # ── State callbacks ──────────────────────────────────────────
 
@@ -188,6 +210,16 @@ class HwManagerNode(Node):
             last_hb = self._last_mcu_hb_time
             last_status = self._last_status_time
             thr_forces = list(self._last_thr_forces)
+            odom = self._odom
+
+        if self.count_publishers('/zit6/cmd/agxhbt') > 1:
+            self.get_logger().warning(
+                '检测到多个心跳发布器！关闭rqt/GUI心跳，否则本节点停止后MCU可能仍保持解锁。',
+                throttle_duration_sec=10.0)
+        if odom is not None and not odom.origin_initialized:
+            self.get_logger().warning(
+                'MCU零点未设置：BasicMotion START仅重置上位机原点；需在未解锁时调用setorigin服务。',
+                throttle_duration_sec=10.0)
 
         # ── Watchdog checks (inline, event-driven) ────────────
         hb_elapsed = (now - last_hb).nanoseconds / 1e9
@@ -240,6 +272,7 @@ class HwManagerNode(Node):
             f'BAT:{s.battery_voltage:4.1f}V | '
             f'CYC:{s.cycle_time_ms:5.1f}ms | '
             f'SEQ:{hb_seq:4d} | '
+            f'ORIGIN:{"unknown" if odom is None else str(odom.origin_generation) + (" ready" if odom.origin_initialized else " unset")} | '
             f'{forces}')
 
 

@@ -1,0 +1,80 @@
+# 海参抓取任务配置。任务名：grab_sea_cucumber。
+# 单独加载：mission_file:=<本文件的绝对路径>（需先完成 START）。
+# 自动执行 START：加载 config/missions/grab_sea_cucumber.yaml 任务链。
+# 以下现场参数标有“[我填的占位值]”，运行前需替换或确认。
+# 占位值是有效配置；注释不会阻止程序执行，参数检查也不能确认现场标定是否正确。
+# 配置说明：workspace_auv/docs/real_camera_and_physical_parameters.md 的海参任务章节。
+task: grab_sea_cucumber
+
+params:
+  # 必填：当前分割模型中海参的类别编号，不能使用抓球类别代替。
+  sea_cucumber_class_id: 2 # [我填的占位值] 按当前真机模型的 trepang=2 填写，需核对实际模型。
+  image_width: 640   # 每目宽度，必须与真实下视标定一致。
+  image_height: 480  # 每目高度。
+
+  expected_count: 5            # 累计视觉数量减少的目标，不代表已验证的投放数量。
+  total_timeout_seconds: 600.0 # 整个任务的时间预算，单位秒。
+  max_failed_attempts: 3       # 数量未减少时，允许初次失败后的重试次数。
+
+  search:
+    # 必填：海参抓取区的观察位姿，格式为 [x, y, z, yaw_deg]。
+    # 使用本次 START 后的 odom 坐标：x 沿初始化艇头方向，y 向其右侧。
+    # x/y/z 单位米；第三个值 z 是扫描目标深度，向下为正；yaw_deg 单位度。
+    # 这是相对于 START 原点的目标位姿，不是相对于当前艇体的移动增量。
+    pose: [3.0, 1.0, 0.8, 0.0] # [我填的占位值] 示例扫描位姿，需现场确认。
+    travel_timeout_seconds: 90.0       # 首次前往抓取区最多允许多久，单位秒。
+    # 程序先用 WTRAVEL 前往上述位置和深度，再进行下视识别与水平对准。
+    # 如目标深度更浅，沿用小步上浮处理后再执行 WTRAVEL。
+    # 当前 WTRAVEL 通常以行进方向作为到达航向，不能保证最终按 yaw_deg 对准。
+
+  vision:
+    min_confidence: 0.35                # 分割结果的最低置信度。
+    detection_timeout: 0.8             # 检测结果允许的最大年龄，单位秒。
+    pixel_tolerance_fraction: 0.035     # 对准误差阈值，越小要求越精确。
+
+  servo:
+    timeout: 30.0                      # 单轮水平对准超时，单位秒。
+    period: 0.15                       # 水平对准循环的等待时间，单位秒。
+    log_period: 0.5                    # 对准日志打印间隔，单位秒。
+    hold_seconds: 0.5                  # 进入对准容差后保持多久，单位秒。
+    projection_depth_m: 0.8            # 图像换算参考距离；不是实际运动目标深度。
+    gain: 0.8                          # 图像偏差对应的水平修正增益。
+    max_step_m: 0.08                   # 单次水平修正最大长度，单位米。
+    position_command_timeout: 2.0      # 单次 SET/BMOVE 超时，单位秒。
+
+  gripper:
+    # 必填：从相机对准位置移到夹爪对准位置所需的艇体补偿位移。
+    offset_x_m: 0.0 # [我填的占位值] 暂不补偿；单位米，正向前、负向后，需实测。
+    offset_y_m: 0.0 # [我填的占位值] 暂不补偿；单位米，正向右、负向左，需实测。
+    # 舵机1的固定定义：0°抓取，90°释放；接口ZitServo使用弧度。
+    pickup_angle_rad: 0.0
+    release_angle_rad: 1.5707963267948966
+    settle_seconds: 1.5                # 补偿位移后等待稳定，单位秒。
+
+  descent:
+    # 必填：下压速度、时间和预计最大行程。
+    speed_mps: 0.05 # [我填的占位值] 示例下压速度；0 < 速度 <= 0.3 m/s，正值向下，需实测。
+    duration_seconds: 2.0 # [我填的占位值] 示例下压时间 2 s，需实测。
+    max_press_distance_m: 0.15 # [我填的占位值] 示例行程上限 0.15 m；预计行程为 0.05×2=0.10 m，需实测。
+    # max_press_distance_m 只检查配置；当前没有实测行程或触底停止。
+    publish_period: 0.05               # 下压速度指令发布间隔，单位秒。
+
+  ascent:
+    step_m: 0.03                       # 任务层计划上浮步长，允许 0.01～0.05 m。
+    step_timeout_seconds: 8.0          # 等待单步到位的超时，单位秒。
+    pause_seconds: 0.5                 # 每步之间的暂停，允许 0～5 秒。
+    tolerance_m: 0.015                 # 深度到位容差，必须大于 0 且小于步长。
+
+  counting:
+    frames: 3                          # 每次计数收集的新消息数，至少 2。
+    timeout_seconds: 12.0              # 单次计数超时，单位秒。
+
+  delivery:
+    # 必填：释放时 AUV 的目标位姿，格式为 [x, y, z, yaw_deg]。
+    # x/y/z 单位米，使用本次 START 后的 odom 坐标，z 向下为正。
+    # 第三个值 z 就是投放深度；必须考虑夹爪位置和释放高度。
+    pose: [5.0, 1.0, 0.8, 0.0] # [我填的占位值] 示例投放位姿 [x, y, z, yaw_deg]，需现场确认。
+    timeout_seconds: 90.0              # 每次运输超时，单位秒。
+    release_wait_seconds: 2.0          # 发送释放角度后等待多久，单位秒。
+
+  return_timeout: 60.0                 # 抓后上浮和水平回位的总超时，单位秒。

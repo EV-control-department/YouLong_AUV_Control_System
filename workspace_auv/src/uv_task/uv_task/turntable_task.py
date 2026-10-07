@@ -1,11 +1,11 @@
-"""真机转盘任务：视觉锁定盘心/盘轴后，三次退出式 yaw 推动。
+"""真机转盘任务：视觉对孔后执行三次固定 yaw 推动。
 
 坐标约定：里程计和机体系 z 向下，机体 x 向前、y 向右；转盘轴
 位于水平面。盘面法向与轴心由前视双目视觉给出。
-图像角度 0° 向右、90° 向上，与真实机械角度的对应必须现场标定。
+图像角度 0° 向右、90° 向上；黄色条幅视为四根辐条之一。
 
-本任务不在任何仿真 mission 中自动启动。没有几何标定、可辨识盘面相位、
-有效里程计或者显式 allow_contact_motion 时，只给出诊断，不会接触转盘。
+本任务不在任何仿真 mission 中自动启动。每次插入前只用视觉定位孔位，
+不根据盘面转角判断任务完成；没有有效观测、里程计或显式放行则禁动。
 """
 
 from __future__ import annotations
@@ -21,13 +21,23 @@ from uv_msgs.action import BasicMotion
 from uv_msgs.msg import PoseInfo
 
 
+# 已知盘体尺寸和名义棍端外参；接触前必须在实物上复核左右镜像与棍端位置。
+DISK_DIAMETER_M = 0.230
+HOLE_INNER_RADIUS_M = 0.0175
+HOLE_OUTER_RADIUS_M = 0.100
+SPOKE_WIDTH_M = 0.020
+CONTACT_RADIUS_M = (HOLE_INNER_RADIUS_M + HOLE_OUTER_RADIUS_M) / 2
+FRONT_CAMERA_CENTER_BODY = (0.230, 0.0, 0.076)
+ROD_TIP_BODY = (FRONT_CAMERA_CENTER_BODY[0] + 0.160,
+                FRONT_CAMERA_CENTER_BODY[1] - 0.090,
+                FRONT_CAMERA_CENTER_BODY[2])
+STROKE_COUNT = 3
+YAW_STEP_DEG = 2.0
+DRIVE_YAW_SIGN = 1
+
+
 def _wrap(angle):
     return (float(angle) + 180.0) % 360.0 - 180.0
-
-
-def _rotation_delta(start, end):
-    """只比较一次短行程；跨过 ±180° 时仍保留正确差值。"""
-    return _wrap(end - start)
 
 
 def _tip_world(robot_xyz, yaw_deg, tip_body):
@@ -74,6 +84,7 @@ class TurntableTask:
         self.log = node.get_logger()
         self._lock = threading.RLock()
         self._observation = None
+        self._last_observation_error = None
         self._pose = None
         self._obs_sub = node.create_subscription(
             String, '/perception/turntable/observation', self._on_observation, 10)
@@ -88,6 +99,11 @@ class TurntableTask:
         try:
             data = json.loads(msg.data)
             stamp = int(data['capture_stamp_ns'])
+            if not data.get('valid'):
+                with self._lock:
+                    self._last_observation_error = (
+                        time.monotonic(), str(data.get('reason', '视觉观测无效')))
+                return
             center = data.get('disk_center_px', ())
             world = data.get('disk_center_world', ())
             radius = float(data.get('disk_radius_px', float('nan')))
@@ -103,6 +119,7 @@ class TurntableTask:
             # 推理可能积压；只保留采集时间更新的一帧，禁止旧帧倒灌。
             if self._observation is None or stamp > self._observation[1]['capture_stamp_ns']:
                 self._observation = (time.monotonic(), data)
+                self._last_observation_error = None
 
     def _on_pose(self, msg):
         pose = (float(msg.robot_x), float(msg.robot_y), float(msg.robot_z),
@@ -141,7 +158,11 @@ class TurntableTask:
                 return self._latest(last_stamp)
             except RuntimeError:
                 time.sleep(0.05)
-        raise RuntimeError('动作后没有新的转盘视觉观测')
+        with self._lock:
+            error = self._last_observation_error
+        stage = '初始等待' if last_stamp == 0 else '动作后等待'
+        reason = f'；最近无效原因={error[1]}' if error and time.monotonic() - error[0] < 5.0 else ''
+        raise RuntimeError(f'{stage}超时：没有新的有效转盘视觉观测{reason}')
 
     def _after_motion_observation(self, last_stamp):
         # 不能把动作执行途中采集的帧误当作到位后的闭环测量。
@@ -150,30 +171,15 @@ class TurntableTask:
 
     def _calibration(self):
         p = self.params
-        camera = tuple(_required_float(p, f'front_camera_center_{axis}') for axis in 'xyz')
-        root = (0.0, -0.09, 0.0)
-        tip = (camera[0] + root[0] + 0.16,
-               camera[1] + root[1], camera[2] + root[2])
-        inner = _required_float(p, 'inner_radius_m', positive=True)
-        outer = _required_float(p, 'outer_radius_m', positive=True)
-        radius = _required_float(p, 'contact_radius_m', positive=True)
-        diameter = _required_float(p, 'disk_diameter_m', positive=True)
-        spoke_width = _required_float(p, 'spoke_width_m', positive=True)
         rod_radius = _required_float(p, 'rod_radius_m', positive=True)
-        if not 0 < inner < radius < outer < diameter/2 or abs(diameter-0.230) > 0.005:
-            raise ValueError('棍端接触半径必须在内外圆环之间')
-        if min(radius - inner, outer - radius) < rod_radius + 0.01:
+        if min(CONTACT_RADIUS_M - HOLE_INNER_RADIUS_M,
+               HOLE_OUTER_RADIUS_M - CONTACT_RADIUS_M) < rod_radius + 0.01:
             raise ValueError('内外圆环净空不足以容纳细棍及 1cm 安全裕量')
-        # 四根等间隔辐条；孔位按相邻辐条的角平分线标定。
-        # 这里只验证静态间隙，yaw 扫掠中的棍端轨迹仍须空载验证。
-        if radius * math.sin(math.pi / 4) - spoke_width / 2 < rod_radius + 0.01:
+        if CONTACT_RADIUS_M * math.sin(math.pi / 4) - SPOKE_WIDTH_M / 2 < rod_radius + 0.01:
             raise ValueError('孔位与 20mm 条幅的切向净空不足')
-        _required_float(p, 'label_to_hole_deg')
-        if int(p.get('image_angle_to_disk_sign', 0)) not in (-1, 1):
-            raise ValueError('image_angle_to_disk_sign 必须现场标定为 +1 或 -1')
         _required_float(p, 'approach_standoff_m', positive=True)
         _required_float(p, 'insert_depth_m', positive=True)
-        return tip, radius
+        return ROD_TIP_BODY, CONTACT_RADIUS_M
 
     def _vision_geometry(self, observation, require_front=True):
         center = tuple(float(v) for v in observation['disk_center_world'])
@@ -190,15 +196,21 @@ class TurntableTask:
     def _require_phase(observation):
         if not observation.get('phase_valid') or not math.isfinite(
                 float(observation.get('angle_deg', float('nan')))):
-            raise RuntimeError('未找到盘面黄色标记；圆形轮廓不能确定绝对相位，禁止插杆')
+            raise RuntimeError('未找到黄色条幅；无法确定孔位，禁止插杆')
+
+    @classmethod
+    def _hole_angle(cls, observation):
+        cls._require_phase(observation)
+        # 黄色条幅是一根辐条；相邻辐条间的孔中心在其 45° 处。
+        # 前视 optical x 向右、y 向下与 _hole_world 的角度定义一致。
+        holes = [(float(observation['angle_deg']) + 45.0 + 90.0 * i) % 360.0
+                 for i in range(4)]
+        return max(holes, key=lambda angle: abs(math.sin(math.radians(angle))))
 
     def _check_hole_alignment(self, observation, tip_body, radius, standoff):
         self._require_phase(observation)
         center, axis_yaw = self._vision_geometry(observation)
-        phase = (int(self.params['image_angle_to_disk_sign'])*observation['angle_deg']+
-                 float(self.params['label_to_hole_deg']))
-        holes = [(phase+90.0*i) % 360.0 for i in range(4)]
-        hole = max(holes, key=lambda value: abs(math.sin(math.radians(value))))
+        hole = self._hole_angle(observation)
         desired = _hole_world(center, axis_yaw, radius, hole, -standoff)
         pose = self._measured_pose()
         actual = _tip_world(pose[:3], pose[3], tip_body)
@@ -256,15 +268,6 @@ class TurntableTask:
                 time.sleep(0.05)
             raise RuntimeError(f'{context} 位姿未达到接触精度 2.5cm/2°')
 
-    def _check_disk(self, reference, last_stamp):
-        current = self._after_motion_observation(last_stamp)
-        # 世界盘心比图像像素更适合比较机器人运动前后的盘体位移。
-        center0, center1 = reference['disk_center_world'], current['disk_center_world']
-        shift = math.dist(center0, center1)
-        if shift > float(self.params.get('max_disk_world_shift_m', 0.05)):
-            raise RuntimeError(f'盘心世界坐标位移 {shift:.3f}m 超限；疑似拉动转盘')
-        return current
-
     def execute(self):
         try:
             tip, radius = self._calibration()
@@ -272,14 +275,9 @@ class TurntableTask:
             self._measured_pose()
             center, axis_yaw = self._vision_geometry(observation, require_front=False)
             p = self.params
-            stroke_count = int(p.get('stroke_count', 3))
-            stroke_yaw = _required_float(p, 'stroke_yaw_deg', positive=True)
-            yaw_step = _required_float(p, 'yaw_step_deg', positive=True)
-            direction = int(p.get('drive_yaw_sign', 0))
-            if (stroke_count != 3 or not 0 < yaw_step <= 3.0
-                    or not 0 < stroke_yaw <= 12.0
-                    or direction not in (-1, 1)):
-                raise ValueError('仅支持三次行程、每步≤3°、每程≤12°，且必须标定 yaw 方向')
+            stroke_yaw = float(p.get('stroke_yaw_deg', 6.0))
+            if not math.isfinite(stroke_yaw) or not 0 < stroke_yaw <= 12.0:
+                raise ValueError('单次 yaw 行程必须在 (0, 12]°')
             standoff = float(p['approach_standoff_m'])
             depth = float(p['insert_depth_m'])
             if standoff > 0.3 or depth > 0.06:
@@ -295,132 +293,57 @@ class TurntableTask:
 
             # 第一阶段只做非接触正视对准。盘轴来自 SGBM 平面法向，
             # 而非任务文件中的名义朝向；盘心也不取手填坐标。
-            camera_body = tuple(_required_float(p, f'front_camera_center_{a}') for a in 'xyz')
             axis = math.radians(axis_yaw)
             align_camera = (center[0]-0.55*math.cos(axis),
                             center[1]-0.55*math.sin(axis), center[2])
-            align_robot = _robot_for_tip(align_camera, axis_yaw, camera_body)
+            align_robot = _robot_for_tip(align_camera, axis_yaw, FRONT_CAMERA_CENTER_BODY)
             self._motion(BasicMotion.Goal.WTRAVEL,
                          [*align_robot, axis_yaw], 'xyzrz', '视觉正视对准', 90.0)
             observation = self._after_motion_observation(observation['capture_stamp_ns'])
-            center, axis_yaw = self._vision_geometry(observation)
-            self._check_hole_alignment(observation, tip, radius, standoff)
-            # 黄色标签角度 + 标定偏角确定四个孔位。yaw 使棍端水平
-            # 摆动，只有靠近盘的顶部/底部，水平力才有足够的切向分量。
-            # 因此选择最靠近竖直方向的孔。安装相位需实测。
-            image_sign = int(p['image_angle_to_disk_sign'])
-            holes = [(image_sign * observation['angle_deg'] + float(p['label_to_hole_deg'])
-                      + 90.0 * index) % 360.0 for index in range(4)]
-            hole = max(holes, key=lambda value: abs(math.sin(math.radians(value))))
-            pre_tip = _hole_world(center, axis_yaw, radius, hole, -standoff)
-            pre_robot = _robot_for_tip(pre_tip, axis_yaw, tip)
-            self.log.info(
-                f'转盘视觉：盘心={center}，盘轴={axis_yaw:.1f}°，'
-                f'长短轴比={observation["axis_ratio"]:.2f}，'
-                f'深度点={observation.get("depth_points", 0)}；'
-                f'黄标={observation["angle_deg"]:.1f}° 孔位={hole:.1f}° '
-                f'预插入机体位姿=({pre_robot[0]:.3f},{pre_robot[1]:.3f},'
-                f'{pre_robot[2]:.3f},{axis_yaw:.1f}°)，'
-                f'三次 yaw 行程 {direction * stroke_yaw:.1f}°')
-            # yaw 不是真正的圆周轨迹：棍端会沿盘轴产生附带位移。
-            # 若最初一个行程的几何预测超过保守限值，任何接触都不执行。
-            self._check_yaw_sweep(pre_robot, pre_tip, axis_yaw, tip,
-                                  stroke_yaw, direction)
-
-            # 接近位姿本身由现场测量的中心/轴线/棍端外参确定；没有这些
-            # 数值时上方校验已失败。接近后需要重新确认黄标可见。
-            self._motion(BasicMotion.Goal.WTRAVEL,
-                         [*pre_robot, axis_yaw], 'xyzrz', '接近转盘', 90.0)
-            observation = self._after_motion_observation(observation['capture_stamp_ns'])
-            # 初始位置只是视觉粗接近；到位后按新图像重新计算真正孔位。
-            center, axis_yaw = self._vision_geometry(observation)
-            self._require_phase(observation)
-            holes = [(image_sign*observation['angle_deg']+float(p['label_to_hole_deg'])
-                      +90.0*index) % 360.0 for index in range(4)]
-            hole = max(holes, key=lambda value: abs(math.sin(math.radians(value))))
-            pre_tip = _hole_world(center, axis_yaw, radius, hole, -standoff)
-            pre_robot = _robot_for_tip(pre_tip, axis_yaw, tip)
-            self._check_yaw_sweep(pre_robot, pre_tip, axis_yaw, tip,
-                                  stroke_yaw, direction)
-            self._motion(BasicMotion.Goal.WTRAVEL,
-                         [*pre_robot, axis_yaw], 'xyzrz', '视觉精对孔', 60.0)
-            observation = self._after_motion_observation(observation['capture_stamp_ns'])
-            center, axis_yaw = self._vision_geometry(observation)
-            self._require_phase(observation)
-            total_rotation = 0.0
-            last_direction = None
             insertion = standoff + depth
-            for stroke in range(stroke_count):
+            for stroke in range(STROKE_COUNT):
                 if self.node.stopped:
                     raise RuntimeError('任务被停止')
-                before = observation
-                # 小步插入，避免一次性撞到四根辐条。此处控制的是位置，
-                # 并非推力；真机必须另行完成低速控制器/限推力标定。
+                # 仅插入前视觉找孔，不用盘面转角判断行程是否完成。
+                center, axis_yaw = self._vision_geometry(observation)
+                hole = self._hole_angle(observation)
+                pre_tip = _hole_world(center, axis_yaw, radius, hole, -standoff)
+                pre_robot = _robot_for_tip(pre_tip, axis_yaw, tip)
+                self._check_yaw_sweep(pre_robot, pre_tip, axis_yaw, tip,
+                                      stroke_yaw, DRIVE_YAW_SIGN)
+                self.log.info(f'第{stroke+1}/3次：黄标={observation["angle_deg"]:.1f}°，'
+                              f'孔位={hole:.1f}°，盘心={center}')
+                self._motion(BasicMotion.Goal.WTRAVEL,
+                             [*pre_robot, axis_yaw], 'xyzrz', '盘外对孔', 90.0)
+                observation = self._after_motion_observation(
+                    observation['capture_stamp_ns'])
+                self._check_hole_alignment(observation, tip, radius, standoff)
+                # 位置小步进不等于限推力；真机须另行确认控制器限速/限推力。
                 remaining = insertion
                 while remaining > 1e-5:
                     step = min(0.02, remaining)
                     self._motion(BasicMotion.Goal.BMOVE,
                                  [step, 0, 0, 0], 'x', f'第{stroke+1}次插入')
                     remaining -= step
-                observation = self._check_disk(before, before['capture_stamp_ns'])
-
-                # 细棍保持插入后用短 yaw 行程向同一方向推。每步等待实测
-                # yaw 到位以及新视觉观测；行程较短以控制轴向拖曳。
                 remaining = stroke_yaw
-                before = observation
                 while remaining > 1e-5:
-                    step = min(yaw_step, remaining) * direction
+                    step = min(YAW_STEP_DEG, remaining) * DRIVE_YAW_SIGN
                     self._motion(BasicMotion.Goal.BMOVE,
                                  [0, 0, 0, step], 'rz', f'第{stroke+1}次推盘')
-                    observation = self._check_disk(observation, observation['capture_stamp_ns'])
                     remaining -= abs(step)
-
-                # 严格按“先退出，再复位”顺序；带棍回摆会把转盘倒转。
+                # 必须先退杆、再复位 yaw，避免带杆反转盘。
                 remaining = insertion
                 while remaining > 1e-5:
                     step = min(0.02, remaining)
                     self._motion(BasicMotion.Goal.BMOVE,
                                  [-step, 0, 0, 0], 'x', f'第{stroke+1}次退出')
                     remaining -= step
-                after = self._after_motion_observation(observation['capture_stamp_ns'])
-                self._require_phase(after)
-                delta = _rotation_delta(before['angle_deg'], after['angle_deg'])
-                if abs(delta) < float(p.get('min_progress_deg', 2.0)):
-                    raise RuntimeError(f'第{stroke+1}次黄标仅变化 {delta:.1f}°；未确认转动')
-                sign = 1 if delta > 0 else -1
-                if last_direction is not None and sign != last_direction:
-                    raise RuntimeError('黄标转向前后不一致；停止后续行程')
-                last_direction = sign
-                total_rotation += abs(delta)
-                self.log.info(
-                    f'第{stroke+1}/3次推盘完成：黄标变化={delta:+.1f}°，'
-                    f'累计={total_rotation:.1f}°')
-                # 退到盘前再复位 yaw；重新计算下一孔位需要实际图像和
-                # 轴线标定。当前只支持同一孔的短角度往复验证。
-                if stroke < stroke_count - 1:
+                self.log.info(f'第{stroke+1}/3次预设推盘动作执行完毕；未验证盘体实际转角')
+                if stroke < STROKE_COUNT - 1:
                     self._motion(BasicMotion.Goal.BMOVE,
-                                 [0, 0, 0, -direction * stroke_yaw], 'rz', '盘外复位')
-                    observation = self._after_motion_observation(after['capture_stamp_ns'])
-                    # 标签已转动，孔位也随之移动；不能盲目再次插入。
-                    # 新孔位偏差超过杆孔几何余量则需要重新接近定位。
-                    center, axis_yaw = self._vision_geometry(observation)
-                    self._require_phase(observation)
-                    holes = [(image_sign*observation['angle_deg']+
-                              float(p['label_to_hole_deg'])+90.0*index) % 360.0
-                             for index in range(4)]
-                    new_hole = max(holes, key=lambda value: abs(math.sin(math.radians(value))))
-                    hole = new_hole
-                    target_tip = _hole_world(center, axis_yaw, radius, new_hole, -standoff)
-                    target_robot = _robot_for_tip(target_tip, axis_yaw, tip)
-                    self._check_yaw_sweep(target_robot, target_tip, axis_yaw,
-                                          tip, stroke_yaw, direction)
-                    self._motion(BasicMotion.Goal.WTRAVEL,
-                                 [*target_robot, axis_yaw], 'xyzrz', '盘外重新对孔', 60.0)
+                                 [0, 0, 0, -DRIVE_YAW_SIGN * stroke_yaw], 'rz', '盘外复位')
                     observation = self._after_motion_observation(observation['capture_stamp_ns'])
-                    self._check_hole_alignment(observation, tip, radius, standoff)
-            self.log.info(
-                f'转盘任务完成：三次有效推动，累计黄标转角 {total_rotation:.1f}°；'
-                '未指定绝对目标角')
+            self.log.info('转盘三次预设推盘动作已执行；未测量或保证实际转角')
             return True
         except (ValueError, RuntimeError, KeyError, TypeError) as exc:
             self.log.error(f'转盘任务停止：{exc}')

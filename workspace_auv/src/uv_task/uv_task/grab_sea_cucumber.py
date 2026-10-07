@@ -1,7 +1,8 @@
-"""海参抓取流程草案；仅供真机联调，暂不注册到任务树。
+"""海参抓取真机联调任务；通过 config/tasks/grab_sea_cucumber.yaml 配置。
 
-必填：模型类别、实际左目尺寸、下压速度/时长/最大行程、收集区位姿、
-准备/释放舵机角度。没有现场标定值就拒绝初始化，不使用抓球任务的危险默认值。
+必填：模型类别、实际左目尺寸、抓取区位姿（含扫描深度）、下压速度/时长/最大行程、收集区位姿、
+舵机1固定0°抓取、90°释放。没有现场标定值就拒绝初始化，不使用抓球任务的危险默认值。
+任务已注册到 task_runner，但不加入默认 robocup_26 任务链。
 """
 
 from __future__ import annotations
@@ -28,11 +29,12 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             'sea_cucumber_class_id', 'image_width', 'image_height',
             'gripper_offset_x_m', 'gripper_offset_y_m',
             'descent_speed_mps', 'descent_duration_seconds',
-            'max_press_distance_m', 'drop_pose',
-            'pickup_servo_angle_rad', 'release_servo_angle_rad')
+            'max_press_distance_m', 'drop_pose', 'search_pose')
         missing = [key for key in required if key not in params]
         if missing:
-            raise ValueError(f'抓海参缺少必填参数：{", ".join(missing)}')
+            raise ValueError(
+                f'抓海参缺少必填参数：{", ".join(missing)}；'
+                '请在任务 YAML 或 params 中填写现场标定值')
         super().__init__(node, params)
         max_press_distance = float(params['max_press_distance_m'])
         if (not 0 < self._descent_speed <= 0.3
@@ -44,13 +46,25 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         if self._class_id < 0:
             raise ValueError('sea_cucumber_class_id 必须非负')
         self._color = '海参'
+        self._search_pose = tuple(float(v) for v in params['search_pose'])
+        if (len(self._search_pose) != 4
+                or not all(map(math.isfinite, self._search_pose))):
+            raise ValueError('search_pose 必须是有限数值 [x, y, z, yaw_deg]，使用 START 后的 odom 坐标')
+        if self._search_pose[2] < 0:
+            raise ValueError('search_pose 中的 z 必须是非负扫描目标深度，单位米、向下为正')
+        self._search_travel_timeout = float(params.get('search_travel_timeout_seconds', 90.0))
+        if not math.isfinite(self._search_travel_timeout) or self._search_travel_timeout <= 0:
+            raise ValueError('search_travel_timeout_seconds 必须是有限的正数')
         self._drop_pose = tuple(float(v) for v in params['drop_pose'])
         if len(self._drop_pose) != 4 or not all(map(math.isfinite, self._drop_pose)):
             raise ValueError('drop_pose 必须是有限数值 [x, y, z, yaw_deg]')
-        self._release_angle = float(params['release_servo_angle_rad'])
-        self._pickup_angle = float(params['pickup_servo_angle_rad'])
-        if not all(map(math.isfinite, (self._release_angle, self._pickup_angle))):
-            raise ValueError('抓取/释放舵机角度必须是有限数值')
+        self._release_angle = math.pi / 2
+        self._pickup_angle = 0.0
+        # 兼容旧配置，但拒绝与实机定义相反的角度，不允许静默改变抓放方向。
+        for key, expected in (('pickup_servo_angle_rad', self._pickup_angle),
+                              ('release_servo_angle_rad', self._release_angle)):
+            if key in params and not math.isclose(float(params[key]), expected, abs_tol=0.01):
+                raise ValueError(f'{key} 与舵机1固定定义冲突：抓0 rad、放π/2 rad')
         self._total_timeout = float(params.get('total_timeout_seconds', 600.0))
         self._target_count = int(params.get('expected_count', 5))
         self._count_frames = int(params.get('count_frames', 3))
@@ -68,6 +82,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         height = float(params.get('image_height', 480.0))
         if (width <= 0 or height <= 0 or self._target_count <= 0
                 or self._count_frames < 2 or self._count_timeout <= 0
+                or not math.isfinite(self._total_timeout)
                 or self._total_timeout <= 0 or self._drop_timeout <= 0
                 or self._max_failed_attempts < 0 or not 0 < self._min_confidence <= 1):
             raise ValueError('抓海参视觉、计数或超时参数无效')
@@ -87,6 +102,8 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._CX, self._CY = float(left_k[0, 2]), float(left_k[1, 2])
         self.confirmed_removed = 0
         self.delivery_commands = 0
+        self._scan_received_after = None
+        self._scan_capture_after_ns = None
 
     def _segmented_detections(self, message):
         return [d for d in getattr(message, 'detections', ())
@@ -101,6 +118,17 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             entry = self._node._down_detections.get('down_left')
         if entry is None or time.monotonic() - entry[0] > self._detection_timeout:
             return None
+        # 前往抓取区或返回后的扫描，只采用扫描开始后收到且拍摄的图像。
+        received_after = getattr(self, '_scan_received_after', None)
+        if received_after is not None and entry[0] <= received_after:
+            return None
+        capture_after_ns = getattr(self, '_scan_capture_after_ns', None)
+        if capture_after_ns is not None:
+            stamp = getattr(getattr(entry[1], 'header', None), 'stamp', None)
+            stamp_ns = (int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+                        if stamp is not None else 0)
+            if stamp_ns <= capture_after_ns:
+                return None
         candidates = self._segmented_detections(entry[1])
         if not candidates:
             return None
@@ -276,12 +304,26 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
 
     def execute(self) -> bool:
         deadline = time.monotonic() + self._total_timeout
-        search_pose = tuple(self._node._latest_robot_pose()[i] for i in (0, 1, 2, 5))
+        pose = self._measured_pose()
+        if pose is None:
+            self._logger.error('抓海参：前往抓取区缺少实测位姿，停止任务')
+            return False
+        # 四个分量均来自配置；x/y/z 已是 START 后 odom 系目标，不能再加上当前位姿。
+        search_pose = self._search_pose
+        self._logger.info(
+            f'抓海参：先前往抓取区 ({search_pose[0]:.3f}, {search_pose[1]:.3f})m，'
+            f'扫描目标深度={search_pose[2]:.3f}m，配置航向={search_pose[3]:.1f}°')
+        if not self._travel(search_pose, '前往海参抓取区并调整扫描深度',
+                            deadline, self._search_travel_timeout):
+            self._logger.error('抓海参：未到达抓取区，停止扫描和抓取')
+            return False
         failed_attempts = 0
         while not self._node.stopped and time.monotonic() < deadline:
             if self.confirmed_removed >= self._target_count:
                 self._logger.info(f'抓海参：已确认减少 {self.confirmed_removed} 只')
                 return True
+            self._scan_received_after = time.monotonic()
+            self._scan_capture_after_ns = self._node.get_clock().now().nanoseconds
             self._node.set_servo(self._pickup_angle, '海参抓取准备')
             self._servo_timeout = min(
                 self._servo_timeout, max(0.1, deadline - time.monotonic()))

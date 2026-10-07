@@ -1,0 +1,942 @@
+"""Crash-resilient ROS2 bag, MJPEG video and process-log recorder."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+from urllib.request import urlopen
+from pathlib import Path
+
+from .session import (
+    SessionPaths,
+    append_event,
+    create_session,
+    default_output_root,
+    finish_session,
+    initialise_session,
+    load_manifest,
+    update_heartbeat,
+    update_manifest,
+)
+from .jpeg_archive import next_chunk_number
+from .performance import ProcessSampler
+
+
+DEFAULT_TOPIC_REGEX = (
+    r'^/(clock|rosout|parameter_events|diagnostics|'
+    r'auv/.*|zit6/.*|perception/.*|basic_motion/.*|task/.*|nav/.*|'
+    r'cmd_vel.*)$'
+)
+# Recording image messages in rosbag duplicates the external video archive and
+# is usually the largest source of recorder overhead.  Record every ROS
+# telemetry/control topic by default, including simulator ground truth and
+# raw sensor feeds.  Image message types are excluded independently below, so
+# this broad filter still keeps camera video in the JPEG archive only.
+METADATA_TOPIC_REGEX = DEFAULT_TOPIC_REGEX
+IMAGE_TOPIC_TYPES = (
+    'sensor_msgs/msg/Image',
+    'sensor_msgs/msg/CompressedImage',
+    'stereo_msgs/msg/DisparityImage',
+)
+VIDEO_STREAMS = {
+    'front_annotated': '/api/stream.ts?src=front_annotated',
+    'down_annotated': '/api/stream.ts?src=down_annotated',
+}
+RAW_STREAMS = {
+    'front': '/api/stream.ts?src=front',
+    'down': '/api/stream.ts?src=down',
+}
+
+
+def _path_is_under(path: Path, directory: Path) -> bool:
+    """Python 3.8-compatible equivalent of Path.is_relative_to()."""
+    try:
+        path.relative_to(directory)
+        return True
+    except ValueError:
+        return False
+
+
+def _mcap_storage_available() -> bool:
+    """Return whether the active ROS installation exposes the MCAP plugin."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        get_package_share_directory('rosbag2_storage_mcap')
+        return True
+    except (ImportError, LookupError, OSError):
+        return False
+
+
+def _select_bag_storage(requested: str) -> str:
+    requested = str(requested or 'auto').strip().lower()
+    if requested not in ('auto', 'sqlite3', 'mcap'):
+        raise ValueError(
+            f'unsupported bag storage {requested!r}; '
+            'use auto, sqlite3, or mcap')
+    if requested == 'auto':
+        return 'mcap' if _mcap_storage_available() else 'sqlite3'
+    if requested == 'mcap' and not _mcap_storage_available():
+        raise RuntimeError(
+            'MCAP storage was requested, but rosbag2_storage_mcap is not '
+            'installed in the active ROS environment')
+    return requested
+
+
+def _rosbag_record_help() -> str:
+    """Read ros2 bag record capabilities from the active ROS distribution."""
+    try:
+        result = subprocess.run(
+            ['ros2', 'bag', 'record', '--help'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        return f'{result.stdout}\n{result.stderr}'
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def _discover_ros_topics(topic_regex: str) -> list[str]:
+    """Discover filtered topic names for Foxy's older rosbag CLI.
+
+    Foxy has no --regex or --exclude-topic-types options, so the recorder
+    passes an explicit topic list instead.  This keeps image messages out of
+    the bag without requiring a newer rosbag2 command line.
+    """
+    try:
+        result = subprocess.run(
+            ['ros2', 'topic', 'list', '-t'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    try:
+        matcher = re.compile(topic_regex)
+    except re.error:
+        return []
+
+    topics = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if (not line.startswith('/') or ' [' not in line or
+                not line.endswith(']')):
+            continue
+        topic, type_list = line.rsplit(' [', 1)
+        topic_types = [item.strip() for item in type_list[:-1].split(',')]
+        if not matcher.search(topic):
+            continue
+        if any(topic_type in IMAGE_TOPIC_TYPES for topic_type in topic_types):
+            continue
+        topics.append(topic)
+    return sorted(set(topics))
+
+
+def _bool_value(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _next_segment_number(directory: Path) -> int:
+    numbers = []
+    for path in directory.glob('*.ts'):
+        match = re.search(r'(\d+)(?=\.ts$)', path.name)
+        if match:
+            numbers.append(int(match.group(1)))
+    return max(numbers, default=-1) + 1
+
+
+def _sync_file(path: Path) -> bool:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return True
+    except OSError:
+        return False
+
+
+class SegmentSyncer(threading.Thread):
+    """Periodically fsync stable video and rosbag files."""
+
+    def __init__(
+        self,
+        directories: list[Path],
+        patterns: tuple[str, ...] = ('*.ts',),
+        period: float = 1.0,
+    ):
+        super().__init__(daemon=True, name='uv-record-segment-sync')
+        self.directories = directories
+        self.patterns = patterns
+        self.period = max(0.25, period)
+        self.stop_event = threading.Event()
+        self._observed: dict[Path, tuple[int, int]] = {}
+        self._synced: set[Path] = set()
+        # Files are discovered recursively only every few seconds. Known
+        # files are stat'ed between discoveries so a growing MCAP tail is
+        # still synced without walking thousands of historical chunks.
+        self._known: set[Path] = set()
+        self._next_discovery = 0.0
+        self.errors = 0
+
+    def run(self):
+        while not self.stop_event.is_set():
+            self.sync_once()
+            self.stop_event.wait(self.period)
+        self.sync_once()
+
+    def sync_once(self):
+        now = time.monotonic()
+        discover = now >= self._next_discovery
+        if discover:
+            self._next_discovery = now + 5.0
+        for directory in self.directories:
+            if not directory.is_dir():
+                continue
+            changed_directories: set[Path] = set()
+            files = {p for p in self._known if _path_is_under(p, directory)}
+            if discover:
+                files.update(
+                    p for p in directory.rglob('*')
+                    if any(p.match(pattern) for pattern in self.patterns))
+            self._known.update(files)
+            for path in files:
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                signature = (stat.st_size, stat.st_mtime_ns)
+                if self._observed.get(path) != signature:
+                    self._observed[path] = signature
+                    self._synced.discard(path)
+                if path not in self._synced and stat.st_size > 0:
+                    if _sync_file(path):
+                        self._synced.add(path)
+                        changed_directories.add(path.parent)
+                    else:
+                        self.errors += 1
+            for changed_directory in changed_directories:
+                try:
+                    fd = os.open(
+                        changed_directory,
+                        os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0),
+                    )
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                except OSError:
+                    pass
+
+    def stop(self):
+        self.stop_event.set()
+
+    def sync_all(self):
+        """Force every currently present segment/file, including the tail."""
+        directories = set()
+        for directory in self.directories:
+            if not directory.is_dir():
+                continue
+            files = {
+                path for pattern in self.patterns
+                for path in directory.rglob(pattern)
+            }
+            for path in files:
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if (path in self._synced and self._observed.get(path) ==
+                        (stat.st_size, stat.st_mtime_ns)):
+                    continue
+                if not _sync_file(path):
+                    self.errors += 1
+                directories.add(path.parent)
+        for directory in directories:
+            try:
+                fd = os.open(
+                    directory,
+                    os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0),
+                )
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+            except OSError:
+                pass
+
+
+class ChildSupervisor(threading.Thread):
+    """Run a child process and restart it after an unexpected exit."""
+
+    def __init__(
+        self,
+        name: str,
+        command_factory,
+        log_path: Path,
+        stop_signal=signal.SIGTERM,
+    ):
+        super().__init__(daemon=True, name=f'uv-record-{name}')
+        self.name_label = name
+        self.command_factory = command_factory
+        self.log_path = log_path
+        self.stop_signal = stop_signal
+        self.stop_event = threading.Event()
+        self.process_lock = threading.Lock()
+        self.process: subprocess.Popen | None = None
+        self.restarts = 0
+        self.last_exit = None
+
+    def run(self):
+        while not self.stop_event.is_set():
+            command = self.command_factory()
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.log_path.open('ab', buffering=0) as logfile:
+                logfile.write(
+                    (f'\n[{time.strftime("%Y-%m-%d %H:%M:%S")}] '
+                     f'starting {self.name_label}: '
+                     f'{json.dumps(command, ensure_ascii=False)}\n').encode())
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=logfile,
+                        stderr=subprocess.STDOUT,
+                        cwd=str(self.log_path.parent.parent),
+                        start_new_session=True,
+                    )
+                except OSError as error:
+                    logfile.write(f'failed to start: {error}\n'.encode())
+                    self.last_exit = 127
+                    self.stop_event.wait(2.0)
+                    continue
+
+                with self.process_lock:
+                    self.process = process
+                while not self.stop_event.wait(0.25):
+                    exit_code = process.poll()
+                    if exit_code is not None:
+                        self.last_exit = exit_code
+                        logfile.write(
+                            f'process exited with code {exit_code}\n'.encode())
+                        break
+
+                if self.stop_event.is_set() and process.poll() is None:
+                    self._terminate(process, self.stop_signal)
+                if process.poll() is None:
+                    try:
+                        process.wait(timeout=6.0)
+                    except subprocess.TimeoutExpired:
+                        self._kill(process)
+                        process.wait(timeout=2.0)
+                with self.process_lock:
+                    self.process = None
+
+            if not self.stop_event.is_set():
+                self.restarts += 1
+                self.stop_event.wait(1.0)
+
+    @staticmethod
+    def _terminate(process: subprocess.Popen, stop_signal=signal.SIGTERM):
+        try:
+            os.killpg(process.pid, stop_signal)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                process.terminate()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _kill(process: subprocess.Popen):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+    def stop(self):
+        self.stop_event.set()
+        with self.process_lock:
+            process = self.process
+        if process is not None and process.poll() is None:
+            self._terminate(process, self.stop_signal)
+
+    def snapshot(self) -> dict:
+        with self.process_lock:
+            process = self.process
+            pid = process.pid if process is not None else None
+            alive = process is not None and process.poll() is None
+        return {
+            'pid': pid,
+            'alive': alive,
+            'restarts': self.restarts,
+            'last_exit': self.last_exit,
+        }
+
+
+class Recorder:
+    """Own one session and all of its independently recoverable writers."""
+
+    def __init__(self, paths: SessionPaths, args):
+        self.paths = paths
+        self.args = args
+        self.record_mode = str(getattr(args, 'record_mode', 'raw')).strip().lower()
+        if self.record_mode not in ('raw', 'go2rtc'):
+            raise ValueError('record_mode must be raw or go2rtc')
+        self.raw_recorder = None
+        self.telemetry = None
+        self.bag_storage = _select_bag_storage(
+            getattr(args, 'bag_storage', 'auto'))
+        self._bag_record_help = _rosbag_record_help()
+        self.stop_event = threading.Event()
+        self.heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, daemon=True, name='uv-record-heartbeat')
+        self.syncer = SegmentSyncer([])
+        self.children: list[ChildSupervisor] = []
+        self.video_directories: list[Path] = []
+        self.performance = ProcessSampler(os.getppid())
+        self.health_errors = 0
+        self._stopped = False
+        self._prepare_video_streams()
+
+    def _recorded_streams(self):
+        """Return go2rtc streams selected for this exclusive record mode."""
+        if self.record_mode != 'go2rtc':
+            return {}
+        mode = str(getattr(
+            self.args, 'go2rtc_stream_mode', 'unannotated')).strip().lower()
+        if mode == 'unannotated':
+            return dict(RAW_STREAMS)
+        if mode == 'annotated':
+            return dict(VIDEO_STREAMS)
+        if mode == 'both':
+            streams = dict(RAW_STREAMS)
+            streams.update(VIDEO_STREAMS)
+            return streams
+        raise ValueError(
+            f'unsupported go2rtc_stream_mode {mode!r}; '
+            'use unannotated, annotated, or both')
+
+    def _prepare_video_streams(self):
+        streams = self._recorded_streams()
+        container = (
+            'jpeg_archive' if self.args.video_format == 'jpeg' else 'mpegts')
+        for name, path in streams.items():
+            directory = self.paths.video / name
+            directory.mkdir(parents=True, exist_ok=True)
+            self.video_directories.append(directory)
+            manifest = load_manifest(self.paths.root)
+            videos = dict(manifest.get('video', {}))
+            videos[name] = {
+                'url': self._video_url(name, path),
+                'container': container,
+                'segment_seconds': self.args.segment_duration,
+                'fps': float(self.args.video_fps),
+                'directory': str(directory),
+                'frame_metadata': ('frame_alignment.jsonl + archive index'
+                                   if self.args.video_format == 'jpeg'
+                                   else 'frame_alignment.jsonl'),
+                'timestamp_source': 'camera_stream_frame_info_pts',
+            }
+            update_manifest(self.paths.root, video=videos)
+
+    def _video_url(self, name, path):
+        if getattr(self.args, 'video_source', 'go2rtc') == 'mjpeg':
+            return f'http://{self.args.host}:{self.args.port}/{name}'
+        return f'http://{self.args.host}:{self.args.port}{path}'
+
+    def _video_command(self, name: str, path: str, directory: Path):
+        if self.args.video_format == 'jpeg':
+            start_number = next_chunk_number(directory)
+        else:
+            start_number = _next_segment_number(directory)
+        url = self._video_url(name, path)
+        duration = max(0.5, float(self.args.segment_duration))
+        command = [
+            sys.executable, '-m', 'uv_record.mjpeg_proxy',
+            '--url', url,
+            '--camera', name.split('_', 1)[0],
+            '--stream-mode', ('annotated' if name.endswith('_annotated')
+                              else 'unannotated'),
+            '--output-dir', str(directory),
+            '--start-number', str(start_number),
+            '--segment-duration', str(duration),
+            '--fps', str(self.args.video_fps),
+            '--output-format', self.args.video_format,
+            '--ffmpeg', self.args.ffmpeg,
+            '--max-width', str(getattr(self.args, 'video_width', 0)),
+            '--bitrate-kbps', str(getattr(self.args, 'video_bitrate_kbps', 0)),
+        ]
+        if self.args.video_format == 'ts':
+            playlist = str(directory / f'index_{start_number:06d}.m3u8')
+            command += [
+                '--playlist', playlist,
+                '--video-codec', self.args.video_codec,
+            ]
+        if getattr(self.args, 'video_source', 'go2rtc') == 'mjpeg':
+            command += ['--wallclock-input']
+        return command
+
+    def _start_video_children(self):
+        streams = self._recorded_streams()
+        for name, path in streams.items():
+            directory = self.paths.video / name
+            child = ChildSupervisor(
+                name,
+                lambda n=name, p=path, d=directory:
+                self._video_command(n, p, d),
+                self.paths.logs / 'nodes' / f'video_{name}.log',
+            )
+            self.children.append(child)
+
+    def _bag_topic_regex(self):
+        """Return the topic-name filter; message-type exclusion is separate."""
+        return self.args.topic_regex
+
+    def _bag_command(self, part: int):
+        output = self.paths.bag / f'part_{part:03d}'
+        command = [
+            'ros2', 'bag', 'record',
+            '--storage', self.bag_storage,
+            '--output', str(output),
+            # Direct writes reduce the amount of data left only in rosbag's
+            # memory cache when the machine becomes unresponsive.
+            '--max-cache-size', '0',
+        ]
+        capabilities = self._bag_record_help
+        if '--regex' in capabilities:
+            command += ['--regex', self._bag_topic_regex()]
+        else:
+            topics = _discover_ros_topics(self._bag_topic_regex())
+            if topics:
+                command += topics
+            else:
+                print(
+                    'uv_record: no matching ROS topics found for Foxy bag '
+                    'record; the supervised recorder will retry',
+                    flush=True)
+        if '--max-bag-duration' in capabilities:
+            # ros2 bag's parser accepts integer seconds only. Round fractional
+            # values up so the requested maximum duration is never shortened.
+            bag_duration = max(1, math.ceil(float(self.args.bag_duration)))
+            command += ['--max-bag-duration', str(bag_duration)]
+        if '--disable-keyboard-controls' in capabilities:
+            command.append('--disable-keyboard-controls')
+        if '--exclude-topic-types' in capabilities:
+            command += ['--exclude-topic-types', *IMAGE_TOPIC_TYPES]
+        if (_bool_value(self.args.use_sim_time) and
+                '--use-sim-time' in capabilities):
+            command.append('--use-sim-time')
+        return command
+
+    def _wait_for_go2rtc(self, timeout: float = 15.0):
+        """Fail early when go2rtc mode has no reachable HTTP API."""
+        endpoint = (self._video_url('front', '') if
+                    getattr(self.args, 'video_source', 'go2rtc') == 'mjpeg' else
+                    f'http://{self.args.host}:{self.args.port}/api/streams')
+        deadline = time.monotonic() + timeout
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                with urlopen(endpoint, timeout=1.0) as response:
+                    if response.status == 200:
+                        return
+                    last_error = RuntimeError(
+                        f'go2rtc returned HTTP {response.status}')
+            except Exception as error:
+                last_error = error
+            time.sleep(0.25)
+        raise RuntimeError(
+            f'go2rtc mode requires an available HTTP API at {endpoint}: '
+            f'{last_error}')
+
+    def _wait_for_video_frames(self, timeout: float = 20.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            ready = True
+            for directory in self.video_directories:
+                try:
+                    status = json.loads(
+                        (directory / 'status.json').read_text(encoding='utf-8'))
+                except (OSError, ValueError):
+                    ready = False
+                    break
+                if int(status.get('frames', 0)) <= 0:
+                    ready = False
+                    break
+            if ready and self.video_directories:
+                return
+            time.sleep(0.25)
+        raise RuntimeError(
+            'go2rtc mode requires a live frame from every selected stream; '
+            'check stream names, HTTP port, and uv_stream status')
+
+    def _start_raw_recorder(self):
+        from .raw_recorder import RawFrameRecorder
+        self.raw_recorder = RawFrameRecorder(self.paths.root)
+        self.raw_recorder.start()
+
+    def _start_bag_child(self):
+        existing = [
+            int(match.group(1))
+            for path in self.paths.bag.glob('part_*')
+            if (match := re.fullmatch(r'part_(\d+)', path.name))
+        ]
+        next_part = max(existing, default=-1) + 1
+
+        def command_factory():
+            nonlocal next_part
+            command = self._bag_command(next_part)
+            next_part += 1
+            return command
+
+        self.children.append(ChildSupervisor(
+            'rosbag2', command_factory,
+            self.paths.logs / 'nodes' / 'rosbag2.log',
+            stop_signal=signal.SIGINT))
+
+    def _heartbeat_loop(self):
+        next_sample = 0.0
+        previous_children = {}
+        while not self.stop_event.wait(1.0):
+            try:
+                snapshots = {
+                    child.name_label: child.snapshot() for child in self.children}
+                for name, state in snapshots.items():
+                    if state != previous_children.get(name):
+                        append_event(self.paths.root, {
+                            'event': 'recorder_child_state', 'name': name, **state})
+                previous_children = snapshots
+                update_heartbeat(self.paths.root, children=snapshots,
+                                 sync_errors=self.syncer.errors,
+                                 health_errors=self.health_errors)
+                if time.monotonic() < next_sample:
+                    continue
+                next_sample = time.monotonic() + 5.0
+                sample = self.performance.sample()
+                sample['disk_free_bytes'] = shutil.disk_usage(self.paths.root).free
+                sample['children'] = snapshots
+                sample['video'] = {}
+                if self.raw_recorder is not None:
+                    sample['camera_raw'] = self.raw_recorder.snapshot()
+                    if self.raw_recorder.error is not None:
+                        self.health_errors += 1
+                for directory in self.video_directories:
+                    try:
+                        status = json.loads((directory / 'status.json').read_text())
+                        received = status.get('last_frame_received_unix_ns', 0)
+                        status['frame_age_seconds'] = (
+                            (time.time_ns() - received) / 1e9 if received else None)
+                        sample['video'][directory.name] = status
+                    except (OSError, ValueError):
+                        sample['video'][directory.name] = {'status': 'waiting_for_video'}
+                with (self.paths.metadata / 'performance.jsonl').open('a') as handle:
+                    handle.write(json.dumps(sample, ensure_ascii=False) + '\n')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except (OSError, ValueError) as error:
+                self.health_errors += 1
+                print(f'uv_record: health logging failed: {error}', flush=True)
+
+    def start(self):
+        if self.record_mode == 'go2rtc':
+            if shutil.which(self.args.ffmpeg) is None:
+                raise RuntimeError(f'ffmpeg executable not found: {self.args.ffmpeg}')
+            self._wait_for_go2rtc()
+        self._start_bag_child()
+        from .telemetry import TelemetryRecorder
+        self.telemetry = TelemetryRecorder(self.paths.root)
+        self.telemetry.start()
+        if self.record_mode == 'raw':
+            self._start_raw_recorder()
+        else:
+            self._start_video_children()
+        self.syncer = SegmentSyncer(
+            # JPEG writers sync their own active/closed chunks. Only legacy
+            # TS and rosbag need an external syncer.
+            ([*self.video_directories] if self.args.video_format == 'ts' else [])
+            + [self.paths.bag],
+            patterns=('*.ts', '*.mcap', '*.db3', 'metadata.yaml'),
+        )
+        self.syncer.start()
+        for child in self.children:
+            child.start()
+        if self.record_mode == 'go2rtc':
+            self._wait_for_video_frames()
+        update_manifest(
+            self.paths.root,
+            bag={'directory': 'bag', 'storage': self.bag_storage,
+                 'segment_seconds': float(self.args.bag_duration),
+                 'segmenting_supported': '--max-bag-duration' in
+                 self._bag_record_help},
+            camera_raw=({
+                'directory': 'camera/raw',
+                'format': 'png',
+                'frame_index': 'frames.jsonl',
+                'timestamp_source': 'iceoryx2_frame_header',
+            } if self.record_mode == 'raw' else {}),
+            recorder={
+                'pid': os.getpid(),
+                'topic_regex': self._bag_topic_regex(),
+                # Kept for manifest compatibility.  The legacy switch cannot
+                # override the type-level image exclusion.
+                'record_image_topics': False,
+                'record_image_topics_requested': _bool_value(
+                    getattr(self.args, 'record_image_topics', False)),
+                'bag_segment_seconds': float(self.args.bag_duration),
+                'bag_segmenting_supported': '--max-bag-duration' in
+                self._bag_record_help,
+                'bag_storage': self.bag_storage,
+                'video_segment_seconds': float(self.args.segment_duration),
+                'record_mode': self.record_mode,
+                'go2rtc_stream_mode': getattr(
+                    self.args, 'go2rtc_stream_mode', 'unannotated'),
+                'video_format': self.args.video_format,
+                'video_fps': float(self.args.video_fps),
+                'use_sim_time': _bool_value(self.args.use_sim_time),
+                'image_topics_excluded': True,
+                'enable_video': self.record_mode == 'go2rtc',
+                'timestamp_alignment': (
+                    'iceoryx2_frame_header' if self.record_mode == 'raw'
+                    else 'camera_stream_frame_info_pts'),
+            },
+        )
+        if _bool_value(getattr(self.args, 'record_image_topics', False)):
+            print(
+                'uv_record: record_image_topics is deprecated and ignored; '
+                'image message types are always excluded from rosbag',
+                flush=True)
+        append_event(self.paths.root, {'event': 'recorder_started'})
+        self.heartbeat_thread.start()
+
+    def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
+        self.stop_event.set()
+        if self.telemetry is not None:
+            self.telemetry.stop()
+        for child in self.children:
+            child.stop()
+        if self.raw_recorder is not None:
+            self.raw_recorder.stop()
+        for child in self.children:
+            if child.is_alive():
+                child.join(timeout=8.0)
+        self.syncer.stop()
+        if self.syncer.is_alive():
+            self.syncer.join(timeout=3.0)
+        self.syncer.sync_all()
+        if self.heartbeat_thread.is_alive():
+            self.heartbeat_thread.join(timeout=2.0)
+        alignment = {'status': 'aligned', 'mode': self.record_mode}
+        if self.raw_recorder is not None:
+            raw_status = self.raw_recorder.snapshot()
+            alignment.update(raw_status)
+            if raw_status['alignment_status'] != 'aligned':
+                alignment['status'] = 'degraded'
+        if self.record_mode == 'go2rtc':
+            video_statuses = []
+            for directory in self.video_directories:
+                try:
+                    video_statuses.append(json.loads(
+                        (directory / 'status.json').read_text(encoding='utf-8')))
+                except (OSError, ValueError):
+                    video_statuses.append({'alignment_status': 'degraded'})
+            alignment['streams'] = {
+                directory.name: status
+                for directory, status in zip(self.video_directories, video_statuses)}
+            if (not video_statuses or any(
+                    status.get('alignment_status') != 'aligned'
+                    for status in video_statuses)):
+                alignment['status'] = 'degraded'
+        update_manifest(self.paths.root, timestamp_alignment=alignment,
+                        recording_health={
+            'sync_errors': self.syncer.errors, 'health_errors': self.health_errors,
+            'children': {child.name_label: child.snapshot() for child in self.children},
+        })
+        append_event(self.paths.root, {'event': 'recorder_stopped'})
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--session-dir')
+    parser.add_argument('--output-root', default=str(default_output_root()))
+    parser.add_argument('--host', default='127.0.0.1')
+    parser.add_argument('--port', type=int, default=1984)
+    parser.add_argument(
+        '--record-mode', choices=('raw', 'go2rtc'), default='raw',
+        help='exclusive image recording path: source BGR8 frames or go2rtc video')
+    parser.add_argument('--segment-duration', type=float, default=2.0)
+    parser.add_argument('--bag-duration', type=float, default=10.0)
+    parser.add_argument(
+        '--bag-storage', choices=('auto', 'sqlite3', 'mcap'), default='auto',
+        help=(
+            'ROS bag storage backend. auto selects MCAP when the plugin is '
+            'installed, otherwise sqlite3 for ROS 2 Foxy compatibility'))
+    parser.add_argument(
+        '--go2rtc-video-format', dest='video_format', choices=('jpeg', 'ts'), default='jpeg',
+        help=(
+            'jpeg stores source JPEG frames and decodes on playback; '
+            'ts keeps the legacy H.264 transcode path'))
+    parser.add_argument(
+        '--video-fps', type=float, default=10.0,
+        help='Maximum recorded frame rate; selects source frames without duplicates')
+    parser.add_argument(
+        '--go2rtc-stream-mode', choices=('unannotated', 'annotated', 'both'),
+        default='unannotated',
+        help='go2rtc stream(s) to record; unannotated is the camera-rate stream')
+    parser.add_argument('--topic-regex', default=METADATA_TOPIC_REGEX)
+    parser.add_argument(
+        '--record-image-topics', default='false',
+        help=(
+            'Deprecated compatibility argument; image message types are '
+            'always excluded because video is stored separately'))
+    parser.add_argument('--use-sim-time', default='false')
+    parser.add_argument('--video-codec', default='libx264')
+    parser.add_argument('--ffmpeg', default='ffmpeg')
+    parser.add_argument('--profile', choices=('legacy', 'competition', 'dataset'), default='competition')
+    parser.add_argument('--video-source', choices=('go2rtc', 'mjpeg'), default=None)
+    parser.add_argument('--video-width', type=int, default=None)
+    parser.add_argument('--video-bitrate-kbps', type=int, default=None)
+    parser.add_argument('--duration-minutes', type=float, default=None)
+    parser.add_argument('--max-session-gb', type=float, default=None)
+    parser.add_argument('--min-free-gb', type=float, default=1.0)
+    # launch_ros appends ``--ros-args -r __node:=...`` to every Node
+    # executable.  This recorder is a supervised process rather than an
+    # rclpy Node, so those arguments are intentionally not consumed here.
+    args, _ros_args = parser.parse_known_args()
+    explicit = set(sys.argv[1:])
+    def default(option, attribute, value):
+        if not any(item == option or item.startswith(option+'=') for item in explicit):
+            setattr(args, attribute, value)
+    if args.profile != 'legacy':
+        for option, attribute, value in (
+            ('--record-mode', 'record_mode', 'go2rtc'),
+            ('--video-source', 'video_source', 'mjpeg'), ('--port', 'port', 8090),
+            ('--segment-duration', 'segment_duration', 60.0),
+            ('--bag-duration', 'bag_duration', 300.0),
+            ('--bag-storage', 'bag_storage', 'sqlite3'),
+            ('--go2rtc-stream-mode', 'go2rtc_stream_mode', 'unannotated'),
+            ('--go2rtc-video-format', 'video_format', 'ts' if args.profile == 'competition' else 'jpeg'),
+            ('--video-fps', 'video_fps', 8.0 if args.profile == 'competition' else 2.0),
+            ('--video-width', 'video_width', 960 if args.profile == 'competition' else 0),
+            ('--video-bitrate-kbps', 'video_bitrate_kbps', 1200),
+            ('--duration-minutes', 'duration_minutes', 60.0),
+            ('--max-session-gb', 'max_session_gb', 4.8 if args.profile == 'competition' else 0.0),
+            ('--topic-regex', 'topic_regex',
+             r'^/(clock|rosout|diagnostics|(auv/)?basic_motion/pose_info|task/(status|mapping/(map|events))|zit6/state/(pos|vel|status))$'),
+        ):
+            default(option, attribute, value)
+    for attribute, value in (('video_source', 'go2rtc'), ('video_width', 0),
+                             ('video_bitrate_kbps', 0), ('duration_minutes', 0.), ('max_session_gb', 0.)):
+        if getattr(args, attribute) is None:
+            setattr(args, attribute, value)
+    numeric = (args.video_fps, args.video_width, args.video_bitrate_kbps,
+               args.duration_minutes, args.max_session_gb, args.min_free_gb)
+    if not all(math.isfinite(value) for value in numeric) or args.video_fps <= 0 or min(numeric[1:]) < 0:
+        parser.error('帧率必须为正数；尺寸、码率、时长和容量限制必须为有限非负数')
+    return args
+
+
+def _session_size(root):
+    total = 0
+    for directory, _, names in os.walk(root):
+        for name in names:
+            try:
+                total += (Path(directory) / name).stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _session_from_args(args) -> SessionPaths:
+    if args.session_dir:
+        return initialise_session(args.session_dir)
+    return create_session(args.output_root)
+
+
+def main():
+    args = _parse_args()
+    paths = None
+    recorder = None
+    stop_requested = threading.Event()
+
+    def request_stop(_signum, _frame):
+        stop_requested.set()
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+
+    try:
+        paths = _session_from_args(args)
+        recorder = Recorder(paths, args)
+        recorder.start()
+        started = time.monotonic()
+        next_size_check = 0.0
+        size = 0
+        update_manifest(paths.root, recording_profile=args.profile,
+                        limits={'duration_minutes': args.duration_minutes,
+                                'max_session_gb': args.max_session_gb,
+                                'min_free_gb': args.min_free_gb})
+        print(f'uv_record: recording session {paths.root}', flush=True)
+        while not stop_requested.wait(0.5):
+            now = time.monotonic()
+            if now >= next_size_check:
+                size = _session_size(paths.root)
+                next_size_check = now + 5.0
+            reason = None
+            if args.duration_minutes and now-started >= args.duration_minutes*60:
+                reason = '录制时长达到上限'
+            elif shutil.disk_usage(paths.root).free < args.min_free_gb*1_000_000_000:
+                reason = '剩余磁盘空间不足，保护性结束录制'
+            elif args.max_session_gb and size >= args.max_session_gb*1_000_000_000:
+                reason = '会话容量达到上限，保护性结束录制'
+            if reason:
+                append_event(paths.root, {'event': 'limit_reached', 'reason': reason})
+                print('uv_record: '+reason, flush=True)
+                break
+            if recorder.raw_recorder is not None and recorder.raw_recorder.error:
+                raise RuntimeError(
+                    f'raw camera recorder failed: {recorder.raw_recorder.error}')
+        recorder.stop()
+        finish_session(paths.root, 'STOPPED')
+        print('uv_record: recording stopped cleanly', flush=True)
+        return 0
+    except KeyboardInterrupt:
+        if recorder is not None:
+            recorder.stop()
+        if paths is not None:
+            finish_session(paths.root, 'STOPPED')
+        return 0
+    except Exception as error:
+        print(f'uv_record: recorder failed: {error}', flush=True)
+        if recorder is not None:
+            recorder.stop()
+        if paths is not None:
+            finish_session(paths.root, 'FAILED', error=str(error))
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

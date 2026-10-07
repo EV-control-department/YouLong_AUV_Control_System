@@ -1,0 +1,1419 @@
+"""Play video and synchronized non-image ROS topics from a uv_record session."""
+
+from __future__ import annotations
+
+import argparse
+import bisect
+import json
+from dataclasses import replace
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from .jpeg_archive import archive_entries, read_payload
+from .session import default_output_root
+
+
+IMAGE_TOPIC_TYPES = {
+    'sensor_msgs/msg/Image',
+    'sensor_msgs/msg/CompressedImage',
+    'stereo_msgs/msg/DisparityImage',
+}
+NANOSECONDS = 1_000_000_000
+
+
+def _part_sort_key(path: Path):
+    match = re.search(r'(\d+)$', path.stem)
+    return (int(match.group(1)) if match else -1, path.name)
+
+
+def _bag_files(directory: Path) -> list[Path]:
+    try:
+        candidates = (
+            path for suffix in ('.mcap', '.db3')
+            for path in directory.glob(f'*{suffix}')
+        )
+        files = []
+        for path in candidates:
+            try:
+                if path.is_file() and path.stat().st_size > 0:
+                    files.append(path)
+            except OSError:
+                continue
+    except OSError:
+        return []
+    return sorted(files, key=_part_sort_key)
+
+
+def _bag_part_paths(bag_root: Path) -> list[Path]:
+    try:
+        parts = sorted(
+            (path for path in bag_root.glob('part_*') if path.is_dir()),
+            key=_part_sort_key,
+        )
+    except OSError:
+        return []
+    if not parts:
+        return _bag_files(bag_root)
+
+    # Read bag files individually.  This works for normal bags and also for
+    # power-loss sessions where metadata.yaml is absent or damaged. Empty
+    # files are ignored because they contain no recoverable messages.
+    recovered = []
+    for part in parts:
+        recovered.extend(_bag_files(part))
+    return recovered
+
+
+def _rosbag_modules():
+    """Import ROS bag support lazily so video-only playback still works."""
+    import rclpy
+    try:
+        import rosbag2_py
+    except ImportError:
+        # ROS 2 Foxy may not ship the Python rosbag2 reader.  The standard
+        # sqlite3 module below is sufficient for Foxy's default .db3 bags.
+        rosbag2_py = None
+    from rclpy.serialization import deserialize_message
+    from rosidl_runtime_py.utilities import get_message
+    return rclpy, rosbag2_py, deserialize_message, get_message
+
+
+class BagPlayback:
+    """Publish recorded non-image topics against the video time axis."""
+
+    def __init__(self, bag_root: Path, node):
+        self.bag_root = Path(bag_root)
+        self.node = node
+        (
+            self._rclpy,
+            self._rosbag2_py,
+            self._deserialize_message,
+            self._get_message,
+        ) = _rosbag_modules()
+        self._parts = _bag_part_paths(self.bag_root)
+        self._part_index = 0
+        self._reader = None
+        self._reader_path = None
+        self._reader_backend = None
+        self._sqlite_connection = None
+        self._sqlite_cursor = None
+        self._next = None
+        self._topic_types: dict[str, str] = {}
+        self._message_types = {}
+        self._publishers = {}
+        self._errors: list[str] = []
+        self._time_offset_ns = 0
+        self._published_count = 0
+        self._first_raw_ns = None
+        self._last_raw_ns = None
+        self._raw_end_ns = None
+        if (self._parts and self._rosbag2_py is None and
+                any(path.suffix.lower() == '.mcap' for path in self._parts) and
+                not any(path.suffix.lower() == '.db3'
+                        for path in self._parts)):
+            raise RuntimeError(
+                'this session contains MCAP, but rosbag2_py is not installed; '
+                'install the MCAP reader or record with sqlite3 on ROS 2 Foxy')
+        self._collect_metadata_bounds()
+        self._open_next_part()
+        self._next = self._read_next()
+        if self._next is not None:
+            self._first_raw_ns = self._next[0]
+
+    @property
+    def empty(self) -> bool:
+        return self._next is None and not self._publishers
+
+    @property
+    def topic_count(self) -> int:
+        return len(self._publishers)
+
+    @property
+    def published_count(self) -> int:
+        return self._published_count
+
+    @property
+    def errors(self) -> tuple[str, ...]:
+        return tuple(self._errors)
+
+    @property
+    def start_ns(self) -> int | None:
+        if self._first_raw_ns is None:
+            return None
+        return self._first_raw_ns + self._time_offset_ns
+
+    @property
+    def end_ns(self) -> int | None:
+        if self._first_raw_ns is None:
+            return None
+        if self._raw_end_ns is None:
+            return self._last_raw_ns
+        return self._raw_end_ns + self._time_offset_ns
+
+    def configure_timebase(
+        self,
+        video_start_ns: int | None,
+        use_sim_time: bool = False,
+    ) -> None:
+        """Align old wall-time bags to video if their clocks are unrelated."""
+        if self._first_raw_ns is None or video_start_ns is None or use_sim_time:
+            self._time_offset_ns = 0
+            return
+        # New simulation sessions use /clock and need no correction.  This
+        # fallback keeps sessions recorded before that default usable when
+        # rosbag used wall time but the camera frames used simulation time.
+        difference = int(video_start_ns) - self._first_raw_ns
+        self._time_offset_ns = difference if abs(difference) > 60 * NANOSECONDS else 0
+
+    def _update_metadata_bounds(self, metadata) -> None:
+        try:
+            part_start_ns = int(metadata.starting_time.nanoseconds)
+            part_duration_ns = int(metadata.duration.nanoseconds)
+            part_end_ns = part_start_ns + part_duration_ns
+            self._raw_end_ns = max(
+                self._raw_end_ns or part_end_ns, part_end_ns)
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    def _collect_metadata_bounds(self) -> None:
+        info = None
+        if self._rosbag2_py is not None:
+            try:
+                info = self._rosbag2_py.Info()
+            except AttributeError:
+                pass
+        for path in self._parts:
+            if path.suffix.lower() == '.db3':
+                try:
+                    connection = sqlite3.connect(
+                        f'{path.as_uri()}?mode=ro', uri=True)
+                    row = connection.execute(
+                        'SELECT MIN(timestamp), MAX(timestamp) FROM messages'
+                    ).fetchone()
+                    connection.close()
+                    if row and row[1] is not None:
+                        self._raw_end_ns = max(
+                            self._raw_end_ns or int(row[1]), int(row[1]))
+                except (OSError, sqlite3.Error, TypeError, ValueError):
+                    continue
+                continue
+            if info is None:
+                continue
+            try:
+                metadata = info.read_metadata(str(path), 'mcap')
+                self._update_metadata_bounds(metadata)
+            except Exception:
+                # The reader below remains the source of truth for damaged or
+                # older bags whose metadata cannot be read by Info.
+                continue
+
+    def _register_topic(
+            self, topic: str, topic_type: str, profiles=None) -> bool:
+        if topic_type in IMAGE_TOPIC_TYPES:
+            return False
+        # Offline visualization must NEVER replay actuator commands or action goals.
+        if ('/cmd/' in topic or '/_action/' in topic or topic.startswith('/cmd_vel')
+                or topic.endswith('/setpoint')):
+            return False
+        self._topic_types[topic] = topic_type
+        try:
+            message_type = self._message_types.get(topic)
+            if message_type is None:
+                message_type = self._get_message(topic_type)
+                self._message_types[topic] = message_type
+            if topic not in self._publishers:
+                qos = 10
+                if profiles and self._rosbag2_py is not None:
+                    try:
+                        converted_qos = (
+                            self._rosbag2_py
+                            .convert_rclcpp_qos_to_rclpy_qos(profiles[0]))
+                        qos = self._safe_replay_qos(converted_qos)
+                    except Exception:
+                        pass
+                self._publishers[topic] = self.node.create_publisher(
+                    message_type, topic, qos)
+            return True
+        except Exception as error:
+            self._errors.append(f'{topic} ({topic_type}): {error}')
+            return False
+
+    def _register_topics(self, reader) -> list[str]:
+        selected = []
+        for metadata in reader.get_all_topics_and_types():
+            topic = str(metadata.name)
+            topic_type = str(metadata.type)
+            if self._register_topic(
+                    topic, topic_type,
+                    getattr(metadata, 'offered_qos_profiles', [])):
+                selected.append(topic)
+        return selected
+
+    def _register_sqlite_topics(self, connection) -> list[str]:
+        selected = []
+        try:
+            rows = connection.execute(
+                'SELECT name, type FROM topics ORDER BY id')
+            for topic, topic_type in rows:
+                if self._register_topic(str(topic), str(topic_type)):
+                    selected.append(str(topic))
+        except sqlite3.Error as error:
+            self._errors.append(
+                f'{self._reader_path}: topic scan failed: {error}')
+        return selected
+
+    @staticmethod
+    def _safe_replay_qos(qos):
+        """Return a publisher-valid QoS profile for recorded metadata.
+
+        Some rosbag2/MCAP metadata contains UNKNOWN policy values.  They are
+        useful as metadata, but RMW rejects UNKNOWN history (and some other
+        UNKNOWN policies) when creating a publisher.  A depth-only profile is
+        a valid, conservative fallback for replay; the recorded message bytes
+        and timestamps are unaffected.
+        """
+        from rclpy.qos import (
+            QoSDurabilityPolicy,
+            QoSHistoryPolicy,
+            QoSLivelinessPolicy,
+            QoSReliabilityPolicy,
+        )
+
+        unknown = (
+            (getattr(qos, 'history', None), QoSHistoryPolicy.UNKNOWN),
+            (getattr(qos, 'reliability', None), QoSReliabilityPolicy.UNKNOWN),
+            (getattr(qos, 'durability', None), QoSDurabilityPolicy.UNKNOWN),
+            (getattr(qos, 'liveliness', None), QoSLivelinessPolicy.UNKNOWN),
+        )
+        if any(value == invalid for value, invalid in unknown):
+            return 10
+        return qos
+
+    def _close_current_part(self) -> None:
+        if self._reader is not None:
+            try:
+                self._reader.close()
+            except Exception:
+                pass
+        if self._sqlite_cursor is not None:
+            try:
+                self._sqlite_cursor.close()
+            except Exception:
+                pass
+        if self._sqlite_connection is not None:
+            try:
+                self._sqlite_connection.close()
+            except Exception:
+                pass
+        self._reader = None
+        self._sqlite_cursor = None
+        self._sqlite_connection = None
+        self._reader_backend = None
+        self._reader_path = None
+
+    def _open_sqlite_part(self, path: Path) -> bool:
+        connection = None
+        self._reader_path = path
+        try:
+            connection = sqlite3.connect(
+                f'{path.resolve().as_uri()}?mode=ro', uri=True)
+            topics = self._register_sqlite_topics(connection)
+            if not topics:
+                connection.close()
+                self._reader_path = None
+                return False
+            placeholders = ','.join('?' for _ in topics)
+            cursor = connection.execute(
+                'SELECT messages.timestamp, topics.name, messages.data '
+                'FROM messages JOIN topics ON topics.id = messages.topic_id '
+                f'WHERE topics.name IN ({placeholders}) '
+                'ORDER BY messages.timestamp, messages.id',
+                topics,
+            )
+            self._sqlite_connection = connection
+            self._sqlite_cursor = cursor
+            self._reader_backend = 'sqlite3'
+            return True
+        except (OSError, sqlite3.Error, TypeError, ValueError) as error:
+            self._errors.append(f'{path}: sqlite3 open failed: {error}')
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            self._reader_path = None
+            return False
+
+    def _open_mcap_part(self, path: Path) -> bool:
+        if self._rosbag2_py is None:
+            self._errors.append(
+                f'{path}: rosbag2_py is not installed for MCAP playback')
+            return False
+        reader = self._rosbag2_py.SequentialReader()
+        self._reader_path = path
+        try:
+            reader.open(
+                self._rosbag2_py.StorageOptions(
+                    uri=str(path), storage_id='mcap'),
+                self._rosbag2_py.ConverterOptions('', ''),
+            )
+            self._update_metadata_bounds(reader.get_metadata())
+            topics = self._register_topics(reader)
+            if topics:
+                reader.set_filter(
+                    self._rosbag2_py.StorageFilter(topics=topics))
+            self._reader = reader
+            self._reader_backend = 'rosbag2'
+            return True
+        except Exception as error:
+            self._errors.append(f'{path}: {error}')
+            try:
+                reader.close()
+            except Exception:
+                pass
+            self._reader = None
+            self._reader_path = None
+            return False
+
+    def _open_next_part(self) -> bool:
+        while self._part_index < len(self._parts):
+            path = self._parts[self._part_index]
+            self._part_index += 1
+            self._close_current_part()
+            if path.suffix.lower() == '.db3':
+                if self._open_sqlite_part(path):
+                    return True
+            elif path.suffix.lower() == '.mcap':
+                if self._open_mcap_part(path):
+                    return True
+        self._close_current_part()
+        return False
+
+    def _read_next(self):
+        while True:
+            if (self._reader_backend is None and
+                    not self._open_next_part()):
+                return None
+            try:
+                if self._reader_backend == 'sqlite3':
+                    row = self._sqlite_cursor.fetchone()
+                    if row is None:
+                        self._close_current_part()
+                        continue
+                    timestamp_ns, topic, payload = row
+                    if topic in self._publishers:
+                        timestamp_ns = int(timestamp_ns)
+                        self._last_raw_ns = timestamp_ns
+                        return timestamp_ns, topic, bytes(payload)
+                    continue
+                if self._reader.has_next():
+                    item = self._reader.read_next()
+                    if len(item) < 3:
+                        continue
+                    topic, payload, timestamp_ns = item[:3]
+                    if topic in self._publishers:
+                        timestamp_ns = int(timestamp_ns)
+                        self._last_raw_ns = timestamp_ns
+                        return timestamp_ns, topic, payload
+                    continue
+                self._close_current_part()
+            except Exception as error:
+                path = self._reader_path or '<unknown bag>'
+                self._errors.append(f'{path}: read failed: {error}')
+                self._close_current_part()
+
+    def _reset(self):
+        self._close_current_part()
+        self._part_index = 0
+        self._next = None
+        self._open_next_part()
+        self._next = self._read_next()
+
+    def publish_until(self, target_ns: int) -> int:
+        """Publish every recorded message whose mapped time is due."""
+        published = 0
+        while self._next is not None:
+            raw_timestamp, topic, payload = self._next
+            if raw_timestamp + self._time_offset_ns > target_ns:
+                break
+            try:
+                message = self._deserialize_message(
+                    payload, self._message_types[topic])
+                self._publishers[topic].publish(message)
+                self._published_count += 1
+                published += 1
+            except Exception as error:
+                self._errors.append(f'{topic}: {error}')
+            self._next = self._read_next()
+        return published
+
+    def seek(self, target_ns: int) -> None:
+        """Reset and replay bag state up to an absolute timeline position."""
+        self._reset()
+        self.publish_until(target_ns)
+
+    def close(self):
+        self._close_current_part()
+
+
+def _probe_duration(path: Path) -> float | None:
+    try:
+        result = subprocess.run(
+            [
+                'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1', str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        value = float(result.stdout.strip())
+        return value if value > 0.0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _valid_ts(path: Path) -> bool:
+    """Accept complete or partially written TS files with a sync byte."""
+    try:
+        if path.stat().st_size < 188:
+            return False
+        with path.open('rb') as handle:
+            data = handle.read(188 * 2)
+        return bool(data) and any(data[offset] == 0x47
+                                  for offset in range(0, len(data), 188))
+    except OSError:
+        return False
+
+
+def _playlist_durations(directory: Path) -> dict[Path, float]:
+    """Read cheap per-segment durations from the recorder's m3u8 indexes."""
+    durations = {}
+    for playlist in sorted(directory.glob('index_*.m3u8')):
+        try:
+            lines = playlist.read_text(encoding='utf-8').splitlines()
+        except OSError:
+            continue
+        pending = None
+        for line in lines:
+            line = line.strip()
+            if line.startswith('#EXTINF:'):
+                try:
+                    pending = float(line[8:].split(',', 1)[0])
+                except ValueError:
+                    pending = None
+            elif pending is not None and line and not line.startswith('#'):
+                segment = (directory / line).resolve()
+                if segment.parent == directory.resolve():
+                    durations[segment] = pending
+                pending = None
+    return durations
+
+
+def _session_candidates(value: str) -> list[Path]:
+    """Resolve a session path without making it depend on the shell cwd."""
+    raw = Path(value).expanduser()
+    if raw.is_absolute():
+        return [raw.resolve()]
+
+    project_sessions = default_output_root()
+    roots = [Path.cwd()]
+    # ``records/sessions/name`` is relative to the repository root.  The
+    # legacy ``sessions/name`` form and a bare name remain accepted too.
+    project_root_dir = project_sessions.parent.parent
+    if (len(raw.parts) >= 2
+            and raw.parts[:2] == (
+                project_sessions.parent.name, project_sessions.name)):
+        roots.append(project_root_dir)
+    elif raw.parts and raw.parts[0] == project_sessions.name:
+        roots.append(project_sessions.parent)
+    else:
+        roots.append(project_sessions)
+    candidates = []
+    for root in roots:
+        candidate = (root / raw).resolve()
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def _has_valid_ts(session_dir: Path) -> bool:
+    return any(
+        _valid_ts(path)
+        for stream in (
+            'front_annotated', 'down_annotated', 'front', 'down')
+        for path in (session_dir / 'video' / stream).glob('*.ts')
+    )
+
+
+def _has_valid_jpeg(session_dir: Path) -> bool:
+    return any(
+        archive_entries(session_dir / 'video' / stream)
+        for stream in ('front', 'down', 'front_annotated', 'down_annotated')
+    )
+
+
+def _raw_frame_records(directory: Path) -> list[dict]:
+    index = directory / 'frames.jsonl'
+    records = []
+    try:
+        with index.open(encoding='utf-8') as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                    filename = str(item['path'])
+                    frame = (directory / filename).resolve()
+                    if frame.parent != directory.resolve() or not frame.is_file():
+                        continue
+                    item['_frame_path'] = frame
+                    records.append(item)
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+    except OSError:
+        return []
+    return records
+
+
+def _has_valid_raw(session_dir: Path) -> bool:
+    return any(_raw_frame_records(session_dir / 'camera' / 'raw' / camera)
+               for camera in ('front', 'down'))
+
+
+def _has_valid_media(session_dir: Path) -> bool:
+    return (_has_valid_ts(session_dir) or _has_valid_jpeg(session_dir)
+            or _has_valid_raw(session_dir))
+
+
+def _preferred_stream(session_dir: Path, camera: str) -> str:
+    """Prefer raw JPEG/TS video, falling back to annotations."""
+    for stream in (camera, f'{camera}_annotated'):
+        if archive_entries(session_dir / 'video' / stream):
+            return stream
+        directory = session_dir / 'video' / stream
+        if any(_valid_ts(path) for path in directory.glob('*.ts')):
+            return stream
+    if _raw_frame_records(session_dir / 'camera' / 'raw' / camera):
+        return 'raw'
+    # Keep the UI useful while a new recording is still being written.
+    return f'{camera}_annotated'
+
+
+class SegmentVideo:
+    """Sequentially read a directory of independently recoverable TS files."""
+
+    def __init__(
+        self,
+        directory: Path,
+        fallback_fps: float,
+        default_segment_duration: float | None = None,
+    ):
+        self.directory = directory
+        self.fallback_fps = max(1.0, float(fallback_fps))
+        self.segments = [
+            path for path in sorted(directory.glob('*.ts')) if _valid_ts(path)
+        ]
+        playlist_durations = _playlist_durations(directory)
+        default_duration = (
+            max(0.0, float(default_segment_duration))
+            if default_segment_duration is not None else None)
+        self.durations = []
+        for index, path in enumerate(self.segments):
+            duration = playlist_durations.get(path)
+            if duration is None and default_duration is not None:
+                duration = default_duration
+                # The last TS is often a short tail after a clean stop. Probe
+                # only that one file instead of every high-resolution segment.
+                if index == len(self.segments) - 1:
+                    duration = _probe_duration(path) or duration
+            if duration is None:
+                duration = _probe_duration(path) or 0.0
+            self.durations.append(max(0.0, duration))
+        self.fps = self.fallback_fps
+        self.width = 0
+        self.height = 0
+        self.cap = None
+        self.segment_index = -1
+        self.frame_index = 0
+        self.latest_frame = None
+        self._frame_times_ns = []
+        try:
+            indexed_frames = [json.loads(line) for line in
+                              (directory / 'frame_alignment.jsonl').read_text(
+                                  encoding='utf-8').splitlines()]
+        except (OSError, ValueError):
+            try:
+                indexed_frames = [json.loads(line) for line in
+                                  (directory / 'frames.jsonl').read_text(
+                                      encoding='utf-8').splitlines()]
+            except (OSError, ValueError):
+                indexed_frames = []
+        if indexed_frames:
+            self._frame_times_ns = _timeline_times(indexed_frames, self.fps)
+        self._start_ns = self._frame_times_ns[0] if self._frame_times_ns else None
+        self._end_ns = self._frame_times_ns[-1] if self._frame_times_ns else None
+        if self._frame_times_ns:
+            self.durations = [max(0.0, (self._end_ns - self._start_ns) / NANOSECONDS)]
+        for index in range(len(self.segments)):
+            if self._open_segment(index):
+                break
+
+    def _open_segment(self, index: int) -> bool:
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        if index < 0 or index >= len(self.segments):
+            self.segment_index = len(self.segments)
+            return False
+        cap = cv2.VideoCapture(str(self.segments[index]))
+        if not cap.isOpened():
+            cap.release()
+            self.segment_index = index
+            return False
+        self.cap = cap
+        self.segment_index = index
+        if index == 0:
+            self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        return True
+
+    @property
+    def duration(self) -> float:
+        return sum(self.durations)
+
+    @property
+    def start_ns(self) -> int | None:
+        return self._start_ns
+
+    @property
+    def end_ns(self) -> int | None:
+        return self._end_ns
+
+    @property
+    def empty(self) -> bool:
+        return not self.segments or self.cap is None
+
+    def seek(self, position: float):
+        """Seek approximately to a timeline position in seconds."""
+        if self._frame_times_ns:
+            self.seek_ns(self._start_ns + int(max(0.0, position) * NANOSECONDS))
+            return
+        position = max(0.0, min(float(position), self.duration))
+        elapsed = 0.0
+        index = 0
+        for index, duration in enumerate(self.durations):
+            if position < elapsed + duration or index == len(self.durations) - 1:
+                break
+            elapsed += duration
+        while index < len(self.segments) and not self._open_segment(index):
+            index += 1
+        if index >= len(self.segments):
+            return
+        local_frame = max(0, int(round((position - elapsed) * self.fps)))
+        for _ in range(local_frame):
+            if self.cap is None or not self.cap.grab():
+                break
+        self.frame_index = int(round(position * self.fps))
+        self.latest_frame = None
+
+    def read_to(self, position: float):
+        """Read through the frame due at ``position`` and return the latest."""
+        if self.empty:
+            return self.latest_frame
+        target_frame = max(0, int(position * self.fps))
+        while self.frame_index <= target_frame:
+            if self.cap is None:
+                break
+            ok, frame = self.cap.read()
+            if ok and frame is not None:
+                self.latest_frame = frame
+                self.frame_index += 1
+                continue
+            next_index = self.segment_index + 1
+            while next_index < len(self.segments):
+                if self._open_segment(next_index):
+                    break
+                next_index += 1
+            else:
+                break
+        return self.latest_frame
+
+    def read_to_ns(self, target_ns: int):
+        if not self._frame_times_ns:
+            return self.read_to(max(0.0, (target_ns - (self._start_ns or 0))
+                                    / NANOSECONDS))
+        target_frame = max(
+            0, bisect.bisect_right(self._frame_times_ns, target_ns) - 1)
+        while self.frame_index <= target_frame:
+            if self.cap is None:
+                break
+            ok, frame = self.cap.read()
+            if ok and frame is not None:
+                self.latest_frame = frame
+                self.frame_index += 1
+                continue
+            next_index = self.segment_index + 1
+            while next_index < len(self.segments):
+                if self._open_segment(next_index):
+                    break
+                next_index += 1
+            else:
+                break
+        return self.latest_frame
+
+    def seek_ns(self, target_ns: int):
+        if not self._frame_times_ns:
+            self.seek(max(0.0, (target_ns - (self._start_ns or 0))
+                          / NANOSECONDS))
+            return
+        frame_target = max(
+            0, bisect.bisect_right(self._frame_times_ns, target_ns) - 1)
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        self.segment_index = -1
+        self.frame_index = 0
+        self.latest_frame = None
+        self._open_segment(0)
+        self.read_to_ns(self._frame_times_ns[frame_target])
+
+    def close(self):
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+
+
+def _timeline_times(entries, fps: float) -> list[int]:
+    """Make a seekable playback axis while keeping source stamps untouched."""
+    period = max(1, int(round(NANOSECONDS / max(1.0, float(fps)))))
+    timeline = []
+    last_time = None
+    previous_epoch = None
+    offset = 0
+    for entry in entries:
+        timestamp = int(getattr(entry, 'timestamp_ns', 0) or 0)
+        metadata = getattr(entry, 'metadata', None) or {}
+        if isinstance(entry, dict):
+            timestamp = int(entry.get('source_timestamp_ns')
+                            or entry.get('timestamp_ns') or entry.get('replay_timestamp_ns') or 0)
+            metadata = entry
+        elif timestamp <= 0 and metadata.get('replay_timestamp_ns'):
+            timestamp = int(metadata['replay_timestamp_ns'])
+        epoch = int(metadata.get('timestamp_epoch') or 0)
+        if timestamp > 0:
+            if last_time is None:
+                candidate = timestamp
+            else:
+                if (epoch != previous_epoch
+                        or timestamp + offset < last_time):
+                    offset = last_time + period - timestamp
+                candidate = timestamp + offset
+        else:
+            receive = int(metadata.get('receive_time_unix_ns') or 0)
+            candidate = (receive if last_time is None and receive > 0
+                         else (last_time + period if last_time is not None else 0))
+        if last_time is not None and candidate < last_time:
+            candidate = last_time + period
+        timeline.append(candidate)
+        last_time = candidate
+        previous_epoch = epoch
+    return timeline
+
+
+class RawFrameVideo:
+    """Decode original PNG camera frames against their source timestamp index."""
+
+    def __init__(self, directory: Path, fallback_fps: float):
+        self.directory = directory
+        self.entries = _raw_frame_records(directory)
+        self.fps = max(1.0, float(fallback_fps))
+        self._times_ns = _timeline_times(self.entries, self.fps)
+        self.cursor = 0
+        self.latest_frame = None
+        self.width = 0
+        self.height = 0
+        self._start_ns = self._times_ns[0] if self._times_ns else 0
+        self._duration = (
+            max(0.0, (self._times_ns[-1] - self._start_ns) / NANOSECONDS)
+            + 1.0 / self.fps if self._times_ns else 0.0)
+
+    @property
+    def duration(self) -> float:
+        return self._duration
+
+    @property
+    def empty(self) -> bool:
+        return not self.entries
+
+    @property
+    def start_ns(self) -> int | None:
+        return self._start_ns if self.entries else None
+
+    @property
+    def end_ns(self) -> int | None:
+        return self._times_ns[-1] if self._times_ns else None
+
+    def _decode(self, entry):
+        frame = cv2.imread(str(entry['_frame_path']), cv2.IMREAD_COLOR)
+        if frame is not None and self.width == 0:
+            self.height, self.width = frame.shape[:2]
+        return frame
+
+    def seek(self, position: float):
+        self.seek_ns(self._start_ns + int(max(0.0, position) * NANOSECONDS))
+
+    def seek_ns(self, target_ns: int):
+        index = bisect.bisect_right(self._times_ns, target_ns)
+        self.cursor = max(0, index - 1)
+        self.latest_frame = (
+            self._decode(self.entries[index - 1]) if index > 0 else None)
+        self.cursor = index
+
+    def read_to(self, position: float):
+        target_ns = self._start_ns + int(max(0.0, position) * NANOSECONDS)
+        return self.read_to_ns(target_ns)
+
+    def read_to_ns(self, target_ns: int):
+        while self.cursor < len(self.entries):
+            if self._times_ns[self.cursor] > target_ns:
+                break
+            frame = self._decode(self.entries[self.cursor])
+            if frame is not None:
+                self.latest_frame = frame
+            self.cursor += 1
+        return self.latest_frame
+
+    def close(self):
+        pass
+
+
+class JpegArchiveVideo:
+    """Read timestamped JPEG archive frames and decode only during playback."""
+
+    def __init__(
+        self,
+        directory: Path,
+        fallback_fps: float,
+        _default_segment_duration: float | None = None,
+    ):
+        self.directory = directory
+        self.entries = archive_entries(directory)
+        sidecar = {}
+        try:
+            with (directory / 'frame_alignment.jsonl').open(encoding='utf-8') as handle:
+                for line in handle:
+                    try:
+                        item = json.loads(line)
+                        sidecar[int(item['sequence'])] = item
+                    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                        continue
+        except OSError:
+            pass
+        if sidecar:
+            self.entries = [
+                replace(entry, metadata={**(entry.metadata or {}),
+                                         **sidecar.get(entry.sequence, {})})
+                for entry in self.entries]
+        self.fps = max(1.0, float(fallback_fps))
+        self.latest_frame = None
+        self.frame_index = 0
+        self.cursor = 0
+        self.width = 0
+        self.height = 0
+        self._times_ns = _timeline_times(self.entries, self.fps)
+        self._start_ns = self._times_ns[0] if self._times_ns else 0
+        self._duration = 0.0
+        if self._times_ns:
+            self._duration = max(
+                0.0,
+                (self._times_ns[-1] - self._start_ns) / 1_000_000_000,
+            ) + 1.0 / self.fps
+
+    @property
+    def duration(self) -> float:
+        return self._duration
+
+    @property
+    def empty(self) -> bool:
+        return not self.entries
+
+    @property
+    def start_ns(self) -> int | None:
+        return self._start_ns if self.entries else None
+
+    @property
+    def end_ns(self) -> int | None:
+        return self._times_ns[-1] if self.entries else None
+
+    def _decode(self, entry):
+        payload = read_payload(entry)
+        if payload is None:
+            return None
+        encoded = np.frombuffer(payload, dtype=np.uint8)
+        frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+        if frame is not None and self.width == 0:
+            self.height, self.width = frame.shape[:2]
+        return frame
+
+    def seek(self, position: float):
+        position = max(0.0, min(float(position), self.duration))
+        self.seek_ns(self._start_ns + int(position * NANOSECONDS))
+
+    def seek_ns(self, target_ns: int):
+        if not self.entries:
+            self.cursor = 0
+            self.latest_frame = None
+            return
+        index = bisect.bisect_right(self._times_ns, target_ns)
+        self.cursor = max(0, index - 1)
+        self.latest_frame = None
+        if index > 0:
+            candidate = self._decode(self.entries[index - 1])
+            if candidate is not None:
+                self.latest_frame = candidate
+            self.cursor = index
+        self.frame_index = index
+
+    def read_to(self, position: float):
+        if self.empty:
+            return self.latest_frame
+        target_ns = self._start_ns + int(
+            max(0.0, float(position)) * NANOSECONDS)
+        return self.read_to_ns(target_ns)
+
+    def read_to_ns(self, target_ns: int):
+        if self.empty:
+            return self.latest_frame
+        while self.cursor < len(self.entries):
+            entry = self.entries[self.cursor]
+            if self._times_ns[self.cursor] > target_ns:
+                break
+            frame = self._decode(entry)
+            if frame is not None:
+                self.latest_frame = frame
+            self.cursor += 1
+            self.frame_index += 1
+        return self.latest_frame
+
+    def close(self):
+        pass
+
+
+def _make_video(directory: Path, fps: float, segment_duration: float):
+    if directory.parent.name == 'raw' and directory.parent.parent.name == 'camera':
+        return RawFrameVideo(directory, fps)
+    if any(directory.glob('chunk_*.mjpg')):
+        return JpegArchiveVideo(directory, fps, segment_duration)
+    return SegmentVideo(directory, fps, segment_duration)
+
+
+def _camera_media_directory(session_dir: Path, camera: str, stream: str):
+    if stream == 'raw':
+        return session_dir / 'camera' / 'raw' / camera
+    return session_dir / 'video' / stream
+
+
+def _load_manifest(session_dir: Path) -> dict:
+    try:
+        return json.loads((session_dir / 'manifest.json').read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _manifest_fps(manifest: dict, stream: str, fallback: float) -> float:
+    try:
+        value = float(manifest.get('video', {}).get(stream, {}).get('fps'))
+        return value if value > 0.0 else fallback
+    except (AttributeError, TypeError, ValueError):
+        return fallback
+
+
+def _manifest_segment_duration(
+    manifest: dict, stream: str, fallback: float
+) -> float:
+    try:
+        value = float(
+            manifest.get('video', {}).get(stream, {}).get('segment_seconds'))
+        return value if value > 0.0 else fallback
+    except (AttributeError, TypeError, ValueError):
+        return fallback
+
+
+def _manifest_bool(manifest: dict, key: str, fallback: bool = False) -> bool:
+    try:
+        value = manifest.get('recorder', {}).get(key, fallback)
+    except AttributeError:
+        return fallback
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _open_bag_playback(session_dir: Path):
+    """Create the optional ROS publisher node for a session's rosbag."""
+    if not _bag_part_paths(session_dir / 'bag'):
+        return None, None, None, False
+    try:
+        rclpy, _rosbag2_py, _deserialize, _get_message = _rosbag_modules()
+        owns_context = False
+        if not rclpy.ok():
+            rclpy.init(args=None)
+            owns_context = True
+        node = rclpy.create_node('uv_record_player')
+        try:
+            bag = BagPlayback(session_dir / 'bag', node)
+        except Exception:
+            node.destroy_node()
+            if owns_context and rclpy.ok():
+                rclpy.shutdown()
+            raise
+        return bag, node, rclpy, owns_context
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+        return None, None, None, False
+
+
+def _build_window(session_dir: Path, publish_telemetry=False):
+    try:
+        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtGui import QImage, QKeyEvent, QPixmap
+        from PySide6.QtWidgets import (
+            QApplication,
+            QHBoxLayout,
+            QLabel,
+            QMainWindow,
+            QPushButton,
+            QSlider,
+            QVBoxLayout,
+            QWidget,
+        )
+    except ImportError:
+        # Foxy systems commonly already have PyQt5 through rqt.
+        from PyQt5.QtCore import Qt, QTimer
+        from PyQt5.QtGui import QImage, QKeyEvent, QPixmap
+        from PyQt5.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMainWindow,
+                                     QPushButton, QSlider, QVBoxLayout, QWidget)
+
+    class Panel(QLabel):
+        def __init__(self, title):
+            super().__init__()
+            self.setMinimumSize(320, 180)
+            self.setAlignment(Qt.AlignCenter)
+            self.setStyleSheet('background-color: #202020; color: #dddddd;')
+            self.setText(title)
+            self._pixmap = None
+
+        def set_frame(self, frame):
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            height, width = rgb.shape[:2]
+            image = QImage(
+                rgb.data, width, height, rgb.strides[0], QImage.Format_RGB888)
+            self._pixmap = QPixmap.fromImage(image.copy())
+            self._refresh()
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self._refresh()
+
+        def _refresh(self):
+            if self._pixmap is not None:
+                self.setPixmap(self._pixmap.scaled(
+                    self.size(), Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation))
+
+    class PlayerWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle(f'uv_record player - {session_dir.name}')
+            self.resize(1280, 760)
+            manifest = _load_manifest(session_dir)
+            self.front_stream = _preferred_stream(session_dir, 'front')
+            self.down_stream = _preferred_stream(session_dir, 'down')
+            self.front = _make_video(
+                _camera_media_directory(session_dir, 'front', self.front_stream),
+                _manifest_fps(manifest, self.front_stream, 10.0),
+                _manifest_segment_duration(
+                    manifest, self.front_stream, 2.0))
+            self.down = _make_video(
+                _camera_media_directory(session_dir, 'down', self.down_stream),
+                _manifest_fps(manifest, self.down_stream, 10.0),
+                _manifest_segment_duration(
+                    manifest, self.down_stream, 2.0))
+            (
+                self.bag,
+                self.ros_node,
+                self.ros_module,
+                self.owns_ros_context,
+            ) = (_open_bag_playback(session_dir) if publish_telemetry
+                 else (None, None, None, False))
+            timestamped_videos = [
+                video for video in (self.front, self.down)
+                if video.start_ns is not None
+            ]
+            if timestamped_videos:
+                self.timeline_origin_ns = min(
+                    video.start_ns for video in timestamped_videos)
+                end_ns = max(
+                    video.end_ns for video in timestamped_videos
+                    if video.end_ns is not None)
+                timestamped_duration = max(
+                    0.0,
+                    (end_ns - self.timeline_origin_ns) / NANOSECONDS,
+                )
+            elif self.bag is not None and self.bag.start_ns is not None:
+                self.timeline_origin_ns = self.bag.start_ns
+                timestamped_duration = 0.0
+            else:
+                self.timeline_origin_ns = 0
+                timestamped_duration = 0.0
+            self.bag_timebase = (
+                _manifest_bool(manifest, 'use_sim_time')
+                if self.bag is not None else False)
+            if self.bag is not None:
+                self.bag.configure_timebase(
+                    self.timeline_origin_ns if timestamped_videos else None,
+                    use_sim_time=self.bag_timebase,
+                )
+            self.duration = max(self.front.duration, self.down.duration)
+            if timestamped_videos:
+                self.duration = max(
+                    self.duration,
+                    timestamped_duration
+                    + 1.0 / max(video.fps for video in timestamped_videos),
+                )
+            if self.bag is not None and self.bag.end_ns is not None:
+                self.duration = max(
+                    self.duration,
+                    max(
+                        0.0,
+                        (self.bag.end_ns - self.timeline_origin_ns)
+                        / NANOSECONDS,
+                    ),
+                )
+            self.position = 0.0
+            self.speed = 1.0
+            self.playing = True
+            self.last_tick = time.monotonic()
+
+            self.front_panel = Panel(self.front_stream)
+            self.down_panel = Panel(self.down_stream)
+            panels = QHBoxLayout()
+            panels.addWidget(self.front_panel, 1)
+            panels.addWidget(self.down_panel, 1)
+            from .telemetry import ReplayTelemetry
+            self.telemetry = ReplayTelemetry(session_dir)
+            self.trajectory_panel = Panel('轨迹与建图回放')
+            panels.addWidget(self.trajectory_panel, 1)
+            self.log_panel = QLabel()
+            self.log_panel.setWordWrap(True)
+
+            self.status = QLabel()
+            self.slider = QSlider(Qt.Horizontal)
+            self.slider.setRange(0, 10000)
+            self.slider.sliderReleased.connect(self._seek_from_slider)
+
+            controls = QHBoxLayout()
+            self.play_button = QPushButton('暂停')
+            self.play_button.clicked.connect(self._toggle_play)
+            controls.addWidget(self.play_button)
+            for value in (0.25, 0.5, 1.0, 2.0):
+                button = QPushButton(f'{value:g}x')
+                button.clicked.connect(
+                    lambda _checked=False, v=value: self._set_speed(v))
+                controls.addWidget(button)
+            controls.addStretch(1)
+            controls.addWidget(self.status)
+
+            central = QWidget()
+            layout = QVBoxLayout(central)
+            layout.addLayout(panels, 1)
+            layout.addWidget(self.log_panel)
+            layout.addWidget(self.slider)
+            layout.addLayout(controls)
+            self.setCentralWidget(central)
+            self.manifest = manifest
+            self._set_status()
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self._tick)
+            self.timer.start(20)
+
+        def _set_status(self):
+            status = self.manifest.get('status', 'UNKNOWN')
+            suffix = '（异常恢复 session）' if self.manifest.get('unclean') else ''
+            topic_suffix = (
+                f'  ROS话题:{self.bag.topic_count}'
+                if self.bag is not None else '  ROS话题:未加载')
+            self.status.setText(
+                f'{status}{suffix}  {self.position:.1f}/{self.duration:.1f}s  '
+                f'{self.speed:g}x{topic_suffix}')
+
+        def _toggle_play(self):
+            self.playing = not self.playing
+            self.last_tick = time.monotonic()
+            self.play_button.setText('暂停' if self.playing else '播放')
+
+        def _set_speed(self, speed):
+            self.speed = speed
+            self.last_tick = time.monotonic()
+
+        def _seek_from_slider(self):
+            if self.duration <= 0.0:
+                return
+            self.position = self.slider.value() / 10000.0 * self.duration
+            target_ns = self.timeline_origin_ns + int(
+                self.position * NANOSECONDS)
+            for video in (self.front, self.down):
+                if isinstance(video, (JpegArchiveVideo, RawFrameVideo)) or video.start_ns is not None:
+                    video.seek_ns(target_ns)
+                else:
+                    video.seek(self.position)
+            if self.bag is not None:
+                self.bag.seek(target_ns)
+            self.last_tick = time.monotonic()
+
+        def _tick(self):
+            now = time.monotonic()
+            if self.playing:
+                self.position += (now - self.last_tick) * self.speed
+                if self.position >= self.duration:
+                    self.position = self.duration
+                    self.playing = False
+                    self.play_button.setText('播放')
+            self.last_tick = now
+
+            target_ns = self.timeline_origin_ns + int(
+                self.position * NANOSECONDS)
+            if self.bag is not None:
+                self.bag.publish_until(target_ns)
+            front = (
+                self.front.read_to_ns(target_ns)
+                if isinstance(self.front, (JpegArchiveVideo, RawFrameVideo)) or self.front.start_ns is not None
+                else self.front.read_to(self.position))
+            down = (
+                self.down.read_to_ns(target_ns)
+                if isinstance(self.down, (JpegArchiveVideo, RawFrameVideo)) or self.down.start_ns is not None
+                else self.down.read_to(self.position))
+            if front is not None:
+                self.front_panel.set_frame(front)
+            if down is not None:
+                self.down_panel.set_frame(down)
+            plot, log = self.telemetry.render(target_ns)
+            self.trajectory_panel.set_frame(plot)
+            self.log_panel.setText(log)
+            if self.duration > 0.0:
+                self.slider.blockSignals(True)
+                self.slider.setValue(int(self.position / self.duration * 10000))
+                self.slider.blockSignals(False)
+            self._set_status()
+
+        def keyPressEvent(self, event: QKeyEvent):
+            if event.key() == Qt.Key_Space:
+                self._toggle_play()
+                return
+            super().keyPressEvent(event)
+
+        def closeEvent(self, event):
+            self.front.close()
+            self.down.close()
+            if self.bag is not None:
+                self.bag.close()
+            if self.ros_node is not None:
+                self.ros_node.destroy_node()
+            if (self.owns_ros_context and self.ros_module is not None
+                    and self.ros_module.ok()):
+                self.ros_module.shutdown()
+            super().closeEvent(event)
+
+    return PlayerWindow, QApplication
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('session_dir')
+    parser.add_argument('--publish-telemetry', action='store_true',
+                        help='Explicit opt-in to ROS metadata playback; use an isolated ROS_DOMAIN_ID')
+    return parser.parse_args()
+
+
+def main():
+    args = _parse_args()
+    candidates = _session_candidates(args.session_dir)
+    existing = [candidate for candidate in candidates if candidate.is_dir()]
+    if not existing:
+        print(
+            f'uv_record player: session does not exist: {candidates[0]}',
+            file=sys.stderr,
+        )
+        return 2
+    session_dir = next(
+        (_path for _path in existing if _has_valid_media(_path)), existing[0])
+    if not _has_valid_media(session_dir):
+        print(
+            f'uv_record player: no valid video segments in {session_dir}',
+            file=sys.stderr,
+        )
+        return 2
+    PlayerWindow, QApplication = _build_window(session_dir, args.publish_telemetry)
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = PlayerWindow()
+    if window.front.empty and window.down.empty:
+        print(
+            f'uv_record player: video archives cannot be decoded in {session_dir}',
+            file=sys.stderr,
+        )
+        return 2
+    window.show()
+    return app.exec() if hasattr(app, 'exec') else app.exec_()
+
+
+def export_frames():
+    """Export dataset archives into unique, per-camera PNG files (no ROS needed)."""
+    parser = argparse.ArgumentParser(description='导出前/下视数据集，可选左右目切分')
+    parser.add_argument('session_dir', type=Path)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--split-stereo', action='store_true')
+    args = parser.parse_args()
+    if args.output.exists():
+        parser.error('输出目录已存在，拒绝覆盖数据集')
+    args.output.mkdir(parents=True)
+    count = 0
+    for camera in ('front', 'down'):
+        directory = args.session_dir / 'video' / camera
+        entries = archive_entries(directory)
+        if not entries:
+            print(f'{camera}: 无JPEG归档，请使用 --profile dataset 录制', file=sys.stderr)
+            continue
+        for index, entry in enumerate(entries):
+            payload = read_payload(entry)
+            if payload is None:
+                continue
+            image = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                continue
+            views = {camera: image}
+            if args.split_stereo:
+                mid = image.shape[1]//2
+                views = {camera+'_left': image[:, :mid], camera+'_right': image[:, mid:]}
+            for name, view in views.items():
+                target = args.output / name
+                target.mkdir(exist_ok=True)
+                if not cv2.imwrite(str(target / f'{name}_{index:08d}.png'), view):
+                    raise OSError('无法保存导出图像')
+                with (target / 'frames.jsonl').open('a', encoding='utf-8') as stream:
+                    stream.write(json.dumps({'path': f'{name}_{index:08d}.png',
+                                             'camera': name, 'sequence': index,
+                                             'timestamp_ns': entry.timestamp_ns,
+                                             'metadata': entry.metadata}, ensure_ascii=False)+'\n')
+                count += 1
+    print(f'导出完成：{count}张，{args.output}')
+    return 0 if count else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

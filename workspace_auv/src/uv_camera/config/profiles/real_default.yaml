@@ -1,14 +1,19 @@
 /uv_camera:
   ros__parameters:
     sim_mode: false
+    # 下视倒装：每目独立旋转；检测坐标恢复原标定像素，左右目不交换。
+    down_rotate_180: true
     enable_mapping_vision: true
     mapping_tag_dictionary: "DICT_APRILTAG_16h5"
+    mapping_allowed_tag_ids: [16, 18]
     mapping_calibration_width: 640
     mapping_calibration_height: 480
     # 名义机体系外参：PDF Cd=(-0.130,0,0.0645)m；左右目按 JSON 基线对称展开。
-    # 左右顺序和实际相机安装仍须现场复核。
-    mapping_left_translation: [-0.130, -0.0305, 0.0645]
-    mapping_right_translation: [-0.130, 0.0305, 0.0645]
+    # 双目整体绕光轴倒装180°：left/right仍是原始Camera1/Camera2，
+    # 不是机体左/右。名义位置绕相机中心旋转，R_new=R_old*diag(-1,-1,1)。
+    mapping_left_translation: [-0.130, 0.0305, 0.0645]
+    mapping_right_translation: [-0.130, -0.0305, 0.0645]
+    mapping_camera_rotation: [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     enable_gortc: true
     stream_annotated: true
 /object_localizer:
@@ -17,8 +22,10 @@
     front_image_height: 480
     down_image_width: 640
     down_image_height: 480
-    down_left_translation: [-0.130, -0.0305, 0.0645]
-    down_right_translation: [-0.130, 0.0305, 0.0645]
+    down_left_translation: [-0.130, 0.0305, 0.0645]
+    down_right_translation: [-0.130, -0.0305, 0.0645]
+    down_left_rotation: [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    down_right_rotation: [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     front_left_translation: [0.230, -0.050, 0.076]
     front_right_translation: [0.230, 0.050, 0.076]
     front_left_rotation: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]

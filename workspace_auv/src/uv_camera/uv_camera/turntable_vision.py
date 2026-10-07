@@ -206,7 +206,13 @@ class TurntableVision:
         else:
             path = str(node.get_parameter('turntable_calibration_file').value).strip()
             if not path:
-                path = str(Path(__file__).resolve().parents[1]/'config'/'front.npz')
+                source_path = Path(__file__).resolve().parents[1]/'config'/'front.npz'
+                if source_path.is_file():
+                    path = str(source_path)
+                else:
+                    from ament_index_python.packages import get_package_share_directory
+                    path = str(Path(get_package_share_directory('uv_camera')) /
+                               'config' / 'front.npz')
             native_size = tuple(int(v) for v in node.get_parameter(
                 'turntable_calibration_native_size').value)
             if (len(native_size) != 2 or len(self.expected_size) != 2

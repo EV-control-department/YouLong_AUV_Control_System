@@ -35,6 +35,7 @@ from .common import (
     _LineFilterState,
     image_msg_to_bgr,
     normalize_frame,
+    unrotate_points_180,
 )
 from .model_classes import DEFAULT_CLASS_NAMES, MODEL_MAPPING_PATH, model_class_id
 from .dataset_recorder import DatasetRecorder
@@ -263,6 +264,11 @@ class Ai:
                     pass
 
                 for candidate in candidates:
+                    if not self._sim_mode:
+                        compatible = candidate.with_name('last_inference.pt')
+                        if compatible.is_file():
+                            model_path = str(compatible)
+                            break
                     if candidate.is_file():
                         model_path = str(candidate)
                         break
@@ -288,8 +294,15 @@ class Ai:
         except ImportError:
             self.node.get_logger().warn('ultralytics not installed, detection disabled')
         except Exception as e:
+            self._model_loaded = False
+            self._model = None
             self.node.get_logger().error(
                 f'Failed to load YOLO model, detection disabled: {e}')
+            if 'ultralytics.utils.loss' in str(e):
+                self.node.get_logger().error(
+                    '权重包含当前 Ultralytics 不支持的训练损失对象。'
+                    '请对可信 last.pt 运行 scripts/convert_yolo_inference.py，'
+                    '并使用 last_inference.pt；不要替换 Jetson 的 NVIDIA PyTorch')
 
     def _start_aruco(self):
         if 'front' not in self._active_cams:
@@ -571,12 +584,19 @@ class Ai:
         polygons = []
         debug_info = {}
 
+        # YOLO sees the upright installed view; all published pixels and masks
+        # return to the raw calibration space before stereo/geometry processing.
+        # Do NOT swap left/right or modify K/D/R/T for a display transform.
+        rotate = getattr(self.node, 'camera_rotate_180', lambda camera: False)(
+            camera_name.rsplit('_', 1)[0])
+        inference_img = cv2.rotate(cv_img, cv2.ROTATE_180) if rotate else cv_img
+
         try:
             queued_at = time.monotonic()
             with self._inference_lock:
                 started_at = time.monotonic()
                 results = self._model(
-                    cv_img, conf=self._confidence, device=self._device,
+                    inference_img, conf=self._confidence, device=self._device,
                     verbose=False)
                 finished_at = time.monotonic()
             if finished_at - self._last_inference_diagnostic.get(camera_name, float('-inf')) >= 5.0:
@@ -604,6 +624,11 @@ class Ai:
                 det.class_id = int(boxes.cls[i])
                 det.confidence = float(boxes.conf[i])
                 x1, y1, x2, y2 = boxes.xyxy[i].tolist()
+                if rotate:
+                    # Bounding boxes are continuous edge coordinates [0,w]/[0,h],
+                    # unlike polygon/sample pixel coordinates [0,w-1]/[0,h-1].
+                    height, width = cv_img.shape[:2]
+                    x1, y1, x2, y2 = width-x2, height-y2, width-x1, height-y1
                 det.bbox_x1, det.bbox_y1 = x1, y1
                 det.bbox_x2, det.bbox_y2 = x2, y2
                 det.pixel_x = (x1 + x2) / 2.0
@@ -611,6 +636,8 @@ class Ai:
                 poly = None
                 if masks is not None and len(masks.xy) > i:
                     poly = masks.xy[i].astype(np.float32)
+                    if rotate:
+                        poly = unrotate_points_180(poly, cv_img.shape[1], cv_img.shape[0])
                     polygons.append(poly)
                     if det.class_id == GATE_FRONT_CLASS_ID:
                         area = cv2.contourArea(poly)

@@ -145,8 +145,10 @@ class BasicMotionNode(Node):
             Float32MultiArray, '/zit6/state/vel', self._vel_cb, 10)
 
         # ── Action Server ────────────────────────────────────────
+        self.declare_parameter('basic_motion_action', '/basic_motion')
+        action_name = self.get_parameter('basic_motion_action').value
         self._action_server = ActionServer(
-            self, BasicMotion, 'basic_motion',
+            self, BasicMotion, action_name,
             goal_callback=self._action_goal_cb,
             cancel_callback=self._action_cancel_cb,
             execute_callback=self._action_execute_cb,

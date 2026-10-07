@@ -35,7 +35,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("enable_task", default_value="true"),
-        DeclareLaunchArgument("target_id", default_value="mapping_grid"),
+        DeclareLaunchArgument("target_id", default_value="turntable"),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument(
             "mission_file",
@@ -43,7 +43,7 @@ def generate_launch_description():
                 FindPackageShare("uv_task"),
                 "config",
                 "missions",
-                "robocup_26.yaml",
+                "mapping_grid.json",
             ]),
             description="YAML mission or standalone task file loaded by task_runner",
         ),

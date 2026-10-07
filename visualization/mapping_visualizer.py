@@ -39,12 +39,12 @@ from rclpy.qos import DurabilityPolicy, QoSPresetProfiles, QoSProfile
 from std_msgs.msg import String
 from uv_msgs.msg import PoseInfo
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import Qt, QTimer, QPointF, QRectF
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QBrush, QLinearGradient, QPainterPath, QFont
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QMainWindow, QPlainTextEdit, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget, QTabWidget,
 )
 
 
@@ -52,6 +52,165 @@ CLASS_NAMES = {0: "方形锥桶", 1: "圆形锥桶"}
 CLASS_COLORS = {0: "#ff9f43", 1: "#4dabf7"}
 BG, PANEL, PANEL_2 = "#0d1117", "#151c27", "#1c2633"
 TEXT, MUTED, ACCENT = "#e6edf3", "#8b98a8", "#4dd0e1"
+STATE_NAMES = {"complete": "建图完成", "failed": "任务失败", "mapping": "正在建图",
+               "idle": "待机", "traversing": "正在遍历", "running": "任务进行中"}
+
+
+class PoolMap(QWidget):
+    """只呈现已发布结果：世界坐标俯视图，图标为示意而非相机重建。"""
+
+    def __init__(self):
+        super().__init__()
+        self.payload = {}
+        self.snapshot_data = {}
+        self.setMinimumSize(480, 420)
+
+    def set_scene(self, payload, snapshot):
+        self.payload, self.snapshot_data = payload, snapshot
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor(BG))
+        p, snapshot = self.payload, self.snapshot_data
+        painter.setPen(QColor(TEXT))
+        painter.setFont(QFont("Noto Sans", 16, QFont.Weight.Bold))
+        painter.drawText(QRectF(22, 12, self.width()-44, 32), "水池 · 建图结果")
+        painter.setFont(QFont("Noto Sans", 10))
+        painter.setPen(QColor(MUTED))
+        painter.drawText(QRectF(22, 48, self.width()-44, 26), "世界坐标俯视 · +X 向右 / +Y 向上 · 图标非实物尺寸")
+        if not p:
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "等待地图数据…")
+            return
+        grid = p.get("grid", {})
+        center = np.asarray(grid.get("center", [2, -4, 1.394]), dtype=float)
+        side = max(.1, float(grid.get("side_m", 2.4)))
+        yaw = math.radians(float(grid.get("yaw_deg", 0)))
+        rotation = np.array([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
+        corners = np.array([[-1,-1], [1,-1], [1,1], [-1,1]]) * side/2
+        corners = corners @ rotation.T + center[:2]
+        bounds = list(corners)
+        pose = snapshot.get("pose")
+        tag = p.get("tag") or {}
+        if pose:
+            bounds.append(pose[:2])
+        if tag.get("position"):
+            bounds.append(tag["position"][:2])
+        for key in ("traversal_path", "return_path"):
+            bounds.extend(point[:2] for point in p.get(key, []))
+        bounds.extend(c["position"][:2] for c in p.get("cells", []) if c.get("position"))
+        bounds = np.asarray(bounds)
+        low, high = bounds.min(axis=0)-.45, bounds.max(axis=0)+.45
+        area = QRectF(30, 92, self.width()-60, self.height()-180)
+        scale = min(area.width()/(high[0]-low[0]), area.height()/(high[1]-low[1]))
+        mid = (low+high)/2
+
+        def screen(xy):
+            return QPointF(area.center().x()+(xy[0]-mid[0])*scale,
+                           area.center().y()-(xy[1]-mid[1])*scale)
+
+        def path(points):
+            result = QPainterPath()
+            if len(points):
+                result.moveTo(screen(points[0]))
+                for point in points[1:]:
+                    result.lineTo(screen(point))
+            return result
+
+        # 连续水面与格线保留真实旋转和比例，不暗示已知水池边界。
+        gradient = QLinearGradient(area.topLeft(), area.bottomRight())
+        gradient.setColorAt(0, QColor("#113a4c"))
+        gradient.setColorAt(1, QColor("#0c2331"))
+        painter.setBrush(QBrush(gradient))
+        painter.setPen(QPen(QColor("#286077"), 2))
+        painter.drawRoundedRect(area, 20, 20)
+        perimeter = path(list(corners)+[corners[0]])
+        painter.setBrush(QColor("#164154"))
+        painter.drawPath(perimeter)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for offset in np.linspace(-side/2, side/2, 4):
+            for line in (np.array([[offset,-side/2],[offset,side/2]]),
+                         np.array([[-side/2,offset],[side/2,offset]])):
+                painter.setPen(QPen(QColor("#397085"), 1))
+                painter.drawPath(path(line @ rotation.T + center[:2]))
+        for cell in p.get("cells", []):
+            point = screen(cell.get("center", center))
+            painter.setPen(QColor("#9bc0cb"))
+            painter.drawText(QRectF(point.x()-40, point.y()+27, 80, 20),
+                             Qt.AlignmentFlag.AlignCenter,
+                             f"格 {cell.get('id', '?')} · {'已访问' if cell.get('visited') else '未访问'}")
+        for key, color, style in (("return_path", "#d8a5fa", Qt.PenStyle.DotLine),
+                                  ("traversal_path", "#ffdc73", Qt.PenStyle.DashLine)):
+            painter.setPen(QPen(QColor(color), 2, style))
+            painter.drawPath(path(p.get(key, [])))
+        painter.setPen(QPen(QColor(ACCENT), 2))
+        painter.drawPath(path(snapshot.get("trajectory", [])))
+        for cell in p.get("cells", []):
+            if not cell.get("position"):
+                continue
+            point = screen(cell["position"])
+            fallback = cell.get("source") == "fallback"
+            painter.save()
+            painter.translate(point)
+            painter.setOpacity(.45 if fallback else 1)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#071922"))
+            painter.drawEllipse(QRectF(-22, -16, 48, 42))
+            if cell.get("class_id") == 0:
+                painter.setBrush(QColor("#f6c445"))
+                painter.drawRoundedRect(QRectF(-18, -18, 36, 36), 4, 4)
+                painter.setPen(QPen(QColor("#242a31"), 6))
+                for offset in (-10, 2, 14):
+                    painter.drawLine(QPointF(offset-5, -14), QPointF(offset+5, 14))
+                painter.setPen(QPen(QColor("#fff0a7"), 2))
+                painter.setBrush(QColor("#5d4a23"))
+                painter.drawRect(QRectF(-8, -8, 16, 16))
+            else:
+                painter.setBrush(QColor("#ff8b45"))
+                painter.setPen(QPen(QColor("#ffe5cf"), 2))
+                painter.drawEllipse(QRectF(-19,-19,38,38))
+                painter.setBrush(QColor("#fff1e4"))
+                painter.drawEllipse(QRectF(-12,-12,24,24))
+                painter.setBrush(QColor("#d9682a"))
+                painter.drawEllipse(QRectF(-7,-7,14,14))
+            painter.restore()
+            painter.setPen(QColor(TEXT))
+            name = CLASS_NAMES.get(cell.get("class_id"), "未知目标")
+            painter.drawText(QRectF(point.x()-80, point.y()-49,160,24),
+                             Qt.AlignmentFlag.AlignCenter, name + (" · 默认" if fallback else ""))
+        if tag.get("position"):
+            point = screen(tag["position"])
+            painter.setPen(QPen(QColor("#ffe18a"), 2))
+            painter.setBrush(QColor("#fff9e7"))
+            painter.drawRect(QRectF(point.x()-13,point.y()-13,26,26))
+            painter.setBrush(QColor("#17242a"))
+            painter.drawRect(QRectF(point.x()-9,point.y()-9,18,18))
+            painter.setBrush(QColor("#fff9e7"))
+            painter.drawRect(QRectF(point.x()-4,point.y()-4,8,8))
+            painter.setPen(QColor("#ffe18a"))
+            painter.drawText(QRectF(point.x()-80,point.y()+17,160,22), Qt.AlignmentFlag.AlignCenter,
+                             f"AprilTag {tag.get('id', '?')}" + (" · 默认" if tag.get("source") in ("fallback", "partial_vision") else ""))
+        if pose:
+            point = screen(pose)
+            painter.save()
+            painter.translate(point)
+            painter.rotate(-float(pose[3]))
+            painter.setPen(QPen(QColor("#aff5ff"), 2))
+            painter.setBrush(QColor("#22bdd2"))
+            painter.drawRoundedRect(QRectF(-23,-12,46,24), 10,10)
+            painter.drawLine(QPointF(13,0),QPointF(38,0))
+            painter.drawLine(QPointF(38,0),QPointF(30,-6))
+            painter.drawLine(QPointF(38,0),QPointF(30,6))
+            painter.setBrush(QColor("#103d52"))
+            painter.drawEllipse(QRectF(-9,-6,12,12))
+            painter.restore()
+        painter.setPen(QColor(TEXT))
+        detail = "等待机器人位姿" if not pose else f"AUV  X {pose[0]:.2f}  Y {pose[1]:.2f}  深度 {pose[2]:.2f} m  航向 {pose[3]:.1f}°"
+        painter.drawText(QRectF(22,self.height()-74,self.width()-44,24), detail)
+        painter.setPen(QColor("#ffcf82") if p.get("fallback_used") else QColor(MUTED))
+        painter.drawText(QRectF(22,self.height()-44,self.width()-44,24),
+                         "含默认推测目标 · 半透明图标，不代表视觉确认" if p.get("fallback_used") else "实线：已走轨迹   虚线：遍历规划   点线：返回标记")
 
 for font_path in font_manager.findSystemFonts():
     if 'CJK' in font_path or 'cjk' in font_path:
@@ -202,7 +361,8 @@ class MappingDashboard(QMainWindow):
         self.ros_node = ros_node
         self.camera_snapshots = CameraSnapshots()
         self.last_image_stamps = {}
-        self.setWindowTitle("YouLong · Mapping Lab")
+        self.setWindowTitle("YouLong · 水下建图工作台")
+        self.last_plot_time = 0.0
         self.resize(1560, 980)
         self.setStyleSheet(self._stylesheet())
         self._build_ui()
@@ -222,6 +382,9 @@ class MappingDashboard(QMainWindow):
         QPlainTextEdit, QTableWidget {{ background: {PANEL}; border: 1px solid #263447; color: {TEXT};
                                        gridline-color: #263447; border-radius: 8px; }}
         QHeaderView::section {{ background: {PANEL_2}; color: {MUTED}; border: 0; padding: 5px; }}
+        QTabWidget::pane {{ border: 1px solid #263447; border-radius: 12px; }}
+        QTabBar::tab {{ background: {PANEL}; color: {MUTED}; padding: 12px 20px; }}
+        QTabBar::tab:selected {{ background: #183344; color: {ACCENT}; }}
         """
 
     def _build_ui(self):
@@ -231,9 +394,9 @@ class MappingDashboard(QMainWindow):
         outer.setSpacing(12)
         header = QHBoxLayout()
         title_box = QVBoxLayout()
-        title = QLabel("YouLong · Mapping Lab")
+        title = QLabel("YouLong · 水下建图工作台")
         title.setObjectName("title")
-        subtitle = QLabel("DDS 地图 + camera 同帧视觉诊断")
+        subtitle = QLabel("水池地图 / 机器人轨迹 / 视觉诊断 · 只读监控")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
@@ -257,8 +420,12 @@ class MappingDashboard(QMainWindow):
         main_split = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
         left_layout = QVBoxLayout(left)
+        self.map_tabs = QTabWidget()
+        self.pool_map = PoolMap()
+        self.map_tabs.addTab(self.pool_map, "水池实景示意")
         self.map_canvas = MplCanvas(left)
-        left_layout.addWidget(self.map_canvas, 1)
+        self.map_tabs.addTab(self.map_canvas, "三维点集诊断")
+        left_layout.addWidget(self.map_tabs, 1)
         self.map_hint = QLabel("等待 /task/mapping/map …")
         self.map_hint.setObjectName("subtitle")
         left_layout.addWidget(self.map_hint)
@@ -318,16 +485,26 @@ class MappingDashboard(QMainWindow):
         snapshot = self.ros_node.snapshot()
         payload = snapshot["map"]
         if payload is not None:
-            self._update_map(payload, snapshot)
+            self.pool_map.set_scene(payload, snapshot)
+            # 昂贵的三维点集只在调试页打开时绘制，最高约2Hz。
+            if self.map_tabs.currentIndex() == 1 and time.monotonic()-self.last_plot_time > .5:
+                self._update_map(payload, snapshot)
+                self.last_plot_time = time.monotonic()
+            self.map_hint.setText(
+                f"已访问 {sum(bool(c.get('visited')) for c in payload.get('cells', []))}/9 格 · "
+                f"观测目标 {sum(bool(c.get('position')) and c.get('source') != 'fallback' for c in payload.get('cells', []))} 个 · "
+                f"默认地图 {'已使用' if payload.get('fallback_used') else '未使用'}")
             self._update_table(payload, snapshot)
-            self.metrics["state"].setText(str(payload.get("state", "—")))
+            state = str(payload.get("state", "—"))
+            self.metrics["state"].setText(STATE_NAMES.get(state, state))
             self.metrics["points"].setText(str(payload.get("measurement_count", 0)))
             accepted = sum(int(c.get("accepted_observations", 0)) for c in payload.get("cells", []))
             self.metrics["accepted"].setText(str(accepted))
         frames = self.camera_snapshots.snapshot()
         for name in ('input', 'overlay', 'disparity', 'depth', 'histogram'):
             sample = frames.get(name)
-            if sample is None or self.last_image_stamps.get(name) == sample[1]:
+            # 没有采集戳的旧HTTP接口也要更新，不能把空戳当作永远相同。
+            if sample is None or (sample[1] and self.last_image_stamps.get(name) == sample[1]):
                 continue
             pixmap = QPixmap()
             if pixmap.loadFromData(sample[0], 'JPEG'):
@@ -337,8 +514,9 @@ class MappingDashboard(QMainWindow):
                     label.size(), Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation))
                 self.last_image_stamps[name] = sample[1]
-        self.metrics['sync'].setText(
-            'camera同帧' if frames.get('depth') else '等待camera诊断流')
+        stamps = [frames[name][1] for name in ('input', 'overlay', 'disparity', 'depth') if name in frames]
+        self.metrics['sync'].setText('同帧' if len(stamps) == 4 and all(stamps) and len(set(stamps)) == 1
+                                     else '异步 / 待更新')
         events = snapshot["events"]
         if events:
             self.log_view.setPlainText("\n".join(self._event_text(item) for item in events[-8:]))

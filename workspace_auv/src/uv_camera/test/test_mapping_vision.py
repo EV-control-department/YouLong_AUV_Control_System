@@ -3,10 +3,31 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from sensor_msgs.msg import CameraInfo
 from uv_msgs.msg import Detection, DetectionArray, PoseInfo
 
 from uv_camera.mapping_vision import MappingVision
+
+
+@pytest.mark.parametrize('tag_id', [16, 18])
+def test_april_tag_rotations_and_unrestricted_ids(tag_id):
+    import cv2
+    node = _Node()
+    node.params['mapping_allowed_tag_ids'] = [-1]
+    vision = MappingVision(node, sim_mode=True)
+    assert not vision.allowed_tag_ids
+    if hasattr(cv2.aruco, 'generateImageMarker'):
+        marker = cv2.aruco.generateImageMarker(vision.dictionary, tag_id, 180)
+    else:
+        marker = cv2.aruco.drawMarker(vision.dictionary, tag_id, 180)
+    image = cv2.copyMakeBorder(marker, 40, 40, 40, 40,
+                               cv2.BORDER_CONSTANT, value=255)
+    for turns in range(4):
+        bgr = cv2.cvtColor(np.rot90(image, turns).copy(), cv2.COLOR_GRAY2BGR)
+        tags, _ = vision._detect_tags(bgr, bgr)
+        assert [tag[0] for tag in tags] == [tag_id]
+        assert not tags[0][2]  # Raw corners must be rectified before depth lookup.
 
 
 class _Publisher:

@@ -15,8 +15,8 @@ uv_camera 在同一帧内完成 YOLO-Seg、AprilTag、SGBM、掩膜深度主峰�
 -------------------------------
 * 运动串行：主线程通过 BasicMotion 的 WTRAVEL 一次只去一个目标点，保证
   控制链路安全、可随时被 /task/stop 中断。
-* 感知并行：camera 独立处理同帧视觉并持续发布观测；任务回调在
-  WTRAVEL 移动期间也会更新格点滤波器，不依赖到格点后临时抓图。
+* 感知并行：camera 保持同帧视觉和预览；任务只采纳到点后、采集时稳定的
+  观测。WTRAVEL 期间以及延迟抵达的移动帧不更新格点滤波器。
 
 坐标系
 ------
@@ -163,11 +163,20 @@ class MappingTask:
     def __init__(self, node, params):
         self.node = node
         self.params = params
+        for name, default in (('stable_seconds', 1.0), ('stable_position_m', 0.03),
+                              ('stable_angle_deg', 2.0), ('motion_window_seconds', 0.5),
+                              ('motion_position_m', 0.15), ('motion_angle_deg', 5.0)):
+            if not math.isfinite(float(params.get(name, default))) or float(
+                    params.get(name, default)) <= 0:
+                raise ValueError(f'{name} 必须为有限正数')
         # 任务线程与 ROS 观测回调会并发访问滤波器/计数。
         self.lock = threading.RLock()
         self.subscriptions = []
         self.pose_history = deque(maxlen=100)
         self.last_observation_stamp = -1.0
+        self.observation_start_stamp = float('inf')
+        self.camera_ready = False
+        self.last_stability_log = float('-inf')
         self.filters = {}                            # 格点索引 -> StaticPositionFilter
         self.class_votes = {}                        # 格点索引 -> [方形票, 圆形票]
         self.visit_order = []                        # 实际访问过的格点顺序
@@ -188,6 +197,9 @@ class MappingTask:
             'cone_mask_rejected': 0,
             'cone_depth_rejected': 0,
             'cone_observations': 0,
+            'unstable_frames': 0,
+            'moving_frames': 0,
+            'old_phase_frames': 0,
         }
         self.tag_scan_stats = {'frames': 0, 'markers': 0, 'wrong_id': 0,
                                'no_depth': 0}
@@ -245,6 +257,62 @@ class MappingTask:
             self.pose_history.append(message)
 
     def _observation_cb(self, message):
+        # Acquisition time, not callback arrival time, determines admission.
+        # Slow travel can contribute evidence when explicitly enabled. Capture
+        # timestamps and pose-history continuity remain mandatory in either mode.
+        with self.lock:
+            timestamp = _stamp(message)
+            # Readiness is independent of admitting measurements to the map.
+            # Otherwise initializing -> waiting for processed frames deadlocks.
+            if message.processed:
+                self.camera_ready = True
+            motion_allowed = (bool(self.params.get('allow_motion_observations', False))
+                              and self.state in ('travel_to_tag', 'travel_to_cell'))
+            if self.state not in ('reading_tag', 'observe_cell') and not motion_allowed:
+                self.perception_stats['moving_frames'] += 1
+                return
+            if timestamp < self.observation_start_stamp:
+                self.perception_stats['old_phase_frames'] += 1
+                return
+            if not self._stable_at(timestamp):
+                self.perception_stats['unstable_frames'] += 1
+                self.last_tag_reason = '采集时艇位或姿态尚未稳定'
+                if time.monotonic() - self.last_stability_log >= 3.0:
+                    self.last_stability_log = time.monotonic()
+                    self.node.get_logger().warning(
+                        '暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；'
+                        f'状态={self.state}，格点={self.current_cell}')
+                return
+            self._consume_observation(message)
+
+    def _stable_at(self, timestamp):
+        moving = (bool(self.params.get('allow_motion_observations', False))
+                  and self.state in ('travel_to_tag', 'travel_to_cell'))
+        window = float(self.params.get('motion_window_seconds', 0.5) if moving
+                       else self.params.get('stable_seconds', 1.0))
+        samples = [pose for pose in self.pose_history
+                   if timestamp - window - 0.15 <= _stamp(pose) <= timestamp]
+        samples.sort(key=_stamp)
+        if (len(samples) < 2 or _stamp(samples[0]) > timestamp - window + 0.15
+                or _stamp(samples[-1]) < timestamp - 0.15):
+            return False
+        times = np.array([_stamp(pose) for pose in samples])
+        if np.max(np.diff(times)) > 0.25:
+            return False
+        positions = np.array([[p.robot_x, p.robot_y, p.robot_z] for p in samples])
+        angles = np.array([[p.robot_roll, p.robot_pitch, p.robot_yaw] for p in samples])
+        if not np.all(np.isfinite(positions)) or not np.all(np.isfinite(angles)):
+            return False
+        position_span = np.linalg.norm(np.ptp(positions, axis=0))
+        angles = np.rad2deg(np.unwrap(np.deg2rad(angles), axis=0))
+        position_limit = float(self.params.get('motion_position_m', 0.15) if moving
+                               else self.params.get('stable_position_m', 0.03))
+        angle_limit = float(self.params.get('motion_angle_deg', 5.0) if moving
+                            else self.params.get('stable_angle_deg', 2.0))
+        return (position_span <= position_limit
+                and np.max(np.ptp(angles, axis=0)) <= angle_limit)
+
+    def _consume_observation(self, message):
         """Consume camera-produced measurements; no image is transported here."""
         timestamp = _stamp(message)
         with self.lock:
@@ -285,6 +353,11 @@ class MappingTask:
 
     def _accept_tag_result(self, observation, timestamp):
         tag_id = int(observation.tag_id)
+        allowed = self.params.get('allowed_tag_ids')
+        if allowed is not None and tag_id not in allowed:
+            self.tag_scan_stats['wrong_id'] += 1
+            self.last_tag_reason = f'标记ID={tag_id}不在允许列表{allowed}'
+            return
         if int(self.params['tag_id']) >= 0 and tag_id != int(self.params['tag_id']):
             self.tag_scan_stats['wrong_id'] += 1
             return
@@ -502,7 +575,7 @@ class MappingTask:
         """记录当前格点收到了一帧可用于定位的同步感知数据。
 
         只统计「停留在格点观察阶段」的帧，用于判断该格点是否真的获得过
-        可用感知输入；移动期间的有效测量仍会进入滤波器，但不算作格点观测帧。
+        可用感知输入；移动期间的测量不进入滤波器，也不算作格点观测帧。
         """
         if self.state != 'observe_cell' or self.current_cell is None:
             return
@@ -531,6 +604,8 @@ class MappingTask:
         """
         cell = self.current_cell
         with self.lock:
+            self.observation_start_stamp = self.node.get_clock().now().nanoseconds * 1e-9
+            self.state = 'observe_cell'
             # 进入观察阶段前的计数快照，用于计算增量
             start = dict(self.cell_observations.get(
                 cell, {'synchronized_frames': 0, 'valid_measurements': 0}))
@@ -539,6 +614,7 @@ class MappingTask:
             time.sleep(0.05)
         with self.lock:
             current = dict(self.cell_observations.get(cell, start))
+            self.state = 'cell_observed'
         observed_frames = current['synchronized_frames'] - start['synchronized_frames']
         measurements = current['valid_measurements'] - start['valid_measurements']
         self.node.get_logger().info(
@@ -550,7 +626,9 @@ class MappingTask:
 
     def _read_tag(self):
         """等待 camera 发布足够多的有效 AprilTag 观测。"""
-        self.state = 'reading_tag'
+        with self.lock:
+            self.observation_start_stamp = self.node.get_clock().now().nanoseconds * 1e-9
+            self.state = 'reading_tag'
         self.node.get_logger().info(
             f'开始识别池底标记：字典={self.params["tag_dictionary"]}，'
             f'期望ID={self.params["tag_id"]}，输入=/perception/mapping/observations')
@@ -631,6 +709,9 @@ class MappingTask:
         """
         if not self._ready():
             return False
+        if bool(self.params.get('allow_motion_observations', False)):
+            with self.lock:
+                self.observation_start_stamp = self.node.get_clock().now().nanoseconds * 1e-9
         timeout = min(float(self.params['move_timeout']),
                       max(1.0, self.deadline - time.monotonic()))
         success, message = self.node._send_action_goal(
@@ -665,7 +746,7 @@ class MappingTask:
             ready = False
             while self._ready() and time.monotonic() < ready_end:
                 with self.lock:
-                    ready = (self.perception_stats['processed_frames'] > 0
+                    ready = (self.camera_ready
                              and bool(self.pose_history))
                 if ready:
                     break
@@ -695,7 +776,6 @@ class MappingTask:
                 if not self._travel_to(center[:2], f'mapping:travel_to_cell_{cell}'):
                     # 运动失败会危及安全，直接中止任务（与观测失败区别对待）
                     raise RuntimeError(f'WTRAVEL to cell {cell} failed')
-                self.state = 'observe_cell'
                 observation_ok = self._observe_cones()
                 self.visit_order.append(self.current_cell)
                 observation = self.cell_observations.get(self.current_cell, {})
@@ -731,7 +811,11 @@ class MappingTask:
                            reason='地图包含未验证猜测，禁止自动遍历')
                 self.publish_map()
                 return True
-            self._traverse_cones()
+            if self.params.get('enable_traversal', True):
+                self._traverse_cones()
+            else:
+                self.node.get_logger().info('建图独立调试完成：不执行锥桶遍历')
+                self._emit('traversal_skipped', reason='独立建图调试配置')
             self.state = 'complete'
             self._emit('completed', confirmed_cells=confirmed,
                        assignment=self.final_assignment,

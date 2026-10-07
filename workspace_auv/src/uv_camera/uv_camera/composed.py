@@ -14,6 +14,7 @@ executable in this package and consumes /perception/detection/*.
 """
 
 import os
+import signal
 import socket
 import subprocess
 import threading
@@ -42,6 +43,7 @@ from .common import (
     _MjpegHandler,
     _MjpegServer,
     FrameGate,
+    rotate_stereo_180,
 )
 
 
@@ -145,6 +147,10 @@ class CameraAiNode(Node):
                                max_workers=2, log_warn=self._warn)
         if params['enable_ai']:
             self.ai.load_model(params['model_path'])
+            if not self.ai._model_loaded:
+                self.get_logger().error(
+                    'YOLO 未就绪：推流可以继续，但不会产生锥桶分割观测；'
+                    '请先修复权重/类别映射，再启动建图任务')
         else:
             self.get_logger().info(
                 'YOLO detection disabled; running sensor/preview/dataset '
@@ -177,14 +183,22 @@ class CameraAiNode(Node):
                 f'MJPEG source on {params["mjpeg_port"]}; '
                 'go2rtc unavailable' if self._preview_enabled
                 else 'preview disabled'))
+        ai_status = ('ai-ready' if self.ai._model_loaded else
+                     'ai-unavailable' if params['enable_ai'] else 'recording-only')
         self.get_logger().info(
             f'uv_camera started: sensor(source={params["sim_mode"] and "sim" or "v4l"})'
-            f' + {"ai" if params["enable_ai"] else "recording-only"}, '
+            f' + {ai_status}, '
             f'{preview_text}')
+        if self.camera_rotate_180('down'):
+            self.get_logger().info(
+                '下视方向修正已启用：左右目各旋转180°用于YOLO及推流；'
+                '检测框/掩膜恢复原始标定坐标，SGBM/建图保留原图及采集时间；前视不变')
 
     # ── params ──────────────────────────────────────────────────────────
     def _declare_params(self):
         self.declare_parameter('sim_mode', False)
+        # Real installation only. Geometry remains in original calibration pixels.
+        self.declare_parameter('down_rotate_180', False)
         self.declare_parameter('enable_ai', True)
         self.declare_parameter('inference_fps', 5.0)
         self.declare_parameter('dataset_fps', 5.0)
@@ -247,7 +261,8 @@ class CameraAiNode(Node):
         self.declare_parameter('mapping_min_confidence', 0.35)
         self.declare_parameter('mapping_max_pose_age_s', 1.0)
         self.declare_parameter('mapping_tag_id', -1)
-        self.declare_parameter('mapping_allowed_tag_ids', [0, 1, 2, 3, 4, 5, 6])
+        # -1 keeps this an integer-array parameter and means no ID restriction.
+        self.declare_parameter('mapping_allowed_tag_ids', [-1])
         self.declare_parameter('mapping_tag_dictionary', 'DICT_APRILTAG_16h5')
         self.declare_parameter('mapping_sgbm_block_size', 5)
         self.declare_parameter('mapping_sgbm_num_disparities', 128)
@@ -397,9 +412,16 @@ class CameraAiNode(Node):
         with self._stream_lock:
             return self._stream_clients.get((camera, annotated), 0) > 0
 
+    def camera_rotate_180(self, camera):
+        return (camera == 'down'
+                and not bool(self.get_parameter('sim_mode').value)
+                and bool(self.get_parameter('down_rotate_180').value))
+
     def update_raw_preview(self, camera, frame, stamp=None):
         if not self.stream_requested(camera):
             return
+        if self.camera_rotate_180(camera):
+            frame = rotate_stereo_180(frame)
         frame = self._draw_pose_overlay(frame)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
@@ -413,6 +435,8 @@ class CameraAiNode(Node):
     def update_annotated_stream(self, camera, frame, stamp=None):
         if not self.stream_requested(camera, True):
             return
+        if self.camera_rotate_180(camera):
+            frame = rotate_stereo_180(frame)
         width = self._annotated_max_width
         if width and frame.shape[1] > width:
             height = max(1, round(frame.shape[0] * width / frame.shape[1]))
@@ -586,8 +610,10 @@ class CameraAiNode(Node):
             self._stream_condition.notify_all()
         _MjpegHandler.node = None
         if self._mjpeg_server is not None:
-            self._mjpeg_server.shutdown()
-            self._mjpeg_server.server_close()
+            if not self._mjpeg_server.stop_bounded(timeout=2.0):
+                self.get_logger().warning(
+                    'MJPEG服务关闭超过2秒，已关闭监听端口，继续释放摄像头与推理线程')
+            self._mjpeg_server = None
         # Stop producers before draining AI.  Otherwise FrameGate workers can
         # enqueue new frames while the recorder is already being closed.
         self.sensor.shutdown()
@@ -619,10 +645,16 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
-        # launch may already have shut down the default context while
-        # delivering SIGINT.
-        rclpy.try_shutdown()
+        # A second Ctrl+C must not interrupt cap.release()/executor draining:
+        # doing so leaves native OpenCV/PyTorch threads alive during interpreter exit.
+        previous_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            node.destroy_node()
+        finally:
+            # Foxy may not expose try_shutdown; its context may already be stopped.
+            if rclpy.ok():
+                rclpy.shutdown()
+            signal.signal(signal.SIGINT, previous_sigint)
 
 
 if __name__ == '__main__':

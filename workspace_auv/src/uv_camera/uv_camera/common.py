@@ -101,7 +101,10 @@ class _MjpegHandler(BaseHTTPRequestHandler):
         stream = self.path.strip('/').split('?', 1)[0]
         if stream.startswith('mapping/'):
             node = self.node
-            name = stream.split('/', 1)[1].removesuffix('.jpg')
+            name = stream.split('/', 1)[1]
+            # Jetson ROS Foxy uses Python 3.8 (no str.removesuffix).
+            if name.endswith('.jpg'):
+                name = name[:-4]
             sample = (node.mapping_vision.debug_jpeg(name)
                       if node is not None and node.mapping_vision is not None else None)
             if sample is None:
@@ -182,6 +185,20 @@ class _MjpegServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def stop_bounded(self, timeout=2.0):
+        """BaseServer.shutdown has no timeout and hangs if serving never started.
+
+        Keep an abnormal HTTP shutdown from blocking camera/worker cleanup.
+        Client handlers are daemon threads; normal shutdown still joins cleanly.
+        """
+        worker = threading.Thread(target=self.shutdown,
+                                  name='uv-camera-http-stop', daemon=True)
+        worker.start()
+        worker.join(timeout=timeout)
+        stopped = not worker.is_alive()
+        self.server_close()
+        return stopped
+
 
 CvBridge = None
 
@@ -193,6 +210,21 @@ def import_cv_bridge():
         from cv_bridge import CvBridge as _CB
         CvBridge = _CB
     return CvBridge
+
+
+def rotate_stereo_180(frame):
+    """Rotate each eye, never the stitched pair (which would swap eyes)."""
+    if frame.ndim < 2 or frame.shape[1] % 2:
+        raise ValueError('双目拼接图像宽度必须为偶数')
+    mid = frame.shape[1] // 2
+    return np.hstack((cv2.rotate(frame[:, :mid], cv2.ROTATE_180),
+                      cv2.rotate(frame[:, mid:], cv2.ROTATE_180)))
+
+
+def unrotate_points_180(points, width, height):
+    """Map rotated inference pixels back to the unchanged calibration space."""
+    return np.asarray([width - 1, height - 1], dtype=np.float32) - np.asarray(
+        points, dtype=np.float32)
 
 
 def normalize_frame(frame):

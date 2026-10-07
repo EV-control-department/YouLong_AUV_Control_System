@@ -150,6 +150,8 @@ def generate_launch_description():
     enable_nav = LaunchConfiguration("enable_nav")
     enable_task = LaunchConfiguration("enable_task")
     mission_file = LaunchConfiguration("mission_file")
+    turntable_mode = LaunchConfiguration("turntable_mode")
+    turntable_model_path = LaunchConfiguration("turntable_model_path")
     profile = LaunchConfiguration("profile")
     sim_profile_params = profile_path(profile, "uv_sim")
     camera_profile_params = profile_path(profile, "uv_camera")
@@ -227,6 +229,8 @@ def generate_launch_description():
             "config",
             "object_localizer_sim.yaml",
         ]),
+        "turntable_mode": turntable_mode,
+        "turntable_model_path": turntable_model_path,
     }, condition=IfCondition(enable_ai))
 
     navigation = _include("uv_nav", "navigation_launch.py", {
@@ -337,6 +341,8 @@ def generate_launch_description():
     return LaunchDescription([
         declare_profile("sim", "sim_dev"),
         declare_mission_file(),
+        DeclareLaunchArgument("turntable_mode", default_value="false"),
+        DeclareLaunchArgument("turntable_model_path", default_value=""),
         *declare_feature_arguments(
             enable_ai="true", enable_nav="false", enable_task="false",
             enable_motion="true",

@@ -51,12 +51,22 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "btravelx": {"dx": float},
     "setz": {"z": float},
+    "setrz": {"rz": float},
+    "wtravelxyz": {"x": float, "y": float, "z": float},
     "mapping_grid": {
+        "enable_traversal": bool,
         "timeout": float,
         "move_timeout": float,
         "traversal_clearance_m": float,
         "traversal_tracking_margin_m": float,
         "observe_seconds": float,
+        "stable_seconds": float,
+        "stable_position_m": float,
+        "stable_angle_deg": float,
+        "allow_motion_observations": bool,
+        "motion_window_seconds": float,
+        "motion_position_m": float,
+        "motion_angle_deg": float,
         "min_observations": int,
         "min_confidence": float,
         "class_vote_ratio": float,
@@ -71,6 +81,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "tag_x": float,
         "tag_y": float,
         "tag_id": int,
+        "allowed_tag_ids": (list, int),
         "tag_dictionary": str,
         "visit_order": (list, int),
         "image_topic": str,
@@ -105,33 +116,10 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     "turntable": {
         "allow_contact_motion": bool,
         "force_limited_control_confirmed": bool,
-        "disk_diameter_m": float,
-        "front_camera_center_x": float,
-        "front_camera_center_y": float,
-        "front_camera_center_z": float,
-        "disk_center_x": float,
-        "disk_center_y": float,
-        "disk_center_z": float,
-        "disk_axis_yaw_deg": float,
-        "rod_tip_x": float,
-        "rod_tip_y": float,
-        "rod_tip_z": float,
         "rod_radius_m": float,
-        "inner_radius_m": float,
-        "outer_radius_m": float,
-        "spoke_width_m": float,
-        "contact_radius_m": float,
-        "label_to_hole_deg": float,
-        "image_angle_to_disk_sign": int,
         "approach_standoff_m": float,
         "insert_depth_m": float,
-        "stroke_count": int,
         "stroke_yaw_deg": float,
-        "yaw_step_deg": float,
-        "drive_yaw_sign": int,
-        "min_progress_deg": float,
-        "max_disk_image_shift_px": float,
-        "max_disk_world_shift_m": float,
     },
     "26rb_find_collection_frame": {
         "platform_name": str,
@@ -176,6 +164,46 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "verification_absence_hold_seconds": float,
         "max_grab_retries": int,
     },
+    "grab_sea_cucumber": {
+        "sea_cucumber_class_id": int,
+        "image_width": int,
+        "image_height": int,
+        "search_pose": (list, float),
+        "search_travel_timeout_seconds": float,
+        "gripper_offset_x_m": float,
+        "gripper_offset_y_m": float,
+        "descent_speed_mps": float,
+        "descent_duration_seconds": float,
+        "max_press_distance_m": float,
+        "drop_pose": (list, float),
+        "pickup_servo_angle_rad": float,
+        "release_servo_angle_rad": float,
+        "total_timeout_seconds": float,
+        "expected_count": int,
+        "count_frames": int,
+        "count_timeout_seconds": float,
+        "min_confidence": float,
+        "drop_timeout_seconds": float,
+        "release_wait_seconds": float,
+        "ascent_step_m": float,
+        "ascent_step_timeout_seconds": float,
+        "ascent_pause_seconds": float,
+        "ascent_tolerance_m": float,
+        "max_failed_attempts": int,
+        "pixel_tolerance_fraction": float,
+        "detection_timeout": float,
+        "horizontal_servo_timeout": float,
+        "horizontal_servo_period": float,
+        "horizontal_servo_log_period": float,
+        "horizontal_hold_seconds": float,
+        "projection_depth_m": float,
+        "horizontal_servo_gain": float,
+        "max_horizontal_step_m": float,
+        "position_command_timeout": float,
+        "pre_descent_settle_seconds": float,
+        "descent_publish_period": float,
+        "return_timeout": float,
+    },
     "light_target_rack_return_origin": {
         "frame_name": str,
         "light_color": str,
@@ -211,6 +239,9 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
+# 基础动作只有少量标量参数；允许直接写在任务链里，不要求空模板文件。
+INLINE_TASKS = frozenset({"btravelx", "setz", "wtravelxyz", "setrz"})
+
 
 # Short names keep the YAML readable where the runtime key carries the
 # implementation detail (for example ``servo.timeout`` becomes
@@ -233,6 +264,28 @@ PARAMETER_ALIASES = {
         "verification.timeout": "verification_timeout",
         "verification.absence_hold_seconds": "verification_absence_hold_seconds",
         "verification.max_retries": "max_grab_retries",
+    },
+    "grab_sea_cucumber": {
+        "search.pose": "search_pose",
+        "search.travel_timeout_seconds": "search_travel_timeout_seconds",
+        "servo.timeout": "horizontal_servo_timeout",
+        "servo.period": "horizontal_servo_period",
+        "servo.log_period": "horizontal_servo_log_period",
+        "servo.hold_seconds": "horizontal_hold_seconds",
+        "servo.gain": "horizontal_servo_gain",
+        "servo.max_step_m": "max_horizontal_step_m",
+        "gripper.offset_x_m": "gripper_offset_x_m",
+        "gripper.offset_y_m": "gripper_offset_y_m",
+        "gripper.settle_seconds": "pre_descent_settle_seconds",
+        "gripper.pickup_angle_rad": "pickup_servo_angle_rad",
+        "gripper.release_angle_rad": "release_servo_angle_rad",
+        "descent.speed_mps": "descent_speed_mps",
+        "descent.duration_seconds": "descent_duration_seconds",
+        "descent.publish_period": "descent_publish_period",
+        "counting.frames": "count_frames",
+        "counting.timeout_seconds": "count_timeout_seconds",
+        "delivery.pose": "drop_pose",
+        "delivery.timeout_seconds": "drop_timeout_seconds",
     },
     "light_target_rack_return_origin": {
         "target.timeout": "target_timeout",
@@ -458,8 +511,11 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
         overrides = entry.get("params", {})
         if not isinstance(overrides, dict):
             raise ConfigError(f"{mission_path}：第 {index} 个任务的 params 必须是映射")
-        task_path = _resolve_task_config(mission_path, config, task_name)
-        defaults = _load_task_defaults(task_path, task_name)
+        if config is None and task_name in INLINE_TASKS:
+            defaults = {}
+        else:
+            task_path = _resolve_task_config(mission_path, config, task_name)
+            defaults = _load_task_defaults(task_path, task_name)
         merged = _deep_merge(defaults, overrides)
         tasks.append({"name": task_name, "params": _validate_params(task_name, merged)})
     return tasks
@@ -485,4 +541,4 @@ def default_mission_path() -> Path:
     from ament_index_python.packages import get_package_share_directory
 
     return (Path(get_package_share_directory("uv_task"))
-            / "config" / "missions" / "robocup_26.yaml")
+            / "config" / "missions" / "mapping_grid.json")

@@ -16,7 +16,8 @@ data_files = [
     ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
     ('share/' + package_name, ['package.xml', 'GO2RTC.md']),
     ('share/' + package_name + '/resource',
-     [path for path in ('resource/best.pt', 'resource/last.pt')
+     [path for path in ('resource/best.pt', 'resource/last.pt',
+                       'resource/last_inference.pt')
       if os.path.isfile(path)]),
     ('share/' + package_name + '/launch', ['launch/perception_launch.py']),
     ('share/' + package_name + '/weights', weight_files),

@@ -36,10 +36,13 @@ def generate_launch_description():
     dataset_format = LaunchConfiguration("dataset_format")
     profile_params = LaunchConfiguration("profile_params")
     object_localizer_params = LaunchConfiguration("object_localizer_params")
+    turntable_mode = LaunchConfiguration("turntable_mode")
+    turntable_model_path = LaunchConfiguration("turntable_model_path")
 
     def _nodes(context):
         ai_enabled = _as_bool(enable_ai.perform(context))
         recording_enabled = _as_bool(save_dataset.perform(context))
+        turntable_enabled = _as_bool(turntable_mode.perform(context))
         profile = profile_params.perform(context).strip()
         localizer_config = object_localizer_params.perform(context).strip()
 
@@ -71,6 +74,17 @@ def generate_launch_description():
             "dataset_png_compression": dataset_png_compression,
             "dataset_format": dataset_format,
         })
+        if turntable_enabled:
+            vision_parameters.append({
+                "enable_turntable_vision": True,
+                "turntable_disk_class_id": 3,
+                "turntable_label_class_id": -1,
+                "enable_mapping_vision": False,
+                "enable_down_camera": False,
+            })
+            model_override = turntable_model_path.perform(context).strip()
+            if model_override:
+                vision_parameters.append({"model_path": model_override})
 
         localizer_parameters = []
         if profile:
@@ -92,7 +106,7 @@ def generate_launch_description():
                 respawn=True,
                 respawn_delay=1.0,
             ))
-        if ai_enabled:
+        if ai_enabled and not turntable_enabled:
             nodes.append(Node(
                 package="uv_camera",
                 executable="object_localizer",
@@ -134,5 +148,7 @@ def generate_launch_description():
         DeclareLaunchArgument("dataset_format", default_value="webp_lossless"),
         DeclareLaunchArgument("profile_params", default_value=""),
         DeclareLaunchArgument("object_localizer_params", default_value=""),
+        DeclareLaunchArgument("turntable_mode", default_value="false"),
+        DeclareLaunchArgument("turntable_model_path", default_value=""),
         OpaqueFunction(function=_nodes),
     ])

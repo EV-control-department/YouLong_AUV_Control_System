@@ -19,10 +19,10 @@ import numpy as np
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from std_msgs.msg import Float32, UInt8
+from std_msgs.msg import UInt8
 from std_srvs.srv import Trigger
 
-from zit6_interfaces.msg import ZitSetpoint, ZitStatus
+from zit6_interfaces.msg import ZitSetpoint, ZitStatus, ZitServo
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import (
@@ -56,6 +56,7 @@ RB26DropBeaconTask = import_module(
     'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
 from uv_task.mapping_task import MappingTask
+from uv_task.grab_sea_cucumber import GrabSeaCucumberTask
 from uv_task.turntable_task import TurntableTask
 from uv_camera.model_classes import model_class_id
 
@@ -103,7 +104,7 @@ class TaskRunnerNode(Node):
     LIGHT_RED = 3
 
     # ── 舵机角度 (/zit6/cmd/servo, rad) ────────────────────────────
-    ANGLE_DROP_BEACON = 90       #   投信标
+    ANGLE_DROP_BEACON = math.pi / 2  # 90°，接口单位为弧度
     ANGLE_SAMPLE_WATER = 0.0               # 采水样
     ANGLE_RELEASE_SAMPLER = 0   #   释放取水器
     ANGLE_INIT = 0.0
@@ -147,18 +148,18 @@ class TaskRunnerNode(Node):
         # Competition metadata only.  The current cruise environment keeps all
         # targets visible; this value tells task logic which one is correct and
         # intentionally does not create scoring or grasping behaviour.
-        self.declare_parameter('target_id', 'mapping_grid')
+        self.declare_parameter('target_id', 'turntable')
         self.target_id = self.get_parameter('target_id').get_parameter_value().string_value
-        valid_target_ids = {'mapping_grid'}
+        valid_target_ids = {'mapping_grid', 'turntable'}
         valid_target_ids.update(
             name for name in ('yellow_golf', 'pink_golf', 'red_ring')
             if model_class_id(name, required=False) is not None)
         if self.target_id not in valid_target_ids:
             self.get_logger().warning(
-                f"未知的 target_id {self.target_id!r}；将使用 'mapping_grid'。"
+                f"未知的 target_id {self.target_id!r}；将使用 'turntable'。"
                 f"有效值：{', '.join(sorted(valid_target_ids))}"
             )
-            self.target_id = 'mapping_grid'
+            self.target_id = 'turntable'
         self.get_logger().info(f'比赛目标元数据：{self.target_id}')
 
         # Camera parameters (used by LineFollower sub-task via get_parameter)
@@ -213,6 +214,7 @@ class TaskRunnerNode(Node):
             'grab_ball': self._task_grab_ball,
             'grab_balls': self._task_grab_ball,
             '26rb_grab_ball': self._task_grab_ball,
+            'grab_sea_cucumber': self._task_grab_sea_cucumber,
             'drop_beacon': self._task_drop_beacon,
             '26rb_drop_beacon': self._task_drop_beacon,
             'take_water_sample': self._task_take_water_sample,
@@ -224,9 +226,13 @@ class TaskRunnerNode(Node):
         }
 
         # Action client
-        self._action_client = ActionClient(self, BasicMotion, 'basic_motion')
+        self.declare_parameter('basic_motion_action', '/basic_motion')
+        self._motion_action_name = self.get_parameter('basic_motion_action').value
+        self._action_client = ActionClient(self, BasicMotion, self._motion_action_name)
         if not self._action_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('BasicMotion 动作服务器不可用！')
+            self.get_logger().error(
+                f'BasicMotion 动作服务器 {self._motion_action_name} 不可用！'
+                '请先启动 uv_control basic_motion，并核对 ROS_DOMAIN_ID 和动作名称')
 
         # Subscribers
         self.create_subscription(
@@ -250,7 +256,7 @@ class TaskRunnerNode(Node):
         # Publishers
         self.pub_status = self.create_publisher(TaskStatus, '/task/status', 10)
         self.pub_light = self.create_publisher(UInt8, '/zit6/cmd/light', 10)
-        self.pub_servo = self.create_publisher(Float32, '/zit6/cmd/servo', 10)
+        self.pub_servo = self.create_publisher(ZitServo, '/zit6/cmd/servo', 10)
         # The impact charge deliberately uses the existing ZIT6 velocity
         # setpoint wire format: mode=VEL (0x01) + body frame (0x10).
         self.pub_setpoint = self.create_publisher(
@@ -301,10 +307,14 @@ class TaskRunnerNode(Node):
         self.get_logger().info('💡 灯光已关闭')
 
     def set_servo(self, angle_rad: float, label: str):
-        msg = Float32(data=float(angle_rad))
+        """统一舵机1出口；0 rad抓取/置零，π/2 rad释放，不发送旧Float32。"""
+        angle_rad = float(angle_rad)
+        if not math.isfinite(angle_rad) or not 0.0 <= angle_rad <= math.pi:
+            raise ValueError('舵机角度必须为0~π的有限弧度值；90°请使用π/2，不要填90')
+        msg = ZitServo(servo_id=1, angle=angle_rad)
         self.pub_servo.publish(msg)
         self.get_logger().info(
-            f'⚙️  舵机：{label}（角度={angle_rad:.2f} rad）')
+            f'⚙️  舵机1：{label}（角度={math.degrees(angle_rad):.1f}° / {angle_rad:.4f} rad，已发指令）')
 
     # ── 下视对齐工具 ───────────────────────────────────────────────
 
@@ -655,6 +665,7 @@ class TaskRunnerNode(Node):
         self.stopped = False
         self.current_index = 0
         total = len(self.tasks)
+        failures = 0
         self.get_logger().info(f'=== 任务列表开始执行（共 {total} 个任务）===')
 
         while self.current_index < total and not self.stopped:
@@ -672,9 +683,11 @@ class TaskRunnerNode(Node):
             try:
                 success = self._execute_task(name, params)
                 if not success:
+                    failures += 1
                     self.get_logger().warn(
                         f'[{self.current_index + 1}/{total}] {name} 执行失败')
             except Exception as e:
+                failures += 1
                 self.get_logger().error(
                     f'[{self.current_index + 1}/{total}] {name} 发生异常：{e}')
 
@@ -685,6 +698,9 @@ class TaskRunnerNode(Node):
         self._current_task_step = 0
         if self.stopped:
             self.get_logger().warn(f'=== 任务列表已停止，位置 {self.current_index}/{total} ===')
+        elif failures:
+            self.get_logger().warn(
+                f'=== 任务列表执行结束：{failures}/{total} 个任务失败 ===')
         else:
             self.get_logger().info(f'=== 任务列表执行完成（{total}/{total}）===')
 
@@ -887,6 +903,9 @@ class TaskRunnerNode(Node):
     def _do_start(self) -> bool:
         """发送 START action goal，初始化 odom 原点。"""
         self.light_off()
+        # 所有START入口（跳过准备、按回车、正常倒计时）均在此置零。
+        # 这里只确认指令发布；没有舵机反馈确认，不宣称已机械到位。
+        self.set_servo(self.ANGLE_INIT, 'START置零（抓取位置）')
         success, msg = self._send_action_goal(
             BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], timeout=0)
         if success:
@@ -1682,6 +1701,10 @@ class TaskRunnerNode(Node):
         grab_task = RB26GrabBallTask(self, p)
         return grab_task.execute()
 
+    def _task_grab_sea_cucumber(self, p: dict) -> bool:
+        """前往配置抓取区，重复抓取、复检计数和投放；保留慢速步进上浮。"""
+        return GrabSeaCucumberTask(self, p).execute()
+
     # ── 投信标 / 采水 / 释放取水器 ─────────────────────────────────
 
     def _task_drop_beacon(self, p: dict) -> bool:
@@ -1925,7 +1948,7 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

@@ -45,6 +45,7 @@ def generate_launch_description():
     enable_nav = LaunchConfiguration("enable_nav")
     enable_task = LaunchConfiguration("enable_task")
     mission_file = LaunchConfiguration("mission_file")
+    turntable_mode = LaunchConfiguration("turntable_mode")
 
     hardware = _include("uv_hm", "hardware_launch.py", {
         "enable_hardware": LaunchConfiguration("enable_hardware"),
@@ -67,6 +68,7 @@ def generate_launch_description():
         "annotated_max_width": "0",
         "profile_params": camera_profile_params,
         "object_localizer_params": "",
+        "turntable_mode": turntable_mode,
     })
     navigation = _include("uv_nav", "navigation_launch.py", {
         "enable_nav": enable_nav,
@@ -98,7 +100,8 @@ def generate_launch_description():
             enable_motion="true",
         ),
         DeclareLaunchArgument("enable_hardware", default_value="true"),
-        DeclareLaunchArgument("target_id", default_value="mapping_grid"),
+        DeclareLaunchArgument("turntable_mode", default_value="false"),
+        DeclareLaunchArgument("target_id", default_value="turntable"),
         RegisterEventHandler(OnProcessExit(on_exit=_critical_exit)),
         validate_profile(profile, "real"),
         SetEnvironmentVariable(

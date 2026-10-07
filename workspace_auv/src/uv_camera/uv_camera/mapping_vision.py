@@ -84,16 +84,26 @@ class MappingVision:
         self.tag_id = int(node.get_parameter('mapping_tag_id').value)
         self.allowed_tag_ids = set(
             map(int, node.get_parameter('mapping_allowed_tag_ids').value))
+        if -1 in self.allowed_tag_ids:
+            self.allowed_tag_ids = set()
         family = str(node.get_parameter('mapping_tag_dictionary').value)
         dictionary_id = getattr(cv2.aruco, family, None)
         if dictionary_id is None:
             raise ValueError(f'建图视觉不支持标记字典 {family}')
         dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
+        self.detector_params = (cv2.aruco.DetectorParameters()
+                                if hasattr(cv2.aruco, 'DetectorParameters') else
+                                cv2.aruco.DetectorParameters_create())
+        self.detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
         if hasattr(cv2.aruco, 'ArucoDetector'):
-            self.detector = cv2.aruco.ArucoDetector(dictionary)
+            self.detector = cv2.aruco.ArucoDetector(dictionary, self.detector_params)
         else:
             self.detector = None
         self.dictionary = dictionary
+        self._last_tag_log = float('-inf')
+        node.get_logger().info(
+            f'AprilTag字典={family}，期望ID={self.tag_id}，'
+            f'允许ID={sorted(self.allowed_tag_ids) or "字典内全部"}')
         block = int(node.get_parameter('mapping_sgbm_block_size').value)
         self.sgbm = cv2.StereoSGBM_create(
             minDisparity=0,
@@ -361,6 +371,28 @@ class MappingVision:
         with self.debug_lock:
             self.debug_frames = encoded
 
+    def _detect_tags(self, raw, rectified):
+        """Decode raw and rectified views without mixing their corner coordinates."""
+        found, seen = [], set()
+        rejected_count = 0
+        for image, is_rectified in ((raw, False), (rectified, True)):
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            for variant in (gray, cv2.createCLAHE(
+                    clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)):
+                corners, ids, rejected = (
+                    self.detector.detectMarkers(variant) if self.detector is not None
+                    else cv2.aruco.detectMarkers(
+                        variant, self.dictionary, parameters=self.detector_params))
+                rejected_count += len(rejected)
+                if ids is None:
+                    continue
+                for polygon, tag_id in zip(corners, ids.flatten()):
+                    tag_id = int(tag_id)
+                    if tag_id not in seen:
+                        found.append((tag_id, polygon.reshape(-1, 2), is_rectified))
+                        seen.add(tag_id)
+        return found, rejected_count
+
     def process(self, frame, stamp, left_detections, right_detections):
         """Called after YOLO on the exact same in-memory stitched BGR frame."""
         result = MappingObservationArray()
@@ -370,6 +402,7 @@ class MappingVision:
         try:
             mid = frame.shape[1] // 2
             left, right = frame[:, :mid], frame[:, mid:mid*2]
+            raw_left = left
             if not self._prepare(left.shape[:2]):
                 result.reason = 'camera calibration unavailable'
                 return
@@ -426,21 +459,24 @@ class MappingVision:
                 observation.pose_age_s = float(age)
                 result.observations.append(observation)
 
-            gray = cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
-            for variant in (gray, cv2.createCLAHE(clipLimit=2.0,
-                                                  tileGridSize=(8, 8)).apply(gray)):
-                corners, ids, _ = (self.detector.detectMarkers(variant)
-                                   if self.detector is not None else
-                                   cv2.aruco.detectMarkers(variant, self.dictionary))
-                if ids is None:
-                    continue
-                for polygon, tag_id in zip(corners, ids.flatten()):
-                    result.tag_candidates += 1
-                    if (int(tag_id) in self.allowed_tag_ids
-                            and (self.tag_id < 0 or int(tag_id) == self.tag_id)):
-                        append(MappingObservation.TAG, int(tag_id), -1, 1.0,
-                               polygon.reshape(-1, 2), True)
-                break
+            tags, rejected = self._detect_tags(raw_left, left)
+            filtered_ids = []
+            for tag_id, polygon, rectified in tags:
+                result.tag_candidates += 1
+                if ((not self.allowed_tag_ids or tag_id in self.allowed_tag_ids)
+                        and (self.tag_id < 0 or tag_id == self.tag_id)):
+                    append(MappingObservation.TAG, tag_id, -1, 1.0, polygon, rectified)
+                else:
+                    filtered_ids.append(tag_id)
+            if time.monotonic() - self._last_tag_log >= 3.0:
+                self._last_tag_log = time.monotonic()
+                self.node.get_logger().info(
+                    f'AprilTag诊断：解码ID={[item[0] for item in tags]}，'
+                    f'字典={self.node.get_parameter("mapping_tag_dictionary").value}，'
+                    f'左目原图={raw_left.shape[1]}x{raw_left.shape[0]}，'
+                    f'被ID条件排除={filtered_ids}，本帧多预处理未解码候选数={rejected}，'
+                    f'深度失败={result.tag_depth_rejected}；'
+                    '未解码请检查字典、黑色编码边框及外围留白，镜像图像需单独复核')
             for detection in left_detections.detections:
                 class_id = int(detection.class_id)
                 if class_id in (0, 1):

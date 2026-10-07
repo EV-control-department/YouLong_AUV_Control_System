@@ -1,75 +1,71 @@
-# 转盘任务：实现与真机调试
+# 转盘任务：实现和调试
 
-此任务只注册为独立调试任务，**未加入仿真 mission**。目前没有可转动、可与细棍接触的 Stonefish 模型；以下是代码级实现与无接触验证方案，不代表已在真机上完成推盘。
+此任务只用于真机独立调试，未加入 Stonefish mission。它执行**三次预设动作**，不根据黄标变化、盘心位移或累计角度判定转盘是否转成。日志中的“执行完毕”只表示运动指令完成，不代表实际盘体转角达标。
 
-## 一、修改前如何运行，以及为什么不适用
+默认列表为 [mapping_grid.json](../src/uv_task/config/missions/mapping_grid.json)，现已按要求覆盖为 `start → turntable`；原建图任务实现和任务参数文件仍保留，但这个默认列表不再执行建图。启动前须把 AUV 人工放在前视能看到转盘、且不会碰撞盘架的位置；START 会建立 odom 原点，保留真机拔缆倒计时。若需要任务链自行粗定位，先实测盘心 odom 位姿，再在两项之间插入现有 `wtravelxyz` 和 `setrz`；这些基础动作的参数直接写在 mission 的 `params` 中，不需另建 YAML。当前没有填入猜测坐标。
 
-旧链路是 `uv_sensor` 采集前视左右图 → 进程内 YOLO-Seg 输出盘体和“黄色标签”两个掩膜 → `turntable_vision.py` 拟合盘体椭圆，用黄标质心计算图像角度 → DDS `/perception/turntable/observation` 小型 JSON → `TurntableTask` 订阅观测和 `/basic_motion/pose_info` → **用任务文件里手填的盘心、盘轴、棍端**反算 `WTRAVEL` 接近位置 → 每程 2 cm 以下 `BMOVE x` 插杆、3° 以下 `BMOVE rz` 推盘、完全退出、盘外反向复位，共三程。每个动作后会等待新的观测和实测里程计。默认 `allow_contact_motion=false`、`force_limited_control_confirmed=false`。
+粗定位填写的是**机器人目标位姿**，不是盘心。若量得盘心 odom 坐标 `(Dx,Dy,Dz)`，并确定机器人机头指向盘心的 odom 航向 `φ`（度，0° 沿 +x），则可先取相机离盘面 0.55 m 的观察位：
 
-旧视觉既不测盘心距离，也不修正盘轴；`last.pt` 真机模型只有 `wheel=3`，并没有黄标 YOLO 类别。因此旧实现的视觉节点无法按真实模型启用。相机画面的圆盘外形最多确定盘面是否正视，**不能**从四重对称的轮廓求出唯一绝对转角；长宽比也不等于黄标相位。
+```text
+robot_x = Dx - (0.55 + 0.23) cos(φ)
+robot_y = Dy - (0.55 + 0.23) sin(φ)
+robot_z = Dz - 0.076
+robot_yaw = φ
+```
 
-## 二、现在的信息流和几何
+其中 `0.23` 和 `0.076` 是当前相机 Body 名义外参，`z` 向下；装配不符须改用实测外参。把 `robot_x/y/z` 交给 `wtravelxyz`，再用 `setrz` 设 `robot_yaw`。`WTRAVEL` 会内部先转向行进方向、再直线前进，最后 `setrz` 正对盘面；它不做避障，因此必须先核对路径无障碍、观察位不会撞盘架。随后转盘任务仍会从前视观测重新计算非接触对准位和插孔位。若只有盘面朝外法向航向，而非“机头指向盘心”的航向，应先换算 180°，不能直接填入。
 
-`uv_camera` 的 YOLO 路径接收前视拼接原图，在进程内切成左右目。前视检测得到转盘整盘掩膜（真机 class ID `3`）；独立的 latest-frame worker 执行下面的测量，不在 DDS 上发布原始图像：
+## 信息流
 
-1. 用整盘多边形拟合椭圆，给出像素中心、长短轴比和检测置信度。长短轴比用于正视程度门控，不能单独判断法向符号。
-2. 在整盘掩膜内做 HSV 黄色检测，作为相位来源；也兼容未来独立黄标 YOLO 类别。黄标缺失时 `phase_valid=false`，仍可发布几何，但**不得插杆**。掩膜外黄色不会参与；盘体内其他黄色区域仍可能误检，需通过录像确认。
-3. 使用前视双目真实标定对左右图去畸、极线校正、SGBM。深度候选必须同时落在整盘掩膜、阈值化黑色区域和避开中心透孔及外缘的环带内；有效视差、测距范围、点数和平面残差均要通过门控。SGBM 点云拟合盘面，盘心像素射线与该平面相交得到左目 optical 坐标系里的盘心。根据盘面法向求实际盘轴方向，同时用 23 cm 外径验证检测目标。
-4. `uv_camera` 按采集时间匹配 `/basic_motion/pose_info`，应用前视左目 Body 外参，得到 `disk_center_world`、`disk_axis_yaw_deg`、深度点数、拟合残差、估计直径等小型观测，发至 `/perception/turntable/observation`。`uv_task` **不订阅图像、不运行 YOLO 或 SGBM**。
+前视双目图像在 `uv_camera` 进程内由 YOLO-Seg 提取整盘掩膜（真机 `last.pt` 中 `wheel=3`），再由 HSV 找黄色条幅。SGBM/盘面拟合估计盘心、盘轴和质量；视觉节点只向 DDS 发布带采集时间的小型 `/perception/turntable/observation` JSON。任务节点只订阅该观测与 `/basic_motion/pose_info`，不订阅图像话题，也不运行 YOLO/SGBM。黄标是其中一根辐条，而非必须另有 YOLO 类别。
 
-坐标约定：Body `x` 前、`y` 右、`z` 下；前视 optical `z` 前、`x` 右、`y` 下。真机双目中点相对 Body 的名义位置为 `(0.230,0,0.076)m`；左目为 `(0.230,-0.050,0.076)m`。本任务把用户提供的棍根 `(0,-0.09,0)m` 解释为**相对双目中点、沿 Body 轴**的偏移，棍尖沿 Body `+x` 再伸出 `0.16m`，因此名义棍尖 Body 坐标为 `(0.390,-0.090,0.076)m`。如果机械图纸里的“前视摄像头”指左目镜头，或者坐标在 optical 轴下，则这个换算不成立；必须重新测量并修改 `front_camera_center_*`，不能直接用这组值接触。盘轴世界航向和盘心均来自视觉，任务文件里的名义位置只可用于手动搜索。
+任务流程：
 
-`TurntableTask` 先验证观测采集戳和里程计新鲜度，再用视觉盘心/法向计算距盘约 0.55m 的**非接触正视对准位**；到位后重测，长短轴比须不小于 0.88、盘面拟合残差不大于 2cm、盘轴航向与机体航向差不大于 15°。黄标相位加现场标定的 `label_to_hole_deg` 才能选择四个孔位中的顶部或底部孔；计算棍尖的预插入目标，`WTRAVEL` 接近并再次视觉对孔，实际棍尖与目标孔误差大于 2.5cm 就停止。推盘期间比较**世界系**盘心，若移动大于 `max_disk_world_shift_m` 则停止，避免把机器人运动造成的像素位移误当作盘体移动。每程退出后须观测到同向黄标变化，下一程重新测盘心、盘轴和相位，再盘外对孔。
+1. 验证观测采集时间和实测里程计新鲜度；要求配置中的棍半径、盘外距离和插入深度有效，且两个接触放行开关都为 `true`。
+2. 用视觉盘心/盘轴走到约 0.55 m 外的非接触正视位，取一帧新观测。程序从黄色辐条起算 45°，在四个相邻辐条中间选最接近盘顶/盘底的孔。这里假设四辐条等间隔，需现场核对镜像与黄标位置。
+3. 每程都用**新观测**计算预插入位，以 `WTRAVEL` 对孔，到位后再视觉复核孔位误差。先用 `BMOVE x` 分段插入（每步 ≤2 cm），用 `BMOVE rz` 分段向固定方向推盘（每步 ≤2°），再分段退出。前两程在盘外反向复位 yaw，重新找孔；第三程退出即结束。
+4. `BasicMotion` 返回后仍核对实测里程计。图像、位姿、动作或几何检查失败即停止后续运动；**不测量推盘后的实际盘体转角，不据此增加或减少次数**。
 
-转盘几何按当前提供的尺寸：最外圆直径 230 mm（半径 115 mm），外环内沿直径 200 mm（半径 100 mm），中心内圈外沿直径 35 mm（半径 17.5 mm），四根条幅各宽 20 mm。可插入孔的径向范围仅为 17.5–100 mm；`contact_radius_m=0.05875` 是两边界中点的**候选值**，不是已验证的接触位置。代码检查静态径向净空，以及假定孔位在相邻 90° 条幅正中时的切向净空；尚不模拟整个 yaw 扫掠、条幅真实厚度或盘体变形。棍半径、黄标到孔位的相位仍未知。盘面点云法向受低纹理和折射影响，离线几何检查通过不代表可自动接触；当前 `BasicMotion` 接口没有接触力控制，现场应具备限推力、急停及人工退杆方案。
+固定几何：盘外径 230 mm，外环内沿直径 200 mm，内圈直径 35 mm，四辐条宽 20 mm；候选接触半径 58.75 mm。名义前视双目中点 Body `(0.230,0,0.076)m`，杆根相对中点 `(0,-0.09,0)m`、沿 Body `+x` 伸出 0.16 m，故名义棍尖 Body `(0.390,-0.090,0.076)m`。Body `x` 前、`y` 右、`z` 下。这些值固化于代码，**装配改变时必须同步改代码并空载复核**。盘心和盘轴不是手填值，运行时由视觉获得。
 
-## 三、参数与放行
+只需现场填写 3 个尺寸，另可调整单程 yaw 行程；见 [最小标定清单](turntable_calibration_checklist.md) 和 [任务模板](../src/uv_task/config/tasks/turntable.yaml)。默认两个放行开关为 `false`。位置小步进不等于力控制；接触前必须确认控制器限速/限推力、人工急停和退杆办法。因为不再监测盘体位移或转角，三次动作可能未转动、反向滑脱或把盘拉动；须通过录像/人工验收，不可把本任务的 `True` 当作物理完成证明。
 
-任务模板：[turntable.yaml](../src/uv_task/config/tasks/turntable.yaml)；逐项验收记录：[turntable_calibration_checklist.md](turntable_calibration_checklist.md)。已写入 `disk_diameter_m=0.230`、`inner_radius_m=0.0175`、`outer_radius_m=0.100`、`spoke_width_m=0.020`，以及候选 `contact_radius_m=0.05875`；棍根相机偏移和杆长仍沿用已有值。相机中点 Body 位置是 PDF 名义值，仍需装配复核。`rod_radius_m`、`label_to_hole_deg`、`image_angle_to_disk_sign`、`approach_standoff_m`、`insert_depth_m`、`drive_yaw_sign` 均须现场测量或标定。接触半径必须满足 `inner < contact < outer < 0.115m`，径向和静态条幅净空还须各留下棍半径与 1cm 余量。目标累计角度/绝对角度目前未确定，代码仅验证三次同向短行程，不能声称满足最终比赛角度。
+## 无接触调试
 
-相机关键参数：`enable_turntable_vision=true`、`turntable_disk_class_id=3`、`turntable_label_class_id=-1`（不需要黄标 YOLO 类）、`turntable_calibration_file`、`turntable_image_size=[640,480]`（**单目**；拼接图为 1280×480）、`turntable_calibration_native_size=[1280,960]`、`turntable_black_threshold=95`、`turntable_min_depth_points=30`、左右目 Body 平移及 optical→Body 旋转。真机默认 `config/front.npz`，运行时把原始每目 1280×960 标定等比换算为每目 640×480；若驱动采用裁剪或改变视场，需重新标定并填写实际原始标定尺寸。代码会拒绝工作尺寸不符的图像。仿真模式采用 `/sim/front_cam/{left,right}/camera_info`，但转盘接触任务不在仿真中执行。
-
-## 四、分阶段调试命令
-
-以下命令均从仓库根目录执行。先停止其他占用 `/dev/video*` 的相机节点。第一阶段只启动硬件、控制和本任务所需的前视相机，**不自动启动任务**：
+在仓库根目录构建并 source：
 
 ```bash
-cd /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System
 source /opt/ros/humble/setup.bash
 cd workspace_auv
 colcon build --symlink-install --packages-select uv_camera uv_task
 source install/setup.bash
-ros2 launch uv_bringup real.launch.py profile:=real_default enable_ai:=false enable_nav:=false enable_task:=false
 ```
 
-新终端同样 source 后，启用独立的前视检测/转盘测量。设置真实模型的映射表，避免把旧比赛类表解释为当前 `last.pt`：
+前视单目工作尺寸为 640×480，左右拼接 1280×480，标定文件为 `front.npz`。若真机底层节点尚未运行，先启动硬件、`basic_motion` 与转盘视觉，但关闭 launch 内的任务节点，以免出现两个 `task_runner`。在仓库根目录执行：
 
 ```bash
-cd /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System/workspace_auv
+cd /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System
 source /opt/ros/humble/setup.bash
-source install/setup.bash
-export UV_MODEL_MAPPING_FILE="$PWD/src/uv_camera/weights/real_last.yaml"
-ros2 run uv_camera uv_camera --ros-args \
-  --params-file "$PWD/src/uv_camera/config/profiles/real_default.yaml" \
-  -p sim_mode:=false -p enable_ai:=true -p device:=cuda:0 \
-  -p enable_down_camera:=false -p enable_mapping_vision:=false \
-  -p enable_turntable_vision:=true -p turntable_disk_class_id:=3 \
-  -p turntable_label_class_id:=-1 \
-  -p turntable_calibration_file:="$PWD/src/uv_camera/config/front.npz"
+source workspace_auv/install/setup.bash
+ros2 launch uv_bringup real.launch.py \
+  profile:=real_default enable_ai:=true enable_nav:=false enable_task:=false \
+  turntable_mode:=true
 ```
 
-检查 `ros2 topic echo /perception/turntable/observation`。期望 `valid=true`、采集戳持续更新、`depth_points≥30`、估计直径接近 0.230m、静止时 `disk_center_world` 波动可接受；有黄色标记时还应有 `phase_valid=true`、`phase_source=hsv`。分别从左/右偏角拍摄，确认 `axis_ratio` 随偏角变小、法向航向变化方向正确。在**未经过实物复核前**，不要仅凭一次 `valid=true` 开接触。
-
-第三个终端启动调试任务节点。`/task/exec` 只在 debug 模式开放，不会自动加载 YAML；需把已经测量的参数作为 JSON 传给服务。首次保持 `allow_contact_motion=false`，且建议先不要发执行服务，只观察测量话题和手动操控下的世界盘心稳定性。
+另一终端运行：
 
 ```bash
-ros2 run uv_task task_runner --ros-args -p debug_mode:=true
-ros2 topic echo /basic_motion/pose_info
-ros2 topic echo /perception/turntable/observation
-ros2 service call /task/exec uv_msgs/srv/ExecTask \
-  '{task_name: turntable, params_json: "{}", timeout: 0.0}'
+source /opt/ros/humble/setup.bash
+source /home/laurie/AUV_2026_Robocup/YouLong_AUV_Control_System/workspace_auv/install/setup.bash
+ros2 run uv_task task_runner
 ```
 
-上述 `{}` **应安全失败**，用来验证任务注册与禁动路径；要验证完整的只读几何检查，请把清单里的必填值填进 `params_json`，但继续令两个放行开关为 `false`。执行 START 建立里程计原点后再做世界坐标验证。人工测量四辐条净空和黄标相位、检验空载正视对准位、急停和限推力，最后才考虑分阶段将两个开关置 `true`。现场接触调试需有人监护，先测试一次最小 yaw 行程，再增加到三次。
+不传参数时自动加载安装后的 `mapping_grid.json`，立即开始 `start → turntable`，无需任务 launch。先检查 `ros2 topic echo /perception/turntable/observation` 与 `ros2 topic echo /basic_motion/pose_info`；观测应持续更新、`valid=true`、`phase_valid=true`，盘心/法向在静止时稳定。`turntable_mode:=true` 开启前视转盘视觉；真机 launch 已自动选用 `real_last.yaml` 类别映射与 `last.pt`。只运行 `task_runner` 不会自行启动硬件、运动控制或相机节点。默认接触开关关闭，且三个几何尺寸待实测，因此默认链**只能验证 START/任务加载，不能推盘**。完成 [放行清单](turntable_calibration_checklist.md) 并填写三个尺寸后，才考虑在人工监护下将两个接触开关置 `true`。
 
-常见拒绝原因：`missing_disk_mask`＝模型未检出整盘；`black ... 视差仅 N 点`＝黑色盘面缺纹理或 SGBM 阈值不适；`视觉直径 ... 不符合 23cm`＝标定/检测或错误目标；`采集时间附近无新鲜位姿`＝时钟/同步延迟；`yellow_marker_not_found`＝HSV 未见黄标，几何仍可用但不得插杆；`盘面尚未正视`＝先手动或非接触调整；`盘心世界坐标位移 ... 超限`＝可能拉动转盘或双目抖动，应停止并复核。调 `turntable_black_threshold` 时必须检查黑色阈值化是否落在真实盘面，不得为了通过门控任意降低最少点数。
+常见拒绝：`missing_disk_mask` 为整盘未检出；`phase_valid=false` 为黄色条幅未检出；盘面残差/长短轴比不达标说明未正视或深度不可靠；图像采集时间超限和里程计过旧表示同步/负载问题。不得通过放宽插孔误差绕过几何安全检查。
+
+## 仿真冒烟结果（2026-10-04）
+
+在独立的临时任务列表中仅运行 `start → turntable`，为测试填写三个几何量，同时保持两个接触开关为 `false`。Stonefish 采用 `water_embodied_intelligence_random.scn`、软件 OpenGL；前视视觉启用 `turntable_mode:=true` 并显式加载 `last.pt`。START 成功，YOLO 正常加载，但相机持续报 `missing_disk_mask`；任务 8 秒后报“初始等待超时：没有新的有效转盘视觉观测；最近无效原因=missing_disk_mask”，列表记录 1/2 失败。没有发出 WTRAVEL、插杆或推盘指令。
+
+当前场景里仅有静态水平圆盘示意物，不是 230 mm、竖直、可转动、可插孔的实物转盘；从初始位置也无法指望直接看到可供真机模型识别的目标。因此这次测试只证明任务链、模型加载、失败日志和禁动行为，**没有验证盘面定位精度或三次接触运动**。测试结束时由定时器送出的 SIGINT/退出码 -2 是关闭仿真的结果，不是转盘任务的失败原因。

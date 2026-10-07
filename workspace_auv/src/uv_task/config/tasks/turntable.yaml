@@ -1,35 +1,11 @@
-# 真机转盘独立任务模板。不会被仿真 mission 自动调用。
-# 不自动加入仿真任务树；接触参数和相位仍待标定，默认禁止运动。
-# 完整待测、待调参数及逐阶段放行清单见
-# workspace_auv/docs/turntable_calibration_checklist.md。
+# 真机独立任务：视觉对孔后执行三次预设 yaw 推盘，不判断实际盘体转角。
+# 现场测量和放行见 docs/turntable_calibration_checklist.md；未确认前禁止接触。
 task: turntable
 params:
   allow_contact_motion: false
   force_limited_control_confirmed: false
-
-  # 名义值只用于视觉搜索，不作为接触位姿。盘心和法向必须从前视双目读取。
-  disk_diameter_m: 0.230  # 最外圆直径 230 mm
-  outer_radius_m: 0.100   # 外环内沿：内圆直径 200 mm 的半径
-  inner_radius_m: 0.0175  # 中心内圈外沿：内圈直径 35 mm 的半径
-  spoke_width_m: 0.020    # 四根条幅各宽 20 mm，待实物复核
-  contact_radius_m: 0.05875  # 两径向边界中点，仅为候选孔位
-  # PDF 给出的前视双目中心在 Body 系的名义位置；装配后需复核。
-  front_camera_center_x: 0.230
-  front_camera_center_y: 0.000
-  front_camera_center_z: 0.076
-  # 棍根相对上述相机中心 (0,-0.09,0)m，沿 Body +x 延伸 0.16m。
-  # 因而名义棍端 Body 坐标 (0.390,-0.090,0.076)m。
-  # 以下量均需现场实测、去掉注释后填写。
-  # rod_radius_m: 棍子最大半径，单位 m
-  # 棍径和黄标到孔位的角度仍未知，上述候选半径不能视作接触已放行。
-  # label_to_hole_deg: 黄标到最近孔位的机械相位；HSV 黄标检测无需 YOLO 类别
-  # image_angle_to_disk_sign: 相机图像角度到盘面角度的方向；仅 +1/-1
-  # approach_standoff_m: 接触前棍端到盘面的轴向距离，单位 m
-  # insert_depth_m: 棍端穿过盘面后的插入深度，单位 m，最大 0.06
-
-  stroke_count: 3
-  stroke_yaw_deg: 6.0  # 示例上限；真机从更小角度试起，最大 12°
-  yaw_step_deg: 2.0    # 单步最大 3°；基础运动控制器需另行低速标定
-  drive_yaw_sign: 0    # 待现场试出 +1 或 -1；0 表示禁止动作
-  min_progress_deg: 2.0
-  max_disk_world_shift_m: 0.05
+  # 以下仅为待复核的调试占位值；现场测量并确认限推力前不得放行接触。
+  rod_radius_m: 0.02
+  approach_standoff_m: 0.2
+  insert_depth_m: 0.03
+  stroke_yaw_deg: 6.0  # 单次预设行程；建议从更小角度试起，最大 12°

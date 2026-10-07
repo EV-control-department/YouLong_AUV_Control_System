@@ -1,6 +1,11 @@
 /uv_camera:
   ros__parameters:
     sim_mode: false
+    down_rotate_180: true
+    # 同real_default：物理倒装不交换原始Camera1/Camera2像素或标定。
+    mapping_left_translation: [-0.130, 0.0305, 0.0645]
+    mapping_right_translation: [-0.130, -0.0305, 0.0645]
+    mapping_camera_rotation: [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     enable_gortc: false
     stream_annotated: false
 /object_localizer:
@@ -9,8 +14,10 @@
     front_image_height: 480
     down_image_width: 640
     down_image_height: 480
-    down_left_translation: [-0.130, -0.0305, 0.0645]
-    down_right_translation: [-0.130, 0.0305, 0.0645]
+    down_left_translation: [-0.130, 0.0305, 0.0645]
+    down_right_translation: [-0.130, -0.0305, 0.0645]
+    down_left_rotation: [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    down_right_rotation: [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     front_left_translation: [0.230, -0.050, 0.076]
     front_right_translation: [0.230, 0.050, 0.076]
     front_left_rotation: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]

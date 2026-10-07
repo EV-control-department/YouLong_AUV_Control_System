@@ -64,6 +64,8 @@ def test_mapping_associates_and_filters_compact_observations():
     task = MappingTask(_Node(), params)
     task.current_cell = 4
     task.state = 'observe_cell'
+    task.observation_start_stamp = 0.0
+    task._stable_at = lambda timestamp: True
     task._observation_cb(_frame(1))
     cone = MappingObservation()
     cone.kind = MappingObservation.CONE
@@ -93,9 +95,69 @@ def test_rejected_camera_frame_is_not_counted_as_synchronized():
     task = MappingTask(_Node(), params)
     task.current_cell = 4
     task.state = 'observe_cell'
+    task.observation_start_stamp = 0.0
+    task._stable_at = lambda timestamp: True
     task._observation_cb(_frame(1, processed=False))
     assert task.perception_stats['rejected_frames'] == 1
     assert task.cell_observations == {}
+
+
+def test_mapping_excludes_travel_delayed_and_unstable_frames():
+    from uv_msgs.msg import PoseInfo
+    params = load_task(Path(__file__).parents[1] / 'config/tasks/mapping_grid.json')[0]['params']
+    params['allow_motion_observations'] = False
+    task = MappingTask(_Node(), params)
+    task.current_cell = 4
+    for index in range(11):
+        pose = PoseInfo()
+        pose.stamp.sec = 2 + index // 10
+        pose.stamp.nanosec = (index % 10) * 100_000_000
+        task._pose_cb(pose)
+    assert task._stable_at(3.0)
+
+
+    task.state = 'travel_to_cell'
+    task.observation_start_stamp = 0.0
+    task._observation_cb(_frame(3))
+    assert not task.cell_observations
+    assert task.camera_ready  # Readiness must not require accepting moving observations.
+    task.state = 'observe_cell'
+    task.observation_start_stamp = 2.9
+    task._observation_cb(_frame(2))
+    assert not task.cell_observations
+    task.pose_history[-1].robot_yaw = 20.0
+    task._observation_cb(_frame(3))
+    assert not task.cell_observations
+    task.pose_history[-1].robot_yaw = 0.0
+    task._observation_cb(_frame(3))
+    assert task.cell_observations[4]['synchronized_frames'] == 1
+    task.pose_history[-1].robot_x = 0.1
+    assert not task._stable_at(3.0)
+    task.pose_history[-1].robot_x = 0.0
+    for pose in task.pose_history:
+        pose.robot_yaw = 179.9
+    task.pose_history[-1].robot_yaw = -179.9
+    assert task._stable_at(3.0)
+
+
+def test_mapping_accepts_low_dynamic_motion_but_rejects_fast_yaw():
+    from uv_msgs.msg import PoseInfo
+    params = load_task(Path(__file__).parents[1] / 'config/tasks/mapping_grid.json')[0]['params']
+    task = MappingTask(_Node(), params)
+    task.state = 'travel_to_cell'
+    task.observation_start_stamp = 0.0
+    for index in range(11):
+        pose = PoseInfo()
+        pose.stamp.sec = 2 + index // 10
+        pose.stamp.nanosec = (index % 10) * 100_000_000
+        pose.robot_x = index * 0.01
+        pose.robot_yaw = index * 0.5
+        task._pose_cb(pose)
+    task._observation_cb(_frame(3))
+    assert task.perception_stats['processed_frames'] == 1
+    task.pose_history[-1].robot_yaw = 30.0
+    task._observation_cb(_frame(3))
+    assert task.perception_stats['unstable_frames'] == 1
 
 
 def test_unverified_fallback_keeps_visual_cells_and_marks_guesses():
@@ -121,6 +183,7 @@ def test_fallback_map_does_not_trigger_cone_traversal(monkeypatch):
     params = load_task(path)[0]['params']
     task = MappingTask(_Node(), params)
     task.perception_stats['processed_frames'] = 1
+    task.camera_ready = True
     task.pose_history.append(object())
     monkeypatch.setattr('uv_task.mapping_task.rclpy.ok', lambda: True)
     monkeypatch.setattr(task, '_travel_to', lambda *_: True)

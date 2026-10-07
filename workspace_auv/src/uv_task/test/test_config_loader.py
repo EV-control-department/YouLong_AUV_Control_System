@@ -6,6 +6,7 @@ import pytest
 
 from uv_task.config_loader import (
     ConfigError,
+    default_mission_path,
     load_mission,
     load_mission_or_task,
 )
@@ -25,6 +26,19 @@ EXPECTED_TASKS = [
     "26rb_grab_ball",
     "light_target_rack_return_origin",
 ]
+
+
+def test_sea_cucumber_mission_and_nested_parameters():
+    tasks = load_mission(CONFIG_ROOT / 'missions' / 'grab_sea_cucumber.yaml')
+    assert [t['name'] for t in tasks] == ['start', 'grab_sea_cucumber']
+    params = tasks[1]['params']
+    assert params['search_pose'] == [3.0, 1.0, 0.8, 0.0]
+    assert params['drop_pose'] == [5.0, 1.0, 0.8, 0.0]
+    assert params['max_press_distance_m'] == 0.15
+    assert params['ascent_step_m'] == 0.03
+    assert params['sea_cucumber_class_id'] == 2
+    assert params['pickup_servo_angle_rad'] == 0.0
+    assert params['release_servo_angle_rad'] == pytest.approx(1.5707963267948966)
 
 
 def test_default_mission_preserves_order_and_values():
@@ -59,14 +73,59 @@ def test_standalone_task_file_loads_as_one_task():
     assert tasks[0]["params"]["move_timeout"] == 120.0
 
 
-def test_mapping_json_comments_are_not_task_parameters():
+def test_default_direct_run_registers_mapping_debug(monkeypatch):
+    import ament_index_python.packages
+
+    monkeypatch.setattr(
+        ament_index_python.packages, "get_package_share_directory",
+        lambda name: str(CONFIG_ROOT.parent),
+    )
+    assert default_mission_path() == MAPPING_MISSION
+    tasks = load_mission(default_mission_path())
+    assert [task["name"] for task in tasks] == ["start", "mapping_grid"]
+    assert tasks[0]["params"]["skip_preparation"] is True
+    assert tasks[1]["params"]["enable_traversal"] is False
+    assert tasks[1]["params"]["tag_timeout"] > 0
+    assert tasks[1]["params"]["tag_dictionary"] == "DICT_APRILTAG_16h5"
+
+
+def test_turntable_mission_can_prepend_existing_coarse_motion(tmp_path):
+    mission = tmp_path / "turntable.yaml"
+    task_dir = CONFIG_ROOT / "tasks"
+    mission.write_text(
+        "mission:\n"
+        "  name: turntable_test\n"
+        "  tasks:\n"
+        "    - name: start\n"
+        f"      config: {task_dir / 'start.yaml'}\n"
+        "    - name: wtravelxyz\n"
+        "      params: {x: 1.22, y: 0.0, z: 0.424}\n"
+        "    - name: btravelx\n"
+        "      params: {dx: 0.25}\n"
+        "    - name: setz\n"
+        "      params: {z: 0.42}\n"
+        "    - name: setrz\n"
+        "      params: {rz: 0.0}\n"
+        "    - name: turntable\n"
+        f"      config: {task_dir / 'turntable.yaml'}\n",
+        encoding="utf-8",
+    )
+    tasks = load_mission(mission)
+    assert [task["name"] for task in tasks] == [
+        "start", "wtravelxyz", "btravelx", "setz", "setrz", "turntable"]
+    assert tasks[1]["params"] == {"x": 1.22, "y": 0.0, "z": 0.424}
+    assert tasks[2]["params"] == {"dx": 0.25}
+    assert tasks[3]["params"] == {"z": 0.42}
+
+
+def test_mapping_task_json_comments_are_not_task_parameters():
     tasks = load_mission_or_task(MAPPING_TASK)
     mission_tasks = load_mission(MAPPING_MISSION)
 
     assert tasks[0]["name"] == "mapping_grid"
     assert tasks[0]["params"]["grid_side_m"] == 2.4
     assert "comments" not in tasks[0]["params"]
-    assert mission_tasks[1]["params"] == tasks[0]["params"]
+    assert [task["name"] for task in mission_tasks] == ["start", "mapping_grid"]
 
 
 def test_nested_parameters_are_merged_and_flattened(tmp_path):

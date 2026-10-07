@@ -3,6 +3,9 @@
 from importlib import import_module
 import threading
 import time
+import math
+from pathlib import Path
+import pytest
 from types import SimpleNamespace
 
 
@@ -20,6 +23,78 @@ class _Logger:
 
     def error(self, _message):
         pass
+
+
+def test_sea_cucumber_retries_and_delivers_until_five_removed():
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    calls = []
+    task._node = SimpleNamespace(
+        stopped=False, set_servo=lambda angle, label: calls.append(('servo', angle)),
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=1)))
+    task._logger = _Logger()
+    task._total_timeout = 10
+    task._search_pose = (3, 1, .8, 0)
+    task._search_travel_timeout = 2
+    task._target_count = 5
+    task._max_failed_attempts = 3
+    task._pickup_angle = 0
+    task._servo_timeout = task._return_timeout = 1
+    task._descent_duration = .1
+    task.confirmed_removed = task.delivery_commands = 0
+    task._measured_pose = lambda: (0,0,.8,0,0,0)
+    task._travel = lambda pose, *args: calls.append(('travel', pose)) or True
+    task._servo_horizontally = lambda: (.1,.2,.8,0)
+    counts = iter((5,5,5,3,3,0))
+    task._count_visible = lambda *args: next(counts)
+    task._apply_gripper_offset = task._wait_pre_descent_settle = task._descend = lambda: True
+    task._return_to_recorded_pose = lambda pose: True
+    task._deliver = lambda pose, deadline, return_to_search: calls.append(('deliver', return_to_search)) or True
+    assert task.execute()
+    assert calls[0] == ('travel', task._search_pose)
+    assert task.confirmed_removed == 5
+    assert [c for c in calls if c[0] == 'deliver'] == [('deliver', True), ('deliver', False)]
+    assert len([c for c in calls if c[0] == 'servo']) == 3
+
+
+def test_sea_cucumber_scan_rejects_old_capture_and_accepts_fresh_frame():
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._class_id, task._min_confidence, task._detection_timeout = 2, .35, 1
+    now = time.monotonic()
+    task._scan_received_after, task._scan_capture_after_ns = now-.2, 100
+    stamp = SimpleNamespace(sec=0, nanosec=99)
+    detection = SimpleNamespace(class_id=2, confidence=.9, mask_x=[1,2,3], mask_y=[4,5,6])
+    task._node = SimpleNamespace(_perception_lock=threading.RLock(), _down_detections={
+        'down_left': (now, SimpleNamespace(header=SimpleNamespace(stamp=stamp), detections=[detection]))})
+    assert task._best_left_detection() is None
+    stamp.nanosec = 101
+    assert task._best_left_detection().pixel_x == 2
+
+
+def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
+    # 仅提取方法执行：无需创建节点，测试不会向DDS发布或触发硬件。
+    import ast
+    from zit6_interfaces.msg import ZitServo
+    file = Path(__file__).parents[1] / 'uv_task' / 'task_runner.py'
+    tree = ast.parse(file.read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'TaskRunnerNode')
+    methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in ('set_servo', '_do_start')]
+    namespace = {'math': math, 'ZitServo': ZitServo, 'BasicMotion': _grab.BasicMotion}
+    exec(compile(ast.Module(body=methods, type_ignores=[]), str(file), 'exec'), namespace)
+    messages, events = [], []
+    fake = SimpleNamespace(pub_servo=SimpleNamespace(publish=messages.append),
+                           get_logger=lambda: _Logger(), ANGLE_INIT=0,
+                           light_off=lambda: events.append('light'),
+                           _send_action_goal=lambda *args, **kw: (events.append('start') or True, 'ok'))
+    fake.set_servo = lambda angle, label: namespace['set_servo'](fake, angle, label)
+    fake.set_servo(math.pi/2, '放')
+    assert messages[-1].servo_id == 1
+    assert messages[-1].angle == pytest.approx(math.pi/2)
+    assert namespace['_do_start'](fake)
+    assert messages[-1].angle == 0
+    assert messages[-1].servo_id == 1
+    assert events == ['light', 'start']
+    with pytest.raises(ValueError):
+        fake.set_servo(90, '错误度数')
 
 
 def test_execute_retries_when_ball_remains_after_return():

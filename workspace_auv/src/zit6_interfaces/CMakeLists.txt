@@ -9,6 +9,10 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/ZitServo.msg"
+  "msg/ZitServoState.msg"
+  "msg/ZitOdom.msg"
+  "srv/SetOrigin.srv"
   "msg/ZitSetpoint.msg"
   "msg/ZitPushrod.msg"
   "msg/ZitStatus.msg"
