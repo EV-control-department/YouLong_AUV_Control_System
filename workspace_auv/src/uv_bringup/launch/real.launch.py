@@ -40,6 +40,11 @@ def generate_launch_description():
             description=(
                 'Launch camera hardware. False permits core bringup while '
                 'camera/AI wait for a separately started camera node.')),
+        DeclareLaunchArgument(
+            'enable_perception_gate', default_value='false',
+            description=(
+                'Require healthy perception output before mission start and '
+                'during mission monitoring. Temporarily disabled by default.')),
         DeclareLaunchArgument('enable_stream', default_value='true'),
         DeclareLaunchArgument('enable_perception_gui', default_value='false'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
@@ -55,6 +60,7 @@ def generate_launch_description():
         '--enable-motion', LaunchConfiguration('enable_motion'),
         '--enable-camera', LaunchConfiguration('enable_camera'),
         '--enable-ai', LaunchConfiguration('enable_ai'),
+        '--enable-perception-gate', LaunchConfiguration('enable_perception_gate'),
         '--enable-nav', LaunchConfiguration('enable_nav'),
         '--enable-task', LaunchConfiguration('enable_task'),
         '--enable-stream', LaunchConfiguration('enable_stream'),

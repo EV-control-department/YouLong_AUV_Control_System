@@ -240,6 +240,10 @@ class RealStartupManager(Node):
             and float(msg.k[4]) > 0.0)
 
     def _camera_health_cb(self, msg):
+        # The default real profile leaves cameras disabled; ignore health from
+        # an optional camera node started independently by the user.
+        if not self.args.enable_camera:
+            return
         name = str(msg.sensor_name).strip().lower()
         if name.startswith('camera/'):
             name = name[len('camera/'):]
@@ -256,9 +260,12 @@ class RealStartupManager(Node):
             self.component_state[f'camera/{name}'] = (
                 'READY' if available else f'DEGRADED ({detail})')
             if changed:
-                log = self.get_logger().info if available else self.get_logger().warning
-                log(f'camera/{name}: {"healthy" if available else "unavailable"}: '
-                    f'{detail}')
+                message = (f'camera/{name}: '
+                           f'{"healthy" if available else "unavailable"}: {detail}')
+                if available:
+                    self.get_logger().info(message)
+                else:
+                    self.get_logger().warning(message)
 
     def _detection_cb(self, msg):
         camera = str(msg.camera_name).strip().lower()
@@ -560,7 +567,8 @@ class RealStartupManager(Node):
             return False
         if self.args.enable_camera and not self._healthy_cameras():
             return False
-        if self.args.enable_ai and not self._healthy_perception():
+        if (self.args.enable_ai and self.args.enable_perception_gate
+                and not self._healthy_perception()):
             return False
         if self.args.enable_nav and (
                 self._nav_health is not True
@@ -745,7 +753,11 @@ class RealStartupManager(Node):
                     'perception_gui',
                     ['ros2', 'run', 'uv_perception', 'perception_gui'],
                     ['/perception_gui'])
-            if self._healthy_cameras():
+            if not self.args.enable_perception_gate:
+                self.component_state['perception gate'] = (
+                    'SKIPPED (enable_perception_gate=false)')
+                self._dashboard()
+            elif self._healthy_cameras():
                 self._phase('perception gate', self._healthy_perception,
                             'fresh detector output for each healthy camera and fresh tracks')
             elif self.args.enable_task:
@@ -1068,7 +1080,9 @@ class RealStartupManager(Node):
             f'mission validated: {self.mission_path}; '
             f'flags: hardware={self.args.enable_hardware}, '
             f'motion={self.args.enable_motion}, camera={self.args.enable_camera}, '
-            f'ai={self.args.enable_ai}, nav={self.args.enable_nav}, '
+            f'ai={self.args.enable_ai}, '
+            f'perception_gate={self.args.enable_perception_gate}, '
+            f'nav={self.args.enable_nav}, '
             f'task={self.args.enable_task}, stream={self.args.enable_stream}, '
             f'record={self.args.record_session}; '
             f'detected nodes={sorted(self._node_names())}')
@@ -1167,10 +1181,11 @@ class RealStartupManager(Node):
                 self._trigger_safe_stop('a critical task dependency disappeared or became stale')
             elif not self._healthy_backend():
                 self._trigger_safe_stop('hardware/localization/odom data stale or unhealthy')
-            elif self.args.enable_ai and not self._healthy_cameras():
+            elif (self.args.enable_ai and self.args.enable_perception_gate
+                  and not self._healthy_cameras()):
                 self._trigger_safe_stop('no calibrated camera stream is currently healthy')
-            elif self.args.enable_ai and self._healthy_cameras() \
-                    and not self._healthy_perception():
+            elif (self.args.enable_ai and self.args.enable_perception_gate
+                  and self._healthy_cameras() and not self._healthy_perception()):
                 self._trigger_safe_stop('perception output is stale')
             elif self.args.enable_nav and (
                     self._nav_health is not True
@@ -1308,7 +1323,8 @@ def _parse_args(argv=None):
     parser.add_argument('--mission-file', default='')
     for name, default in (
         ('enable_hardware', True), ('enable_motion', True),
-        ('enable_camera', False), ('enable_ai', True), ('enable_nav', False),
+        ('enable_camera', False), ('enable_ai', True),
+        ('enable_perception_gate', False), ('enable_nav', False),
         ('enable_task', False), ('enable_stream', True),
         ('enable_perception_gui', False), ('record_session', False),
     ):
@@ -1328,7 +1344,8 @@ def _parse_args(argv=None):
     parser.add_argument('--preview-port', default='1984')
     args, ros_args = parser.parse_known_args(argv)
     for name in ('enable_hardware', 'enable_motion', 'enable_camera', 'enable_ai',
-                 'enable_nav', 'enable_task', 'enable_stream',
+                 'enable_perception_gate', 'enable_nav', 'enable_task',
+                 'enable_stream',
                  'enable_perception_gui', 'record_session'):
         setattr(args, name, _as_bool(getattr(args, name)))
     return args, ros_args
