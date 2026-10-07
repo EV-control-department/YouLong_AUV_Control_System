@@ -205,6 +205,7 @@ def generate_launch_description():
         "profile_params": sim_profile_params,
     })
     control = _include("uv_control", "control_launch.py", {
+        "reset_mcu_origin_on_start": "false",
         "enable_motion": enable_motion,
         "profile_params": "",
     })

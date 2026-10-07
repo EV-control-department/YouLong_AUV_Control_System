@@ -12,7 +12,8 @@ def generate_launch_description():
     profile_params = LaunchConfiguration("profile_params")
 
     def _nodes(context):
-        parameters = []
+        parameters = [{'reset_mcu_origin_on_start':
+                       LaunchConfiguration('reset_mcu_origin_on_start').perform(context).lower() == 'true'}]
         profile = profile_params.perform(context).strip()
         if profile:
             parameters.append(profile)
@@ -27,6 +28,7 @@ def generate_launch_description():
         )]
 
     return LaunchDescription([
+        DeclareLaunchArgument('reset_mcu_origin_on_start', default_value='true'),
         DeclareLaunchArgument("enable_motion", default_value="true"),
         DeclareLaunchArgument("profile_params", default_value=""),
         OpaqueFunction(function=_nodes),

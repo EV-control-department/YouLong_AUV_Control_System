@@ -680,6 +680,7 @@ class TaskRunnerNode(Node):
                 f'| 指令位姿=({self._cmd_x:.2f}, {self._cmd_y:.2f}, '
                 f'{self._cmd_z:.2f}, {self._cmd_yaw:.1f}°)')
 
+            success = False
             try:
                 success = self._execute_task(name, params)
                 if not success:
@@ -692,6 +693,10 @@ class TaskRunnerNode(Node):
                     f'[{self.current_index + 1}/{total}] {name} 发生异常：{e}')
 
             self.current_index += 1
+            if name == 'start' and not success:
+                # 普通任务允许失败后继续，但原点初始化是所有运动的前提。
+                self.get_logger().error('START初始化失败：禁止继续移动和抓取，请修复原点/心跳后重新启动任务')
+                self.stopped = True
 
         self.running = False
         self._current_task_name = ''
@@ -1797,7 +1802,7 @@ class TaskRunnerNode(Node):
         self.stopped = True
         if self._active_goal_handle is not None:
             self.get_logger().info('正在取消当前动作目标')
-            self._action_client.async_cancel_goal(self._active_goal_handle)
+            self._active_goal_handle.cancel_goal_async()
             self._active_goal_handle = None
         response.success = True
         response.message = '任务已停止'

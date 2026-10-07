@@ -1,5 +1,52 @@
 # 调试指南
 
+## START 与心跳统一管理（真机新版）
+
+`basic_motion` 是 `/zit6/cmd/agxhbt` 的唯一心跳发送者；`uv_hm` 默认只监控
+（`enable_heartbeat:=false`）。请停止旧版 uv_hm、rqt、GUI、CLI 心跳发布器，
+构建后重新启动节点，旧进程不会自动加载新代码。
+
+START 不再按心跳发布器数量拒绝初始化：rqt 创建了发布器但未发送消息时，
+不会阻断 START。仍然检查 MCU 是否实际处于上锁状态；如果其他节点持续发送
+解锁心跳使 MCU 无法上锁，START 会等待超时失败，不绕过固件限制。
+
+BasicMotion 中文诊断日志：启动时列出配置和接口；运行中每3秒汇报 status/odom
+接收年龄、导航有效性、原点代数、心跳启用状态和累计发送包数。
+START 的 `[1/6]` 到 `[6/6]` 分别表示等待上锁、查找服务、发送请求、
+确认新代odom、初始化上位机原点并发布位姿、启用心跳并返回成功。
+等待服务/odom/移动解锁时每秒打印实际条件。没有START日志表示请求尚未到达执行回调；
+odom累计为0需检查MCU发布和DDS通信；心跳未启用时看START最后停在哪一步。
+心跳累计增加只证明本地publish成功，不证明MCU收到或已解锁。
+
+START 顺序：暂停自身心跳 → 等待 MCU 上锁（最多3秒）→ 调用 `setorigin`
+→ 确认有效且代数一致的新 odom → 初始化上位机原点并发布位姿 → 开始15Hz心跳。
+之后运动会等待 MCU 确认解锁；START 失败时不启用心跳，也不执行后续抓取。
+因此无需先手动解锁再 START；这正是旧流程被 `requires disarmed state` 拒绝的原因。
+再次 START 也会先暂停心跳、等待上锁，不绕过固件保护。节点退出后心跳停止，
+由 MCU 的心跳超时保护上锁；务必保证没有第二个心跳源。
+
+```bash
+cd /home/nvidia/YouLong_AUV_Control_System/workspace_auv
+source /opt/ros/foxy/setup.bash
+colcon build --symlink-install --packages-select uv_control uv_hm uv_task
+source install/setup.bash
+# 独立终端，均加载上述环境；agent、视觉节点仍按各任务要求启动
+ros2 run uv_control basic_motion
+ros2 run uv_hm hw_manager --ros-args -p enable_heartbeat:=false
+# 确认现场路径、抓取深度和下压参数后，在另一终端启动
+ros2 run uv_task task_runner --ros-args \
+  -p mission_file:="$PWD/src/uv_task/config/missions/grab_sea_cucumber.yaml"
+```
+
+海参下压参数位于 `src/uv_task/config/tasks/grab_sea_cucumber.yaml`。
+日志中的 `0.5m/s × 4s = 2m` 大于 `1.3m` 配置上限，且速度、上限均超出当前
+安全校验（速度≤0.3m/s，上限≤0.5m）；不得通过删除校验解决。按实际池深、机构
+行程填写，预计行程必须不超过上限。该上限是配置检查，不是触底传感器。
+上浮仍使用小步 BMOVE，数量未减少时有限次重复抓取，受总超时限制。
+
+本节替代下文旧版“uv_hm持续解锁心跳”的启动方式；手动心跳仅用于独立维护，
+不可与 BasicMotion 同时启用。
+
 ## 真机完整复制后的建图部署检查（Foxy / Jetson）
 
 唯一目标目录为 `/home/nvidia/YouLong_AUV_Control_System/workspace_auv`，
@@ -633,6 +680,35 @@ ros2 run uv_record record \
 
 ## 最新 MCU 工程：独立心跳与零点初始化（2026-10-07）
 
+**后续更新：BasicMotion START 已接入 setorigin；通常不再提前手动调用。**
+真机 `reset_mcu_origin_on_start` 默认true：START单次请求MCU原点，等待同代有效
+`ZitOdom` 后初始化上位机原点。服务拒绝、超时或缺少反馈都返回START失败，不发送移动。
+服务超时时请求可能已执行，不应盲目重试；检查MCU原点代数。真机位姿改由
+`/zit6/state/odom` 提供，旧`/zit6/state/pos`不再混用。后续移动最多等待5秒确认
+新鲜状态中MCU已解锁且导航就绪。它不发心跳，仍由唯一的uv_hm负责。
+
+新启动顺序：连接agent，确认未解锁且导航稳定、关闭其他心跳源 → 启动BasicMotion和
+视觉 → 启动唯一uv_hm → 启动包含START的任务链。初次原点未设置时uv_hm不会解锁；
+START成功设置原点后，MCU重新积累至少1秒心跳再解锁。若原点已经设置且MCU已解锁，
+必须停止任务/控制输出、关闭所有心跳并确认未解锁后，才能再次START。
+不能自动停用其他节点的心跳，也不绕过固件解锁状态检查。
+
+```bash
+cd /home/nvidia/YouLong_AUV_Control_System/workspace_auv
+source /opt/ros/foxy/setup.bash
+colcon build --packages-select zit6_interfaces uv_control uv_bringup --symlink-install
+source install/setup.bash
+ros2 run uv_control basic_motion
+# 已在安全未解锁条件下准备好时，可以显式测试START（会重置坐标）：
+ros2 action send_goal /basic_motion uv_msgs/action/BasicMotion \
+  '{cmd_type: 6, axes: "", target: [0.0, 0.0, 0.0, 0.0], timeout: 0.0}'
+```
+
+`sim.launch.py` 显式传入 `reset_mcu_origin_on_start:=false`，保留原仿真START行为。
+其他旧固件/仿真若直接run可传 `-p reset_mcu_origin_on_start:=false`，但不能将此用作
+新真机固件服务失败时的绕过办法。下面手动setorigin命令保留用于服务诊断，不要在
+任务运行或解锁状态执行。
+
 对照 `AUV_zit6_cmake-master`，心跳没有换接口：`/zit6/cmd/agxhbt`，类型
 `std_msgs/msg/UInt32`。`uv_hm` 的 `hw_manager` 默认 15 Hz，模式 1 是正常导航模式；
 模式 3 是遥控模式（绕过导航解锁检查，不绕过原点要求），不是“强制推力模式”。
@@ -664,14 +740,16 @@ ros2 service call /zit6/cmd/setorigin zit6_interfaces/srv/SetOrigin '{}'
 ros2 topic echo /zit6/state/odom
 ```
 
-随后在独立终端启动唯一的心跳节点（本操作会请求解锁，不是纯监控）：
+仅在停止 BasicMotion 的独立维护诊断中，才可启动唯一的维护心跳节点
+（本操作会请求解锁，不是纯监控）：
 
 ```bash
 cd /home/nvidia/YouLong_AUV_Control_System/workspace_auv
 source /opt/ros/foxy/setup.bash
 source install/setup.bash
 ros2 run uv_hm hw_manager --ros-args \
-  --params-file "$PWD/src/uv_hm/config/profiles/real_default.yaml"
+  --params-file "$PWD/src/uv_hm/config/profiles/real_default.yaml" \
+  -p enable_heartbeat:=true
 ```
 
 另一个终端做只读检查：
@@ -682,8 +760,8 @@ ros2 topic hz /zit6/cmd/agxhbt              # 预期约15 Hz
 ros2 topic echo /zit6/state/status         # 查看is_armed/navigation_ready/error_flags
 ```
 
-确认后再启动 BasicMotion 和任务。任务 `START` 仍只初始化上位机坐标系，不能替代 MCU
-setorigin；务必先设置 MCU 原点，再执行 START，之后不要重置 MCU 原点。
+以上手动流程仅用于服务诊断。新版任务 `START` 会再次调用 MCU setorigin，
+不要同时运行维护心跳和新版 BasicMotion；请停止维护节点，再按文档开头的新顺序启动。
 最新固件 `/zit6/state/pos` 已是 MCU odom 坐标，BasicMotion 可把它视作稳定的底层坐标系
 再定义任务原点；若运行中重新 setorigin，上位机原点就会失效。
 `real.launch.py` 已包含 hw_manager，不要在 launch 之外重复启动一份。

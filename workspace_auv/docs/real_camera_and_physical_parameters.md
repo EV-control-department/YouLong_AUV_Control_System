@@ -99,7 +99,8 @@ cd /home/nvidia/YouLong_AUV_Control_System/workspace_auv
 source /opt/ros/foxy/setup.bash
 colcon build --packages-select zit6_interfaces uv_task --symlink-install
 source install/setup.bash
-# 需已启动相机AI、BasicMotion和唯一uv_hm心跳，并先完成MCU setorigin。
+# 需已启动相机AI、新版BasicMotion和唯一uv_hm心跳，保持MCU未解锁。
+# 新版START会调用MCU setorigin，不必提前手动设置；导航必须有效。
 # 以下命令会自动执行START、移动和抓放，不是只读测试。
 ros2 run uv_task task_runner --ros-args \
   -p mission_file:="$PWD/src/uv_task/config/missions/grab_sea_cucumber.yaml"

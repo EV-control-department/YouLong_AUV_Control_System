@@ -35,13 +35,19 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             raise ValueError(
                 f'抓海参缺少必填参数：{", ".join(missing)}；'
                 '请在任务 YAML 或 params 中填写现场标定值')
-        super().__init__(node, params)
         max_press_distance = float(params['max_press_distance_m'])
-        if (not 0 < self._descent_speed <= 0.3
-                or self._descent_duration <= 0
+        speed = float(params['descent_speed_mps'])
+        duration = float(params['descent_duration_seconds'])
+        if (not all(map(math.isfinite, (speed, duration, max_press_distance)))
+                or not 0 < speed <= 0.3
+                or duration <= 0
                 or not 0 < max_press_distance <= 0.5
-                or self._descent_speed * self._descent_duration > max_press_distance):
-            raise ValueError('下压速度、时长或行程超出安全配置，请按实机标定')
+                or speed * duration > max_press_distance):
+            raise ValueError(
+                f'下压配置不安全：速度={speed:g}m/s，时长={duration:g}s，'
+                f'预计行程={speed * duration:g}m，上限={max_press_distance:g}m；'
+                '要求速度≤0.3m/s、行程上限≤0.5m且预计行程不超过上限，请按实机标定')
+        super().__init__(node, params)
         self._class_id = int(params['sea_cucumber_class_id'])
         if self._class_id < 0:
             raise ValueError('sea_cucumber_class_id 必须非负')

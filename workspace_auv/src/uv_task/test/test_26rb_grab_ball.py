@@ -4,6 +4,7 @@ from importlib import import_module
 import threading
 import time
 import math
+import ast
 from pathlib import Path
 import pytest
 from types import SimpleNamespace
@@ -23,6 +24,33 @@ class _Logger:
 
     def error(self, _message):
         pass
+
+
+def test_failed_start_prevents_grab_and_movement():
+    source = Path(__file__).parents[1] / 'uv_task' / 'task_runner.py'
+    cls = next(n for n in ast.parse(source.read_text()).body
+               if isinstance(n, ast.ClassDef) and n.name == 'TaskRunnerNode')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'run_task_list')
+    scope = {}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'), scope)
+    calls = []
+    logger = SimpleNamespace(info=lambda msg: None, warn=lambda msg: None, error=lambda msg: None)
+    node = SimpleNamespace(tasks=[{'name': 'start'}, {'name': 'grab_sea_cucumber'}],
+                           _cmd_x=0., _cmd_y=0., _cmd_z=0., _cmd_yaw=0.,
+                           get_logger=lambda: logger,
+                           _execute_task=lambda name, params: calls.append(name) or False)
+    scope['run_task_list'](node)
+    assert calls == ['start']
+    assert node.stopped and not node.running
+
+
+def test_unsafe_sea_descent_reports_distance_before_initialization():
+    params = dict(sea_cucumber_class_id=2, image_width=640, image_height=480,
+                  gripper_offset_x_m=.3, gripper_offset_y_m=0.,
+                  descent_speed_mps=.5, descent_duration_seconds=4.,
+                  max_press_distance_m=1.3, drop_pose=[0,0,.3,0], search_pose=[1,1,.3,0])
+    with pytest.raises(ValueError, match='预计行程=2m'):
+        GrabSeaCucumberTask(None, params)
 
 
 def test_sea_cucumber_retries_and_delivers_until_five_removed():

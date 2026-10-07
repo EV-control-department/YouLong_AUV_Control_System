@@ -72,11 +72,13 @@ import time
 
 import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, UInt32
 
-from zit6_interfaces.msg import ZitSetpoint, ZitStatus
+from zit6_interfaces.msg import ZitSetpoint, ZitStatus, ZitOdom
+from zit6_interfaces.srv import SetOrigin
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import PoseInfo
 from uv_control.coordinate import Coordinate, wrap_deg, wrap_rad
@@ -123,6 +125,7 @@ class BasicMotionNode(Node):
 
         # ── 状态 ───────────────────────────────────────────────
         self.status = ZitStatus()
+        self._last_status_received = 0.0
         self.pose = Coordinate()        # 当前位置 (odom 系)
         self._target = Coordinate()     # 当前目标 (odom 系)
         self._map_pose = Coordinate()   # 原始 map 系位置（ZIT6 上报，未经 odom 转换）
@@ -131,6 +134,36 @@ class BasicMotionNode(Node):
         self._state_lock = threading.Lock()
         self.vel_body = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}   # 机体速度                     # 世界速度
         self._pose_stamp = self.get_clock().now().to_msg()            # 位姿测量时间（_pos_cb 接收时刻）
+        self.declare_parameter('reset_mcu_origin_on_start', True)
+        self.declare_parameter('origin_service_timeout', 5.0)
+        self._use_mcu_odom = bool(self.get_parameter('reset_mcu_origin_on_start').value)
+        self.declare_parameter('heartbeat_rate', 15.0)
+        self.declare_parameter('arm_mode', 1)
+        hb_rate = float(self.get_parameter('heartbeat_rate').value)
+        if not math.isfinite(hb_rate) or not 10 <= hb_rate <= 100:
+            raise ValueError('heartbeat_rate 必须为10~100 Hz')
+        if self.get_parameter('arm_mode').value not in (1, 3):
+            raise ValueError('arm_mode 必须为1或3')
+        self._heartbeat_enabled = False  # 启动节点不解锁，只有START握手完成后才开启。
+        self._heartbeat_sent = 0
+        self._odom_received_count = 0
+        self._diagnostic_last_log = float('-inf')
+        self._odom_invalid_last_log = float('-inf')
+        self._heartbeat_group = MutuallyExclusiveCallbackGroup()
+        self._heartbeat_pub = None
+        if self._use_mcu_odom:
+            self._heartbeat_pub = self.create_publisher(UInt32, '/zit6/cmd/agxhbt', 10)
+            self.create_timer(1.0/hb_rate, self._heartbeat_cb,
+                              callback_group=self._heartbeat_group)
+        self._mcu_odom = None
+        self._mcu_odom_received = 0.0
+        # START执行时会等待服务/新代数，必须让响应和遥测在另一回调组运行。
+        self._hardware_group = MutuallyExclusiveCallbackGroup()
+        self._origin_client = self.create_client(
+            SetOrigin, '/zit6/cmd/setorigin', callback_group=self._hardware_group)
+        if self._use_mcu_odom:
+            self.create_subscription(ZitOdom, '/zit6/state/odom', self._odom_cb, 10,
+                                     callback_group=self._hardware_group)
 
         # ─────────────────────────────────────────────────────────
         # Layer 1: ZIT6 协议发布/订阅
@@ -138,7 +171,8 @@ class BasicMotionNode(Node):
         self.pub_setpoint = self.create_publisher(
             ZitSetpoint, '/zit6/cmd/setpoint', 10)
         self.create_subscription(
-            ZitStatus, '/zit6/state/status', self._status_cb, 10)
+            ZitStatus, '/zit6/state/status', self._status_cb, 10,
+            callback_group=self._hardware_group)
         self.create_subscription(
             Float32MultiArray, '/zit6/state/pos', self._pos_cb, 10)
         self.create_subscription(
@@ -161,8 +195,17 @@ class BasicMotionNode(Node):
         # ── PoseInfo Publisher ─────────────────────────────────
         self.pub_pose = self.create_publisher(PoseInfo, '/basic_motion/pose_info', 10)
         self.create_timer(1.0 / 30.0, self._publish_pose_info)
+        self.create_timer(1.0, self._diagnostic_cb, callback_group=self._heartbeat_group)
 
         self.get_logger().info('BasicMotion node started')
+        self.get_logger().info(
+            f'启动配置：MCU原点重置={self._use_mcu_odom}，'
+            f'心跳发布器已创建={self._heartbeat_pub is not None}，频率={hb_rate:g}Hz，'
+            f'arm_mode={self.get_parameter("arm_mode").value}；等待START成功后才发送心跳')
+        self.get_logger().info(
+            '接口：调用MCU服务 /zit6/cmd/setorigin；接收 /zit6/state/odom 和 '
+            '/zit6/state/status；发布 /basic_motion/pose_info 和 /zit6/cmd/agxhbt。'
+            'BasicMotion不提供setorigin服务，也不发布MCU的state/odom话题。')
 
     # ═════════════════════════════════════════════════════════════════════════
     # Layer 1: ZIT6 底层 (map 坐标系)
@@ -191,6 +234,7 @@ class BasicMotionNode(Node):
     def _status_cb(self, msg: ZitStatus):
         with self._state_lock:
             self.status = msg
+            self._last_status_received = time.monotonic()
 
     def _vel_cb(self, msg: Float32MultiArray):
         """ZIT6 速度回调。机体速度 6-DOF [vx, vy, vz, vroll_rad, vpitch_rad, vyaw_rad_s]。"""
@@ -207,6 +251,45 @@ class BasicMotionNode(Node):
                 }
 
     def _pos_cb(self, msg: Float32MultiArray):
+        if self._use_mcu_odom:
+            return  # 新固件使用带原点代数的odom，避免重置前排队的旧pos污染位姿。
+        self._update_position(msg)
+
+    def _odom_cb(self, msg: ZitOdom):
+        values = list(msg.pose_odom)
+        if len(values) != 6 or not all(math.isfinite(v) for v in values):
+            now = time.monotonic()
+            if now - self._odom_invalid_last_log >= 3.0:
+                self._odom_invalid_last_log = now
+                self.get_logger().error(f'odom接收后被丢弃：pose_odom长度应为6且全部有限，实际={values}')
+            return
+        self._update_position(Float32MultiArray(data=values))
+        with self._state_lock:
+            self._mcu_odom = msg
+            self._mcu_odom_received = time.monotonic()
+            self._odom_received_count += 1
+
+    def _diagnostic_cb(self):
+        """独立于长动作的诊断；每3秒汇报一次，即使尚未发送START也能定位。"""
+        now = time.monotonic()
+        if now - self._diagnostic_last_log < 3.0:
+            return
+        self._diagnostic_last_log = now
+        with self._state_lock:
+            odom = self._mcu_odom
+            detail = ('未收到有效格式odom' if odom is None else
+                      f'接收年龄={now-self._mcu_odom_received:.3f}s，'
+                      f'nav_valid={odom.nav_valid}，origin_initialized={odom.origin_initialized}，'
+                      f'generation={odom.origin_generation}')
+            self.get_logger().info(
+                f'运行诊断：status接收年龄='
+                f'{"未收到" if self._last_status_received == 0 else format(now-self._last_status_received, ".3f") + "s"}，'
+                f'is_armed={self.status.is_armed}，navigation_ready={self.status.navigation_ready}；'
+                f'odom累计={self._odom_received_count}，{detail}；'
+                f'上位机原点已设置={self._origin is not None}；'
+                f'心跳启用={self._heartbeat_enabled}，已发送={self._heartbeat_sent}包')
+
+    def _update_position(self, msg: Float32MultiArray):
         """ZIT6 位置回调。原始数据是 map 系，内部转 odom 系后存为 self.pose。
 
         支持 6 元素 [x, y, z, roll_rad, pitch_rad, yaw_rad] 和
@@ -279,6 +362,97 @@ class BasicMotionNode(Node):
             f'odom origin set: map({self._origin.x:.2f}, '
             f'{self._origin.y:.2f}, {self._origin.z:.2f}), '
             f'yaw={self._origin.rz:.1f}°')
+
+    def _reset_mcu_origin(self, goal_handle):
+        """单次显式调用；拒绝/超时不重试，不绕过导航或未解锁保护。"""
+        timeout = float(self.get_parameter('origin_service_timeout').value)
+        if not math.isfinite(timeout) or timeout <= 0:
+            return False, 'origin_service_timeout 必须为有限正数'
+        deadline = time.monotonic() + timeout
+        self.get_logger().info(f'START[2/6]：查找MCU setorigin服务，握手总预算={timeout:g}s')
+        if not self._origin_client.wait_for_service(timeout_sec=timeout):
+            return False, 'MCU setorigin服务不可用；检查agent/固件/SetOrigin接口'
+        if goal_handle.is_cancel_requested:
+            return False, 'START已取消，未发送MCU重置'
+        with self._state_lock:
+            self._origin = None  # 结果不确定时不能继续使用旧任务原点。
+        self.get_logger().info('START：请求MCU设置零点（必须未解锁且导航新鲜）')
+        future = self._origin_client.call_async(SetOrigin.Request())
+        self.get_logger().info('START[3/6]：setorigin请求已发送，等待服务响应')
+        last_log = time.monotonic()
+        while not future.done() and time.monotonic() < deadline and rclpy.ok():
+            if time.monotonic() - last_log >= 1.0:
+                last_log = time.monotonic()
+                self.get_logger().info(f'START等待服务响应：剩余预算={max(0., deadline-last_log):.2f}s')
+            time.sleep(0.01)
+        if not future.done():
+            future.cancel()
+            return False, 'MCU setorigin响应超时；请求可能已执行，需人工核对原点代数，禁止盲目重试'
+        try:
+            response = future.result()
+        except Exception as error:
+            return False, f'MCU setorigin调用异常：{error}'
+        if response is None or not response.success:
+            reason = response.message if response is not None else '没有返回响应'
+            self.get_logger().info(f'START服务响应：success=False，原因={reason}')
+            return False, f'MCU零点设置失败：{reason}'
+        generation = response.origin_generation
+        self.get_logger().info(f'MCU零点已设置，等待新坐标反馈：generation={generation}')
+        last_log = float('-inf')
+        # 等到同一代的新鲜、有效遥测，不能把重置前的缓存当成新坐标。
+        while time.monotonic() < deadline and rclpy.ok():
+            if goal_handle.is_cancel_requested:
+                return False, 'START已取消；MCU零点已改变，任务原点未初始化'
+            with self._state_lock:
+                odom = self._mcu_odom
+                age = time.monotonic() - self._mcu_odom_received
+                if (odom is not None and odom.origin_initialized and odom.nav_valid
+                        and odom.origin_generation == generation and age <= .2):
+                    self.get_logger().info(f'START[4/6]：有效同代odom已确认，generation={generation}，年龄={age:.3f}s')
+                    return True, f'MCU原点已确认，generation={generation}'
+            if time.monotonic() - last_log >= 1.0:
+                last_log = time.monotonic()
+                detail = ('尚未收到odom' if odom is None else
+                          f'nav_valid={odom.nav_valid}，origin_initialized={odom.origin_initialized}，'
+                          f'实际generation={odom.origin_generation}，年龄={age:.3f}s')
+                self.get_logger().info(f'START等待odom：期望generation={generation}，{detail}')
+            time.sleep(0.01)
+        return False, f'MCU已重置，但未收到有效同代odom（generation={generation}），START未完成'
+
+    def _heartbeat_cb(self):
+        # 由独立回调组调度，长动作等待不能阻塞心跳。发布与停用共用锁，
+        # 防止START暂停心跳后仍有旧回调补发一个包。
+        with self._state_lock:
+            if self._heartbeat_enabled and self._heartbeat_pub is not None:
+                self._heartbeat_pub.publish(UInt32(data=int(self.get_parameter('arm_mode').value)))
+                self._heartbeat_sent = getattr(self, '_heartbeat_sent', 0) + 1
+                if self._heartbeat_sent == 1:
+                    self.get_logger().info('心跳：首包agxhbt已提交发布，后续由独立定时器持续发送；不代表MCU已解锁')
+
+    def _prepare_start(self, goal_handle):
+        """暂停自己的心跳，等待固件租约上锁；不发送强制解锁或跳过导航指令。"""
+        with self._state_lock:
+            self._heartbeat_enabled = False
+            self._origin = None
+        self.get_logger().info('START[1/6]：暂停BasicMotion心跳，等待MCU上锁，再设置原点')
+        deadline = time.monotonic() + 3.0
+        last_log = float('-inf')
+        while rclpy.ok() and time.monotonic() < deadline:
+            if goal_handle.is_cancel_requested:
+                return False, 'START已取消，心跳保持暂停'
+            with self._state_lock:
+                fresh = time.monotonic()-self._last_status_received <= .5
+                disarmed = not self.status.is_armed
+            if fresh and disarmed:
+                self.get_logger().info('START[1/6]：收到新鲜状态，MCU已上锁')
+                return True, 'MCU已上锁'
+            if time.monotonic() - last_log >= 1.0:
+                last_log = time.monotonic()
+                self.get_logger().info(
+                    f'START等待上锁：状态新鲜={fresh}，is_armed={not disarmed}，'
+                    f'status接收年龄={last_log-self._last_status_received:.3f}s')
+            time.sleep(.02)
+        return False, 'MCU未确认上锁；检查其他心跳源、MCU状态和1秒心跳超时保护'
 
     def _odom_to_map(self, pos: Coordinate) -> Coordinate:
         """odom 坐标 → map 坐标（x/y/z/rz 全做偏移）。
@@ -789,21 +963,72 @@ class BasicMotionNode(Node):
         req = goal_handle.request
         self._action_goal_handle = goal_handle
 
-        # START: 初始化 odom 原点，不需要任何前置校验
+        # 真机START先重置MCU原点并确认遥测；仿真显式关闭该步骤。
         if req.cmd_type == BasicMotion.Goal.START:
             self.get_logger().info('Action START: initializing odom origin')
             task_context = str(getattr(req, 'task_context', '')).strip()
             if task_context:
                 self.get_logger().info(
                     f'Action START: task_context="{task_context}"')
-            self.start()
             result = BasicMotion.Result()
+            if self._use_mcu_odom:
+                success, message = self._prepare_start(goal_handle)
+                if success:
+                    success, message = self._reset_mcu_origin(goal_handle)
+                if not success:
+                    result.success = False
+                    result.message = message
+                    if goal_handle.is_cancel_requested:
+                        goal_handle.canceled()
+                    else:
+                        goal_handle.abort()
+                    self._action_goal_handle = None
+                    self.get_logger().error(f'Action START失败：{message}')
+                    return result
+            self.start()
+            self.get_logger().info('START[5/6]：上位机原点已初始化，准备发布PoseInfo')
+            # 必须先发布新任务原点，再发送第一个解锁心跳。
+            self._publish_pose_info()
+            if self._use_mcu_odom:
+                with self._state_lock:
+                    self._heartbeat_enabled = True
+                self._heartbeat_cb()
+                self.get_logger().info('START[6/6]：PoseInfo已发布，agxhbt心跳已启用；START返回成功，不等待MCU解锁')
             result.success = True
             result.message = "odom origin set"
             goal_handle.succeed()
             self._action_goal_handle = None
             self.get_logger().info('Action START: done')
             return result
+
+        if self._use_mcu_odom:
+            # 重置原点后固件重新积累心跳；不能在尚未解锁时发送第一段位移。
+            arm_deadline = time.monotonic() + 5.0
+            armed = False
+            last_log = float('-inf')
+            while rclpy.ok() and time.monotonic() < arm_deadline:
+                with self._state_lock:
+                    armed = (self.status.is_armed and self.status.navigation_ready
+                             and time.monotonic()-self._last_status_received <= .5)
+                if armed or goal_handle.is_cancel_requested:
+                    break
+                if time.monotonic() - last_log >= 1.0:
+                    last_log = time.monotonic()
+                    self.get_logger().info(
+                        f'移动前等待解锁：is_armed={self.status.is_armed}，'
+                        f'navigation_ready={self.status.navigation_ready}，'
+                        f'status接收年龄={last_log-self._last_status_received:.3f}s')
+                time.sleep(.02)
+            if not armed or goal_handle.is_cancel_requested:
+                result = BasicMotion.Result()
+                result.success = False
+                result.message = 'MCU未解锁/导航未就绪或动作取消；检查BasicMotion心跳、原点和导航'
+                if goal_handle.is_cancel_requested:
+                    goal_handle.canceled()
+                else:
+                    goal_handle.abort()
+                self._action_goal_handle = None
+                return result
 
         # ── 参数校验 ──────────────────────────────────────────
         if len(req.target) < 4:
@@ -979,6 +1204,8 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        with node._state_lock:
+            node._heartbeat_enabled = False
         executor.shutdown()
         node.destroy_node()
         # launch may already have shut down the default context while
