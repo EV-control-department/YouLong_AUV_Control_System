@@ -189,6 +189,9 @@ def test_arm_confirmation_has_its_own_timeout_and_keeps_heartbeat_enabled(node):
         await tick(node)
         assert node._heartbeat_enabled
         arm_started_at = time.monotonic()
+        # Feedback can briefly go stale while the MCU is processing the ARM
+        # handshake. BasicMotion must keep the heartbeat flowing during START.
+        node._nav_valid = False
 
         for _ in range(3):
             node._heartbeat_cb()

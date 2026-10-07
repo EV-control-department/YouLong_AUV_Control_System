@@ -507,9 +507,20 @@ class BasicMotionNode(Node):
         with self._state_lock:
             if not self._heartbeat_enabled or self._shutdown_requested:
                 return
-            valid = (self._state_ready_locked()
-                     and self._origin_generation == self._active_origin_generation
-                     and (not self._started or bool(self.status.is_armed)))
+            same_origin = (
+                self._origin_initialized
+                and self._active_origin_generation is not None
+                and self._origin_generation == self._active_origin_generation)
+            # During START, the MCU needs a continuous heartbeat in order to
+            # arm. Transiently stale status/odom or nav_valid=false must not
+            # suppress that handshake; the MCU enforces its own arm gates.
+            # Still stop if the origin was cleared or changed, and restore the
+            # full feedback validity checks once START has completed.
+            if self._start_in_progress and not self._started:
+                valid = same_origin
+            else:
+                valid = (self._state_ready_locked() and same_origin
+                         and bool(self.status.is_armed))
             if not valid:
                 self._heartbeat_enabled = False
                 self._started = False
