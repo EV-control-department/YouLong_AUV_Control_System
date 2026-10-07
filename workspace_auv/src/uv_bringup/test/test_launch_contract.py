@@ -77,7 +77,10 @@ def test_real_startup_contract_is_staged_and_task_launch_is_deferred():
     assert "start_new_session=True" in startup
     assert "sigterm_timeout='22'" in _source("real.launch.py")
     assert "auto_start" in task_launch
+    assert '"auto_start", default_value="true"' in task_launch
     assert "node._auto_start" in task_runner
+    assert "declare_parameter('auto_start', True)" in task_runner
+    assert "'auto_start:=false'" in startup
 
 
 def test_bringup_uses_the_invoking_terminal():

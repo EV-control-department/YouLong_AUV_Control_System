@@ -511,22 +511,23 @@ class BasicMotionNode(Node):
                 self._origin_initialized
                 and self._active_origin_generation is not None
                 and self._origin_generation == self._active_origin_generation)
-            # During START, the MCU needs a continuous heartbeat in order to
-            # arm. Transiently stale status/odom or nav_valid=false must not
-            # suppress that handshake; the MCU enforces its own arm gates.
-            # Still stop if the origin was cleared or changed, and restore the
-            # full feedback validity checks once START has completed.
-            if self._start_in_progress and not self._started:
+            # START owns the arm heartbeat until another START begins (or a
+            # safety lifecycle event explicitly stops it). Keep sending after
+            # the MCU confirms armed; the heartbeat is what maintains ARM.
+            # During the handshake, stop only if the origin was cleared or
+            # changed. The MCU enforces its own nav/status gates.
+            if self._started:
+                valid = True
+            elif self._start_in_progress:
                 valid = same_origin
             else:
-                valid = (self._state_ready_locked() and same_origin
-                         and bool(self.status.is_armed))
+                valid = False
             if not valid:
                 self._heartbeat_enabled = False
                 self._started = False
                 self._active_origin_generation = None
                 self.get_logger().error(
-                    'ARM heartbeat stopped: navigation/status/origin unavailable; '
+                    'ARM heartbeat stopped: no active START or MCU origin changed; '
                     'send START again')
                 return
             msg = UInt32()

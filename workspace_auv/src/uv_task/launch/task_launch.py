@@ -49,7 +49,7 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_mode", default_value="auto"),
         DeclareLaunchArgument("camera_config_dir", default_value=""),
         DeclareLaunchArgument(
-            "auto_start", default_value="false",
+            "auto_start", default_value="true",
             description="Automatically execute the loaded mission on startup",
         ),
         DeclareLaunchArgument(

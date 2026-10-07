@@ -134,6 +134,9 @@ def test_start_requires_correlated_reset_and_matching_fresh_odom_before_heartbea
         result = await task
         assert result.success and goal.terminal == 'succeeded'
         assert node._motion_ready()
+        node._heartbeat_cb()
+        assert node._heartbeat_enabled
+        assert [msg.data for msg in node.pub_arm_heartbeat.messages] == [1, 1]
     asyncio.run(scenario())
 
 
@@ -263,7 +266,7 @@ def test_nonzero_velocity_requires_ready_but_internal_neutral_still_works(node):
 
 
 @pytest.mark.parametrize('fault', ['stale_status', 'stale_nav', 'nav_invalid', 'new_generation', 'disarmed'])
-def test_heartbeat_stops_when_started_state_is_lost(node, fault):
+def test_started_heartbeat_keeps_running_through_feedback_changes(node, fault):
     refresh(node, armed=True, origin=True, generation=4)
     node._started = node._heartbeat_enabled = True
     node._active_origin_generation = 4
@@ -278,8 +281,9 @@ def test_heartbeat_stops_when_started_state_is_lost(node, fault):
     else:
         node.status.is_armed = False
     node._heartbeat_cb()
-    assert not node._heartbeat_enabled and not node._motion_ready()
-    assert not node.pub_arm_heartbeat.messages
+    assert node._heartbeat_enabled
+    assert node._started
+    assert node.pub_arm_heartbeat.messages[-1].data == 1
 
 
 def test_republishing_old_nav_sample_does_not_refresh_nav_age(node):

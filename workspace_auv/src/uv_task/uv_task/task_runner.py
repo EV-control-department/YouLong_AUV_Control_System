@@ -163,7 +163,7 @@ class TaskRunnerNode(Node):
         self.declare_parameter('mission_file', '')
         self.mission_file = self.get_parameter(
             'mission_file').get_parameter_value().string_value
-        self.declare_parameter('auto_start', False)
+        self.declare_parameter('auto_start', True)
         auto_start_value = self.get_parameter('auto_start').value
         self._auto_start = (
             auto_start_value if isinstance(auto_start_value, bool)
