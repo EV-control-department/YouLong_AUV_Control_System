@@ -631,8 +631,7 @@ class RealStartupManager(Node):
             components.append((
                 'hardware', ['ros2', 'launch', 'uv_hm', 'hardware_launch.py',
                              'enable_hardware:=true'], ['/hw_manager'],
-                {'/hw_manager': {'arm_mode': 1, 'heartbeat_rate': 15.0,
-                                 'watchdog_timeout': 7.0,
+                {'/hw_manager': {'watchdog_timeout': 7.0,
                                  'legacy_state_topics': True}}))
         for name, command, nodes, params in components:
             self._launch(name, command, nodes, params)
@@ -660,14 +659,15 @@ class RealStartupManager(Node):
             ['ros2', 'launch', 'uv_control', 'control_launch.py',
              'enable_motion:=true', 'sim_mode:=false'],
             ['/basic_motion'],
-            {'/basic_motion': {'sim_mode': False}})
+            {'/basic_motion': {'sim_mode': False, 'arm_mode': 1,
+                               'heartbeat_rate': 15.0, 'start_timeout': 10.0}})
         if self.args.startup_mode == 'adopt' \
                 and self.component_state.get('basic_motion') != 'REUSED':
             raise StartupBlocked('adopt mode requires an existing BasicMotion server')
-        self.component_state['armed gate'] = 'WAITING'
-        self._phase('armed gate',
-                    lambda: self.action.server_is_ready() and self._healthy_armed(),
-                    'BasicMotion Action Server and armed healthy MCU')
+        self._phase('motion ready gate',
+                    lambda: self.action.server_is_ready() and self._healthy_backend()
+                    and bool(self._mcu_status.navigation_ready),
+                    'BasicMotion Action Server and fresh navigation before START')
         # Deliberately sent exactly once, even when the Action Server and/or a
         # task_runner were already present.  An ambiguous timeout is fatal;
         # this goal is never retried by the coordinator.
@@ -689,6 +689,8 @@ class RealStartupManager(Node):
             detail = getattr(getattr(wrapped, 'result', None), 'message', 'no result')
             raise StartupBlocked(f'BasicMotion origin reset failed: {detail}')
         self.component_state['origin reset'] = 'DONE (START sent once)'
+        self._phase('armed gate', self._healthy_armed,
+                    'fresh armed healthy MCU after START')
         self._dashboard()
 
     def _wait_future(self, future, description):
@@ -1093,9 +1095,11 @@ class RealStartupManager(Node):
                 self.monitoring_enabled = True
         self.startup_stages_started = True
         self._start_core()
-        self._start_motion_and_reset_origin()
         self._start_camera_perception()
         self._start_navigation()
+        # Wait for the backend and every enabled navigation dependency before
+        # START captures the MCU's raw nav pose and re-arms the vehicle.
+        self._start_motion_and_reset_origin()
         self._start_auxiliary()
         self._start_or_adopt_task()
         self.startup_sequence_complete = True

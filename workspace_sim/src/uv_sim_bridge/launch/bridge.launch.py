@@ -1,5 +1,6 @@
 """Launch the split Stonefish-to-AUV adapter owned by ``uv_sim_bridge``."""
 
+from auv_protocol.topics import DVL_VELOCITY, IMU
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
@@ -19,6 +20,8 @@ def generate_launch_description():
             parameters.append(parameter_file)
         parameters.append({
             'hil_mode': hil_mode,
+            'dvl_topic': LaunchConfiguration('dvl_topic'),
+            'imu_topic': LaunchConfiguration('imu_topic'),
             'camera_stitch_fps': camera_stitch_fps,
             'publish_raw_camera_topics': publish_raw,
         })
@@ -33,6 +36,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('hil_mode', default_value='false'),
+        DeclareLaunchArgument('dvl_topic', default_value=DVL_VELOCITY),
+        DeclareLaunchArgument('imu_topic', default_value=IMU),
         DeclareLaunchArgument('camera_stitch_fps', default_value='10.0'),
         DeclareLaunchArgument(
             'publish_raw_camera_topics', default_value='false',

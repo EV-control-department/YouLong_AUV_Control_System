@@ -45,3 +45,18 @@ def test_control_performance_has_a_dedicated_topic():
     source = BRIDGE.read_text(encoding='utf-8')
     assert 'SIM_CONTROL_PERFORMANCE' in source
     assert 'SIM_PERFORMANCE' not in source
+
+
+def test_control_backend_does_not_feed_back_its_odom_as_raw_nav():
+    source = BRIDGE.read_text(encoding='utf-8')
+    assert 'STATE_ODOM' not in source
+    assert 'STATE_TWIST' not in source
+    assert 'ZIT6_ODOM' in source and 'ZIT6_SET_ORIGIN' in source
+    assert 'ZIT6_ARM_HEARTBEAT' in source
+
+
+def test_hil_launch_owns_hardware_forwarding_and_gates_task_start():
+    launch_root = PACKAGE_ROOT.parents[0] / 'uv_sim_bringup'
+    source = (launch_root / 'launch/hil.launch.py').read_text(encoding='utf-8')
+    assert "_include('uv_hm', 'hardware_launch.py'" in source
+    assert 'release_tasks_after_backend_ready(' in source

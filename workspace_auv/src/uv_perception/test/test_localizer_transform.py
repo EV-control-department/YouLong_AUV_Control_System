@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 import threading
 
+from auv_protocol.model_mapping import ModelClassRegistry
 from builtin_interfaces.msg import Time
 from rclpy.clock import ClockType
 from sensor_msgs.msg import CameraInfo
@@ -38,6 +39,16 @@ class Publisher:
 
 def _localizer():
     localizer = ObjectLocalizer.__new__(ObjectLocalizer)
+    localizer._mapping_registry = ModelClassRegistry.empty()
+    localizer._lock = threading.Lock()
+    localizer._pending = {}
+    localizer._last_cleared_generation = None
+    localizer._origin_ready = True
+    localizer._reset_stamp_ns = 0
+    localizer.node = SimpleNamespace(
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(
+            nanoseconds=43_000_000_000)),
+        get_logger=lambda: SimpleNamespace(info=lambda _message: None))
     localizer._id_lock = threading.Lock()
     localizer._id_prefix = 17
     localizer._observation_counter = 0
@@ -203,3 +214,17 @@ def test_publishing_measurement_header_does_not_mutate_camera_header():
 def test_world_frame_as_camera_source_is_rejected():
     localizer = _localizer()
     assert localizer._to_world((0.1, 0.2, 1.0), 'odom', Time(sec=42)) is None
+
+
+def test_localizer_keeps_failed_reset_cache_and_deduplicates_applied_generation():
+    from uv_msgs.msg import PoseInfo, StateResetResult
+    localizer = _localizer()
+    localizer._pending['old'] = object()
+    localizer._reset_callback(StateResetResult(success=False, origin_generation=1))
+    assert 'old' in localizer._pending
+    localizer._origin_state_callback(PoseInfo(origin_initialized=True, origin_generation=2))
+    assert not localizer._pending
+    localizer._pending['new'] = object()
+    localizer._reset_callback(StateResetResult(success=True, origin_generation=2))
+    localizer._reset_callback(StateResetResult(success=True, origin_generation=1))
+    assert 'new' in localizer._pending

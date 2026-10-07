@@ -4,12 +4,12 @@ uint8 BMOVE=2       # 机体系步进, target=[dx, dy, dz, dyaw]
 uint8 SET=3         # 绝对定位, target=[x, y, z, yaw]
 uint8 WTRAVEL=4     # 世界系直线, target=[dx, dy, dz]
 uint8 BTRAVEL=5     # 机体系直线, target=[dx, dy, dz]
-uint8 START=6       # 初始化里程计原点（无视 axes/target/timeout）
+uint8 START=6       # 上锁、MCU 重设原点、等待新 odom、解锁（忽略 axes/target）
 uint8 BODY_VELOCITY=7  # 机体速度租约, target=[vx, vy, vz, yaw_rate_deg_s]
 uint8 cmd_type
 string axes         # 要动的轴: "x","y","z","rz" 任意组合, 空=全部
 float32[] target    # [x, y, z, yaw]
-float32 timeout     # 普通动作最长时间（秒）, ≤0=默认60s
+float32 timeout     # 动作最长时间（秒）, ≤0: START 默认10s，其余默认60s
 string task_context # 任务上下文，例如：hit_balls task:5步骤-前往红球前1米
 float32 velocity_lease  # BODY_VELOCITY 的速度租约（秒）, ≤0=默认0.25s
 ---

@@ -153,3 +153,24 @@ def declare_simulation_arguments(
             'startup_timeout', default_value='120.0',
             description='Maximum seconds per readiness stage'),
     ]
+
+
+def release_tasks_after_backend_ready(task, enable_task, timeout):
+    """Release an auto-started mission only after healthy telemetry is flowing."""
+    from launch.actions import RegisterEventHandler
+    from launch.conditions import IfCondition
+    from launch.event_handlers import OnProcessExit
+    from launch_ros.actions import Node
+
+    gate = Node(
+        package='uv_sim_bridge', executable='wait_for_backend',
+        name='wait_for_sim_backend', output='both',
+        parameters=[{'timeout': timeout}], condition=IfCondition(enable_task))
+
+    def release(event, _context):
+        if event.returncode == 0:
+            return [task]
+        return [LogInfo(msg='Simulation backend not ready; mission not started')]
+
+    return [RegisterEventHandler(OnProcessExit(target_action=gate, on_exit=release)),
+            gate]

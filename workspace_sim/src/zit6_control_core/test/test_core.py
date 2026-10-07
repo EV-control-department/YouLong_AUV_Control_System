@@ -121,3 +121,53 @@ def test_actuator_passthrough():
     assert abs(f[0] - 0.5) < 1e-3
     assert abs(f[1]) < 1e-3
     assert abs(f[3]) < 1e-3
+
+
+def test_explicit_origin_uses_raw_nav_and_preserves_roll_pitch():
+    core = Zit6Controller(CHASSIS)
+    raw = (7.0, -3.0, 2.0, 0.2, -0.1, math.pi / 2)
+    core.update_nav(raw, (0.0,) * 6, timestamp_ms=100, valid=True)
+    commit = core.try_set_origin(101)
+    assert commit['success']
+    assert commit['origin_nav'] == pytest.approx((7, -3, 2, 0, 0, math.pi / 2))
+    odom = core.get_odom_snapshot()
+    assert odom['pose_odom'] == pytest.approx((0, 0, 0, 0.2, -0.1, 0))
+    assert odom['origin_generation'] == commit['origin_generation'] == 1
+    core.update_nav((7, -2, 2, 0.2, -0.1, math.pi / 2), (0.0,) * 6,
+                    timestamp_ms=110, valid=True)
+    assert core.get_odom_snapshot()['pose_odom'] == pytest.approx(
+        (1, 0, 0, 0.2, -0.1, 0), abs=1e-6)
+
+
+def test_repeated_origin_does_not_use_already_transformed_odom():
+    core = Zit6Controller(CHASSIS)
+    core.update_nav((4, 5, 2, 0, 0, 1), (0.0,) * 6, timestamp_ms=100)
+    assert core.try_set_origin(100)['success']
+    raw = (9, 3, 4, 0.1, 0.2, 2)
+    core.update_nav(raw, (0.0,) * 6, timestamp_ms=200)
+    commit = core.try_set_origin(200)
+    assert commit['origin_nav'] == pytest.approx((9, 3, 4, 0, 0, 2))
+    assert commit['origin_generation'] == 2
+    assert core.get_odom_snapshot()['pose_odom'] == pytest.approx((0, 0, 0, 0.1, 0.2, 0))
+
+
+def test_origin_requires_a_fresh_valid_finite_sample_and_preserves_old_commit():
+    core = Zit6Controller(CHASSIS)
+    assert not core.try_set_origin(0)['success']
+    core.update_nav((4, 5, 2, 0, 0, 1), (0.0,) * 6, timestamp_ms=100)
+    assert core.try_set_origin(100)['success']
+    assert not core.try_set_origin(301)['success']
+    core.update_nav((8, 9, 2, 0, 0, 1), (0.0,) * 6,
+                    timestamp_ms=302, valid=False)
+    assert not core.try_set_origin(302)['success']
+    core.update_nav((8, 9, 2, 0, 0, float('nan')), (0.0,) * 6,
+                    timestamp_ms=303, valid=True)
+    assert not core.try_set_origin(303)['success']
+    assert core.get_odom_snapshot()['origin_generation'] == 1
+    assert core.get_odom_snapshot()['origin_initialized']
+
+
+def test_origin_age_handles_mcu_tick_wraparound():
+    core = Zit6Controller(CHASSIS)
+    core.update_nav((1, 2, 3, 0, 0, 0), (0.0,) * 6, timestamp_ms=0xFFFFFFFE)
+    assert core.try_set_origin(2, 10)['success']

@@ -10,13 +10,12 @@ import rclpy
 from rclpy.duration import Duration as RclpyDuration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Empty
 from visualization_msgs.msg import Marker, MarkerArray
 
 from auv_protocol.topics import (
     MEASUREMENTS,
     STATE_ODOM,
-    STATE_RESET,
+    STATE_RESET_RESULT,
     TRACKS,
     TRAJECTORY,
     VIZ_MEASUREMENTS,
@@ -26,6 +25,8 @@ from auv_protocol.topics import (
     VIZ_TRACKS,
 )
 from uv_msgs.msg import (
+    StateResetResult,
+    ObjectMeasurement,
     ObjectMeasurementArray,
     ObjectTrack,
     ObjectTrackArray,
@@ -344,6 +345,8 @@ class VisualizationAdapter(Node):
         self.declare_parameter('ray_length', 3.0)
         self._ray_length = max(0.01, float(self.get_parameter('ray_length').value))
         self._history = OdomPathHistory()
+        self._last_cleared_generation = None
+        self._reset_stamp_ns = 0
         self._measurement_slots = 0
         self._track_marker_ids: Dict[int, int] = {}
         self._next_track_marker_id = 0
@@ -357,7 +360,7 @@ class VisualizationAdapter(Node):
         self._planned_path_pub = self.create_publisher(Path, VIZ_PLANNED_PATH, 10)
 
         self.create_subscription(PoseInfo, STATE_ODOM, self._pose_callback, 10)
-        self.create_subscription(Empty, STATE_RESET, self._reset_callback, 10)
+        self.create_subscription(StateResetResult, STATE_RESET_RESULT, self._reset_callback, 10)
         self.create_subscription(
             ObjectMeasurementArray, MEASUREMENTS,
             self._measurement_callback, 10)
@@ -375,6 +378,16 @@ class VisualizationAdapter(Node):
                     topic, frame_id))
 
     def _pose_callback(self, message: PoseInfo) -> None:
+        if not message.origin_initialized:
+            self._last_cleared_generation = None
+            return
+        if (self._last_cleared_generation is not None and
+                ((int(message.origin_generation) - self._last_cleared_generation)
+                 & 0xffffffff) >= 0x80000000):
+            self._last_cleared_generation = None
+        if self._last_cleared_generation != int(message.origin_generation):
+            self._reset_callback(StateResetResult(
+                success=True, origin_generation=int(message.origin_generation)))
         odometry = pose_info_to_odometry(message)
         if odometry is None:
             self.get_logger().warning('dropping non-finite /auv/state/odom pose')
@@ -384,7 +397,17 @@ class VisualizationAdapter(Node):
         if rewound or sampled:
             self._odom_path_pub.publish(self._history.to_message())
 
-    def _reset_callback(self, _message: Empty) -> None:
+    def _reset_callback(self, _message: StateResetResult) -> None:
+        if not _message.success:
+            return
+        generation = int(_message.origin_generation)
+        if self._last_cleared_generation is not None and (
+                ((generation - self._last_cleared_generation) & 0xffffffff) == 0
+                or ((generation - self._last_cleared_generation) & 0xffffffff)
+                >= 0x80000000):
+            return
+        self._last_cleared_generation = generation
+        self._reset_stamp_ns = stamp_to_nanoseconds(self.get_clock().now().to_msg())
         self._history.clear()
         self._odom_path_pub.publish(empty_path())
         self._planned_path_pub.publish(empty_path())
@@ -410,6 +433,9 @@ class VisualizationAdapter(Node):
             self._track_marker_ids.clear()
 
     def _measurement_callback(self, message: ObjectMeasurementArray) -> None:
+        if (self._reset_stamp_ns > 0
+                and stamp_to_nanoseconds(message.header.stamp) <= self._reset_stamp_ns):
+            return
         if str(message.header.frame_id).strip() != ODOM_FRAME:
             self._warn_frame_once(MEASUREMENTS, str(message.header.frame_id))
         markers, self._measurement_slots = build_measurement_markers(
@@ -418,6 +444,9 @@ class VisualizationAdapter(Node):
             self._measurement_pub.publish(markers)
 
     def _track_callback(self, message: ObjectTrackArray) -> None:
+        if (self._reset_stamp_ns > 0
+                and stamp_to_nanoseconds(message.header.stamp) <= self._reset_stamp_ns):
+            return
         frame_id = str(message.header.frame_id).strip()
         if frame_id != ODOM_FRAME:
             self._warn_frame_once(TRACKS, frame_id)
@@ -428,6 +457,9 @@ class VisualizationAdapter(Node):
             self._track_pub.publish(markers)
 
     def _trajectory_callback(self, message: WaypointPath) -> None:
+        if (self._reset_stamp_ns > 0
+                and stamp_to_nanoseconds(message.header.stamp) <= self._reset_stamp_ns):
+            return
         path = waypoint_path_to_nav_path(message)
         if path is None:
             self._warn_frame_once(TRAJECTORY, str(message.header.frame_id))

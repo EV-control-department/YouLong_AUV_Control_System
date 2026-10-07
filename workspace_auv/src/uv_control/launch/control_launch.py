@@ -3,8 +3,9 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -31,6 +32,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("enable_motion", default_value="true"),
         DeclareLaunchArgument("sim_mode", default_value="false"),
-        DeclareLaunchArgument("params_file", default_value=""),
+        DeclareLaunchArgument(
+            "params_file", default_value=PathJoinSubstitution([
+                FindPackageShare("uv_control"), "config", "default.yaml",
+            ])),
         OpaqueFunction(function=_nodes),
     ])

@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'sim_bridge = uv_sim_bridge.sim_bridge:main',
+            'wait_for_backend = uv_sim_bridge.wait_for_backend:main',
         ],
     },
 )

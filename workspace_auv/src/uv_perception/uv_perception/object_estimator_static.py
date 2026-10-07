@@ -9,16 +9,16 @@ import threading
 import time
 
 import numpy as np
-from std_msgs.msg import Empty
 
 from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
 )
 from auv_protocol.model_mapping import ModelClassRegistry
 from auv_protocol.topics import (
-    MEASUREMENTS, MODEL_CLASS_MAPPING, STATE_RESET, TRACKS,
+    MEASUREMENTS, MODEL_CLASS_MAPPING, STATE_ODOM, STATE_RESET_RESULT, TRACKS,
 )
 from uv_msgs.msg import (
+    StateResetResult, PoseInfo,
     ModelClassMapping, ObjectMeasurementArray, ObjectTrack, ObjectTrackArray,
 )
 from .localization.geometry import minimum_cost_assignment
@@ -105,11 +105,16 @@ class ObjectEstimator:
         self._pool_track_ids = {}        # pool key -> persistent track IDs
         self._next_id = 1
         self._reset_stamp_ns = 0
+        self._last_cleared_generation = None
+        self._origin_ready = True
         self._warned_frames = set()
         self._last_log_ns = {}
         node.create_subscription(ObjectMeasurementArray, MEASUREMENTS,
                                  self._measurements, 10)
-        node.create_subscription(Empty, STATE_RESET, self._reset_callback, 10)
+        node.create_subscription(
+            StateResetResult, STATE_RESET_RESULT, self._reset_callback, 10)
+        node.create_subscription(
+            PoseInfo, STATE_ODOM, self._origin_state_callback, 10)
         self.timer = node.create_timer(0.1, self._publish)
 
     def _declare_anchor_sigmas(self, node):
@@ -209,6 +214,8 @@ class ObjectEstimator:
         return np.column_stack((first, second))
 
     def _measurements(self, message):
+        if not self._origin_ready:
+            return
         frame = str(message.header.frame_id).strip()
         if frame != self.world_frame:
             if frame not in self._warned_frames:
@@ -247,8 +254,31 @@ class ObjectEstimator:
                         seen_ids.difference_update(ray['source_detection_ids'])
                 self._dirty_pools.add(key)
 
+    def _origin_state_callback(self, message):
+        self._origin_ready = bool(message.origin_initialized)
+        if not self._origin_ready:
+            self._last_cleared_generation = None
+            return
+        if (self._last_cleared_generation is not None and
+                ((int(message.origin_generation) - self._last_cleared_generation)
+                 & 0xffffffff) >= 0x80000000):
+            self._last_cleared_generation = None
+        if self._last_cleared_generation != int(message.origin_generation):
+            self._reset_callback(StateResetResult(
+                success=True, origin_generation=int(message.origin_generation)))
+
     def _reset_callback(self, _message):
         """Clear world-frame estimates when BasicMotion redefines odom."""
+        if not _message.success:
+            return
+        generation = int(_message.origin_generation)
+        if self._last_cleared_generation is not None and (
+                ((generation - self._last_cleared_generation) & 0xffffffff) == 0
+                or ((generation - self._last_cleared_generation) & 0xffffffff)
+                >= 0x80000000):
+            return
+        self._last_cleared_generation = generation
+        self._origin_ready = True
         now = self.node.get_clock().now()
         reset_stamp_ns = int(getattr(now, 'nanoseconds', 0))
         if reset_stamp_ns <= 0:
@@ -265,7 +295,7 @@ class ObjectEstimator:
             self._last_log_ns.clear()
             # Keep _next_id monotonic so consumers never see reused track IDs.
         self.node.get_logger().info(
-            'ObjectEstimator cleared ray pools and tracks after STATE_RESET')
+            'ObjectEstimator cleared ray pools and tracks after STATE_RESET_RESULT')
         self._publish()
 
     def _seed_candidates(self, rays):
@@ -822,6 +852,8 @@ class ObjectEstimator:
                 self._rebuild_pool(key, tuple(self._pools.get(key, ())), now)
 
     def _publish(self):
+        if not self._origin_ready:
+            return
         now = time.monotonic_ns()
         self._rebuild_dirty(now)
         output = ObjectTrackArray()

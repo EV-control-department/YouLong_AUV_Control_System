@@ -33,6 +33,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/WaypointPath.msg"
   "msg/TaskStatus.msg"
   "msg/PoseInfo.msg"
+  "msg/StateResetRequest.msg"
+  "msg/StateResetResult.msg"
   "msg/LineState.msg"
   "msg/ModelClassMapping.msg"
   "msg/DvlVelocity.msg"

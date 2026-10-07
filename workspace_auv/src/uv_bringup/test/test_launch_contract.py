@@ -56,6 +56,15 @@ def test_real_startup_contract_is_staged_and_task_launch_is_deferred():
     assert "_start_camera_perception()" in startup
     assert "_start_navigation()" in startup
     assert "_start_or_adopt_task()" in startup
+    startup_stages = (
+        "self._start_core()",
+        "self._start_camera_perception()",
+        "self._start_navigation()",
+        "self._start_motion_and_reset_origin()",
+        "self._start_or_adopt_task()",
+    )
+    startup_positions = [startup.index(stage) for stage in startup_stages]
+    assert startup_positions == sorted(startup_positions)
     assert "startup_mode" in startup
     assert "startup_sequence_complete" in startup
     assert "Initial component decisions" in startup
@@ -225,11 +234,14 @@ def test_component_profiles_and_old_pid_files_are_removed():
             assert "launch_profiles" not in setup
 
     hm_root = AUV_SOURCE_ROOT / "uv_hm"
-    assert {path.name for path in (hm_root / "config").glob("*.yaml")} == {
-        "default.yaml",
-    }
+    assert (hm_root / "config" / "default.yaml").exists()
     params = _profile(hm_root / "config" / "default.yaml")["/hw_manager"]["ros__parameters"]
-    assert params["arm_mode"] == 1
+    assert "arm_mode" not in params
+    assert "heartbeat_rate" not in params
+    control_params = _profile(AUV_SOURCE_ROOT / "uv_control" / "config" / "default.yaml")["/basic_motion"]["ros__parameters"]
+    assert control_params["arm_mode"] == 1
+    assert control_params["heartbeat_rate"] == 15.0
+    assert control_params["start_timeout"] == 10.0
     assert params["watchdog_timeout"] == 7.0
     assert params["battery_low_threshold"] == 14.0
     hm_setup = (hm_root / "setup.py").read_text(encoding="utf-8")

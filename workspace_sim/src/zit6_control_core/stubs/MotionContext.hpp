@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
 
 namespace auv {
 namespace motion {
@@ -35,6 +36,27 @@ struct HomeOffset {
   std::array<float, 6> offset = {0, 0, 0, 0, 0, 0};
 };
 
+struct NavSnapshot {
+  NavState raw_nav{};
+  uint32_t nav_timestamp_ms = 0;
+  bool nav_valid = false;
+  bool have_sample = false;
+};
+
+struct OdomSnapshot {
+  NavState nav_state{};
+  uint32_t nav_timestamp_ms = 0;
+  bool nav_valid = false;
+  bool origin_initialized = false;
+  uint32_t origin_generation = 0;
+};
+
+struct OriginCommit {
+  std::array<float, 6> origin_nav{};
+  uint32_t nav_timestamp_ms = 0;
+  uint32_t origin_generation = 0;
+};
+
 struct Constants {
   static constexpr float CONTROL_FREQ = 100.0f;
   static constexpr uint32_t CONTROL_PERIOD_MS = 10;
@@ -45,6 +67,11 @@ struct Constants {
 class MotionContext {
 public:
   static float wrapAngle(float angle);
+  void resetNavigation();
+  void updateNavigationSnapshot(const NavState &nav, uint32_t timestamp_ms,
+                                bool valid);
+  OdomSnapshot getOdomSnapshot() const;
+  bool trySetOrigin(uint32_t now_ms, uint32_t max_age_ms, OriginCommit &commit);
 
   // 线程安全字段(LockedField 宿主无锁,退化为读写)
   LockedField<NavState> nav_state_{};
@@ -64,6 +91,12 @@ public:
 
   void setHomeOffset(const std::array<float, 6> &offset);
   void clearHomeOffset();
+
+private:
+  NavState applyOrigin(const NavState &nav) const;
+  mutable std::mutex navigation_mutex_;
+  NavSnapshot raw_nav_{};
+  OdomSnapshot odom_{};
 };
 
 extern MotionContext motion_context;

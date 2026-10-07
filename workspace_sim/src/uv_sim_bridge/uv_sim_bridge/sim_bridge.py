@@ -1,6 +1,6 @@
 """Simulation bridge: emulate the ZIT6 MCU firmware, driven by the native C++ control core.
 
-Protocol matches real AUV: ZitSetpoint in → ZitStatus + Float32MultiArray out.
+Protocol matches real AUV: ZitSetpoint in → ZitOdom + ZitStatus out.
 Unlike the old homegrown Python cascade PID, the 100Hz control loop runs in the
 native ZIT6 control core (zit6_control_core.Zit6Controller) — a host compile of
 the actual firmware cascade controller.
@@ -19,17 +19,17 @@ from pathlib import Path
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from sensor_msgs.msg import FluidPressure
-from geometry_msgs.msg import TwistWithCovarianceStamped
+from sensor_msgs.msg import FluidPressure, Imu
 from std_msgs.msg import UInt8, UInt32, Float32MultiArray, String
 
-from zit6_interfaces.msg import ZitServo, ZitSetpoint, ZitStatus
-from zit6_interfaces.srv import GetParams, UpdateParams
-from uv_msgs.msg import DvlAltitude, DvlVelocity, PoseInfo
+from zit6_interfaces.msg import ZitOdom, ZitServo, ZitSetpoint, ZitStatus
+from zit6_interfaces.srv import GetParams, SetOrigin, UpdateParams
+from uv_msgs.msg import DvlAltitude, DvlVelocity
 from auv_protocol.topics import (
-    DVL_ALTITUDE, DVL_VELOCITY, PRESSURE, STATE_ODOM, STATE_TWIST,
+    DVL_ALTITUDE, DVL_VELOCITY, IMU, PRESSURE,
     ZIT6_GET_PARAMS, ZIT6_UPDATE_PARAMS,
-    LEGACY_ZIT6_HEARTBEAT, ZIT6_INS, ZIT6_LIGHT, ZIT6_SERVO, ZIT6_SETPOINT,
+    ZIT6_ARM_HEARTBEAT, ZIT6_ODOM, ZIT6_SET_ORIGIN,
+    ZIT6_INS, ZIT6_LIGHT, ZIT6_SERVO, ZIT6_SETPOINT,
     ZIT6_STATUS, ZIT6_THRUSTER,
     ZIT6_HEARTBEAT_STATE, ZIT6_SIM_NAV,
     SIM_CONTROL_PERFORMANCE,
@@ -41,6 +41,8 @@ from uv_sim_bridge.thrust_mixer import ThrustMixer
 from uv_sim_bridge.zit6_emulator import Zit6Emulator
 from uv_sim_bridge.actuator_adapter import ActuatorAdapter
 from uv_sim_bridge.performance import ControlLoopStats
+from uv_sim_bridge.raw_navigation import RawNavigation
+from uv_sim_bridge.arm_lifecycle import ArmLifecycle
 
 
 def _wrap_angle_deg(angle: float) -> float:
@@ -99,6 +101,13 @@ class SimBridgeNode(Node):
 
         self.declare_parameter('hil_mode', False)
         self._hil_mode = _as_bool(self.get_parameter('hil_mode').value)
+        self.declare_parameter('dvl_topic', DVL_VELOCITY)
+        self.declare_parameter('imu_topic', IMU)
+        self.declare_parameter('navigation_timeout', 2.0)
+        self._boot_monotonic_s = time.monotonic()
+        self._navigation = RawNavigation(
+            float(self.get_parameter('navigation_timeout').value),
+            timestamp_origin_s=self._boot_monotonic_s)
         self.declare_parameter('camera_stitch_fps', 10.0)
         self.declare_parameter('publish_raw_camera_topics', False)
         self._control_stop = threading.Event()
@@ -139,20 +148,16 @@ class SimBridgeNode(Node):
         self._tick = 0
         self._last_status_publish_s = float('-inf')
         self._last_thruster_publish_s = float('-inf')
+        self._last_odom_publish_s = float('-inf')
         self._control_stats = ControlLoopStats(target_hz=100.0)
 
-        # Internal state (host policy, mirrors firmware MicroRosPublisher semantics)
-        self.pos = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}  # estimated NED, angles deg
-        self.vel = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}  # estimated body, rad/s
-        self.vel_world = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}
         self.thrust = [0.0] * 6
         self.force_6dof = [0.0] * 6
-        self.current_pose_ready = False
+        self._core_lock = threading.RLock()
+        self._forces_lock = threading.Lock()
 
         # ARM / INS state
-        self._armed = True
-        self._arm_mode = 3
-        self._last_heartbeat_time = self.get_clock().now()
+        self._lifecycle = ArmLifecycle()
         self._ins_state = 1
         self._ins_nav_ready = False
         self._ins_boot_time = self.get_clock().now()
@@ -167,6 +172,7 @@ class SimBridgeNode(Node):
             f"{self._core.control_level}")
 
         # === Publishers ===
+        self.zit6_odom_pub = self.create_publisher(ZitOdom, ZIT6_ODOM, 10)
         self.zit6_status_pub = self.create_publisher(ZitStatus, ZIT6_STATUS, 10)
         self.zit6_thr_pub = self.create_publisher(Float32MultiArray, ZIT6_THRUSTER, 10)
         self.zit6_hbt_pub = self.create_publisher(UInt32, ZIT6_HEARTBEAT_STATE, 10)
@@ -181,18 +187,16 @@ class SimBridgeNode(Node):
         self.create_subscription(ZitSetpoint, ZIT6_SETPOINT, self._setpoint_cb, 10)
         self.create_subscription(ZitServo, ZIT6_SERVO, self._servo_cb, 10)
         self.create_subscription(UInt8, ZIT6_LIGHT, self._light_cb, 10)
-        self.create_subscription(PoseInfo, STATE_ODOM, self._state_odom_cb, 10)
-        self.create_subscription(
-            TwistWithCovarianceStamped, STATE_TWIST,
-            self._state_twist_cb, 10)
+        self._init_navigation_inputs()
         self.sensor_adapter = SensorAdapter(
             self, self.dvl_velocity_pub, self.dvl_altitude_pub)
         self.create_subscription(FluidPressure, PRESSURE, self._pressure_cb, 10)
         self.create_subscription(
-            UInt32, LEGACY_ZIT6_HEARTBEAT, self._agxhbt_cb, 10)
+            UInt32, ZIT6_ARM_HEARTBEAT, self._agxhbt_cb, 10)
         self.create_subscription(UInt8, ZIT6_INS, self._ins_cb, 10)
 
         # === Services ===
+        self.create_service(SetOrigin, ZIT6_SET_ORIGIN, self._set_origin_cb)
         self.create_service(GetParams, ZIT6_GET_PARAMS, self._get_params_cb)
         self.create_service(UpdateParams, ZIT6_UPDATE_PARAMS, self._update_params_cb)
 
@@ -206,7 +210,6 @@ class SimBridgeNode(Node):
         # Start the 100Hz control thread (separated from camera/state executor so
         # image stitching never starves control).
         self._control_stop = threading.Event()
-        self._forces_lock = threading.Lock()
         self._control_thread = threading.Thread(
             target=self._control_loop, name="zit6_control", daemon=True)
         self._control_thread.start()
@@ -227,71 +230,114 @@ class SimBridgeNode(Node):
         self._mixer = ThrustMixer()
         self._actuator = ActuatorAdapter(self, self._mixer)
 
-        # Nav aggregation for MCU
-        self._sim_pos = [0.0] * 6
-        self._sim_vel = [0.0] * 6
+        # External HIL navigation is continuous raw nav, never MCU odom.
         self.sim_nav_pub = self.create_publisher(Float32MultiArray, ZIT6_SIM_NAV, 10)
-        # HIL navigation is sourced from the canonical estimated state.  The
-        # simulator ground-truth topic is intentionally not part of this
-        # control/MCU feed.
-        self.create_subscription(PoseInfo, STATE_ODOM, self._sim_nav_pose_cb, 10)
+        self._hil_navigation_configured = False
+        self._hil_status = None
+        self._hil_status_time_s = None
+        self._hil_config_future = None
+        self._hil_config_next_attempt_s = 0.0
+        self._hil_last_heartbeat_tick = None
+        self._hil_config_client = self.create_client(UpdateParams, ZIT6_UPDATE_PARAMS)
+        self.create_subscription(ZitStatus, ZIT6_STATUS, self._hil_status_cb, 10)
         self.create_subscription(
-            TwistWithCovarianceStamped, STATE_TWIST,
-            self._sim_nav_twist_cb, 10)
+            UInt32, ZIT6_HEARTBEAT_STATE, self._hil_heartbeat_cb, 10)
+        self._init_navigation_inputs()
+        self.create_timer(1.0 / 30.0, self._publish_sim_nav)
 
     def _thrust_cb(self, msg: Float32MultiArray) -> None:
         if len(msg.data) >= 6:
             self._publish_thrust_from_6dof(*msg.data[:6])
 
-    def _sim_nav_pose_cb(self, msg: PoseInfo) -> None:
-        """Forward the canonical estimated pose to the HIL MCU adapter."""
-        values = (
-            msg.robot_x, msg.robot_y, msg.robot_z,
-            msg.robot_roll, msg.robot_pitch, msg.robot_yaw,
-        )
-        if not all(math.isfinite(float(value)) for value in values):
-            return
-        self._sim_pos[0:3] = [float(msg.robot_x), float(msg.robot_y),
-                              float(msg.robot_z)]
-        self._sim_pos[3:6] = [
-            math.radians(float(msg.robot_roll)),
-            math.radians(float(msg.robot_pitch)),
-            math.radians(float(msg.robot_yaw)),
-        ]
-        self._publish_sim_nav()
+    def _init_navigation_inputs(self) -> None:
+        self.create_subscription(
+            DvlVelocity, str(self.get_parameter('dvl_topic').value),
+            self._dvl_cb, 10)
+        self.create_subscription(
+            Imu, str(self.get_parameter('imu_topic').value), self._imu_cb, 10)
 
-    def _sim_nav_twist_cb(self, msg: TwistWithCovarianceStamped) -> None:
-        """Forward estimator velocity to the HIL MCU adapter."""
-        twist = msg.twist.twist
-        values = (twist.linear.x, twist.linear.y, twist.linear.z,
-                  twist.angular.x, twist.angular.y, twist.angular.z)
-        if not all(math.isfinite(float(value)) for value in values):
+    def _dvl_cb(self, msg: DvlVelocity) -> None:
+        if msg.valid:
+            self._navigation.update_velocity(
+                (msg.velocity.x, msg.velocity.y, msg.velocity.z), time.monotonic())
+
+    def _imu_cb(self, msg: Imu) -> None:
+        angular = msg.angular_velocity
+        self._navigation.update_imu(
+            (angular.x, angular.y, angular.z), time.monotonic())
+
+    def _hil_status_cb(self, msg: ZitStatus) -> None:
+        self._hil_status = msg
+        self._hil_status_time_s = time.monotonic()
+
+    def _hil_heartbeat_cb(self, msg: UInt32) -> None:
+        tick = int(msg.data)
+        if (self._hil_last_heartbeat_tick is not None
+                and ((tick - self._hil_last_heartbeat_tick) & 0xFFFFFFFF) > 0x80000000):
+            # Runtime external-nav configuration must be reapplied after MCU reboot.
+            self._hil_navigation_configured = False
+            if self._hil_config_future is not None:
+                self._hil_config_future.cancel()
+                self._hil_config_future = None
+        self._hil_last_heartbeat_tick = tick
+
+    def _configure_hil_navigation(self) -> None:
+        if self._hil_navigation_configured:
             return
-        self._sim_vel[:] = [float(value) for value in values]
-        self._publish_sim_nav()
+        if self._hil_config_future is not None:
+            if not self._hil_config_future.done():
+                return
+            try:
+                response = self._hil_config_future.result()
+                self._hil_navigation_configured = bool(response and response.success)
+                if not self._hil_navigation_configured:
+                    self.get_logger().error('HIL external navigation config rejected')
+            except Exception as error:
+                self.get_logger().error(f'HIL navigation config failed: {error}')
+            self._hil_config_future = None
+            self._hil_config_next_attempt_s = time.monotonic() + 1.0
+            return
+        if time.monotonic() < self._hil_config_next_attempt_s:
+            return
+        if (self._hil_status is None or self._hil_status.is_armed
+                or self._hil_status_time_s is None
+                or time.monotonic() - self._hil_status_time_s > 2.0
+                or not self._hil_config_client.service_is_ready()):
+            return
+        request = UpdateParams.Request()
+        request.paths = ['simulation.hitl_enabled', 'simulation.sitl_enabled']
+        request.values = ['false', 'true']
+        self._hil_config_future = self._hil_config_client.call_async(request)
 
     def _publish_sim_nav(self) -> None:
+        self._configure_hil_navigation()
+        sample = self._navigation.snapshot(time.monotonic())
+        if not self._hil_navigation_configured or not sample.valid:
+            return
         nav = Float32MultiArray()
-        nav.data = self._sim_pos + self._sim_vel
+        nav.data = list(sample.position + sample.velocity)
         self._publish_while_running(self.sim_nav_pub, nav)
 
     # ── ZIT6 setpoint callback → native core ────────────────────────
 
     def _setpoint_cb(self, msg: ZitSetpoint) -> None:
         mode = int(msg.control_key & 0x03)   # 0=POS, 1=VEL, 2=ACTUATOR
+        if mode >= 3:
+            return
         is_body = bool(msg.control_key & 0x10)
         is_inc = bool(msg.control_key & 0x20)
         mask = int(msg.type_mask)
         # val6: [x, y, z, roll, pitch, yaw] — yaw is RADIANS on the wire.
         val6 = [msg.x, msg.y, msg.z, msg.roll, msg.pitch, msg.yaw]
 
-        # Firmware gating: position/velocity setpoints need armed + nav_valid.
-        # We stay always-armed in sim, so only pass through if pose ready.
-        if mode in (0, 1) and not self.current_pose_ready:
-            self.get_logger().debug("setpoint dropped: pose not ready")
+        if not all(math.isfinite(float(value)) for value in val6):
             return
         try:
-            self._core.update_setpoint(mode, val6, mask, is_body, is_inc)
+            with self._core_lock:
+                odom = self._core.get_odom_snapshot()
+                if not self._lifecycle.armed or (mode in (0, 1) and not odom['nav_valid']):
+                    return
+                self._core.update_setpoint(mode, val6, mask, is_body, is_inc)
             self.get_logger().debug(
                 f"Setpoint: level={mode} is_body={is_body} is_inc={is_inc} "
                 f"mask={mask} val={[f'{v:.2f}' for v in val6]}")
@@ -310,53 +356,42 @@ class SimBridgeNode(Node):
     # ── Heartbeat / ARM ─────────────────────────────────────────────
 
     def _agxhbt_cb(self, msg: UInt32) -> None:
-        self._last_heartbeat_time = self.get_clock().now()
-        arm_val = msg.data
-        newly_armed = False
-        if arm_val == 3:
-            if not self._armed:
-                self.get_logger().info("ARM: force arm (mode 3)")
-                newly_armed = True
-            self._arm_mode = 3
-            self._armed = True
-        elif arm_val == 1 and self._ins_nav_ready:
-            if not self._armed:
-                self.get_logger().info("ARM: normal arm (mode 0)")
-                newly_armed = True
-            self._arm_mode = 0
-            self._armed = True
+        with self._core_lock:
+            odom = self._core.get_odom_snapshot()
+            previously_armed = self._lifecycle.armed
+            self._lifecycle.heartbeat(
+                int(msg.data), time.monotonic(),
+                origin_ready=odom['origin_initialized'],
+                nav_ready=odom['nav_valid'])
+            if self._lifecycle.armed and not previously_armed:
+                self._core.reset_setpoints()
 
-        # 复刻固件 SafetyMonitor::executeArm: 解锁瞬间把当前位姿设为 home offset
-        # (roll/pitch 强制 0,核心内部将它作为控制原点/零姿态)。
-        if newly_armed:
-            self._set_home_offset_on_arm()
+    def _set_origin_cb(self, _request, response):
+        with self._core_lock:
+            if self._lifecycle.armed:
+                response.success = False
+                response.message = 'vehicle must be disarmed'
+                return response
+            commit = self._core.try_set_origin(self._mcu_tick_ms(), 200)
+            response.success = commit['success']
+            response.message = ('origin set' if response.success
+                                else 'navigation invalid or stale')
+            if response.success:
+                # Pre-reset heartbeats must not ARM before the new odom is confirmed.
+                self._lifecycle.reset_arming_qualification()
+                self._core.set_control_level(0)
+                response.origin_nav = commit['origin_nav']
+                response.nav_timestamp_ms = commit['nav_timestamp_ms']
+                response.origin_generation = commit['origin_generation']
+        return response
 
-    def _set_home_offset_on_arm(self) -> None:
-        """ARM 时把当前 map 位姿设为解锁原点,注入控制核 home offset。"""
-        if not self.current_pose_ready:
-            self.get_logger().warn("ARM: pose not ready, home offset skipped")
-            return
-        # self.pos 内部是 NED 度;核心期望弧度,roll/pitch 强制 0。
-        pos6 = [
-            self.pos.get('x', 0.0),
-            self.pos.get('y', 0.0),
-            self.pos.get('z', 0.0),
-            0.0, 0.0,
-            math.radians(self.pos.get('rz', 0.0)),
-        ]
-        try:
-            self._core.set_home_offset(pos6)
-            self.get_logger().info(
-                f"Home offset set on ARM: x={pos6[0]:.2f} y={pos6[1]:.2f} "
-                f"z={pos6[2]:.2f} yaw={math.degrees(pos6[5]):.1f}deg "
-                f"-> current pose becomes origin (0,0,0,0,0,0)")
-        except Exception as e:
-            self.get_logger().error(f"set_home_offset failed: {e}")
+    def _mcu_tick_ms(self) -> int:
+        return int((time.monotonic() - self._boot_monotonic_s) * 1000) & 0xFFFFFFFF
 
     def _publish_zithbt(self) -> None:
         """~1Hz heartbeat, data = coarse ms tick (matches firmware; avoids hw_manager 7s watchdog)."""
         msg = UInt32()
-        msg.data = int(time.monotonic() * 1000) & 0xFFFFFFFF
+        msg.data = self._mcu_tick_ms()
         self._publish_while_running(self.zit6_hbt_pub, msg)
 
     # ── INS command ─────────────────────────────────────────────────
@@ -378,11 +413,10 @@ class SimBridgeNode(Node):
             self._dvl_enabled = False
             self._ins_align_request = None
             self._ins_boot_time = self.get_clock().now()
-            # INS 重启 → 清除解锁原点(复刻固件 forceDisarmWithNeutralLevel)
-            try:
-                self._core.clear_home_offset()
-            except Exception as e:
-                self.get_logger().error(f"clear_home_offset failed: {e}")
+            # INS restart disarms while retaining the explicitly set origin.
+            with self._core_lock:
+                self._lifecycle.disarm()
+                self._core.set_control_level(0)
 
     # ── Parameter services (get/update write through native core gains) ──
 
@@ -430,33 +464,28 @@ class SimBridgeNode(Node):
             return
         self._tick = (self._tick + 1) % 60
 
-        # Pose-ready gate for state publishing
-        pos_world = [0.0] * 6
-        vel_body = [0.0] * 6
-        if self.current_pose_ready:
-            # World NED position (radians for angular) — note pos stores deg internally
-            pos_world = [
-                self.pos['x'], self.pos['y'], self.pos['z'],
-                math.radians(self.pos.get('rx', 0.0)),
-                math.radians(self.pos.get('ry', 0.0)),
-                math.radians(self.pos['rz']),
-            ]
-            vel_body = [
-                self.vel['x'], self.vel['y'], self.vel['z'],
-                self.vel['rx'], self.vel['ry'], self.vel['rz'],
-            ]
-
-            # Update INS alignment (1 → 5 → 4) using clock time
-            self._update_ins_alignment()
-
-            # Feed native core and step
-            try:
-                self._core.update_nav(pos_world, vel_body)
-                forces = self._core.step()  # [Fx,Fy,Fz,Mroll,Mpitch,Myaw]
-            except Exception as e:
-                self.get_logger().error(f"core.step failed: {e}")
-                forces = [0.0] * 6
-        else:
+        now_s = time.monotonic()
+        sample = self._navigation.snapshot(now_s)
+        self._update_ins_alignment()
+        try:
+            with self._core_lock:
+                self._core.update_nav(sample.position, sample.velocity,
+                                      sample.timestamp_ms,
+                                      sample.valid and self._ins_nav_ready)
+                odom = self._core.get_odom_snapshot()
+                previously_armed = self._lifecycle.armed
+                if self._lifecycle.check(
+                        now_s, origin_ready=odom['origin_initialized'],
+                        nav_ready=odom['nav_valid']):
+                    self._core.set_control_level(0)
+                    self.get_logger().info('ARM heartbeat timed out; disarmed')
+                if self._lifecycle.armed and not previously_armed:
+                    self._core.reset_setpoints()
+                allow_control = (self._lifecycle.armed
+                                 and (odom['nav_valid'] or self._core.control_level == 3))
+                forces = self._core.step() if allow_control else [0.0] * 6
+        except Exception as error:
+            self.get_logger().error(f'core.step failed: {error}')
             forces = [0.0] * 6
 
         with self._forces_lock:
@@ -467,6 +496,9 @@ class SimBridgeNode(Node):
         # are sufficient for navigation and task control.  Time-based gates
         # avoid the jitter of modulo counters when the control thread slips.
         publish_now = time.monotonic()
+        if publish_now - self._last_odom_publish_s >= (1.0 / 30.0):
+            self._publish_odom()
+            self._last_odom_publish_s = publish_now
         if publish_now - self._last_status_publish_s >= 0.1:
             self._publish_state()
             self._last_status_publish_s = publish_now
@@ -483,33 +515,6 @@ class SimBridgeNode(Node):
             self.force_6dof = [fx, fy, fz, mroll, mpitch, myaw]
             self.thrust = self._mixer.mix6(fx, fy, fz, mroll, mpitch, myaw)
         self._actuator.publish_thrust(self.thrust)
-
-    # ── Sensor callbacks → estimator input / control state ─────────
-
-    def _state_odom_cb(self, msg: PoseInfo) -> None:
-        """Consume only the formal estimator state used by the control core."""
-        values = (msg.robot_x, msg.robot_y, msg.robot_z, msg.robot_yaw)
-        if not all(math.isfinite(float(value)) for value in values):
-            return
-        self.pos.update({
-            'x': float(msg.robot_x), 'y': float(msg.robot_y),
-            'z': float(msg.robot_z), 'rx': float(msg.robot_roll),
-            'ry': float(msg.robot_pitch), 'rz': float(msg.robot_yaw),
-        })
-        self.current_pose_ready = True
-
-    def _state_twist_cb(self, msg: TwistWithCovarianceStamped) -> None:
-        """Consume only the formal estimator velocity used by the core."""
-        twist = msg.twist.twist
-        values = (twist.linear.x, twist.linear.y, twist.linear.z,
-                  twist.angular.x, twist.angular.y, twist.angular.z)
-        if not all(math.isfinite(float(value)) for value in values):
-            return
-        self.vel.update({
-            'x': float(twist.linear.x), 'y': float(twist.linear.y),
-            'z': float(twist.linear.z), 'rx': float(twist.angular.x),
-            'ry': float(twist.angular.y), 'rz': float(twist.angular.z),
-        })
 
     def _pressure_cb(self, msg: FluidPressure) -> None:
         pass
@@ -535,12 +540,13 @@ class SimBridgeNode(Node):
 
     def _publish_state(self) -> None:
         status = ZitStatus()
-        status.is_armed = self._armed
-        status.arm_mode = self._arm_mode
-        # control_level from native core (1=POS, 2=VEL, 3=ACTUATOR)
-        status.control_level = self._core.control_level
+        with self._core_lock:
+            odom = self._core.get_odom_snapshot()
+            status.is_armed = self._lifecycle.armed
+            status.arm_mode = self._lifecycle.arm_mode
+            status.control_level = self._core.control_level
         status.ins_state = self._ins_state
-        status.navigation_ready = self._ins_nav_ready
+        status.navigation_ready = odom['nav_valid']
         with self._forces_lock:
             f = list(self.force_6dof)
         status.forces = [f[0], f[1], f[2], f[3], f[4], f[5]]
@@ -548,6 +554,14 @@ class SimBridgeNode(Node):
         status.battery_voltage = 16.8
         status.error_flags = 0
         self._publish_while_running(self.zit6_status_pub, status)
+    def _publish_odom(self) -> None:
+        with self._core_lock:
+            snapshot = self._core.get_odom_snapshot()
+        message = ZitOdom()
+        for key, value in snapshot.items():
+            setattr(message, key, value)
+        self._publish_while_running(self.zit6_odom_pub, message)
+
     def _publish_thr(self) -> None:
         thr_msg = Float32MultiArray()
         with self._forces_lock:

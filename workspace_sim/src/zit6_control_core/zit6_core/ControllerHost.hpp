@@ -37,16 +37,20 @@ public:
                       uint32_t mask, bool is_body, bool is_inc);
 
   /** @brief 更新导航状态（写入 motion_context 单例;世界系 NED + 机体系 FRD，radian） */
-  void updateNav(const auv::motion::NavState &nav);
+  void updateNav(const auv::motion::NavState &nav, uint32_t timestamp_ms = 0,
+                 bool valid = true);
+  auv::motion::OdomSnapshot getOdomSnapshot() const;
+  bool trySetOrigin(uint32_t now_ms, uint32_t max_age_ms,
+                    auv::motion::OriginCommit &commit);
 
   /**
-   * @brief 设置解锁原点(Home Offset) — 复刻固件 SafetyMonitor::executeArm。
+   * @brief 兼容接口：显式设置原点(Home Offset)。
    * @param pos6 当前位置 [x,y,z,roll,pitch,yaw];内部 roll/pitch 强制 0。
    * 之后 updateNav 会先把输入减去该原点并按 offset.yaw 旋转(理正姿态)。
    */
   void setHomeOffset(const float pos6[6]);
 
-  /** @brief 清除解锁原点(复刻 forceDisarmWithNeutralLevel::clearHomeOffset)。 */
+  /** @brief 清除原点（仅重启/兼容测试使用）。 */
   void clearHomeOffset();
 
   /** @brief 是否已设置解锁原点 */
@@ -54,6 +58,7 @@ public:
 
   /** @brief 强制切换控制层级（带无扰动对齐，固件内部读单例 nav） */
   void setControlLevel(auv::motion::ControlLevel lvl);
+  void resetSetpoints();
 
   /** @brief 100Hz 演进一次，返回 6-DOF 归一化力/力矩 [Fx,Fy,Fz,Mroll,Mpitch,Myaw] */
   std::array<float, 6> step();

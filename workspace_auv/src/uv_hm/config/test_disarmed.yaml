@@ -1,8 +1,12 @@
 /hw_manager:
   ros__parameters:
-    heartbeat_rate: 15.0
     watchdog_timeout: 7.0
-    arm_mode: 0
     battery_low_threshold: 21.0
     cycle_time_warn_threshold: 100.0
     legacy_state_topics: true
+
+# BasicMotion owns arming; this profile keeps arm heartbeat disabled.
+/basic_motion:
+  ros__parameters:
+    arm_mode: 0
+    heartbeat_rate: 15.0

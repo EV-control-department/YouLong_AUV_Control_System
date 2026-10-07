@@ -10,6 +10,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(Threads REQUIRED)
 find_package(pybind11 REQUIRED)
 # pybind11 的 pybind11NewTools 需要 Python3 Interpreter+Development 组件
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
@@ -48,6 +49,8 @@ target_include_directories(zit6_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/zit6_core
   ${EIGEN3_INCLUDE_DIR}
 )
+
+target_link_libraries(zit6_core PUBLIC Threads::Threads)
 
 # --- pybind11 模块 ---
 # 定位 pybind11 头目录(apt python3-pybind11 提供 /usr/include/pybind11)

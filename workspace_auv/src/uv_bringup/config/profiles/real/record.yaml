@@ -9,8 +9,8 @@
 #   - model_class_publisher：仍会启动，但本模式没有 AI 检测节点消费它。
 #   - robot_state_publisher：发布真实 URDF 和静态 TF。
 #   - uv_localization：读取硬件状态并发布 /auv/state/odom。
-#   - hw_manager：发布 ZIT6 heartbeat，转发硬件状态并执行 watchdog 监控。
-#   - basic_motion：保留运动控制，便于台架上检查控制状态；本模式不会启动任务。
+#   - hw_manager：转发 ZIT6 命令/服务、硬件状态并执行 watchdog 监控。
+#   - basic_motion：拥有 ARM 心跳并保留运动控制；本模式不会启动任务。
 #   - uv_camera：打开真实前视/下视相机，提供 raw 采集源。
 #   - uv_record_recorder：record_session=true 时启动，record_mode=raw 表示采集原始帧。
 #

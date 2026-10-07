@@ -10,17 +10,17 @@ import time
 import uuid
 
 import numpy as np
-from std_msgs.msg import Empty
 from rclpy.qos import (
     QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy,
 )
 from auv_protocol.model_mapping import ModelClassRegistry
 from auv_protocol.topics import (
     DOWN_LEFT_INFO, DOWN_RIGHT_INFO, FRONT_LEFT_INFO, FRONT_RIGHT_INFO,
-    MEASUREMENTS, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, STATE_RESET,
+    MEASUREMENTS, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, STATE_ODOM, STATE_RESET_RESULT,
 )
 from sensor_msgs.msg import CameraInfo
 from uv_msgs.msg import (
+    StateResetResult, PoseInfo,
     DetectionArray, ModelClassMapping, ObjectMeasurement, ObjectMeasurementArray,
 )
 
@@ -66,6 +66,8 @@ class ObjectLocalizer:
         self._id_lock = threading.Lock()
         self._pending: dict[tuple[str, int, int], PendingPair] = {}
         self._reset_stamp_ns = 0
+        self._last_cleared_generation = None
+        self._origin_ready = True
         self._infos = {}
         self._warned_tf_frames = set()
         # Distinguish IDs produced by separate localizer process lifetimes.
@@ -92,7 +94,10 @@ class ObjectLocalizer:
                                      info_qos)
         node.create_subscription(DetectionArray, PERCEPTION_DETECTIONS,
                                  self._detections, 10)
-        node.create_subscription(Empty, STATE_RESET, self._reset_callback, 10)
+        node.create_subscription(
+            StateResetResult, STATE_RESET_RESULT, self._reset_callback, 10)
+        node.create_subscription(
+            PoseInfo, STATE_ODOM, self._origin_state_callback, 10)
         self.timer = node.create_timer(0.02, self._flush)
 
     def _mapping_callback(self, message):
@@ -106,8 +111,31 @@ class ObjectLocalizer:
         with self._lock:
             self._infos[name] = message
 
+    def _origin_state_callback(self, message):
+        self._origin_ready = bool(message.origin_initialized)
+        if not self._origin_ready:
+            self._last_cleared_generation = None
+            return
+        if (self._last_cleared_generation is not None and
+                ((int(message.origin_generation) - self._last_cleared_generation)
+                 & 0xffffffff) >= 0x80000000):
+            self._last_cleared_generation = None
+        if self._last_cleared_generation != int(message.origin_generation):
+            self._reset_callback(StateResetResult(
+                success=True, origin_generation=int(message.origin_generation)))
+
     def _reset_callback(self, _message):
         """Discard camera pairs captured before an odom-frame reset."""
+        if not _message.success:
+            return
+        generation = int(_message.origin_generation)
+        if self._last_cleared_generation is not None and (
+                ((generation - self._last_cleared_generation) & 0xffffffff) == 0
+                or ((generation - self._last_cleared_generation) & 0xffffffff)
+                >= 0x80000000):
+            return
+        self._last_cleared_generation = generation
+        self._origin_ready = True
         now = self.node.get_clock().now()
         reset_stamp_ns = int(getattr(now, 'nanoseconds', 0))
         if reset_stamp_ns <= 0:
@@ -120,9 +148,11 @@ class ObjectLocalizer:
             self._reset_stamp_ns = reset_stamp_ns
         self.node.get_logger().info(
             'ObjectLocalizer discarded {} pending camera pairs after '
-            'STATE_RESET'.format(pending_count))
+            'STATE_RESET_RESULT'.format(pending_count))
 
     def _detections(self, message):
+        if not self._origin_ready:
+            return
         camera_name = str(message.camera_name).strip().lower()
         group = camera_name.split('_', 1)[0]
         key = (group, int(message.capture_id), int(message.stereo_pair_id))

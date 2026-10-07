@@ -23,6 +23,7 @@ from uv_sim_bringup.launch_common import (
     declare_mission_file,
     declare_observability_arguments,
     declare_simulation_arguments,
+    release_tasks_after_backend_ready,
 )
 from uv_sim_bringup.scene import prepare_scene
 
@@ -71,6 +72,9 @@ def generate_launch_description():
             'scenario_desc': LaunchConfiguration('resolved_scenario'),
             'simulation_rate': LaunchConfiguration('simulation_rate'),
         }, condition=UnlessCondition(LaunchConfiguration('gpu')))
+    hardware = _include('uv_hm', 'hardware_launch.py', {
+        'enable_hardware': 'true',
+    })
     localization = _include('uv_localization', 'localization_launch.py', {
         'sim_mode': 'true', 'publish_tf': 'true',
     })
@@ -117,6 +121,8 @@ def generate_launch_description():
         'params_file': '', 'mission_file': mission_file,
         'auto_start': 'true',
     })
+    task_startup = release_tasks_after_backend_ready(
+        task, LaunchConfiguration('enable_task'), LaunchConfiguration('startup_timeout'))
     agent = ExecuteProcess(
         cmd=[LaunchConfiguration('agent_executable'), 'serial', '-D',
              LaunchConfiguration('serial_dev'), '-b',
@@ -149,6 +155,6 @@ def generate_launch_description():
             scenario_desc=scenario, scene_seed=seed, launch_file=__file__,
             start_actions=[model_mapping, description, localization, stonefish_gpu,
                            stonefish_nogpu, bridge,
-                           agent, control, camera, perception, stream,
-                           planning, task, observability]),
+                           agent, hardware, control, camera, perception, stream,
+                           planning, *task_startup, observability]),
     ])

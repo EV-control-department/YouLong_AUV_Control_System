@@ -1,7 +1,7 @@
 # Pose information published by basic_motion
 builtin_interfaces/Time stamp
 
-# odom origin in map frame (degrees for yaw)
+# Deprecated compatibility fields. Always zero; MCU owns the odom origin.
 float32 origin_x
 float32 origin_y
 float32 origin_z
@@ -20,3 +20,9 @@ float32 target_x
 float32 target_y
 float32 target_z
 float32 target_yaw
+
+# Metadata copied from the same MCU odom snapshot as robot pose.
+bool nav_valid
+bool origin_initialized
+uint32 origin_generation
+uint32 nav_timestamp_ms

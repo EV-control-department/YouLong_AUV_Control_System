@@ -3,6 +3,7 @@
 #include "SystemConfig.hpp"
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include <array>
 
@@ -113,19 +114,47 @@ PYBIND11_MODULE(zit6_control_core, m) {
            py::arg("is_body"), py::arg("is_inc"))
 
       .def("update_nav",
-           [](auv::host::ControllerHost &c, py::handle pos_world6, py::handle vel_body6) {
+           [](auv::host::ControllerHost &c, py::handle pos_world6, py::handle vel_body6,
+              uint32_t timestamp_ms, bool valid) {
              auv::motion::NavState n;
              n.pos_world = to_arr6(pos_world6);
              n.vel_body = to_arr6(vel_body6);
-             c.updateNav(n);
+             c.updateNav(n, timestamp_ms, valid);
            },
-           py::arg("pos_world"), py::arg("vel_body"))
+           py::arg("pos_world"), py::arg("vel_body"),
+           py::arg("timestamp_ms") = 0, py::arg("valid") = true)
+
+      .def("get_odom_snapshot", [](const auv::host::ControllerHost &c) {
+        const auto odom = c.getOdomSnapshot();
+        py::dict result;
+        result["pose_odom"] = odom.nav_state.pos_world;
+        result["twist_body"] = odom.nav_state.vel_body;
+        result["nav_timestamp_ms"] = odom.nav_timestamp_ms;
+        result["nav_valid"] = odom.nav_valid;
+        result["origin_initialized"] = odom.origin_initialized;
+        result["origin_generation"] = odom.origin_generation;
+        return result;
+      })
+
+      .def("try_set_origin", [](auv::host::ControllerHost &c,
+                                uint32_t now_ms, uint32_t max_age_ms) {
+        auv::motion::OriginCommit commit;
+        const bool success = c.trySetOrigin(now_ms, max_age_ms, commit);
+        py::dict result;
+        result["success"] = success;
+        result["origin_nav"] = commit.origin_nav;
+        result["nav_timestamp_ms"] = commit.nav_timestamp_ms;
+        result["origin_generation"] = commit.origin_generation;
+        return result;
+      }, py::arg("now_ms"), py::arg("max_age_ms") = 200)
 
       .def("set_home_offset",
            [](auv::host::ControllerHost &c, py::handle pos6) {
              auto v = to_arr6(pos6);
              c.setHomeOffset(v.data());
            }, py::arg("pos_world"))
+
+      .def("reset_setpoints", &auv::host::ControllerHost::resetSetpoints)
 
       .def("clear_home_offset", &auv::host::ControllerHost::clearHomeOffset)
 

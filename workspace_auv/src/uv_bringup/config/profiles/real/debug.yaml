@@ -9,8 +9,8 @@
 #   - model_class_publisher：发布模型类别映射。
 #   - robot_state_publisher：发布真实 URDF 和相机静态 TF。
 #   - uv_localization：发布 /auv/state/odom 和动态 TF。
-#   - hw_manager：持续发布 ZIT6 heartbeat，适配硬件状态并监控 watchdog。
-#   - basic_motion：提供 /auv/basic_motion Action Server。
+#   - hw_manager：转发 ZIT6 命令/服务、适配硬件状态并监控 watchdog。
+#   - basic_motion：拥有 ARM 心跳并提供 /auv/basic_motion Action Server。
 #   - uv_camera：打开真实前视/下视相机。
 #   - object_detector：从相机帧生成目标检测和特征线结果。
 #   - object_localizer：结合双目内参、TF 和检测结果生成几何观测。

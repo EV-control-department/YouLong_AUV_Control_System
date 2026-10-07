@@ -1,389 +1,316 @@
-"""Small canonical-state adapter used as the first localization boundary.
+"""Adapt the MCU's versioned odom into canonical state and TF.
 
-This node intentionally does not subscribe to simulator ground truth.  In a
-real deployment it consumes the ZIT6 navigation feedback.  In SIL/HIL it
-consumes the canonical DVL and IMU streams and integrates a deliberately
-simple dead-reckoning state.  The estimator is a replaceable boundary: the
-future FGO backend can publish the same ``/auv/state/*`` interfaces without
-changing control, planning, or mission code.
-
-``PoseInfo`` is retained on ``/auv/state/odom`` for compatibility with the
-current consumers.  Its yaw fields are degrees; the estimator keeps all
-internal angles in radians and converts only at this temporary message edge.
+The MCU owns navigation selection and nav-to-odom conversion in every profile.
+This boundary neither integrates sensors nor subtracts another origin.
 """
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 import math
 import threading
+import time
 
 from auv_protocol.topics import (
-    DVL_VELOCITY,
-    IMU,
-    LEGACY_ZIT6_POSITION,
-    LEGACY_ZIT6_VELOCITY,
-    STATE_HEALTH,
-    STATE_ODOM,
-    STATE_RESET,
-    STATE_TWIST,
-    TF,
-    USBL_MEASUREMENT,
-    ZIT6_POSITION,
-    ZIT6_VELOCITY,
+    STATE_HEALTH, STATE_ODOM, STATE_RESET, STATE_RESET_RESULT, STATE_TWIST,
+    TF, ZIT6_ODOM, ZIT6_SET_ORIGIN,
 )
 from geometry_msgs.msg import TransformStamped, TwistWithCovarianceStamped
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from sensor_msgs.msg import Imu
-from std_msgs.msg import Empty, Float32MultiArray
 from tf2_msgs.msg import TFMessage
-from uv_msgs.msg import DvlVelocity, PoseInfo, SensorHealth, UsblMeasurement
-
-
-# The simulated Stonefish DVL is mounted away from the vehicle reference
-# point. Its message is converted to body axes by uv_sim_bridge, but still
-# measures velocity at this sensor origin. Apply the rigid-body lever-arm
-# correction only in SIL/HIL where this pose is defined. The real vehicle
-# DVL pose is intentionally not guessed from the simulation model.
-_SIM_DVL_POSITION_BODY = (-0.375, 0.0, 0.2)
+from uv_msgs.msg import PoseInfo, SensorHealth, StateResetRequest, StateResetResult
+from zit6_interfaces.msg import ZitOdom
+from zit6_interfaces.srv import SetOrigin
 
 
 def _finite(values) -> bool:
     return all(math.isfinite(float(value)) for value in values)
 
 
-def _wrap_rad(value: float) -> float:
-    return (value + math.pi) % (2.0 * math.pi) - math.pi
-
-
 def _as_bool(value) -> bool:
-    """Parse launch/YAML booleans without treating ``'false'`` as true."""
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-def _body_to_world(vx: float, vy: float, yaw: float) -> tuple[float, float]:
-    """FRD body velocity to NED odom velocity (yaw-only first adapter)."""
-    cy, sy = math.cos(yaw), math.sin(yaw)
-    return cy * vx - sy * vy, sy * vx + cy * vy
-
-
-def _remove_sensor_lever_arm(
-        velocity: tuple[float, float, float],
-        angular_velocity: tuple[float, float, float],
-        sensor_position: tuple[float, float, float],
-) -> tuple[float, float, float]:
-    """Remove ``omega × r`` from a sensor velocity in body axes."""
-    vx, vy, vz = velocity
-    wx, wy, wz = angular_velocity
-    rx, ry, rz = sensor_position
-    return (
-        vx - (wy * rz - wz * ry),
-        vy - (wz * rx - wx * rz),
-        vz - (wx * ry - wy * rx),
-    )
+def _at_least_u32(value: int, reference: int) -> bool:
+    """Compare MCU counters, including uint32 rollover."""
+    return ((int(value) - int(reference)) & 0xffffffff) < 0x80000000
 
 
 @dataclass
-class _State:
-    x: float = 0.0
-    y: float = 0.0
-    z: float = 0.0
-    roll: float = 0.0
-    pitch: float = 0.0
-    yaw: float = 0.0
-    vx: float = 0.0
-    vy: float = 0.0
-    vz: float = 0.0
-    wx: float = 0.0
-    wy: float = 0.0
-    wz: float = 0.0
+class _PendingReset:
+    request_id: int
+    future: object
+    started_at: float
+    deadline: float
+    baseline_generation: int
+    boot_epoch: int
+    origin_generation: int | None = None
+    nav_timestamp_ms: int = 0
 
 
 class EstimatorNode(Node):
-    """Publish one estimated state stream and one dynamic odom TF stream."""
+    """Publish exactly the MCU odom and confirm applied reset generations."""
 
     def __init__(self) -> None:
         super().__init__('uv_localization')
+        # Existing launch arguments remain accepted for profile compatibility.
         self.declare_parameter('sim_mode', False)
+        self.declare_parameter('estimator', 'bootstrap')
+        if str(self.get_parameter('estimator').value).strip().lower() != 'bootstrap':
+            raise ValueError('this localization boundary supports only the MCU bootstrap adapter')
         self.declare_parameter('publish_tf', True)
         self.declare_parameter('publish_rate', 30.0)
         self.declare_parameter('position_timeout', 2.0)
-        self.declare_parameter('estimator', 'bootstrap')
-
-        self._sim_mode = _as_bool(self.get_parameter('sim_mode').value)
-        self._estimator = str(self.get_parameter('estimator').value).strip().lower()
-        if self._estimator != 'bootstrap':
-            raise ValueError(
-                f'unsupported estimator {self._estimator!r}; '
-                "V1 supports only 'bootstrap'")
-        self._publish_tf_enabled = _as_bool(
-            self.get_parameter('publish_tf').value)
+        self.declare_parameter('setorigin_timeout', 3.0)
+        self.declare_parameter('reset_frame_timeout', 1.0)
+        self._publish_tf_enabled = _as_bool(self.get_parameter('publish_tf').value)
         self._position_timeout = float(self.get_parameter('position_timeout').value)
+        self._setorigin_timeout = float(self.get_parameter('setorigin_timeout').value)
+        self._reset_frame_timeout = float(self.get_parameter('reset_frame_timeout').value)
         self._lock = threading.Lock()
-        self._state = _State()
-        self._raw_position: _State | None = None
-        self._map_origin: _State | None = None
-        self._last_position_time = None
-        self._last_velocity_time = None
-        self._last_imu_time = None
-        self._last_update_time = self.get_clock().now()
-        self._have_measurement = False
-        self._sim_sensor_stale_reported = False
+        self._odom = None
+        self._last_odom_time = 0.0
+        self._last_nav_progress_time = 0.0
+        self._pending_reset: _PendingReset | None = None
+        self._reset_results = OrderedDict()
+        self._boot_epoch = 0
 
         self._odom_pub = self.create_publisher(PoseInfo, STATE_ODOM, 10)
         self._twist_pub = self.create_publisher(
             TwistWithCovarianceStamped, STATE_TWIST, 10)
         self._health_pub = self.create_publisher(SensorHealth, STATE_HEALTH, 10)
         self._tf_pub = self.create_publisher(TFMessage, TF, 10)
-
-        # Canonical ZIT6 topics are the new adapter contract.  The two legacy
-        # subscriptions keep existing Foxy firmware usable until its topic
-        # strings are rebuilt; both feeds enter the same estimator boundary.
+        self._reset_result_pub = self.create_publisher(
+            StateResetResult, STATE_RESET_RESULT, 10)
+        self._origin_client = self.create_client(
+            SetOrigin, ZIT6_SET_ORIGIN, callback_group=ReentrantCallbackGroup())
+        self.create_subscription(ZitOdom, ZIT6_ODOM, self._odom_cb, 10)
         self.create_subscription(
-            Float32MultiArray, ZIT6_POSITION, self._position_cb, 10)
-        self.create_subscription(
-            Float32MultiArray, LEGACY_ZIT6_POSITION, self._position_cb, 10)
-        self.create_subscription(
-            Float32MultiArray, ZIT6_VELOCITY, self._velocity_cb, 10)
-        self.create_subscription(
-            Float32MultiArray, LEGACY_ZIT6_VELOCITY, self._velocity_cb, 10)
-        self.create_subscription(Empty, STATE_RESET, self._reset_cb, 10)
-        self.create_subscription(DvlVelocity, DVL_VELOCITY, self._dvl_cb, 10)
-        self.create_subscription(
-            UsblMeasurement, USBL_MEASUREMENT, self._usbl_cb, 10)
-
-        # IMU is used for angular velocity in both profiles.  Orientation is
-        # intentionally not fused in this bootstrap adapter; FGO replaces it.
-        self.create_subscription(Imu, IMU, self._imu_cb, 10)
+            StateResetRequest, STATE_RESET, self._reset_cb, 10)
         rate = max(1.0, float(self.get_parameter('publish_rate').value))
         self.create_timer(1.0 / rate, self._publish_tick)
-        self.get_logger().info(
-            f'Localization boundary started ({"sim" if self._sim_mode else "real"} source)')
+        self.create_timer(0.05, self._reset_timeout_tick)
+        self.get_logger().info('Localization adapting versioned MCU odom')
 
     @staticmethod
-    def _parse_pose(data) -> _State | None:
-        if len(data) < 4:
-            return None
-        values = list(data[:6]) if len(data) >= 6 else list(data[:4])
-        if not _finite(values):
-            return None
-        pose = _State(x=float(data[0]), y=float(data[1]), z=float(data[2]))
-        if len(data) >= 6:
-            pose.roll = float(data[3])
-            pose.pitch = float(data[4])
-            pose.yaw = float(data[5])
-        else:
-            pose.yaw = float(data[3])
-        return pose
+    def _valid_odom(message) -> bool:
+        return (len(message.pose_odom) == 6 and len(message.twist_body) == 6
+                and _finite(message.pose_odom) and _finite(message.twist_body))
 
-    @staticmethod
-    def _parse_velocity(data) -> tuple[float, float, float, float, float, float] | None:
-        if len(data) < 4 or not _finite(data[:min(len(data), 6)]):
-            return None
-        values = [float(value) for value in data]
-        values += [0.0] * (6 - len(values))
-        return tuple(values[:6])
-
-    def _position_cb(self, msg: Float32MultiArray) -> None:
-        pose = self._parse_pose(msg.data)
-        if pose is None:
+    def _odom_cb(self, message: ZitOdom) -> None:
+        if not self._valid_odom(message):
             return
+        now = time.monotonic()
         with self._lock:
-            self._raw_position = pose
-            self._last_position_time = self.get_clock().now()
-            self._have_measurement = True
-            if self._map_origin is None:
-                self._map_origin = _State(**pose.__dict__)
+            previous = self._odom
+            restarted = bool(previous is not None and (
+                not _at_least_u32(message.nav_timestamp_ms,
+                                  previous.nav_timestamp_ms)
+                or (previous.origin_initialized and not message.origin_initialized)
+                or (previous.origin_initialized and message.origin_initialized
+                    and not _at_least_u32(message.origin_generation,
+                                          previous.origin_generation))))
+            if restarted:
+                self._boot_epoch += 1
+                self._reset_results.clear()
+            if (restarted or previous is None
+                    or message.nav_timestamp_ms != previous.nav_timestamp_ms):
+                self._last_nav_progress_time = now
+            self._odom = message
+            self._last_odom_time = now
+            pending = self._pending_reset
+        if restarted and pending is not None:
+            self._finish_reset(pending, False, 'MCU navigation/origin restarted')
+            if not pending.future.done():
+                self._origin_client.remove_pending_request(pending.future)
+                pending.future.cancel()
+        elif pending is not None and self._reset_frame_matches(pending):
+            self._finish_reset(pending, True, 'MCU odom origin set')
 
-    def _velocity_cb(self, msg: Float32MultiArray) -> None:
-        velocity = self._parse_velocity(msg.data)
-        if velocity is None:
+    def _reset_frame_matches(self, pending: _PendingReset) -> bool:
+        with self._lock:
+            message = self._odom
+            return bool(
+                self._pending_reset is pending
+                and pending.boot_epoch == self._boot_epoch
+                and pending.origin_generation is not None
+                and message is not None and message.origin_initialized
+                and message.nav_valid
+                and int(message.origin_generation) == pending.origin_generation
+                and _at_least_u32(message.nav_timestamp_ms,
+                                  pending.nav_timestamp_ms)
+                and self._last_odom_time >= pending.started_at
+                and time.monotonic() - self._last_odom_time
+                <= self._position_timeout
+                and time.monotonic() - self._last_nav_progress_time
+                <= self._position_timeout)
+
+    def _reset_cb(self, request: StateResetRequest) -> None:
+        request_id = int(request.request_id)
+        with self._lock:
+            cached = self._reset_results.get(request_id)
+            pending = self._pending_reset
+            baseline = int(self._odom.origin_generation) if self._odom is not None else 0
+            boot_epoch = self._boot_epoch
+        if cached is not None:
+            self._reset_result_pub.publish(cached)
             return
-        with self._lock:
-            self._state.vx, self._state.vy, self._state.vz = velocity[:3]
-            self._state.wx, self._state.wy, self._state.wz = velocity[3:]
-            self._last_velocity_time = self.get_clock().now()
-
-    def _dvl_cb(self, msg: DvlVelocity) -> None:
-        if not msg.valid or not _finite((msg.velocity.x, msg.velocity.y, msg.velocity.z)):
+        if pending is not None:
+            if pending.request_id != request_id:
+                self._publish_reset_result(request_id, False, 'origin reset busy')
             return
-        with self._lock:
-            vx = float(msg.velocity.x)
-            vy = float(msg.velocity.y)
-            vz = float(msg.velocity.z)
-            if self._sim_mode:
-                # v_sensor = v_reference + omega x r_sensor.  Remove the
-                # angular contribution before feeding the dead reckoner.
-                vx, vy, vz = _remove_sensor_lever_arm(
-                    (vx, vy, vz),
-                    (self._state.wx, self._state.wy, self._state.wz),
-                    _SIM_DVL_POSITION_BODY,
-                )
-            self._state.vx = vx
-            self._state.vy = vy
-            self._state.vz = vz
-            self._last_velocity_time = self.get_clock().now()
-            self._have_measurement = True
-
-    def _imu_cb(self, msg) -> None:
-        with self._lock:
-            values = (msg.angular_velocity.x, msg.angular_velocity.y,
-                      msg.angular_velocity.z)
-            if _finite(values):
-                self._state.wx, self._state.wy, self._state.wz = map(float, values)
-                self._last_imu_time = self.get_clock().now()
-                self._have_measurement = True
-
-    def _usbl_cb(self, msg: UsblMeasurement) -> None:
-        """Record USBL availability; the future FGO backend will fuse it."""
-        if not msg.valid:
+        if not self._origin_client.service_is_ready():
+            self._publish_reset_result(request_id, False, 'setorigin service unavailable')
             return
-        values = (msg.position.x, msg.position.y, msg.position.z)
-        if _finite(values):
-            with self._lock:
-                self._have_measurement = True
-
-    def _reset_cb(self, _msg: Empty) -> None:
+        try:
+            future = self._origin_client.call_async(SetOrigin.Request())
+        except Exception as error:
+            self._publish_reset_result(request_id, False, str(error))
+            return
+        now = time.monotonic()
+        pending = _PendingReset(request_id, future, now,
+                                now + self._setorigin_timeout, baseline, boot_epoch)
         with self._lock:
-            source = self._raw_position
-            if source is None:
-                self._state = _State()
-                self._map_origin = None
-                self._have_measurement = self._sim_mode
+            self._pending_reset = pending
+        future.add_done_callback(lambda completed: self._origin_done(pending, completed))
+
+    def _origin_done(self, pending: _PendingReset, future) -> None:
+        with self._lock:
+            if self._pending_reset is not pending:
                 return
-            self._map_origin = _State(**source.__dict__)
-            self._state.x = self._state.y = self._state.z = 0.0
-            self._state.roll = self._state.pitch = self._state.yaw = 0.0
-        self.get_logger().info('Estimator odom origin reset from STATE_RESET')
-
-    def _update_real(self) -> None:
-        if self._raw_position is None or self._map_origin is None:
+        try:
+            response = future.result()
+            if response is None:
+                raise RuntimeError('setorigin returned no response')
+        except Exception as error:
+            self._finish_reset(pending, False, str(error))
             return
-        raw, origin = self._raw_position, self._map_origin
-        dx, dy = raw.x - origin.x, raw.y - origin.y
-        cy, sy = math.cos(origin.yaw), math.sin(origin.yaw)
-        self._state.x = cy * dx + sy * dy
-        self._state.y = -sy * dx + cy * dy
-        self._state.z = raw.z - origin.z
-        self._state.roll = raw.roll - origin.roll
-        self._state.pitch = raw.pitch - origin.pitch
-        self._state.yaw = _wrap_rad(raw.yaw - origin.yaw)
+        if not response.success:
+            self._finish_reset(pending, False, response.message)
+            return
+        if len(response.origin_nav) != 6 or not _finite(response.origin_nav):
+            self._finish_reset(pending, False, 'invalid setorigin response')
+            return
+        response_generation = int(response.origin_generation)
+        advance = (response_generation - pending.baseline_generation) & 0xffffffff
+        if response_generation == 0 or not (0 < advance < 0x80000000):
+            self._finish_reset(pending, False, 'unexpected setorigin generation')
+            return
+        self.get_logger().info(
+            'MCU adopted nav origin: xyz={} yaw={:.3f} rad generation={}'.format(
+                tuple(float(value) for value in response.origin_nav[:3]),
+                float(response.origin_nav[5]), int(response.origin_generation)))
+        with self._lock:
+            if self._pending_reset is not pending:
+                return
+            pending.origin_generation = int(response.origin_generation)
+            pending.nav_timestamp_ms = int(response.nav_timestamp_ms)
+            pending.deadline = time.monotonic() + self._reset_frame_timeout
+        if self._reset_frame_matches(pending):
+            self._finish_reset(pending, True, 'MCU odom origin set')
+
+    def _reset_timeout_tick(self) -> None:
+        with self._lock:
+            pending = self._pending_reset
+        if pending is not None and time.monotonic() >= pending.deadline:
+            stage = ('setorigin response timeout' if pending.origin_generation is None
+                     else 'matching MCU odom timeout')
+            self._finish_reset(pending, False, stage)
+            if not pending.future.done():
+                self._origin_client.remove_pending_request(pending.future)
+                pending.future.cancel()
+
+    def _finish_reset(self, pending: _PendingReset, success: bool, message: str) -> None:
+        with self._lock:
+            if self._pending_reset is not pending:
+                return
+            self._pending_reset = None
+        if success:
+            # Publish confirmed odom before completion; BasicMotion also gates
+            # on the PoseInfo generation before emitting an arm heartbeat.
+            self._publish_tick()
+        self._publish_reset_result(pending.request_id, success, message,
+                                   pending.origin_generation)
+
+    def _publish_reset_result(self, request_id, success, message, generation=None) -> None:
+        result = StateResetResult()
+        result.request_id = int(request_id)
+        result.success = bool(success)
+        result.message = str(message)
+        with self._lock:
+            current = self._odom
+            result.origin_generation = int(
+                generation if generation is not None
+                else current.origin_generation if current is not None else 0)
+            self._reset_results[int(request_id)] = result
+            while len(self._reset_results) > 32:
+                self._reset_results.popitem(last=False)
+        self._reset_result_pub.publish(result)
 
     def _publish_tick(self) -> None:
-        now = self.get_clock().now()
+        now = time.monotonic()
         with self._lock:
-            dt = max(0.0, min(0.2, (now - self._last_update_time).nanoseconds / 1e9))
-            self._last_update_time = now
-            if not self._sim_mode:
-                self._update_real()
-            else:
-                # A SIL estimator integrates DVL/IMU streams because there is
-                # no raw position feed.  Do not integrate the last velocity
-                # forever when Stonefish or a sensor publisher has stopped.
-                # After the timeout, freeze the corresponding motion channel
-                # and report localization unhealthy to downstream monitors.
-                velocity_age = (
-                    float('inf') if self._last_velocity_time is None else
-                    (now - self._last_velocity_time).nanoseconds / 1e9)
-                imu_age = (
-                    float('inf') if self._last_imu_time is None else
-                    (now - self._last_imu_time).nanoseconds / 1e9)
-                velocity_fresh = velocity_age <= self._position_timeout
-                imu_fresh = imu_age <= self._position_timeout
-                if not velocity_fresh:
-                    self._state.vx = self._state.vy = self._state.vz = 0.0
-                if not imu_fresh:
-                    self._state.wx = self._state.wy = self._state.wz = 0.0
-                if not velocity_fresh or not imu_fresh:
-                    if not self._sim_sensor_stale_reported:
-                        self.get_logger().warning(
-                            '仿真定位传感器超时；停止使用旧速度积分')
-                        self._sim_sensor_stale_reported = True
-                elif self._sim_sensor_stale_reported:
-                    self.get_logger().info('仿真定位传感器恢复')
-                    self._sim_sensor_stale_reported = False
-                dx, dy = _body_to_world(self._state.vx, self._state.vy, self._state.yaw)
-                self._state.x += dx * dt
-                self._state.y += dy * dt
-                self._state.z += self._state.vz * dt
-                self._state.yaw = _wrap_rad(self._state.yaw + self._state.wz * dt)
-            state = _State(**self._state.__dict__)
-            healthy = self._have_measurement
-            if self._sim_mode:
-                velocity_age = (
-                    float('inf') if self._last_velocity_time is None else
-                    (now - self._last_velocity_time).nanoseconds / 1e9)
-                imu_age = (
-                    float('inf') if self._last_imu_time is None else
-                    (now - self._last_imu_time).nanoseconds / 1e9)
-                healthy = healthy and (
-                    velocity_age <= self._position_timeout and
-                    imu_age <= self._position_timeout)
-            elif self._last_position_time is not None:
-                age = (now - self._last_position_time).nanoseconds / 1e9
-                healthy = healthy and age <= self._position_timeout
-
-        stamp = now.to_msg()
+            message = self._odom
+            fresh = (message is not None
+                     and now - self._last_odom_time <= self._position_timeout
+                     and now - self._last_nav_progress_time <= self._position_timeout)
+        stamp = self.get_clock().now().to_msg()
         pose = PoseInfo()
         pose.stamp = stamp
-        with self._lock:
-            origin = self._map_origin
-        if origin is not None:
-            pose.origin_x = origin.x
-            pose.origin_y = origin.y
-            pose.origin_z = origin.z
-            pose.origin_yaw = math.degrees(origin.yaw)
-        pose.robot_x = state.x
-        pose.robot_y = state.y
-        pose.robot_z = state.z
-        pose.robot_roll = math.degrees(state.roll)
-        pose.robot_pitch = math.degrees(state.pitch)
-        pose.robot_yaw = math.degrees(state.yaw)
+        # origin_* remain zero: every pose and target uses MCU odom directly.
+        if message is not None:
+            values = message.pose_odom
+            pose.robot_x, pose.robot_y, pose.robot_z = map(float, values[:3])
+            pose.robot_roll, pose.robot_pitch, pose.robot_yaw = (
+                math.degrees(float(value)) for value in values[3:])
+            pose.origin_initialized = bool(message.origin_initialized)
+            pose.nav_valid = bool(message.nav_valid and fresh)
+            pose.origin_generation = int(message.origin_generation)
+            pose.nav_timestamp_ms = int(message.nav_timestamp_ms)
         self._odom_pub.publish(pose)
 
         twist = TwistWithCovarianceStamped()
         twist.header.stamp = stamp
         twist.header.frame_id = 'base_link'
-        twist.twist.twist.linear.x = state.vx
-        twist.twist.twist.linear.y = state.vy
-        twist.twist.twist.linear.z = state.vz
-        twist.twist.twist.angular.x = state.wx
-        twist.twist.twist.angular.y = state.wy
-        twist.twist.twist.angular.z = state.wz
+        if message is not None and fresh and message.nav_valid:
+            values = message.twist_body
+            twist.twist.twist.linear.x = float(values[0])
+            twist.twist.twist.linear.y = float(values[1])
+            twist.twist.twist.linear.z = float(values[2])
+            twist.twist.twist.angular.x = float(values[3])
+            twist.twist.twist.angular.y = float(values[4])
+            twist.twist.twist.angular.z = float(values[5])
         self._twist_pub.publish(twist)
 
         health = SensorHealth()
         health.header.stamp = stamp
         health.header.frame_id = 'base_link'
         health.sensor_name = 'localization'
-        health.available = bool(healthy)
-        health.quality = 1.0 if healthy else 0.0
-        health.detail = (
-            'bootstrap dead reckoning' if self._sim_mode and healthy
-            else 'simulation sensor timeout' if self._sim_mode
-            else 'ZIT6 navigation feedback')
+        health.available = bool(pose.nav_valid)
+        health.quality = 1.0 if health.available else 0.0
+        health.detail = ('versioned MCU odom' if pose.origin_initialized and health.available
+                         else 'MCU navigation valid; origin not initialized' if health.available
+                         else 'MCU navigation stale/invalid')
         self._health_pub.publish(health)
 
-        if self._publish_tf_enabled:
+        if self._publish_tf_enabled and pose.origin_initialized and pose.nav_valid:
             transform = TransformStamped()
             transform.header.stamp = stamp
             transform.header.frame_id = 'odom'
             transform.child_frame_id = 'base_link'
-            transform.transform.translation.x = state.x
-            transform.transform.translation.y = state.y
-            transform.transform.translation.z = state.z
-            # Internal pose angles are radians. Publish the full body attitude
-            # using the ROS roll-pitch-yaw convention (Rz(yaw) * Ry(pitch) * Rx(roll)).
-            half_roll = state.roll / 2.0
-            half_pitch = state.pitch / 2.0
-            half_yaw = state.yaw / 2.0
-            cr, sr = math.cos(half_roll), math.sin(half_roll)
-            cp, sp = math.cos(half_pitch), math.sin(half_pitch)
-            cy, sy = math.cos(half_yaw), math.sin(half_yaw)
+            transform.transform.translation.x = pose.robot_x
+            transform.transform.translation.y = pose.robot_y
+            transform.transform.translation.z = pose.robot_z
+            roll, pitch, yaw = (float(value) / 2.0 for value in message.pose_odom[3:])
+            cr, sr = math.cos(roll), math.sin(roll)
+            cp, sp = math.cos(pitch), math.sin(pitch)
+            cy, sy = math.cos(yaw), math.sin(yaw)
             transform.transform.rotation.x = sr * cp * cy - cr * sp * sy
             transform.transform.rotation.y = cr * sp * cy + sr * cp * sy
             transform.transform.rotation.z = cr * cp * sy - sr * sp * cy
@@ -399,10 +326,7 @@ def main(args=None) -> None:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        try:
-            node.destroy_node()
-        except (KeyboardInterrupt, ExternalShutdownException):
-            pass
+        node.destroy_node()
         rclpy.try_shutdown()
 
 

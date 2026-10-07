@@ -92,6 +92,7 @@ STATE_ODOM = f'{ROOT}/state/odom'
 STATE_TWIST = f'{ROOT}/state/twist'
 STATE_HEALTH = f'{ROOT}/state/health'
 STATE_RESET = f'{ROOT}/state/reset'
+STATE_RESET_RESULT = f'{ROOT}/state/reset_result'
 TF = f'{ROOT}/tf'
 TF_STATIC = f'{ROOT}/tf_static'
 # Foxy's RViz TF listener subscribes to these absolute root topics internally,
@@ -115,9 +116,12 @@ MISSION_EXECUTE = f'{ROOT}/mission/execute'
 
 # Hardware adapter.
 ZIT6_SETPOINT = f'{ROOT}/hardware/zit6/cmd/setpoint'
+ZIT6_ARM_HEARTBEAT = f'{ROOT}/hardware/zit6/cmd/agxhbt'
+ZIT6_SET_ORIGIN = f'{ROOT}/hardware/zit6/cmd/setorigin'
 ZIT6_SERVO = f'{ROOT}/hardware/zit6/cmd/servo'
 ZIT6_LIGHT = f'{ROOT}/hardware/zit6/cmd/light'
 ZIT6_INS = f'{ROOT}/hardware/zit6/cmd/ins'
+ZIT6_ODOM = f'{ROOT}/hardware/zit6/state/odom'
 ZIT6_STATUS = f'{ROOT}/hardware/zit6/state/status'
 ZIT6_SERVO_STATE = f'{ROOT}/hardware/zit6/state/servo'
 ZIT6_POSITION = f'{ROOT}/hardware/zit6/state/position'
@@ -156,10 +160,14 @@ SIM_DEGRADED_USBL = f'{ROOT}/sim/degraded/usbl/measurement'
 SIM_DEGRADED_FRONT_STITCHED = f'{ROOT}/sim/degraded/camera/front/image_stitched'
 SIM_DEGRADED_DOWN_STITCHED = f'{ROOT}/sim/degraded/camera/downward/image_stitched'
 
-# The MCU arm heartbeat is generated directly by hw_manager.
-# Keep the legacy constant name for the firmware endpoint; it has no
-# canonical command counterpart.
-LEGACY_ZIT6_HEARTBEAT = '/zit6/cmd/agxhbt'
+# BasicMotion owns the arm heartbeat; hw_manager adapts its canonical command.
+LEGACY_ZIT6_ARM_HEARTBEAT = '/zit6/cmd/agxhbt'
+LEGACY_ZIT6_HEARTBEAT = LEGACY_ZIT6_ARM_HEARTBEAT
+LEGACY_ZIT6_SET_ORIGIN = '/zit6/cmd/setorigin'
+LEGACY_ZIT6_GET_PARAMS = '/zit6/get_params'
+LEGACY_ZIT6_UPDATE_PARAMS = '/zit6/update_params'
+LEGACY_ZIT6_ODOM = '/zit6/state/odom'
+LEGACY_ZIT6_SIM_NAV = '/zit6/sim/nav'
 
 # Temporary compatibility endpoints.  New nodes must not use these as their
 # primary interface; they are intentionally kept in one place for bridges.

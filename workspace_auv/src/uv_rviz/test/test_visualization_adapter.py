@@ -185,3 +185,35 @@ def test_waypoint_path_rejects_an_unexpected_frame():
     message = WaypointPath()
     message.header.frame_id = 'map'
     assert waypoint_path_to_nav_path(message) is None
+
+
+def test_new_generation_pose_survives_later_duplicate_success_result():
+    from types import SimpleNamespace
+    from uv_msgs.msg import StateResetResult
+    from uv_rviz.visualization_adapter import VisualizationAdapter
+    adapter = VisualizationAdapter.__new__(VisualizationAdapter)
+    adapter._history = OdomPathHistory()
+    adapter._last_cleared_generation = 1
+    adapter._reset_stamp_ns = 0
+    adapter.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(
+        to_msg=lambda: __import__(
+            'builtin_interfaces.msg', fromlist=['Time']).Time(sec=1)))
+    adapter._measurement_slots = 0
+    adapter._track_marker_ids = {}
+    published = []
+    for name in ('_odom_pub', '_odom_path_pub', '_planned_path_pub'):
+        setattr(adapter, name, SimpleNamespace(publish=published.append))
+    message = _pose(1_000_000_000, x=5.0)
+    message.origin_initialized = True
+    message.origin_generation = 2
+    adapter._pose_callback(message)
+    assert len(adapter._history.to_message().poses) == 1
+    old_tracks = ObjectTrackArray()
+    old_tracks.header.stamp.sec = 0
+    adapter._track_callback(old_tracks)
+    old_measurements = ObjectMeasurementArray()
+    adapter._measurement_callback(old_measurements)
+    adapter._reset_callback(StateResetResult(success=False, origin_generation=2))
+    adapter._reset_callback(StateResetResult(success=True, origin_generation=2))
+    adapter._reset_callback(StateResetResult(success=True, origin_generation=1))
+    assert len(adapter._history.to_message().poses) == 1

@@ -401,3 +401,26 @@ def test_early_ray_remains_available_for_late_triangulation_after_many_clutter_r
     estimate = np.array([track.world_x, track.world_y, track.world_z])
     assert np.linalg.norm(estimate - target) < 0.05
     assert track.measurement_count == 3
+
+
+def test_failed_origin_reset_keeps_static_estimator_cache():
+    from uv_msgs.msg import StateResetResult
+    estimator = ObjectEstimator(FakeNode())
+    estimator._pools['old'] = ['ray']
+    estimator._tracks[9] = object()
+    estimator._reset_callback(StateResetResult(success=False, message='armed'))
+    assert estimator._pools['old'] == ['ray'] and 9 in estimator._tracks
+    estimator._reset_callback(StateResetResult(success=True, origin_generation=2))
+    assert not estimator._pools and not estimator._tracks
+
+
+def test_authoritative_pose_generation_clears_before_result_without_double_clear():
+    from uv_msgs.msg import PoseInfo, StateResetResult
+    estimator = ObjectEstimator(FakeNode())
+    estimator._pools['old'] = ['ray']
+    estimator._origin_state_callback(PoseInfo(origin_initialized=True, origin_generation=2))
+    assert not estimator._pools
+    estimator._pools['new'] = ['new ray']
+    estimator._reset_callback(StateResetResult(success=True, origin_generation=2))
+    estimator._reset_callback(StateResetResult(success=True, origin_generation=1))
+    assert estimator._pools['new'] == ['new ray']

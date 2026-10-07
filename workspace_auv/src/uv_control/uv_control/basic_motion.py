@@ -7,17 +7,17 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
   Layer 4: 步进坐标系 (运动方向 along/lateral 分解 + 动态步长)
   Layer 3: 机器人坐标系 (body frame — set_body / set_step)
   Layer 2: 世界坐标系 (odom — start / set_world / get_state)
-  Layer 1: ZIT6 底层 (map 坐标系 — _send_setpoint)
+  Layer 1: ZIT6 底层 (MCU odom 坐标系 — _send_setpoint)
 
 坐标系说明：
-  map 系 — ZIT6 协议使用的绝对坐标；原点由 uv_localization 提供
-  odom 系 — 以 AUV 启动位置为原点的世界坐标系（start() 时初始化）
+  nav 系 — MCU 导航输入的连续坐标系
+  odom 系 — MCU setorigin 定义的作业坐标系，由 uv_localization 原样发布
   body 系 — 以 AUV 当前位置为原点的机体坐标系
 
 指令路径（保证 single source of truth）：
-  高级 API → set_world → set_map → _send_setpoint → /auv/hardware/zit6/cmd/setpoint
+  高级 API → set_world → _send_setpoint → /auv/hardware/zit6/cmd/setpoint
   set_body/set_step → Coordinate 变换 → set_world → …
-  set_map 是唯一的协议出口，迁移协议只需改此函数
+  _send_setpoint 是位置指令的唯一协议出口；上位机不再次平移/旋转原点
 
 ================================================================================
 系统架构
@@ -72,28 +72,31 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
 from __future__ import annotations
 
 import math
+import secrets
 import threading
 import time
 
 import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.task import Future
 from rclpy.node import Node
 from geometry_msgs.msg import TwistWithCovarianceStamped
-from std_msgs.msg import Bool, Empty
+from std_msgs.msg import Bool, UInt32
 from std_srvs.srv import Trigger
 from auv_protocol.topics import (
     BASIC_MOTION, BASIC_MOTION_CLEAR_SAFE_STOP, BASIC_MOTION_SAFE_STOP,
     BASIC_MOTION_SAFE_STOP_STATE, LEGACY_BASIC_MOTION, LEGACY_POSE_INFO,
-    LEGACY_ZIT6_SETPOINT, STATE_ODOM, STATE_RESET, STATE_TWIST,
-    ZIT6_SETPOINT,
+    STATE_ODOM, STATE_RESET, STATE_RESET_RESULT, STATE_TWIST,
+    ZIT6_ARM_HEARTBEAT, ZIT6_SETPOINT,
     ZIT6_STATUS,
 )
 
 from zit6_interfaces.msg import ZitSetpoint, ZitStatus
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import PoseInfo
-from uv_control.coordinate import Coordinate, wrap_deg, wrap_rad
+from uv_msgs.msg import PoseInfo, StateResetRequest, StateResetResult
+from uv_control.coordinate import Coordinate, wrap_deg
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ZIT6 control_key 常量
@@ -159,8 +162,6 @@ class BasicMotionNode(Node):
         self.status = ZitStatus()
         self.pose = Coordinate()        # 当前位置 (odom 系)
         self._target = Coordinate()     # 当前目标 (odom 系)
-        self._state_origin = Coordinate()  # estimator-provided map origin
-        self._origin = None             # active odom origin (map Coordinate)
         self._state_lock = threading.Lock()
         self._velocity_lock = threading.Lock()
         self._shutdown_requested = False
@@ -171,24 +172,56 @@ class BasicMotionNode(Node):
         self.vel_body = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}   # 机体速度
         self._pose_stamp = self.get_clock().now().to_msg()
         self.declare_parameter('sim_mode', False)
+        self.declare_parameter('heartbeat_rate', 15.0)
+        self.declare_parameter('arm_mode', 1)
+        self.declare_parameter('start_timeout', 10.0)
+        self.declare_parameter('state_timeout', 1.0)
         self._sim_mode = _as_bool(self.get_parameter('sim_mode').value)
+        self._arm_mode = int(self.get_parameter('arm_mode').value)
+        self._start_timeout = float(self.get_parameter('start_timeout').value)
+        self._state_timeout = float(self.get_parameter('state_timeout').value)
+        heartbeat_rate = float(self.get_parameter('heartbeat_rate').value)
+        if (not all(math.isfinite(value) and value > 0.0 for value in
+                    (heartbeat_rate, self._start_timeout, self._state_timeout))
+                or self._arm_mode not in (0, 1, 3)):
+            raise ValueError('invalid heartbeat/start/state timeout or arm_mode')
+        self._started = False
+        self._heartbeat_enabled = False
+        self._start_in_progress = False
+        self._motion_reserved = False
+        self._active_origin_generation = None
+        self._status_received_at = float('-inf')
+        self._odom_received_at = float('-inf')
+        self._nav_sample_at = float('-inf')
+        self._nav_sample_key = None
+        self._origin_initialized = False
+        self._nav_valid = False
+        self._origin_generation = 0
+        self._nav_timestamp_ms = 0
+        self._reset_request_id = secrets.randbits(64)
+        self._pending_reset_id = None
+        self._reset_result = None
+        self._reset_invalidated = False
+        self._start_waiter = None
+        self._state_group = MutuallyExclusiveCallbackGroup()
+        self._action_group = ReentrantCallbackGroup()
 
         # ─────────────────────────────────────────────────────────
         # Layer 1: ZIT6 协议发布/订阅
         # ─────────────────────────────────────────────────────────
         self.pub_setpoint = self.create_publisher(
             ZitSetpoint, ZIT6_SETPOINT, 10)
-        # Compatibility output for the pre-V1 hardware adapter.  New nodes
-        # must use ZIT6_SETPOINT above.
-        self.pub_setpoint_legacy = self.create_publisher(
-            ZitSetpoint, LEGACY_ZIT6_SETPOINT, 10)
+        self.pub_arm_heartbeat = self.create_publisher(
+            UInt32, ZIT6_ARM_HEARTBEAT, 10)
         self.create_subscription(
-            ZitStatus, ZIT6_STATUS, self._status_cb, 10)
+            ZitStatus, ZIT6_STATUS, self._status_cb, 10,
+            callback_group=self._state_group)
         self.create_subscription(
-            PoseInfo, STATE_ODOM, self._state_odom_cb, 10)
+            PoseInfo, STATE_ODOM, self._state_odom_cb, 10,
+            callback_group=self._state_group)
         self.create_subscription(
             TwistWithCovarianceStamped, STATE_TWIST,
-            self._state_twist_cb, 10)
+            self._state_twist_cb, 10, callback_group=self._state_group)
 
         # ── Action Server ────────────────────────────────────────
         self._action_server = ActionServer(
@@ -196,12 +229,14 @@ class BasicMotionNode(Node):
             goal_callback=self._action_goal_cb,
             cancel_callback=self._action_cancel_cb,
             execute_callback=self._action_execute_cb,
+            callback_group=self._action_group,
         )
         self._legacy_action_server = ActionServer(
             self, BasicMotion, LEGACY_BASIC_MOTION,
             goal_callback=self._action_goal_cb,
             cancel_callback=self._action_cancel_cb,
             execute_callback=self._action_execute_cb,
+            callback_group=self._action_group,
         )
         self._action_goal_handle = None
         self._action_target = None       # 绝对目标 {x, y, z, yaw}，用于反馈
@@ -219,7 +254,16 @@ class BasicMotionNode(Node):
         # a compatibility output for tools that still consume it.
         self.pub_pose_legacy = self.create_publisher(
             PoseInfo, LEGACY_POSE_INFO, 10)
-        self.pub_state_reset = self.create_publisher(Empty, STATE_RESET, 10)
+        self.pub_state_reset = self.create_publisher(
+            StateResetRequest, STATE_RESET, 10)
+        self.create_subscription(
+            StateResetResult, STATE_RESET_RESULT, self._state_reset_result_cb,
+            10, callback_group=self._state_group)
+        self._timers.append(self.create_timer(
+            1.0 / heartbeat_rate, self._heartbeat_cb,
+            callback_group=self._state_group))
+        self._timers.append(self.create_timer(
+            0.02, self._start_wait_tick, callback_group=self._state_group))
         self._safe_stop_state_pub = self.create_publisher(
             Bool, BASIC_MOTION_SAFE_STOP_STATE, 10)
         self._timers.append(self.create_timer(1.0 / 30.0, self._publish_pose_info))
@@ -242,6 +286,10 @@ class BasicMotionNode(Node):
             except Exception:
                 pass
         self._shutdown_requested = True
+        self._stop_arm_heartbeat()
+        waiter = self._start_waiter
+        if waiter is not None and not waiter[0].done():
+            waiter[0].set_result(False)
         for timer in self._timers:
             try:
                 timer.cancel()
@@ -272,12 +320,14 @@ class BasicMotionNode(Node):
         return super().destroy_node()
 
     # ═════════════════════════════════════════════════════════════════════════
-    # Layer 1: ZIT6 底层 (map 坐标系)
+    # Layer 1: ZIT6 底层 (MCU odom 坐标系)
     # ═════════════════════════════════════════════════════════════════════════
 
     def _send_setpoint(self, control_key: int, type_mask: int,
                        x: float, y: float, z: float, yaw_rad: float):
-        """发送 ZitSetpoint。坐标是 map 系，yaw 是弧度，只走 CK_POS 位置模式。"""
+        """Send an MCU odom target unchanged; yaw is radians on the wire."""
+        if not self._motion_ready():
+            raise RuntimeError('motion inhibited: START/armed/fresh navigation required')
         # A position command supersedes any leased body-velocity command.
         with self._velocity_lock:
             self._velocity_active = False
@@ -292,15 +342,15 @@ class BasicMotionNode(Node):
         msg.roll = 0.0         # roll/pitch 未使用，控制栈保持 4-DOF
         msg.pitch = 0.0
         msg.seq = 0
-        odom_t = self._map_to_odom(
-            Coordinate(x=x, y=y, z=z, rz=math.degrees(yaw_rad)))
         with self._state_lock:
-            self._target = odom_t
-        self.pub_setpoint.publish(msg)
-        self.pub_setpoint_legacy.publish(msg)
+            if not self._motion_ready_locked():
+                raise RuntimeError('motion inhibited: START/armed/fresh navigation required')
+            self._target = Coordinate(
+                x=x, y=y, z=z, rz=math.degrees(yaw_rad))
+            self._publish_while_running(self.pub_setpoint, msg)
         self.get_logger().info(
-            f'发往ZIT6: map=({x:.2f}, {y:.2f}, {z:.2f}, {math.degrees(yaw_rad):.1f}°), '
-            f'对应odom=({odom_t.x:.2f}, {odom_t.y:.2f}, {odom_t.z:.2f}, {odom_t.rz:.1f}°)')
+            f'发往ZIT6: odom=({x:.2f}, {y:.2f}, {z:.2f}, '
+            f'{math.degrees(yaw_rad):.1f}°)')
 
     def _publish_body_velocity(self, forward_mps: float = 0.0,
                                lateral_mps: float = 0.0,
@@ -321,6 +371,8 @@ class BasicMotionNode(Node):
             raise ValueError('body velocity command must be finite')
 
         is_zero = max(abs(value) for value in values) <= 1e-6
+        if not is_zero and not self._motion_ready():
+            raise RuntimeError('motion inhibited: START/armed/fresh navigation required')
         with self._velocity_lock:
             if is_zero:
                 self._velocity_active = False
@@ -341,8 +393,10 @@ class BasicMotionNode(Node):
         msg.pitch = 0.0
         msg.yaw = math.radians(values[3])
         msg.seq = 0
-        self._publish_while_running(self.pub_setpoint, msg)
-        self._publish_while_running(self.pub_setpoint_legacy, msg)
+        with self._state_lock:
+            if not is_zero and not self._motion_ready_locked():
+                raise RuntimeError('motion inhibited: START/armed/fresh navigation required')
+            self._publish_while_running(self.pub_setpoint, msg)
 
     def _velocity_watchdog_cb(self):
         """Stop a velocity command when its action lease is not renewed."""
@@ -359,6 +413,7 @@ class BasicMotionNode(Node):
     def _status_cb(self, msg: ZitStatus):
         with self._state_lock:
             self.status = msg
+            self._status_received_at = time.monotonic()
 
     def _vel_cb(self, msg: Float32MultiArray):
         """Deprecated raw velocity callback; control uses ``STATE_TWIST``."""
@@ -371,14 +426,32 @@ class BasicMotionNode(Node):
         if not all(math.isfinite(float(value)) for value in values):
             return
         with self._state_lock:
-            # In SIL/HIL the estimator starts at a zero odom origin and there
-            # is no raw ZIT6 position stream.  Allow actions after START to use
-            # the formal state without manufacturing a second state publisher.
-            if self._sim_mode and self._origin is None:
-                self._origin = Coordinate()
-            self._state_origin = Coordinate(
-                x=float(msg.origin_x), y=float(msg.origin_y),
-                z=float(msg.origin_z), rz=float(msg.origin_yaw))
+            now = time.monotonic()
+            timestamp = int(msg.nav_timestamp_ms)
+            timestamp_delta = (timestamp - self._nav_timestamp_ms) & 0xFFFFFFFF
+            navigation_restarted = (
+                (self._origin_initialized and not msg.origin_initialized)
+                or (self._nav_sample_key is not None and timestamp_delta > 0x80000000))
+            if navigation_restarted:
+                self._heartbeat_enabled = False
+                self._started = False
+                self._active_origin_generation = None
+                if self._pending_reset_id is not None:
+                    self._reset_invalidated = True
+                    failure = StateResetResult()
+                    failure.request_id = self._pending_reset_id
+                    failure.success = False
+                    failure.message = 'MCU navigation restarted during origin reset'
+                    self._reset_result = failure
+            self._odom_received_at = now
+            self._origin_initialized = bool(msg.origin_initialized)
+            self._nav_valid = bool(msg.nav_valid)
+            self._origin_generation = int(msg.origin_generation)
+            self._nav_timestamp_ms = int(msg.nav_timestamp_ms)
+            sample_key = (self._origin_generation, self._nav_timestamp_ms)
+            if sample_key != self._nav_sample_key:
+                self._nav_sample_key = sample_key
+                self._nav_sample_at = now
             self.pose = Coordinate(
                 x=float(msg.robot_x), y=float(msg.robot_y),
                 z=float(msg.robot_z), rx=float(msg.robot_roll),
@@ -399,82 +472,200 @@ class BasicMotionNode(Node):
                 }
 
 
-    def set_map(self, x: float, y: float, z: float, yaw_deg: float):
-        """直接发送 map 系绝对位置。yaw 单位为度。
+    def _state_ready_locked(self, *, require_origin=True):
+        now = time.monotonic()
+        fresh = (now - self._status_received_at <= self._state_timeout
+                 and now - self._odom_received_at <= self._state_timeout
+                 and now - self._nav_sample_at <= self._state_timeout)
+        return (fresh and self._nav_valid
+                and (not require_origin or self._origin_initialized))
 
-        所有 ZIT6 协议细节集中于此（CK_POS, type_mask=0）。
-        迁移到其他协议时只需修改此函数。
-        """
-        self._send_setpoint(CK_POS, 0, x, y, z, math.radians(yaw_deg))
+    def _motion_ready_locked(self):
+        return (self._started and self._heartbeat_enabled
+                and not self._start_in_progress
+                and not self._safe_stop_latched
+                and not self._shutdown_requested
+                and self._state_ready_locked()
+                and self._origin_generation == self._active_origin_generation
+                and bool(self.status.is_armed))
 
-
-    # ═════════════════════════════════════════════════════════════════════════
-    # Layer 2: 世界坐标系 (odom)
-    # ═════════════════════════════════════════════════════════════════════════
-
-    def start(self):
-        """初始化 odom 原点。AUV 开始作业前第一个调用。
-
-        记录当前 map 位置为 odom 原点，之后所有坐标都是相对于此原点。
-        odom 0° = AUV 初始朝向（yaw 也做偏移）。
-        例：AUV 朝东 (map 90°) start → odom 0° = 东，set_world(x=5) 向东走 5m。
-        """
+    def _motion_ready(self):
         with self._state_lock:
-            if self._origin is not None:
-                self.get_logger().info(
-                    'odom origin already set, updating to current map pose')
-            # The real estimator's origin may have been recorded before
-            # lowering the vehicle into water. START must anchor at the current
-            # measured map pose so a zero odom target holds the current depth.
-            origin = self._state_origin
-            if not self._sim_mode:
-                origin = self._state_origin.to_world_frame(Coordinate(
-                    x=self.pose.x, y=self.pose.y, z=self.pose.z,
-                    rz=self.pose.rz))
-            self._origin = Coordinate(
-                x=origin.x, y=origin.y, z=origin.z, rz=origin.rz)
-            self.get_logger().info(
-                f'DEBUG estimator origin: x={self._origin.x:.4f}, '
-                f'y={self._origin.y:.4f}, z={self._origin.z:.4f}, '
-                f'rz={self._origin.rz:.4f}')
-            self.pose.x = 0.0
-            self.pose.y = 0.0
-            self.pose.z = 0.0
-            self.pose.rz = 0.0
-            # START 重新定义坐标系时，旧动作目标也必须一起清零。
-            self._target = Coordinate()
-        self._publish_while_running(self.pub_state_reset, Empty())
-        self.get_logger().info(
-            f'odom origin set: map({self._origin.x:.2f}, '
-            f'{self._origin.y:.2f}, {self._origin.z:.2f}), '
-            f'yaw={self._origin.rz:.1f}°')
+            return self._motion_ready_locked()
 
-    def _odom_to_map(self, pos: Coordinate) -> Coordinate:
-        """odom 坐标 → map 坐标（x/y/z/rz 全做偏移）。
+    def _stop_arm_heartbeat(self):
+        with self._state_lock:
+            self._heartbeat_enabled = False
+            self._started = False
+            self._active_origin_generation = None
 
-        Returns: (map_x, map_y, map_z, map_yaw_deg)
-        """
-        if self._origin is None:
-            return pos
-        return self._origin.to_world_frame(pos)
-    def _map_to_odom(self, pos: Coordinate) -> Coordinate:
-        """map 坐标字典 → odom 坐标字典（x/y/z/rz 全做偏移）。"""
-        if self._origin is None:
-            return pos
-        return self._origin.to_local_frame(pos)
-    
-    def _map_to_body(self, pos: Coordinate) -> Coordinate:
-        """map 坐标 → body 坐标（以当前 pose 为原点）。"""
-        return self._odom_to_body(self._map_to_odom(pos))
-    
-    def _body_to_map(self, pos: Coordinate) -> Coordinate:
-        """body 坐标 → map 坐标（以当前 pose 为原点）。"""
-        return self._odom_to_map(self._body_to_odom(pos))
-    
+    def _heartbeat_cb(self):
+        with self._state_lock:
+            if not self._heartbeat_enabled or self._shutdown_requested:
+                return
+            valid = (self._state_ready_locked()
+                     and self._origin_generation == self._active_origin_generation
+                     and (not self._started or bool(self.status.is_armed)))
+            if not valid:
+                self._heartbeat_enabled = False
+                self._started = False
+                self._active_origin_generation = None
+                self.get_logger().error(
+                    'ARM heartbeat stopped: navigation/status/origin unavailable; '
+                    'send START again')
+                return
+            msg = UInt32()
+            msg.data = self._arm_mode
+            self._publish_while_running(self.pub_arm_heartbeat, msg)
+
+    def _state_reset_result_cb(self, msg):
+        with self._state_lock:
+            if (self._start_in_progress and not self._reset_invalidated
+                    and self._pending_reset_id is not None
+                    and int(msg.request_id) == self._pending_reset_id):
+                self._reset_result = msg
+
+    def _start_wait_tick(self):
+        waiter = self._start_waiter
+        if waiter is None:
+            return
+        future, predicate, goal_handle, deadline = waiter
+        if future.done():
+            return
+        if (self._shutdown_requested or self._safe_stop_latched
+                or self._reset_invalidated or goal_handle.is_cancel_requested
+                or time.monotonic() >= deadline):
+            future.set_result(False)
+        elif predicate():
+            future.set_result(True)
+
+    async def _wait_start_condition(self, predicate, goal_handle, deadline):
+        # A rclpy Future yields the executor thread; the timer/state callbacks
+        # remain able to receive reset results, status, and cancel requests.
+        future = Future(executor=self.executor)
+        waiter = (future, predicate, goal_handle, deadline)
+        self._start_waiter = waiter
+        try:
+            completed = await future
+            if not completed and self._reset_invalidated:
+                raise RuntimeError('START: MCU navigation restarted during reset')
+            return completed
+        finally:
+            if self._start_waiter is waiter:
+                self._start_waiter = None
+
+    def _start_disarmed_ready(self, started_at):
+        with self._state_lock:
+            return (self._status_received_at >= started_at
+                    and self._state_ready_locked(require_origin=False)
+                    and not self.status.is_armed)
+
+    def _start_origin_ready(self, requested_at, generation):
+        with self._state_lock:
+            return (not self._reset_invalidated
+                    and self._odom_received_at >= requested_at
+                    and self._state_ready_locked()
+                    and self._origin_generation == generation)
+
+    def _start_armed_ready(self, arming_at, generation):
+        with self._state_lock:
+            return (not self._reset_invalidated
+                    and self._status_received_at >= arming_at
+                    and self._state_ready_locked()
+                    and self._origin_generation == generation
+                    and self._heartbeat_enabled and bool(self.status.is_armed))
+
+    async def _execute_start(self, goal_handle):
+        result = BasicMotion.Result()
+        result.success = False
+        self._stop_arm_heartbeat()
+        started_at = time.monotonic()
+        timeout = float(goal_handle.request.timeout)
+        timeout = timeout if math.isfinite(timeout) and timeout > 0.0 else self._start_timeout
+        deadline = started_at + timeout
+        try:
+            if not await self._wait_start_condition(
+                    lambda: not self._motion_reserved, goal_handle, deadline):
+                raise RuntimeError('START: previous motion did not stop or START interrupted')
+            self._action_goal_handle = goal_handle
+            self._action_target = None
+            self._publish_body_velocity()
+            self.get_logger().info('START: waiting for disarmed MCU and fresh navigation')
+            if not await self._wait_start_condition(
+                    lambda: self._start_disarmed_ready(started_at), goal_handle, deadline):
+                raise RuntimeError('START: disarm/navigation wait timed out or interrupted')
+            with self._state_lock:
+                self._reset_request_id = (self._reset_request_id + 1) & ((1 << 64) - 1)
+                self._pending_reset_id = self._reset_request_id
+                self._reset_result = None
+                self._reset_invalidated = False
+            request = StateResetRequest()
+            request.request_id = self._reset_request_id
+            requested_at = time.monotonic()
+            self._publish_while_running(self.pub_state_reset, request)
+            if not await self._wait_start_condition(
+                    lambda: self._reset_result is not None, goal_handle, deadline):
+                raise RuntimeError('START: origin reset result timed out or interrupted')
+            reset_result = self._reset_result
+            if not reset_result.success:
+                raise RuntimeError(f'START: origin reset failed: {reset_result.message}')
+            generation = int(reset_result.origin_generation)
+            if not await self._wait_start_condition(
+                    lambda: self._start_origin_ready(requested_at, generation),
+                    goal_handle, deadline):
+                raise RuntimeError('START: matching fresh odom timed out or interrupted')
+            with self._state_lock:
+                if (self._reset_invalidated or not self._state_ready_locked()
+                        or self._origin_generation != generation):
+                    raise RuntimeError('START: origin/navigation changed before ARM')
+                self._target = Coordinate()
+                self._active_origin_generation = generation
+                self._heartbeat_enabled = True
+            arming_at = time.monotonic()
+            self.get_logger().info(f'START: origin generation {generation} ready; arming')
+            if not await self._wait_start_condition(
+                    lambda: self._start_armed_ready(arming_at, generation),
+                    goal_handle, deadline):
+                raise RuntimeError('START: armed confirmation timed out or interrupted')
+            if goal_handle.is_cancel_requested or self._safe_stop_latched or self._shutdown_requested:
+                raise RuntimeError('START interrupted')
+            with self._state_lock:
+                if (self._reset_invalidated or not self._state_ready_locked()
+                        or self._origin_generation != generation
+                        or not self._heartbeat_enabled or not self.status.is_armed):
+                    raise RuntimeError('START: armed/navigation state changed')
+                self._started = True
+            result.success = True
+            result.message = f'origin generation {generation} set; MCU armed'
+            goal_handle.succeed()
+            self.get_logger().info(result.message)
+        except Exception as exc:
+            self._stop_arm_heartbeat()
+            result.message = str(exc)
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
+            self.get_logger().error(result.message)
+        finally:
+            with self._state_lock:
+                self._pending_reset_id = None
+                self._reset_result = None
+                self._reset_invalidated = False
+                self._start_in_progress = False
+            if self._action_goal_handle is goal_handle:
+                self._action_goal_handle = None
+                self._action_target = None
+        return result
+
+    # MCU owns nav -> odom. BasicMotion transforms only odom <-> body.
+
     def _body_to_odom(self, pos: Coordinate) -> Coordinate:
         """body 坐标 → odom 坐标（2D 旋转 + 平移）。"""
         p, _, _ = self.get_state()
-        return p.body_to_world(pos.x, pos.y, pos.z)
+        offset = p.body_to_world(pos.x, pos.y, pos.z)
+        return Coordinate(x=p.x + offset.x, y=p.y + offset.y,
+                          z=p.z + offset.z, rz=wrap_deg(p.rz + pos.rz))
 
     def _odom_to_body(self, pos: Coordinate) -> Coordinate:
         """odom 绝对坐标 → body 相对坐标（先算位移差, 再 2D 旋转）。"""
@@ -489,9 +680,7 @@ class BasicMotionNode(Node):
 
     def set_world(self, x: float, y: float, z: float, yaw_deg: float):
         """设置 odom 系绝对位置。yaw 单位为度。"""
-        odom = Coordinate(x=x, y=y, z=z, rz=yaw_deg)
-        m = self._odom_to_map(odom)
-        self.set_map(m.x, m.y, m.z, m.rz)
+        self._send_setpoint(CK_POS, 0, x, y, z, math.radians(yaw_deg))
 
     def get_state(self):
         """获取 AUV 当前状态（odom 系，线程安全）。
@@ -531,9 +720,8 @@ class BasicMotionNode(Node):
 
     def set_body(self, x: float, y: float, z: float, yaw_deg: float):
         """设置机体系绝对位置。yaw 单位为度。"""
-        _, t, _ = self.get_state()
         body_target = Coordinate(x=x, y=y, z=z, rz=yaw_deg)
-        new_target = t.to_world_frame(body_target)
+        new_target = self._body_to_odom(body_target)
         self.get_logger().info(
             f'set_body: body目标=({x:.2f}, {y:.2f}, {z:.2f}, {yaw_deg:.1f}°) '
             f'→ world目标=({new_target.x:.2f}, {new_target.y:.2f}, {new_target.z:.2f}, {new_target.rz:.1f}°)')
@@ -543,14 +731,13 @@ class BasicMotionNode(Node):
         """设置机体系增量步进。dyaw 单位为度。"""
         # 增量必须从当前实测位姿开始；使用上一次目标会在上一段未完全
         # 收敛时把下一段继续向前推，造成 BMOVE 的目标和误差看起来漂移。
-        p, _, _ = self.get_state()
         target_step = Coordinate(x=dx, y=dy, z=dz, rz=dyaw_deg)
-        map_target = p.to_world_frame(target_step)
+        odom_target = self._body_to_odom(target_step)
 
         self.get_logger().info(
             f'set_step: 增量=({dx:.3f}, {dy:.3f}, {dz:.3f}, {dyaw_deg:.2f}°) '
-            f'→ world目标=({map_target.x:.2f}, {map_target.y:.2f}, {map_target.z:.2f}, {map_target.rz:.1f}°)')
-        self.set_world(map_target.x, map_target.y, map_target.z, map_target.rz)
+            f'→ world目标=({odom_target.x:.2f}, {odom_target.y:.2f}, {odom_target.z:.2f}, {odom_target.rz:.1f}°)')
+        self.set_world(odom_target.x, odom_target.y, odom_target.z, odom_target.rz)
 
     # ═════════════════════════════════════════════════════════════════════════
     # 内部工具： 等待到达
@@ -559,7 +746,8 @@ class BasicMotionNode(Node):
     def _is_cancelled(self) -> bool:
         """检查当前 action goal 是否被取消（线程安全）。"""
         gh = self._action_goal_handle
-        return (self._safe_stop_latched
+        return (self._safe_stop_latched or self._shutdown_requested
+                or not self._motion_ready()
                 or (gh is not None and gh.is_cancel_requested))
 
     def _safe_stop_cb(self, _request, response):
@@ -1007,10 +1195,19 @@ class BasicMotionNode(Node):
     # ═════════════════════════════════════════════════════════════════════════
 
     def _action_goal_cb(self, goal_request):
-        if self._safe_stop_latched:
-            self.get_logger().error(
-                'Rejecting BasicMotion goal: safe-stop latch is active')
+        if self._safe_stop_latched or self._shutdown_requested:
             return GoalResponse.REJECT
+        with self._state_lock:
+            if goal_request.cmd_type == BasicMotion.Goal.START:
+                if self._start_in_progress:
+                    return GoalResponse.REJECT
+                self._start_in_progress = True
+            elif self._start_in_progress:
+                return GoalResponse.REJECT
+            elif goal_request.cmd_type != BasicMotion.Goal.BODY_VELOCITY:
+                if self._motion_reserved:
+                    return GoalResponse.REJECT
+                self._motion_reserved = True
         self.get_logger().info(
             f'Action goal received: cmd_type={goal_request.cmd_type}, '
             f'axes="{goal_request.axes}", target={list(goal_request.target)}, '
@@ -1028,27 +1225,38 @@ class BasicMotionNode(Node):
                 raise
         return CancelResponse.ACCEPT
 
-    def _action_execute_cb(self, goal_handle):
+    async def _action_execute_cb(self, goal_handle):
         req = goal_handle.request
-        # A short velocity goal must not hide a position goal's cancellation
-        # handle. In particular the test runner sends neutral after cancel.
+        if req.cmd_type == BasicMotion.Goal.START:
+            return await self._execute_start(goal_handle)
         if req.cmd_type != BasicMotion.Goal.BODY_VELOCITY:
             self._action_goal_handle = goal_handle
-
-        # START: 初始化 odom 原点，不需要任何前置校验
-        if req.cmd_type == BasicMotion.Goal.START:
-            self.get_logger().info('Action START: initializing odom origin')
-            task_context = str(getattr(req, 'task_context', '')).strip()
-            if task_context:
-                self.get_logger().info(
-                    f'Action START: task_context="{task_context}"')
-            self.start()
+        try:
+            return self._execute_motion(goal_handle)
+        except Exception as exc:
             result = BasicMotion.Result()
-            result.success = True
-            result.message = "odom origin set"
-            goal_handle.succeed()
-            self._action_goal_handle = None
-            self.get_logger().info('Action START: done')
+            result.success = False
+            result.message = str(exc)
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
+            return result
+        finally:
+            if req.cmd_type != BasicMotion.Goal.BODY_VELOCITY:
+                if self._action_goal_handle is goal_handle:
+                    self._action_goal_handle = None
+                    self._action_target = None
+                with self._state_lock:
+                    self._motion_reserved = False
+
+    def _execute_motion(self, goal_handle):
+        req = goal_handle.request
+        if not self._motion_ready():
+            result = BasicMotion.Result()
+            result.success = False
+            result.message = 'motion inhibited: START/armed/fresh navigation required'
+            goal_handle.abort()
             return result
 
         # BODY_VELOCITY is intentionally a short, immediately-completed
@@ -1087,20 +1295,9 @@ class BasicMotionNode(Node):
             result.success = False
             result.message = f"target needs 4 values [x, y, z, yaw], got {len(req.target)}"
             goal_handle.abort()
-            self._action_goal_handle = None
             return result
 
-        if self._origin is None:
-            self.get_logger().error(
-                'Action rejected: odom origin not set, send START first')
-            result = BasicMotion.Result()
-            result.success = False
-            result.message = "odom origin not set, call start() first"
-            goal_handle.abort()
-            self._action_goal_handle = None
-            return result
-
-        x, y, z, yaw = req.target
+        x, y, z, yaw = req.target[:4]
         timeout = req.timeout if req.timeout > 0 else 60.0
         task_context = str(getattr(req, 'task_context', '')).strip()
         p, t, _ = self.get_state()
@@ -1183,7 +1380,6 @@ class BasicMotionNode(Node):
             result.success = False
             result.message = f"unknown cmd_type: {req.cmd_type}"
             goal_handle.abort()
-            self._action_goal_handle = None
             return result
 
         result = BasicMotion.Result()
@@ -1202,11 +1398,11 @@ class BasicMotionNode(Node):
             self.get_logger().info(f'Action {type_name}: CANCELLED')
             goal_handle.canceled()
         else:
-            result.message = "motion timeout"
-            self.get_logger().error(f'Action {type_name}: TIMEOUT')
+            result.message = ('preempted by START' if self._start_in_progress else
+                              'motion timeout' if self._motion_ready() else
+                              'motion state unavailable or inhibited')
+            self.get_logger().error(f'Action {type_name}: {result.message}')
             goal_handle.abort()
-        self._action_goal_handle = None
-        self._action_target = None
         return result
 
     def _action_feedback_cb(self):
@@ -1234,11 +1430,10 @@ class BasicMotionNode(Node):
         msg = PoseInfo()
         msg.stamp = self._pose_stamp
         with self._state_lock:
-            if self._origin is not None:
-                msg.origin_x = float(self._origin.x)
-                msg.origin_y = float(self._origin.y)
-                msg.origin_z = float(self._origin.z)
-                msg.origin_yaw = float(self._origin.rz)
+            msg.origin_initialized = self._origin_initialized
+            msg.nav_valid = self._nav_valid
+            msg.origin_generation = self._origin_generation
+            msg.nav_timestamp_ms = self._nav_timestamp_ms
             msg.robot_x = float(self.pose.x)
             msg.robot_y = float(self.pose.y)
             msg.robot_z = float(self.pose.z)
@@ -1255,7 +1450,7 @@ class BasicMotionNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = BasicMotionNode()
-    executor = MultiThreadedExecutor()
+    executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:
         executor.spin()

@@ -4,10 +4,14 @@
 namespace auv {
 namespace host {
 
-ControllerHost::ControllerHost() : cascade_() {}
+ControllerHost::ControllerHost() : cascade_() {
+  auv::motion::motion_context.resetNavigation();
+}
 
 ControllerHost::ControllerHost(const auv::config::ChassisConfig &cfg)
-    : cascade_(cfg) {}
+    : cascade_(cfg) {
+  auv::motion::motion_context.resetNavigation();
+}
 
 void ControllerHost::applyConfig(const auv::config::ChassisConfig &cfg) {
   cascade_.applyConfig(cfg);
@@ -23,51 +27,40 @@ void ControllerHost::updateSetpoint(auv::motion::ControlLevel level,
   cascade_.setControlLevel(lv);
 }
 
-void ControllerHost::updateNav(const auv::motion::NavState &nav) {
-  // 先应用解锁原点(Home Offset),再写入 motion_context 单例,
-  // 供 verbatim CascadeController::update() 读取。复刻固件
-  // ControlTask::updateNavigation 的 offset 平移+旋转。
-  auv::motion::NavState nav_out = nav;
-  const auto home = auv::motion::motion_context.home_offset_.get();
-  if (home.active) {
-    const auto &off = home.offset;
-    float diff[6];
-    for (int i = 0; i < 6; i++)
-      diff[i] = nav.pos_world[i] - off[i];
-    // offset.roll/pitch 恒 0(固件 executeArm 强制),故仅按 offset.yaw 旋转
-    auv::algorithm::math::applyRotationToBody(diff, nav_out.pos_world.data(),
-                                              off[3], off[4], off[5]);
-    for (int i = 3; i < 6; i++)
-      nav_out.pos_world[i] = auv::motion::MotionContext::wrapAngle(nav_out.pos_world[i]);
-  }
-  auv::motion::motion_context.nav_state_.set(nav_out);
+void ControllerHost::updateNav(const auv::motion::NavState &nav,
+                               uint32_t timestamp_ms, bool valid) {
+  auv::motion::motion_context.updateNavigationSnapshot(nav, timestamp_ms, valid);
+}
+
+auv::motion::OdomSnapshot ControllerHost::getOdomSnapshot() const {
+  return auv::motion::motion_context.getOdomSnapshot();
+}
+
+bool ControllerHost::trySetOrigin(uint32_t now_ms, uint32_t max_age_ms,
+                                  auv::motion::OriginCommit &commit) {
+  return auv::motion::motion_context.trySetOrigin(now_ms, max_age_ms, commit);
 }
 
 void ControllerHost::setHomeOffset(const float pos6[6]) {
-  // 复刻固件 SafetyMonitor::executeArm: 当前位姿写入 home_offset, roll/pitch 强制 0
-  auv::motion::HomeOffset h;
-  h.active = true;
-  h.offset[0] = pos6[0];
-  h.offset[1] = pos6[1];
-  h.offset[2] = pos6[2];
-  h.offset[3] = 0.0f;  // Roll 强制 0
-  h.offset[4] = 0.0f;  // Pitch 强制 0
-  h.offset[5] = pos6[5];  // Yaw 正常记录
-  auv::motion::motion_context.home_offset_.set(h);
+  std::array<float, 6> origin;
+  for (int i = 0; i < 6; ++i) origin[i] = pos6[i];
+  auv::motion::motion_context.setHomeOffset(origin);
 }
 
 void ControllerHost::clearHomeOffset() {
-  // 复刻固件 forceDisarmWithNeutralLevel::clearHomeOffset
-  auv::motion::HomeOffset h;
-  auv::motion::motion_context.home_offset_.set(h);
+  auv::motion::motion_context.clearHomeOffset();
 }
 
 bool ControllerHost::hasHomeOffset() const {
-  return auv::motion::motion_context.home_offset_.get().active;
+  return auv::motion::motion_context.getOdomSnapshot().origin_initialized;
 }
 
 void ControllerHost::setControlLevel(auv::motion::ControlLevel lvl) {
   cascade_.setControlLevel(lvl);
+}
+
+void ControllerHost::resetSetpoints() {
+  auv::motion::motion_context.current_setpoint_.set(auv::motion::TargetSetpoint{});
 }
 
 std::array<float, 6> ControllerHost::step() {

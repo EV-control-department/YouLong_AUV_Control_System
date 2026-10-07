@@ -1,7 +1,7 @@
-"""Hardware manager node: heartbeat, state monitoring.
+"""Hardware manager node: command adaptation, state monitoring.
 
 Responsibilities:
-- Own the MCU arm heartbeat (15Hz default) on /zit6/cmd/agxhbt
+- Forward the BasicMotion arm heartbeat to /zit6/cmd/agxhbt
 - Forward canonical servo/light commands to the firmware endpoints
 - Subscribe to /auv/hardware/zit6/state/status, heartbeat, and thruster state
 - Adapt legacy servo target state into the canonical hardware namespace
@@ -13,22 +13,30 @@ Responsibilities:
 from __future__ import annotations
 
 import threading
+import time
 
 import rclpy
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.task import Future
 from std_msgs.msg import Float32MultiArray, UInt8, UInt32
 
-from zit6_interfaces.msg import ZitServo, ZitServoState, ZitStatus
+from zit6_interfaces.msg import ZitOdom, ZitServo, ZitServoState, ZitSetpoint, ZitStatus
+from zit6_interfaces.srv import GetParams, SetOrigin, UpdateParams
 from zit6_interfaces.msg import ZitUsbl
 from uv_msgs.msg import UsblMeasurement
 from auv_protocol.topics import (
-    LEGACY_ZIT6_HEARTBEAT,
+    LEGACY_ZIT6_HEARTBEAT, LEGACY_ZIT6_ODOM, LEGACY_ZIT6_SET_ORIGIN,
+    LEGACY_ZIT6_SETPOINT, LEGACY_ZIT6_SIM_NAV,
+    LEGACY_ZIT6_GET_PARAMS, LEGACY_ZIT6_UPDATE_PARAMS,
     LEGACY_ZIT6_HEARTBEAT_STATE, LEGACY_ZIT6_POSITION,
     LEGACY_ZIT6_LIGHT, LEGACY_ZIT6_SERVO, LEGACY_ZIT6_SERVO_STATE,
     LEGACY_ZIT6_STATUS, LEGACY_ZIT6_THRUSTER, LEGACY_ZIT6_USBL,
     LEGACY_ZIT6_VELOCITY,
     ZIT6_STATUS, ZIT6_HEARTBEAT_STATE, ZIT6_THRUSTER,
+    ZIT6_ARM_HEARTBEAT, ZIT6_ODOM, ZIT6_SET_ORIGIN, ZIT6_SETPOINT, ZIT6_SIM_NAV,
+    ZIT6_GET_PARAMS, ZIT6_UPDATE_PARAMS,
     ZIT6_LIGHT, ZIT6_POSITION, ZIT6_SERVO, ZIT6_SERVO_STATE, ZIT6_VELOCITY,
     USBL_MEASUREMENT,
 )
@@ -62,7 +70,7 @@ _ERROR_BITS = [
 
 
 class HwManagerNode(Node):
-    """Hardware manager: heartbeat keeper + state monitor."""
+    """Hardware manager: transport adapter and state monitor."""
 
     # ── Startup phase enum ───────────────────────────────────────
     PHASE_INIT = 'INIT'
@@ -76,9 +84,9 @@ class HwManagerNode(Node):
         super().__init__('hw_manager')
 
         # ── Parameters ───────────────────────────────────────────
-        self.declare_parameter('heartbeat_rate', 15.0)
         self.declare_parameter('watchdog_timeout', 7.0)
-        self.declare_parameter('arm_mode', 1)  # 1=normal, 3=force
+        self.declare_parameter('setorigin_timeout', 2.0)
+        self.declare_parameter('parameter_service_timeout', 2.0)
         self.declare_parameter('battery_low_threshold', 14.0)
         self.declare_parameter('cycle_time_warn_threshold', 100.0)
         self.declare_parameter(
@@ -97,15 +105,48 @@ class HwManagerNode(Node):
         self._startup_phase = self.PHASE_INIT
         self._prev_armed = False
 
-        # ── Heartbeat publisher ──────────────────────────────────
+        # BasicMotion owns arming; this node only forwards each command.
         self._heartbeat_pub = self.create_publisher(
             UInt32, LEGACY_ZIT6_HEARTBEAT, 10)
-        hb_rate = self.get_parameter('heartbeat_rate').value
-        self._hb_timer = self.create_timer(1.0 / hb_rate, self._heartbeat_cb)
+        self._heartbeat_sub = self.create_subscription(
+            UInt32, ZIT6_ARM_HEARTBEAT, self._heartbeat_cb, 10)
+        self._setpoint_command_pub = self.create_publisher(
+            ZitSetpoint, LEGACY_ZIT6_SETPOINT, 10)
+        self._setpoint_command_sub = self.create_subscription(
+            ZitSetpoint, ZIT6_SETPOINT, self._setpoint_command_cb, 10)
+        self._sim_nav_pub = self.create_publisher(
+            Float32MultiArray, LEGACY_ZIT6_SIM_NAV, 10)
+        self._sim_nav_sub = self.create_subscription(
+            Float32MultiArray, ZIT6_SIM_NAV, self._sim_nav_cb, 10)
+
+        self._origin_proxy_lock = threading.Lock()
+        self._pending_origin_proxy = None
+        origin_group = ReentrantCallbackGroup()
+        self._origin_client = self.create_client(
+            SetOrigin, LEGACY_ZIT6_SET_ORIGIN, callback_group=origin_group)
+        self._origin_service = self.create_service(
+            SetOrigin, ZIT6_SET_ORIGIN, self._set_origin_cb,
+            callback_group=origin_group)
+        self._origin_timeout_timer = self.create_timer(0.05, self._origin_timeout_cb)
+        self._param_proxy_lock = threading.Lock()
+        self._pending_param_proxies = {}
+        self._param_clients = {
+            'get': self.create_client(
+                GetParams, LEGACY_ZIT6_GET_PARAMS, callback_group=origin_group),
+            'update': self.create_client(
+                UpdateParams, LEGACY_ZIT6_UPDATE_PARAMS, callback_group=origin_group),
+        }
+        self._get_params_service = self.create_service(
+            GetParams, ZIT6_GET_PARAMS, self._get_params_cb, callback_group=origin_group)
+        self._update_params_service = self.create_service(
+            UpdateParams, ZIT6_UPDATE_PARAMS, self._update_params_cb,
+            callback_group=origin_group)
+        self._params_timeout_timer = self.create_timer(0.05, self._params_timeout_cb)
 
         # ── MCU state subscriptions ──────────────────────────────
         self._state_publishers = {
             'status': self.create_publisher(ZitStatus, ZIT6_STATUS, 10),
+            'odom': self.create_publisher(ZitOdom, ZIT6_ODOM, 10),
             'servo': self.create_publisher(
                 ZitServoState, ZIT6_SERVO_STATE, 10),
             'position': self.create_publisher(
@@ -131,6 +172,8 @@ class HwManagerNode(Node):
             UInt8, ZIT6_LIGHT, self._light_command_cb, 10)
 
         if bool(self.get_parameter('legacy_state_topics').value):
+            self._odom_sub = self.create_subscription(
+                ZitOdom, LEGACY_ZIT6_ODOM, self._legacy_odom_cb, 10)
             self._status_sub = self.create_subscription(
                 ZitStatus, LEGACY_ZIT6_STATUS,
                 self._legacy_status_cb, 10)
@@ -153,6 +196,7 @@ class HwManagerNode(Node):
                 ZitServoState, LEGACY_ZIT6_SERVO_STATE,
                 self._legacy_servo_state_cb, 10)
         else:
+            self._odom_sub = None
             self._status_sub = self.create_subscription(
                 ZitStatus, ZIT6_STATUS, self._status_cb, 10)
             self._mcu_hb_sub = self.create_subscription(
@@ -169,9 +213,7 @@ class HwManagerNode(Node):
 
         self.get_logger().info('HW Manager started')
         self.get_logger().info(
-            f'  heartbeat_topic={LEGACY_ZIT6_HEARTBEAT}, '
-            f'heartbeat_rate={hb_rate} Hz, '
-            f'arm_mode={self.get_parameter("arm_mode").value}')
+            f'  heartbeat adapted {ZIT6_ARM_HEARTBEAT} -> {LEGACY_ZIT6_HEARTBEAT}')
         self.get_logger().info(
             f'  watchdog_timeout='
             f'{self.get_parameter("watchdog_timeout").value}s')
@@ -179,12 +221,148 @@ class HwManagerNode(Node):
 
     # ── Heartbeat ────────────────────────────────────────────────
 
-    def _heartbeat_cb(self):
-        """Send heartbeat to MCU at the configured rate."""
-        msg = UInt32()
-        arm_mode = self.get_parameter('arm_mode').value
-        msg.data = arm_mode
-        self._heartbeat_pub.publish(msg)
+    def _heartbeat_cb(self, message: UInt32):
+        """Forward exactly the owner-supplied heartbeat, without a local timer."""
+        self._heartbeat_pub.publish(message)
+
+    def _setpoint_command_cb(self, message: ZitSetpoint):
+        self._setpoint_command_pub.publish(message)
+
+    def _sim_nav_cb(self, message: Float32MultiArray):
+        self._sim_nav_pub.publish(message)
+
+    def _legacy_odom_cb(self, message: ZitOdom):
+        self._state_publishers['odom'].publish(message)
+
+    async def _set_origin_cb(self, _request, response):
+        """Proxy one asynchronous MCU call; never spin inside a callback."""
+        with self._origin_proxy_lock:
+            if self._pending_origin_proxy is not None:
+                response.success = False
+                response.message = 'setorigin busy'
+                return response
+            if not self._origin_client.service_is_ready():
+                response.success = False
+                response.message = 'MCU setorigin service unavailable'
+                return response
+            try:
+                future = self._origin_client.call_async(SetOrigin.Request())
+            except Exception as error:
+                response.success = False
+                response.message = str(error)[:64]
+                return response
+            completion = Future(executor=self.executor)
+            pending = {
+                'future': future, 'completion': completion, 'response': response,
+                'deadline': time.monotonic() + float(
+                    self.get_parameter('setorigin_timeout').value),
+            }
+            self._pending_origin_proxy = pending
+        future.add_done_callback(lambda result: self._origin_proxy_done(pending, result))
+        return await completion
+
+    def _origin_proxy_done(self, pending, future):
+        with self._origin_proxy_lock:
+            if self._pending_origin_proxy is not pending:
+                return
+            self._pending_origin_proxy = None
+        response = pending['response']
+        try:
+            result = future.result()
+            if result is None:
+                raise RuntimeError('MCU setorigin returned no response')
+            response.success = bool(result.success)
+            response.message = str(result.message)[:64]
+            response.origin_nav = [float(value) for value in result.origin_nav]
+            response.nav_timestamp_ms = int(result.nav_timestamp_ms)
+            response.origin_generation = int(result.origin_generation)
+        except Exception as error:
+            response.success = False
+            response.message = str(error)[:64]
+        pending['completion'].set_result(response)
+
+    def _origin_timeout_cb(self):
+        with self._origin_proxy_lock:
+            pending = self._pending_origin_proxy
+            if pending is None or time.monotonic() < pending['deadline']:
+                return
+            self._pending_origin_proxy = None
+        response = pending['response']
+        response.success = False
+        response.message = 'MCU setorigin response timeout'
+        pending['completion'].set_result(response)
+        if not pending['future'].done():
+            self._origin_client.remove_pending_request(pending['future'])
+            pending['future'].cancel()
+
+    async def _get_params_cb(self, request, response):
+        return await self._proxy_params('get', request, response)
+
+    async def _update_params_cb(self, request, response):
+        return await self._proxy_params('update', request, response)
+
+    async def _proxy_params(self, name, request, response):
+        with self._param_proxy_lock:
+            if name in self._pending_param_proxies:
+                response.success = False
+                response.message = 'MCU parameter service busy'
+                return response
+            client = self._param_clients[name]
+            if not client.service_is_ready():
+                response.success = False
+                response.message = 'MCU parameter service unavailable'
+                return response
+            try:
+                future = client.call_async(request)
+            except Exception as error:
+                response.success = False
+                response.message = str(error)
+                return response
+            completion = Future(executor=self.executor)
+            pending = {
+                'client': client, 'future': future,
+                'completion': completion, 'response': response,
+                'deadline': time.monotonic() + float(
+                    self.get_parameter('parameter_service_timeout').value),
+            }
+            self._pending_param_proxies[name] = pending
+        future.add_done_callback(
+            lambda result: self._params_proxy_done(name, pending, result))
+        return await completion
+
+    def _params_proxy_done(self, name, pending, future):
+        with self._param_proxy_lock:
+            if self._pending_param_proxies.get(name) is not pending:
+                return
+            del self._pending_param_proxies[name]
+        response = pending['response']
+        try:
+            result = future.result()
+            if result is None:
+                raise RuntimeError('MCU parameter service returned no response')
+            for field in response.get_fields_and_field_types():
+                setattr(response, field, getattr(result, field))
+        except Exception as error:
+            response.success = False
+            response.message = str(error)
+        pending['completion'].set_result(response)
+
+    def _params_timeout_cb(self):
+        now = time.monotonic()
+        expired = []
+        with self._param_proxy_lock:
+            for name, pending in list(self._pending_param_proxies.items()):
+                if now >= pending['deadline']:
+                    del self._pending_param_proxies[name]
+                    expired.append(pending)
+        for pending in expired:
+            response = pending['response']
+            response.success = False
+            response.message = 'MCU parameter service response timeout'
+            pending['completion'].set_result(response)
+            if not pending['future'].done():
+                pending['client'].remove_pending_request(pending['future'])
+                pending['future'].cancel()
 
     def _servo_command_cb(self, msg: ZitServo):
         """Forward the canonical servo command to the firmware topic."""

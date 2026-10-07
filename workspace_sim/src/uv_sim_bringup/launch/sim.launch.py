@@ -35,6 +35,7 @@ from uv_sim_bringup.launch_common import (
     declare_mission_file,
     declare_observability_arguments,
     declare_simulation_arguments,
+    release_tasks_after_backend_ready,
 )
 from uv_sim_bringup.scene import prepare_scene
 
@@ -135,6 +136,7 @@ def generate_launch_description():
         }, condition=UnlessCondition(gpu))
     bridge = _include('uv_sim_bridge', 'bridge.launch.py', {
         'hil_mode': 'false',
+        'dvl_topic': dvl_input, 'imu_topic': imu_input,
         'camera_stitch_fps': LaunchConfiguration('camera_stitch_fps'),
         'publish_raw_camera_topics': 'false',
     })
@@ -187,6 +189,8 @@ def generate_launch_description():
         'params_file': '', 'mission_file': mission_file,
         'auto_start': 'true',
     })
+    task_startup = release_tasks_after_backend_ready(
+        task, enable_task, LaunchConfiguration('startup_timeout'))
     observability = _include('uv_bringup', 'observability.launch.py', {
         'enable_preview': LaunchConfiguration('enable_preview'),
         'preview_port': LaunchConfiguration('preview_port'),
@@ -260,6 +264,6 @@ def generate_launch_description():
             scenario_desc=scenario, scene_seed=seed, launch_file=__file__,
             start_actions=[model_mapping, description, localization, stonefish_gpu,
                            stonefish_nogpu, bridge, degradation,
-                           control, camera, perception, stream, planning, task,
+                           control, camera, perception, stream, planning, *task_startup,
                            observability, evaluation]),
     ])

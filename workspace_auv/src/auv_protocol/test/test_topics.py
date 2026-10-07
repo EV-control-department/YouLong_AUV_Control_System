@@ -6,7 +6,8 @@ from auv_protocol import topics
 def test_public_topic_constants_are_vehicle_scoped():
     constants = [
         value for name, value in vars(topics).items()
-        if name.isupper() and name != 'ROOT' and isinstance(value, str)
+        if name.isupper() and name not in ('ROOT', 'RVIZ_TF', 'RVIZ_TF_STATIC')
+        and isinstance(value, str)
         and not name.startswith(('LEGACY_', 'ICEORYX_'))
     ]
     assert constants
@@ -37,3 +38,12 @@ def test_legacy_endpoints_are_explicit_compatibility_only():
         topics.LEGACY_TASK_EXECUTE,
     ]
     assert all(not value.startswith('/auv/') for value in legacy)
+
+
+def test_origin_reset_and_arm_owner_endpoints():
+    assert topics.STATE_RESET_RESULT == '/auv/state/reset_result'
+    assert topics.ZIT6_ARM_HEARTBEAT == '/auv/hardware/zit6/cmd/agxhbt'
+    assert topics.ZIT6_SET_ORIGIN == '/auv/hardware/zit6/cmd/setorigin'
+    assert topics.ZIT6_ODOM == '/auv/hardware/zit6/state/odom'
+    assert topics.LEGACY_ZIT6_SET_ORIGIN == '/zit6/cmd/setorigin'
+    assert topics.LEGACY_ZIT6_ODOM == '/zit6/state/odom'

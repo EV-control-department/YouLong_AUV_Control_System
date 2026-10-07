@@ -18,6 +18,7 @@
   <exec_depend>uv_sim_description</exec_depend>
   <exec_depend>uv_localization</exec_depend>
   <exec_depend>uv_control</exec_depend>
+  <exec_depend>uv_hm</exec_depend>
   <exec_depend>uv_camera</exec_depend>
   <exec_depend>uv_perception</exec_depend>
   <exec_depend>uv_stream</exec_depend>

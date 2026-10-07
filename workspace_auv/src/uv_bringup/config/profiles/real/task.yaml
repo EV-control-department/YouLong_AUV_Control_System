@@ -9,8 +9,8 @@
 #   - model_class_publisher：发布类别映射，task_runner 启动前必须收到该消息。
 #   - robot_state_publisher：发布真实 URDF 和相机静态 TF。
 #   - uv_localization：发布 /auv/state/odom 和动态 TF。
-#   - hw_manager：发布 ZIT6 heartbeat，并监控 MCU 是否进入 ARMED/RUNNING 状态。
-#   - basic_motion：提供 /auv/basic_motion Action Server，接收 task_runner 的运动目标。
+#   - hw_manager：转发 ZIT6 命令/服务和状态，并监控 watchdog。
+#   - basic_motion：拥有 ARM 心跳并提供 /auv/basic_motion Action Server。
 #   - uv_camera：打开真实前视/下视相机。
 #   - object_detector、object_localizer、object_estimator：提供检测、目标定位和轨迹。
 #   - uv_stream/go2rtc：提供视频预览。

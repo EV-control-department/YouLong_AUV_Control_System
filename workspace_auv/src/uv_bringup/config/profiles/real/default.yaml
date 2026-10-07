@@ -14,8 +14,8 @@
 # 本文件中的 enable_hardware、enable_motion、enable_camera、enable_ai、
 # enable_nav、enable_task
 # 决定是否额外启用：
-#   - hw_manager（硬件心跳、ZIT6 状态适配和 watchdog）。
-#   - basic_motion（/auv/basic_motion Action Server，接收运动目标）。
+#   - hw_manager（ZIT6 命令/服务代理、状态适配和 watchdog）。
+#   - basic_motion（拥有 ARM 心跳并提供 /auv/basic_motion Action Server）。
 #   - object_detector、object_localizer、object_estimator（AI 检测、几何定位和跟踪）。
 #   - uv_planning/uv_nav（导航；本模式关闭）。
 #   - task_runner（任务；本模式关闭）。
