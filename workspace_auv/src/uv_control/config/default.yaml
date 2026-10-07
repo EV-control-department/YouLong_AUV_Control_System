@@ -5,3 +5,6 @@
     start_timeout: 10.0
     arm_confirmation_timeout: 20.0
     state_timeout: 1.0
+    # TEMPORARY real-mode override: BasicMotion ignores MCU nav_valid for readiness.
+    # Keep state freshness, origin, ARM, and safe-stop checks enabled.
+    force_nav_valid: true

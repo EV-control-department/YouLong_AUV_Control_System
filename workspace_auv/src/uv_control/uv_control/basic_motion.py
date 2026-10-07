@@ -177,7 +177,15 @@ class BasicMotionNode(Node):
         self.declare_parameter('start_timeout', 10.0)
         self.declare_parameter('arm_confirmation_timeout', 20.0)
         self.declare_parameter('state_timeout', 1.0)
+        self.declare_parameter('force_nav_valid', False)
         self._sim_mode = _as_bool(self.get_parameter('sim_mode').value)
+        self._force_nav_valid = (
+            not self._sim_mode
+            and _as_bool(self.get_parameter('force_nav_valid').value))
+        if self._force_nav_valid:
+            self.get_logger().warning(
+                'TEMPORARY OVERRIDE: BasicMotion ignores MCU nav_valid; '
+                'state freshness and all other motion gates remain active')
         self._arm_mode = int(self.get_parameter('arm_mode').value)
         self._start_timeout = float(self.get_parameter('start_timeout').value)
         self._arm_confirmation_timeout = float(
@@ -483,12 +491,18 @@ class BasicMotionNode(Node):
                 }
 
 
+    def _nav_valid_for_motion_locked(self):
+        # Keep the raw MCU flag for telemetry; the temporary override only
+        # changes BasicMotion's readiness decision.
+        return (self._nav_valid
+                or bool(getattr(self, '_force_nav_valid', False)))
+
     def _state_ready_locked(self, *, require_origin=True):
         now = time.monotonic()
         fresh = (now - self._status_received_at <= self._state_timeout
                  and now - self._odom_received_at <= self._state_timeout
                  and now - self._nav_sample_at <= self._state_timeout)
-        return (fresh and self._nav_valid
+        return (fresh and self._nav_valid_for_motion_locked()
                 and (not require_origin or self._origin_initialized))
 
     def _motion_ready_locked(self):
@@ -522,7 +536,7 @@ class BasicMotionNode(Node):
             if age > self._state_timeout:
                 reasons.append(
                     f'{label} stale ({age:.2f}s; limit {self._state_timeout:.2f}s)')
-        if not self._nav_valid:
+        if not self._nav_valid_for_motion_locked():
             reasons.append('navigation is invalid')
         if not self._origin_initialized:
             reasons.append('odom origin is not initialized')
@@ -873,7 +887,8 @@ class BasicMotionNode(Node):
 
         while rclpy.ok():
             if self._is_cancelled():
-                self.get_logger().info('等待到达: 被取消')
+                self.get_logger().warning(
+                    f'等待到达: 动作中断: {self._action_abort_reason}')
                 return False
             elapsed = time.monotonic() - start
             if elapsed > timeout:
@@ -953,7 +968,9 @@ class BasicMotionNode(Node):
 
         while rclpy.ok():
             if self._is_cancelled():
-                self.get_logger().info('_wait_step_convergence: action cancelled')
+                self.get_logger().warning(
+                    f'_wait_step_convergence: 动作中断: '
+                    f'{self._action_abort_reason}')
                 return False
             elapsed = time.monotonic() - start
             if elapsed > timeout:
@@ -1010,7 +1027,8 @@ class BasicMotionNode(Node):
                 self.get_logger().warning(f'步进超时: 已用{time.monotonic()-start:.0f}s')
                 return False
             if self._is_cancelled():
-                self.get_logger().info('步进被取消')
+                self.get_logger().warning(
+                    f'步进中断: {self._action_abort_reason}')
                 return False
 
             target_world = Coordinate(x=target_x, y=target_y, z=target_z)
