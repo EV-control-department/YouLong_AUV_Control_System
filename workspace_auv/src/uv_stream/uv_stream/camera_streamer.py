@@ -284,9 +284,27 @@ def _ffmpeg_process(output_fps: float):
     ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, bufsize=0)
 
 
-def _forward_stdout(process):
+def _open_video_output():
+    """Reserve the media pipe and route all other process stdout to stderr.
+
+    Native DDS/iceoryx2 diagnostics can write directly to fd 1, bypassing
+    Python's print routing. Keep a duplicate for encoded video only, then
+    redirect fd 1 before either runtime is initialized. The CLI leaves this
+    redirection in place through shutdown so native teardown logs stay out of
+    the video pipe too.
+    """
+    sys.stdout.flush()
+    video_fd = os.dup(sys.stdout.fileno())
+    try:
+        os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+        return os.fdopen(video_fd, 'wb')
+    except BaseException:
+        os.close(video_fd)
+        raise
+
+
+def _forward_stdout(process, output):
     assert process.stdout is not None
-    output = sys.stdout.buffer
     try:
         while True:
             chunk = process.stdout.read(64 * 1024)
@@ -330,7 +348,9 @@ def _sample_source_rate(reader: Iceoryx2Reader, target_fps: float):
     return packet, effective_fps, first_clock_ns, use_header_timestamps
 
 
-def run(camera: str, mode: str, output_fps: float) -> int:
+def run(camera: str, mode: str, output_fps: float, *, video_output=None) -> int:
+    if video_output is None:
+        video_output = sys.stdout.buffer
     service = ICEORYX_CAMERA_FRONT if camera == 'front' else ICEORYX_CAMERA_DOWN
     reader = Iceoryx2Reader(service)
     stream_instance_id = uuid.uuid4().hex
@@ -350,7 +370,8 @@ def run(camera: str, mode: str, output_fps: float) -> int:
             f'encoding at {effective_fps:.2f} fps',
             file=sys.stderr, flush=True)
         encoder = _ffmpeg_process(effective_fps)
-        forwarder = threading.Thread(target=_forward_stdout, args=(encoder,),
+        forwarder = threading.Thread(target=_forward_stdout,
+                                     args=(encoder, video_output),
                                      name='camera-streamer-stdout', daemon=True)
         forwarder.start()
         cache: deque[CachedFrame] = deque()
@@ -420,6 +441,9 @@ def run(camera: str, mode: str, output_fps: float) -> int:
                 encoder.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 encoder.kill()
+                encoder.wait(timeout=1.0)
+        if forwarder is not None:
+            forwarder.join(timeout=1.0)
 
 
 def _annotate_from_cache(image, frame: CachedFrame, cache: DetectionCache):
@@ -450,7 +474,9 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    return run(args.camera, args.mode, max(1.0, args.output_fps))
+    with _open_video_output() as video_output:
+        return run(args.camera, args.mode, max(1.0, args.output_fps),
+                   video_output=video_output)
 
 
 if __name__ == '__main__':  # pragma: no cover
