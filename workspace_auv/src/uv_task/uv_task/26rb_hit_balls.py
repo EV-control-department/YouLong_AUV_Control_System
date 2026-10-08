@@ -1,533 +1,443 @@
-"""26rb 撞球任务入口。
+"""Preset-position impact-ball workflow using front detections and BLINE.
 
-通用 ROS 状态、动作客户端和速度发布器由 TaskRunnerNode 提供；
-撞球专属的观测缓存、目标筛选、扫描定位和运动策略由本模块负责。
+Set task depth once on entry. Later commands adjust XY/yaw only, and every
+BLINE has dz=0. Visual failures run a bounded blind approach and finish the
+whole task; motion failures and cancellation do not start another motion.
 """
-
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 import time
 
 import numpy as np
 import rclpy
-
-from auv_protocol.topics import MEASUREMENTS
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import ObjectMeasurementArray
+from uv_task.front_target_observer import FrontTargetObserver, wrap_degrees
+from uv_task.hit_ball_config import validate_hit_params
 from uv_task.task_outcome import TaskOutcome
 
 
+class MotionFailure(RuntimeError):
+    pass
+
+
+class ObservationFailure(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class LineResult:
+    reason: str
+    drive_started: float | None
+
+
 class RB26HitBallsTask:
-    """Execute the configured suspended-ball impact task.
-
-    Generic localization state and motion primitives remain on
-    ``TaskRunnerNode``. Impact-ball observation handling, target selection,
-    scanning, alignment, and per-ball workflow live in this module.
-    """
-
-    def __init__(self, node, params: dict):
+    def __init__(self, node, params):
         self._node = node
-        self._params = params
-        self._impact_ball_observations = {}
-        self._impact_ball_positions = {}
-        self._indicated_targets = set()
-        self._measurements_subscription = node.create_subscription(
-            ObjectMeasurementArray, MEASUREMENTS,
-            self._measurements_cb, 10)
+        self._params = validate_hit_params(params)
+        self._now = time.monotonic
+        self._sleep = time.sleep
+        self._observer = FrontTargetObserver(node, self._params)
+        self._yaw_active = False
+        self._bline_active = False
+        self._name = ''
+        self._position = None
 
     def destroy(self):
-        """Release the task-specific measurement subscription."""
-        subscription = self._measurements_subscription
-        self._measurements_subscription = None
-        if subscription is not None:
-            self._node.destroy_subscription(subscription)
+        self._observer.destroy()
 
-    def _measurements_cb(self, msg: ObjectMeasurementArray):
-        """Cache best front rays and positions for configured targets."""
-        node = self._node
-        values = self._params.get(
-            'order', ['impact_ball_blue', 'impact_ball_red'])
-        if isinstance(values, (str, int, np.integer)):
-            values = [values]
-        target_names_by_class = {}
-        for value in values:
-            name = self._normalize_impact_ball_name(value)
-            if name is None:
-                continue
-            class_id = node._model_mapping.model_class_id(
-                name, required=False)
-            if class_id is not None:
-                target_names_by_class[int(class_id)] = name
+    def _check(self):
+        if self._node.stopped or not rclpy.ok():
+            raise MotionFailure('撞球任务已取消')
 
-        received_at = time.monotonic()
-        min_confidence = float(self._params.get('min_confidence', 0.05))
-        latest_by_class = {}
-        latest_positions_by_class = {}
-        for measurement in msg.measurements:
-            class_id = int(measurement.class_id)
-            if class_id not in target_names_by_class:
-                continue
-            source = str(measurement.source_camera).strip().lower()
-            if not source.startswith('front'):
-                continue
-            confidence = float(measurement.confidence)
-            if not math.isfinite(confidence) or confidence < min_confidence:
-                continue
+    def _pose(self):
+        pose = tuple(float(x) for x in self._node._latest_robot_pose())
+        if len(pose) != 6 or not all(math.isfinite(x) for x in pose):
+            raise MotionFailure('撞球任务实测位姿无效')
+        return pose
 
-            if measurement.has_position:
-                position = (
-                    float(measurement.world_x),
-                    float(measurement.world_y),
-                    float(measurement.world_z),
-                )
-                if all(math.isfinite(value) for value in position):
-                    candidate = {
-                        'received_at': received_at,
-                        'confidence': confidence,
-                        'source': source,
-                        'measurement_form': int(measurement.measurement_form),
-                        'position': position,
-                    }
-                    previous = latest_positions_by_class.get(class_id)
-                    if (previous is None
-                            or confidence > previous['confidence']):
-                        latest_positions_by_class[class_id] = candidate
+    def _sync(self):
+        pose = self._pose()
+        (self._node._cmd_x, self._node._cmd_y, self._node._cmd_z,
+         self._node._cmd_yaw) = (*pose[:3], pose[5])
 
-            if not measurement.has_ray:
-                continue
-            ray_direction = (
-                float(measurement.ray_direction_x),
-                float(measurement.ray_direction_y),
-                float(measurement.ray_direction_z),
-            )
-            if (not all(math.isfinite(value) for value in ray_direction)
-                    or math.hypot(ray_direction[0], ray_direction[1]) <= 1e-6):
-                continue
-            observation = {
-                'received_at': received_at,
-                'confidence': confidence,
-                'source': source,
-                'measurement_form': int(measurement.measurement_form),
-                'ray_direction': ray_direction,
-            }
-            previous = latest_by_class.get(class_id)
-            if previous is None or confidence > previous['confidence']:
-                latest_by_class[class_id] = observation
+    def _light(self, color, label):
+        self._node._set_task_phase_light(color, f'26rb_hit_balls：{self._name} {label}')
 
-        if not latest_by_class and not latest_positions_by_class:
+    def _wait_until(self, deadline):
+        while self._now() < deadline:
+            self._check()
+            self._sleep(min(self._params['search_period'], deadline-self._now()))
+
+    def _flash(self, color, count, label):
+        for index in range(count):
+            self._light(color, f'{label} ({index+1}/{count})')
+            self._wait_until(self._now()+self._params['light_pulse_seconds'])
+            self._light(self._node.LIGHT_OFF, '闪灯间隔')
+            if index+1 < count:
+                self._wait_until(self._now()+self._params['light_gap_seconds'])
+
+    def _set(self, target, axes, timeout, label):
+        self._check()
+        if self._bline_active:
+            raise MotionFailure('BLINE 未结束，禁止发送 SET')
+        ok, message = self._node._send_action_goal(
+            BasicMotion.Goal.SET, list(map(float, target)), axes,
+            timeout=timeout, wait_deadline=self._now()+timeout,
+            task_context=self._node._format_motion_context(f'{self._name} {label}'))
+        if not ok:
+            raise MotionFailure(f'{label}失败：{message}')
+        self._sync()
+
+    def _hold(self):
+        pose = self._pose()
+        # No z axis here: do not restore depth from visual estimates or preset z.
+        self._set([*pose[:3], pose[5]], 'xyrz',
+                  self._params['search_rotate_timeout'], '停车保持当前水平位置和航向')
+
+    def _turn(self, yaw, label):
+        pose = self._pose()
+        self._set([*pose[:3], wrap_degrees(yaw)], 'rz',
+                  self._params['search_rotate_timeout'], label)
+
+    def _look_at_preset(self):
+        pose = self._pose()
+        delta = self._position[:2]-np.asarray(pose[:2])
+        yaw = pose[5] if np.linalg.norm(delta) < 1e-6 else math.degrees(math.atan2(delta[1], delta[0]))
+        self._turn(yaw, '朝向当前颜色球的预设 XY')
+
+    def _observe(self, seconds, full_window=False):
+        # Each observation phase requires a callback after phase entry.
+        after = self._observer.cursor()
+        deadline = self._now()+seconds
+        seen = False
+        while self._now() < deadline:
+            self._check()
+            if self._observer.frames(after):
+                seen = True
+                if not full_window:
+                    return True
+            self._sleep(min(self._params['search_period'], deadline-self._now()))
+        return seen or bool(self._observer.frames(after))
+
+    def _neutral_yaw(self):
+        if not self._yaw_active:
             return
-        with node._perception_lock:
-            self._impact_ball_observations.update(latest_by_class)
-            self._impact_ball_positions.update(latest_positions_by_class)
+        ok, message = self._node._send_body_velocity(
+            task_context=self._node._format_motion_context(f'{self._name} 结束 yaw 伺服'),
+            wait_deadline=self._now()+self._params['motion_cancel_timeout'])
+        if not ok:
+            raise MotionFailure(f'停止 yaw 伺服失败：{message}')
+        self._yaw_active = False
 
-        for class_id, observation in latest_by_class.items():
-            ray_x, ray_y, ray_z = observation['ray_direction']
-            node.get_logger().info(
-                f'hit_balls：采纳 {target_names_by_class[class_id]} 观测 '
-                f'(id={class_id}, camera={observation["source"]}, '
-                f'form={observation["measurement_form"]})，'
-                f'confidence={observation["confidence"]:.3f}，'
-                f'ray_dir=({ray_x:.3f},{ray_y:.3f},{ray_z:.3f})')
+    def _align(self, seconds, deadline=math.inf):
+        """Zero translation, yaw-only servo; prefer geometrically valid stereo."""
+        until = min(deadline, self._now()+seconds)
+        after = self._observer.cursor()
+        owner = self._observer.first_eye
+        stable_mode = stable_since = None
+        mono = stereo = False
+        self._light(self._node.LIGHT_YELLOW, '前视单目／双目 yaw 对准')
+        try:
+            while self._now() < until:
+                self._check()
+                frames = self._observer.frames(after)
+                frame = next((f for f in frames if f.eye == owner), None)
+                if frame is None and frames:
+                    frame = frames[0]
+                    owner = frame.eye
+                    stable_since = None
+                pose = self._pose()
+                center = self._observer.stereo_center(after) if frame is not None else None
+                direction = center-np.asarray(pose[:3]) if center is not None else (
+                    frame.ray if frame is not None else None)
+                if direction is not None and np.linalg.norm(direction[:2]) < 1e-6:
+                    direction = None
+                error = None if direction is None else wrap_degrees(
+                    math.degrees(math.atan2(direction[1], direction[0]))-pose[5])
+                mode = 'stereo' if center is not None else owner
+                if error is not None and abs(error) <= self._params['search_yaw_tolerance_deg']:
+                    if stable_since is None or stable_mode != mode:
+                        stable_since, stable_mode = self._now(), mode
+                    if self._now()-stable_since >= self._params['search_yaw_stable_seconds']:
+                        if center is not None:
+                            stereo = True
+                        else:
+                            mono = True
+                else:
+                    stable_since = None
+                rate = 0.0 if error is None else float(np.clip(
+                    error*self._params['search_yaw_gain'],
+                    -self._params['search_max_yaw_rate_deg_s'],
+                    self._params['search_max_yaw_rate_deg_s']))
+                self._yaw_active = True
+                ok, message = self._node._send_body_velocity(
+                    yaw_rate_deg_s=rate, lease_s=max(0.25, 4*self._params['search_period']),
+                    wait_deadline=until,
+                    task_context=self._node._format_motion_context(f'{self._name} 前视 yaw 伺服；无垂向修正'))
+                if not ok:
+                    if self._now() >= until:
+                        break
+                    raise MotionFailure(f'yaw 伺服失败：{message}')
+                self._sleep(min(self._params['search_period'], max(0.0, until-self._now())))
+        finally:
+            self._neutral_yaw()
+        self._hold()
+        valid = bool(self._observer.frames(after))
+        if valid and mono:
+            self._flash(self._node.LIGHT_GREEN, 1, '单目对准完成')
+        if valid and stereo:
+            self._flash(self._node.LIGHT_GREEN, 2, '双目对准完成')
+        if valid and not mono and not stereo:
+            self._node.get_logger().warning(
+                f'hit_balls：{self._name} 对准预算用尽仍未稳定，保留当前实测航向')
+        # Flashing must not hide a target loss before the next motion starts.
+        return bool(self._observer.frames(after))
 
-    def _normalize_impact_ball_name(self, value):
-        """Accept only canonical impact-ball names from the model registry."""
-        if not isinstance(value, str):
+    def _cancel_line(self, handle, result_future, allow_timeout=False):
+        if not result_future.done():
+            handle.cancel_goal_async()
+        until = self._now()+self._params['motion_cancel_timeout']
+        while not result_future.done() and rclpy.ok() and self._now() < until:
+            self._sleep(self._params['search_period'])
+        if not result_future.done():
+            raise MotionFailure('BLINE 取消尚未确认结束，停止后续运动')
+        completed = result_future.result()
+        if completed.status == 6:  # ROS action STATUS_ABORTED, not our requested cancellation.
+            if not (allow_timeout and 'timeout' in completed.result.message.lower()):
+                raise MotionFailure(f'BLINE 中止：{completed.result.message}')
+
+    def _run_bline(self, displacement, speed, timeout, label, monitor=None, duration=None):
+        """Monitor a finite BLINE; timed phases start at positive speed feedback."""
+        self._check()
+        if self._yaw_active or self._bline_active:
+            raise MotionFailure('旧速度或 BLINE 未结束，禁止启动新的 BLINE')
+        deadline = self._now()+timeout
+        client = self._node._action_client
+        if not client.wait_for_server(timeout_sec=min(2.0, timeout)):
+            raise MotionFailure('BasicMotion 动作服务器不可用')
+        goal = BasicMotion.Goal()
+        goal.cmd_type = BasicMotion.Goal.BLINE
+        goal.axes = 'xyz'
+        goal.target = [float(displacement[0]), float(displacement[1]), 0.0, 0.0]
+        goal.cruise_speed = float(speed)
+        goal.timeout = max(0.001, deadline-self._now())
+        goal.task_context = self._node._format_motion_context(f'{self._name} {label}')
+        drive = {'started': None}
+
+        def feedback(message):
+            f = message.feedback
+            if (drive['started'] is None and f.phase in ('CAPTURE', 'CRUISE', 'BRAKE', 'TERMINAL')
+                    and math.isfinite(f.along_speed_mps) and f.along_speed_mps > 0):
+                drive['started'] = self._now()
+
+        self._light(self._node.LIGHT_YELLOW, label)
+        self._node._last_motion_final_target = None
+        future = client.send_goal_async(goal, feedback_callback=feedback)
+        accept_until = min(deadline, self._now()+self._params['motion_accept_timeout'])
+        while not future.done() and not self._node.stopped and rclpy.ok() and self._now() < accept_until:
+            self._sleep(self._params['search_period'])
+        if not future.done() or self._node.stopped or not rclpy.ok():
+            def cancel_late(done):
+                try:
+                    handle = done.result()
+                    if handle.accepted:
+                        handle.cancel_goal_async()
+                except Exception:
+                    pass
+            future.add_done_callback(cancel_late)
+            self._check()
+            raise MotionFailure('BLINE 目标接受超时，已登记迟到取消')
+        handle = future.result()
+        if not handle.accepted:
+            raise MotionFailure('BLINE 被拒绝')
+        self._bline_active = True
+        self._node._active_goal_handle = handle
+        result_future = handle.get_result_async()
+        start_until = min(deadline, self._now()+self._params['motion_start_timeout'])
+        try:
+            while True:
+                self._check()
+                if result_future.done():
+                    result = result_future.result().result
+                    if not result.success:
+                        if self._now() >= deadline and 'timeout' in result.message.lower():
+                            self._sync()
+                            return LineResult('timeout', drive['started'])
+                        raise MotionFailure(f'BLINE 失败：{result.message}')
+                    target = list(result.final_target)
+                    if len(target) != 4 or not all(math.isfinite(x) for x in target):
+                        raise MotionFailure('BLINE 返回无效 final_target')
+                    (self._node._cmd_x, self._node._cmd_y, self._node._cmd_z,
+                     self._node._cmd_yaw) = target
+                    self._node._last_motion_final_target = target
+                    return LineResult('endpoint', drive['started'])
+                reason = monitor() if monitor is not None else None
+                if reason is None and duration is not None and drive['started'] is not None:
+                    if self._now()-drive['started'] >= duration:
+                        reason = 'duration'
+                if reason is None and self._now() >= deadline:
+                    reason = 'timeout'
+                if reason is None and duration is not None and drive['started'] is None and self._now() >= start_until:
+                    raise MotionFailure('BLINE 未在起步时限内产生前进反馈')
+                if reason is not None:
+                    self._cancel_line(handle, result_future, allow_timeout=reason == 'timeout')
+                    self._sync()
+                    return LineResult(reason, drive['started'])
+                self._sleep(self._params['search_period'])
+        finally:
+            try:
+                if not result_future.done():
+                    self._cancel_line(handle, result_future)
+            finally:
+                if result_future.done():
+                    self._bline_active = False
+                    if self._node._active_goal_handle is handle:
+                        self._node._active_goal_handle = None
+
+    def _cruise_to_radius(self, front_seen):
+        p = self._params
+        deadline = self._now()+p['cruise_timeout']
+
+        def monitor():
+            if np.linalg.norm(np.asarray(self._pose()[:2])-self._position[:2]) <= p['cruise_radius_m']:
+                return 'radius'
+            if self._now() >= deadline:
+                return 'timeout'
+            if not front_seen and self._observer.frames():
+                return 'front'
             return None
-        name = value.strip()
-        return (name if name in {'impact_ball_blue', 'impact_ball_red'}
-                and self._node._model_mapping.model_class_id(
-                    name, required=False) is not None else None)
 
-    def _indicate_target_found(self, name: str):
-        if name in self._indicated_targets:
+        while True:
+            self._check()
+            state = monitor()
+            if state == 'radius':
+                self._hold()
+                return
+            if state == 'timeout':
+                raise ObservationFailure('靠近预设位置的 BLINE 总超时')
+            if state == 'front':
+                front_seen = True
+                if not self._align(p['search_align_seconds'], deadline):
+                    raise ObservationFailure('途中首次发现目标，但修正阶段结束时目标丢失')
+                continue
+            remaining = max(0.001, deadline-self._now())
+            result = self._run_bline(
+                [p['cruise_speed_mps']*remaining+1.0, 0.0], p['cruise_speed_mps'],
+                remaining, 'BLINE 靠近预设位置水平半径', monitor=monitor)
+            if result.reason == 'radius':
+                self._hold()
+                return
+            if result.reason == 'timeout':
+                raise ObservationFailure('靠近预设位置的 BLINE 总超时')
+            if result.reason == 'front':
+                front_seen = True
+                if not self._align(p['search_align_seconds'], deadline):
+                    raise ObservationFailure('途中首次发现目标，但修正阶段结束时目标丢失')
+
+    def _near_observation(self):
+        p = self._params
+        base_yaw = self._pose()[5]
+        if self._observe(p['observe_timeout']):
             return
-        self._indicated_targets.add(name)
-        self._node._pulse_task_light(
-            self._node.LIGHT_GREEN, f'观测到 {name}', duration=1.0)
+        # Body/world yaw follows NED: negative is left, positive is right.
+        for sign, label in ((-1, '左'), (1, '右')):
+            self._turn(base_yaw+sign*p['observe_yaw_step_deg'],
+                       f'近场向{label} {p["observe_yaw_step_deg"]:.1f}° 扫视')
+            if self._observe(p['observe_direction_dwell_seconds']):
+                return
+        raise ObservationFailure('近场正前方及左右扫视均未发现当前颜色球')
 
-    def _impact_ball_order(self, params: dict) -> list[str]:
-        """Read the requested canonical detector class-name order."""
-        node = self._node
-        values = params.get('order', ['impact_ball_blue', 'impact_ball_red'])
-        if isinstance(values, (str, int, np.integer)):
-            values = [values]
+    def _fallback(self, message):
+        p = self._params
+        self._node.get_logger().warning(f'hit_balls：{self._name} {message}；执行预设位置兜底并结束整个撞球任务')
+        self._hold()
+        self._flash(self._node.LIGHT_RED, 1, '观测失败，直接前往预设 XY')
+        self._look_at_preset()
+        pose = self._pose()
+        world_delta = self._position[:2]-np.asarray(pose[:2])
+        began = self._now()
+        if np.linalg.norm(world_delta) > 1e-6:
+            yaw = math.radians(pose[5])
+            c, s = math.cos(yaw), math.sin(yaw)
+            body_delta = [c*world_delta[0]+s*world_delta[1],
+                          -s*world_delta[0]+c*world_delta[1]]
+            result = self._run_bline(body_delta, p['fallback_speed_mps'],
+                                     p['fallback_timeout'], '预设 XY 兜底 BLINE',
+                                     duration=p['fallback_duration'])
+            if result.reason == 'timeout':
+                raise MotionFailure('兜底 BLINE 动作超时')
+            began = result.drive_started if result.drive_started is not None else began
+        self._hold()
+        # Reaching the finite preset endpoint early never sends us beyond it.
+        self._wait_until(began+p['fallback_duration'])
+        self._light(self._node.LIGHT_OFF, '兜底结束，未通过视觉确认撞击')
+        return TaskOutcome.ok(f'{self._name} 兜底前往预设 XY 后结束；未通过视觉确认撞击')
 
-        result = []
-        for value in values:
-            name = self._normalize_impact_ball_name(value)
-            if name is not None and name not in result:
-                result.append(name)
-        if not result:
-            node.get_logger().error(
-                'hit_balls：撞球顺序中没有有效目标；请使用 '
-                '共享模型映射中存在的 canonical class name')
-        return result
-
-    def _latest_impact_ball_observation(
-            self, name: str, params: dict, *, after_received=None):
-        """Return a front measurement ray and its world-frame yaw."""
-        node = self._node
-        class_id = node._model_mapping.model_class_id(name, required=False)
-        if class_id is None:
-            return None
-        min_confidence = float(params.get('min_confidence', 0.05))
-        with node._perception_lock:
-            cached = self._impact_ball_observations.get(int(class_id))
-        if cached is None:
-            return None
-        received_at = float(cached['received_at'])
-        max_age = max(0.0, float(params.get(
-            'search_observation_max_age', 5.0)))
-        too_old = time.monotonic() - received_at > max_age
-        if (too_old
-                or (after_received is not None
-                    and received_at <= float(after_received))
-                or cached['confidence'] < min_confidence):
-            return None
-
-        ray_x, ray_y, _ray_z = cached['ray_direction']
-        if (not math.isfinite(ray_x) or not math.isfinite(ray_y)
-                or math.hypot(ray_x, ray_y) <= 1e-6):
-            return None
-        yaw = math.degrees(math.atan2(ray_y, ray_x))
-        return {**cached, 'yaw_deg': node._wrap_yaw_degrees(yaw)}
-
-    def _latest_impact_ball_position(
-            self, name: str, params: dict, *, reference_received=None):
-        """Return a fresh direct front-camera XYZ position, if available."""
-        node = self._node
-        class_id = node._model_mapping.model_class_id(name, required=False)
-        if class_id is None:
-            return None
-        with node._perception_lock:
-            cached = self._impact_ball_positions.get(int(class_id))
-        if cached is None:
-            return None
-        received_at = float(cached['received_at'])
-        max_age = max(0.0, float(params.get(
-            'search_observation_max_age', 5.0)))
-        if (time.monotonic() - received_at > max_age
-                or (reference_received is not None
-                    and received_at + 1e-6 < float(reference_received))
-                or cached['confidence'] < float(
-                    params.get('min_confidence', 0.05))):
-            return None
-        if not all(math.isfinite(value) for value in cached['position']):
-            return None
-        return cached
-
-    def _wait_for_impact_ball_observation(
-            self, name: str, params: dict, *, timeout: float,
-            after_received=None):
-        """Wait for a front observation at the current heading."""
-        node = self._node
-        deadline = time.monotonic() + max(0.0, float(timeout))
-        while rclpy.ok() and not node.stopped:
-            observation = self._latest_impact_ball_observation(
-                name, params, after_received=after_received)
-            if observation is not None:
-                return observation
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.0:
-                break
-            time.sleep(min(0.05, remaining))
-        return None
-
-    def _rotate_for_impact_scan(self, yaw: float, timeout: float) -> bool:
-        """Rotate in place so the front stereo cameras scan their surroundings."""
-        node = self._node
-        yaw = node._wrap_yaw_degrees(yaw)
-        success, message = node._send_action_goal(
-            BasicMotion.Goal.SET,
-            [node._cmd_x, node._cmd_y, node._cmd_z, yaw],
-            'rz',
-            timeout=timeout,
-            quiet=True,
-            task_context=node._format_motion_context('主动旋转扫描撞球目标'),
-        )
-        if success:
-            node._cmd_yaw = yaw
+    def _one_ball(self):
+        p = self._params
+        self._look_at_preset()
+        seen = self._observe(p['search_initial_observe_seconds'], full_window=True)
+        if seen:
+            if not self._align(p['search_align_seconds']):
+                self._flash(self._node.LIGHT_RED, 1, '初始前视观测丢失，继续靠近')
         else:
-            node.get_logger().warn(
-                f'hit_balls：旋转到 {yaw:.1f}° 进行扫描失败：{message}')
-        return success
-
-    def _active_localize_impact_balls(self, order: list[str], params: dict):
-        """Search a left/right arc and align to each target bearing."""
-        node = self._node
-        node._set_task_phase_light(
-            node.LIGHT_YELLOW, '撞球 15° 旋转与目标搜索阶段')
-        step = float(params.get('search_yaw_step_deg', 15.0))
-        step = min(180.0, max(5.0, abs(step)))
-        settle_time = max(0.0, float(params.get('search_settle_time', 5.0)))
-        direction_dwell_time = max(
-            0.0, float(params.get('search_direction_dwell_time', 5.0)))
-        rotate_timeout = max(
-            1.0, float(params.get('search_rotate_timeout', 10.0)))
-        search_timeout = max(0.0, float(params.get('search_timeout', 60.0)))
-        found = {}
-        for name in order:
-            search_deadline = time.monotonic() + search_timeout
-            start_yaw = node._wrap_yaw_degrees(
-                float(node._latest_robot_pose()[5]))
-            observation = self._latest_impact_ball_observation(
-                name, params)
-            if observation is None and settle_time > 0.0:
-                observation = self._wait_for_impact_ball_observation(
-                    name, params, timeout=settle_time)
-            if observation is not None:
-                self._indicate_target_found(name)
-
-            if observation is None:
-                node.get_logger().info(
-                    f'hit_balls：当前方向未看到 {name}，开始左右各 '
-                    f'{step:.1f}°搜索')
-                for offset_deg in (step, 0.0, -step, 0.0):
-                    if (not rclpy.ok() or node.stopped
-                            or time.monotonic() >= search_deadline):
-                        break
-                    heading = node._wrap_yaw_degrees(start_yaw + offset_deg)
-                    if not self._rotate_for_impact_scan(
-                            heading, rotate_timeout):
-                        continue
-                    arrived_at = time.monotonic()
-                    remaining = max(0.0, search_deadline - arrived_at)
-                    observation_timeout = (
-                        direction_dwell_time
-                        if abs(offset_deg) > 1e-9 else settle_time)
-                    observation = self._wait_for_impact_ball_observation(
-                        name, params,
-                        timeout=min(observation_timeout, remaining))
-                    if observation is not None:
-                        self._indicate_target_found(name)
-                        break
-                    node._pulse_task_light(
-                        node.LIGHT_RED,
-                        f'{name} 在 {offset_deg:+.1f}° 未观测到目标',
-                        duration=1.0)
-
-            if observation is None:
-                node.set_light(node.LIGHT_RED, f'{name} 搜索失败')
-                node.get_logger().error(
-                    f'hit_balls：左右各 {step:.1f}°扫描后仍未看到 {name}')
-                return None
-
-            ray_yaw = float(observation['yaw_deg'])
-            if not self._rotate_for_impact_scan(ray_yaw, rotate_timeout):
-                node.get_logger().error(
-                    f'hit_balls：无法将艇首对准 {name} 的观测射线')
-                return None
-            node.get_logger().info(
-                f'hit_balls：看到 {name}，观测射线偏航角='
-                f'{ray_yaw:.1f}°，保持观察 2 秒')
-            observe_deadline = time.monotonic() + 2.0
-            while rclpy.ok() and not node.stopped:
-                remaining = observe_deadline - time.monotonic()
-                if remaining <= 0.0:
-                    break
-                time.sleep(min(0.1, remaining))
-            if not rclpy.ok() or node.stopped:
-                return None
-
-            found[name] = observation
-            node.get_logger().info(
-                f'hit_balls：{name} 首轮搜索与射线对准完成，'
-                f'偏航角={ray_yaw:.1f}°')
-
-        node.get_logger().info(
-            f'hit_balls：搜索与首轮对准完成，目标={list(found.keys())}')
-        return found
-
-    def _hold_impact_alignment(self, name: str, params: dict, *,
-                               after_received=None):
-        """Align yaw from fresh measurement rays while holding position."""
-        node = self._node
-        duration = max(
-            0.0, float(params.get('position_correction_duration', 30.0)))
-        period = max(0.05, float(params.get('position_correction_period', 0.20)))
-        command_timeout = max(
-            0.20, float(params.get('position_correction_command_timeout', 10.0)))
-        min_update_yaw_deg = max(
-            0.0, float(params.get('position_correction_min_update_deg', 1.0)))
-
-        deadline = time.monotonic() + duration
-        last_observation_received = after_received
-        last_sent_yaw = None
-        while rclpy.ok() and not node.stopped:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.0:
-                break
-            observation = self._wait_for_impact_ball_observation(
-                name, params,
-                timeout=min(period, remaining),
-                after_received=last_observation_received)
-            if observation is None:
-                continue
-            last_observation_received = observation['received_at']
-            target_position = self._latest_impact_ball_position(
-                name, params, reference_received=last_observation_received)
-            if target_position is not None:
-                pose = node._latest_robot_pose()
-                target_x, target_y, target_z = target_position['position']
-                horizontal_distance = math.hypot(
-                    target_x - pose[0], target_y - pose[1])
-                node.get_logger().info(
-                    f'hit_balls：{name} 实时目标位置(odom)='
-                    f'({target_x:.3f}, {target_y:.3f}, {target_z:.3f})，'
-                    f'水平距离={horizontal_distance:.3f}m，'
-                    f'camera={target_position["source"]}，'
-                    f'confidence={target_position["confidence"]:.3f}')
-            yaw = float(observation['yaw_deg'])
-            if (last_sent_yaw is not None
-                    and abs(node._wrap_yaw_degrees(
-                        yaw - last_sent_yaw)) < min_update_yaw_deg):
-                continue
-            success, message = node._send_action_goal(
-                BasicMotion.Goal.SET,
-                [node._cmd_x, node._cmd_y, node._cmd_z, yaw],
-                'rz',
-                timeout=min(command_timeout, max(0.20, remaining)),
-                quiet=True,
-                task_context=node._format_motion_context(
-                    f'{name} measurement 射线偏航对准'),
-                light_color=node.LIGHT_BLUE)
-            if success:
-                node._cmd_yaw = yaw
-                last_sent_yaw = yaw
-            elif not rclpy.ok() or node.stopped:
-                return False
-            else:
-                node.get_logger().warning(
-                    f'hit_balls：{name} 射线偏航对准失败：{message}')
-
-        return rclpy.ok() and not node.stopped and last_sent_yaw is not None
-
-    def _charge_forward(self, params: dict) -> bool:
-        """Run the body-X velocity loop for a fixed short impact charge."""
-        node = self._node
-        duration = max(0.0, float(params.get('charge_duration', 5.0)))
-        speed = max(0.0, float(params.get('charge_speed_mps', 0.15)))
-        period = max(0.02, float(params.get('charge_publish_period', 0.05)))
-        lease = max(0.25, period * 4.0)
-        deadline = time.monotonic() + duration
-        while rclpy.ok() and not node.stopped and time.monotonic() < deadline:
-            success, message = node._send_body_velocity(
-                forward_mps=speed, lease_s=lease,
-                task_context=node._format_motion_context('撞球持续前进'))
-            if not success:
-                node.get_logger().error(f'撞球速度指令发送失败：{message}')
-                return False
-            time.sleep(min(period, max(0.0, deadline - time.monotonic())))
-        node._send_body_velocity(
-            lease_s=lease,
-            task_context=node._format_motion_context('结束撞球持续前进'))
-        return rclpy.ok() and not node.stopped
-
-    def _record_current_impact_pose(self):
-        """Snapshot the measured pose after alignment for the return target."""
-        pose = self._node._latest_robot_pose()
-        return [pose[0], pose[1], pose[2], pose[5]]
-
-    def execute(self) -> TaskOutcome:
-        node = self._node
-        params = self._params
-        order = self._impact_ball_order(params)
-        if not order:
-            return TaskOutcome.failed(
-                '26rb_hit_balls.localization', '没有有效的撞球目标')
-        if not bool(params.get('active_localization', True)):
-            return TaskOutcome.failed(
-                '26rb_hit_balls.localization',
-                '撞球流程要求启用主动搜索与首轮对准')
-
-        approach_distance = max(
-            0.0, float(params.get('approach_distance', 0.8)))
-        pause = max(0.0, float(params.get('between_balls_pause', 0.5)))
-        node.get_logger().info(
-            f'hit_balls：撞球顺序={order}，流程=主动搜索并对准 -> '
-            f'BTRAVEL前进{approach_distance:.2f}m -> 二次对准 -> 冲撞')
-
-        for index, name in enumerate(order):
-            found = self._active_localize_impact_balls([name], params)
-            if found is None or name not in found:
-                return TaskOutcome.failed(
-                    '26rb_hit_balls.localization',
-                    f'{name} 主动搜索或首轮对准失败')
-            outcome = self._staged_charge_return(name, params)
-            if not outcome:
-                return outcome
-            if index + 1 < len(order) and pause > 0.0:
-                time.sleep(pause)
+            self._flash(self._node.LIGHT_RED, 1, '初始两秒未看到当前颜色球')
+        self._cruise_to_radius(seen)
+        self._near_observation()
+        if not self._align(p['search_align_seconds']):
+            raise ObservationFailure('近场对准结束时没有有效目标')
+        result = self._run_bline([p['approach_distance_m'], 0.0],
+                                 p['approach_speed_mps'], p['approach_timeout'],
+                                 '对准后 BLINE 前进 0.5m')
+        if result.reason != 'endpoint':
+            raise MotionFailure('前进 0.5m 的 BLINE 超时')
+        self._hold()
+        if not self._align(p['charge_alignment_seconds']):
+            raise ObservationFailure('撞击前两秒对准结束时没有有效目标')
+        distance = p['charge_speed_mps']*p['charge_duration']+1.0
+        result = self._run_bline([distance, 0.0], p['charge_speed_mps'],
+                                 p['charge_timeout'], 'BLINE 前向定时撞击',
+                                 duration=p['charge_duration'])
+        if result.reason != 'duration':
+            raise MotionFailure('定时撞击未完成指定前进时长')
+        self._hold()
+        self._light(self._node.LIGHT_GREEN, '定时撞击完成；不返回原位置')
         return TaskOutcome.ok()
 
-    def _staged_charge_return(self, name: str,
-                              params: dict) -> TaskOutcome:
-        """Move forward from the first alignment, re-align, charge, and return."""
+    def execute(self):
+        p = self._params
         node = self._node
-        approach_distance = max(
-            0.0, float(params.get('approach_distance', 0.8)))
-        approach_timeout = max(
-            1.0, float(params.get('approach_timeout', 30.0)))
-        return_timeout = max(
-            1.0, float(params.get('return_timeout', 60.0)))
-
-        node.get_logger().info(
-            f'hit_balls：{name} 首轮对准完成，BTRAVEL机体系前进'
-            f'{approach_distance:.2f}m')
-        success, message = node._send_action_goal(
-            BasicMotion.Goal.BTRAVEL,
-            [approach_distance, 0.0, 0.0, 0.0],
-            'x',
-            timeout=approach_timeout,
-            task_context=node._format_motion_context(
-                f'{name} 首轮对准后 BTRAVEL 前进 {approach_distance:.2f}m'),
-            light_color=node.LIGHT_BLUE)
-        if not success:
-            return TaskOutcome.failed(
-                '26rb_hit_balls.approach',
-                f'{name} BTRAVEL前进失败：{message}')
-
-        pose = node._latest_robot_pose()
-        node._cmd_x, node._cmd_y, node._cmd_z, node._cmd_yaw = (
-            pose[0], pose[1], pose[2], pose[5])
-        node.get_logger().info(
-            f'hit_balls：{name} BTRAVEL后当前位置='
-            f'({pose[0]:.2f}, {pose[1]:.2f}, {pose[2]:.2f})，'
-            f'偏航角={pose[5]:.1f}°，开始二次对准')
-
-        arrived_at = time.monotonic()
-        if not self._hold_impact_alignment(
-                name, params, after_received=arrived_at):
-            return TaskOutcome.failed(
-                '26rb_hit_balls.approach', f'{name} 二次对准失败')
-
-        recorded_pose = self._record_current_impact_pose()
-        node.get_logger().info(
-            f'hit_balls：{name} 二次对准完成，记录冲撞后返回位置='
-            f'({recorded_pose[0]:.2f}, {recorded_pose[1]:.2f}, '
-            f'{recorded_pose[2]:.2f}, {recorded_pose[3]:.1f}°)')
-
-        if not self._charge_forward(params):
-            return TaskOutcome.failed(
-                '26rb_hit_balls.impact', f'{name} 前向冲撞失败')
-        node.get_logger().info(
-            f'hit_balls：{name} 前向冲撞完成，持续 '
-            f'{float(params.get("charge_duration", 5.0)):.1f}s')
-
-        success, message = node._send_action_goal(
-            BasicMotion.Goal.SET,
-            recorded_pose,
-            'xyzrz',
-            timeout=return_timeout,
-            task_context=node._format_motion_context(
-                f'{name}撞球后返回记录位置'))
-        if not success:
-            node.get_logger().error(
-                f'hit_balls：返回记录位置失败：{message}')
-            return TaskOutcome.failed(
-                '26rb_hit_balls.return', message)
-        node._cmd_x, node._cmd_y, node._cmd_z, node._cmd_yaw = recorded_pose
-        node.get_logger().info(
-            f'hit_balls：{name}任务完成，已返回记录位置')
-        return TaskOutcome.ok()
+        try:
+            self._check()
+            self._light(node.LIGHT_YELLOW, '进入撞球任务')
+            for name in p['order']:
+                key = 'targets_blue_position' if name == 'impact_ball_blue' else 'targets_red_position'
+                if len(p[key]) != 3:
+                    return TaskOutcome.failed('26rb_hit_balls.configuration', f'{name} 预设 [x,y,z] 尚未填写')
+                if node._model_mapping.model_class_id(name, required=False) is None:
+                    return TaskOutcome.failed('26rb_hit_balls.mapping', f'模型映射缺少 {name}')
+            if not node._ensure_camera_extrinsics() or not any(
+                    eye in node.camera_extrinsics for eye in ('front_left', 'front_right')):
+                return TaskOutcome.failed('26rb_hit_balls.camera_tf', '撞球任务缺少前视相机 TF')
+            pose = self._pose()
+            self._set([*pose[:2], p['depth_task_depth_m'], pose[5]], 'z',
+                      p['depth_timeout'], '入场定深一次')
+            for index, name in enumerate(p['order']):
+                self._name = name
+                key = 'targets_blue_position' if name == 'impact_ball_blue' else 'targets_red_position'
+                self._position = np.asarray(p[key])
+                self._observer.select(node._model_mapping.model_class_id(name, required=False))
+                node.get_logger().info(f'hit_balls：{name} 预设位置={list(self._position)}；后续无任务层深度修正')
+                try:
+                    self._one_ball()
+                except ObservationFailure as error:
+                    return self._fallback(str(error))
+                if index+1 < len(p['order']):
+                    self._wait_until(self._now()+p['between_balls_pause'])
+            return TaskOutcome.ok('指定球的 BLINE 定时撞击流程完成')
+        except MotionFailure as error:
+            node.get_logger().error(f'hit_balls：{error}')
+            code = '26rb_hit_balls.cancelled' if node.stopped or not rclpy.ok() else '26rb_hit_balls.motion'
+            return TaskOutcome.failed(code, str(error))

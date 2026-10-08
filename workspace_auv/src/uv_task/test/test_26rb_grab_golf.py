@@ -1,11 +1,11 @@
-"""抓球流程的偏置、回位复检和重试测试。"""
+"""抓高尔夫球流程的偏置、回位复检和重试测试。"""
 
 from importlib import import_module
 from types import SimpleNamespace
 
 
-_grab = import_module('uv_task.26rb_grab_ball')
-GrabBallTask = _grab.RB26GrabBallTask
+_grab = import_module('uv_task.26rb_grab_golf')
+GrabGolfTask = _grab.RB26GrabGolfTask
 
 
 class _Logger:
@@ -19,15 +19,15 @@ class _Logger:
         pass
 
 
-def test_execute_retries_when_ball_remains_after_return():
+def test_execute_retries_when_golf_remains_after_return():
     events = []
     verification_results = iter((False, True))
-    task = GrabBallTask.__new__(GrabBallTask)
+    task = GrabGolfTask.__new__(GrabGolfTask)
     task._logger = _Logger()
     task._node = SimpleNamespace(stopped=False)
     task._max_grab_retries = 1
-    task._color = 'pink_golf'
-    task._class_id = 7
+    task._golf_color = 'pink_golf'
+    task._golf_class_id = 7
     task._descent_speed = 0.4
     task._descent_duration = 10.0
 
@@ -60,7 +60,7 @@ def test_execute_retries_when_ball_remains_after_return():
     task._wait_pre_descent_settle = settle
     task._descend = descend
     task._return_to_recorded_pose = return_pose
-    task._verify_ball_removed = verify
+    task._verify_golf_removed = verify
 
     assert task.execute()
     assert events == [

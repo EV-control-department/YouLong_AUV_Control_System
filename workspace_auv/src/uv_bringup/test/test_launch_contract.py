@@ -2,6 +2,7 @@
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -57,9 +58,9 @@ def test_real_startup_contract_is_staged_and_task_control_is_external():
     assert "_start_navigation()" in startup
     startup_stages = (
         "self._start_core()",
+        "self._start_motion_component()",
         "self._start_camera_perception()",
         "self._start_navigation()",
-        "self._start_motion_component()",
     )
     startup_positions = [startup.index(stage) for stage in startup_stages]
     assert startup_positions == sorted(startup_positions)
@@ -100,6 +101,27 @@ def test_bringup_uses_the_invoking_terminal():
     for path in launch_files:
         source = path.read_text(encoding="utf-8").lower()
         assert not any(token in source for token in forbidden), path
+
+
+def test_missing_odom_health_only_observes_and_can_become_ready():
+    source = PACKAGE_ROOT / 'uv_bringup/real_startup.py'
+    tree = ast.parse(source.read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+               and n.name == 'RealStartupManager')
+    methods = [n for n in cls.body if isinstance(n, ast.FunctionDef)
+               and n.name in ('_observe_phase', 'monitor')]
+    namespace = {'time': SimpleNamespace(monotonic=lambda: 2.0)}
+    exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), namespace)
+    ready = [False]
+    manager = SimpleNamespace(
+        _observed_phases={}, component_state={}, children=[],
+        _last_monitor=0.0, _dashboard=lambda: None)
+    namespace['_observe_phase'](manager, 'perception gate', lambda: ready[0],
+                                'odom-based tracks')
+    assert manager.component_state['perception gate'].startswith('WAITING')
+    ready[0] = True
+    namespace['monitor'](manager)
+    assert manager.component_state['perception gate'] == 'READY'
 
 
 def test_top_level_launch_modes_use_profile_and_no_preset_selector():

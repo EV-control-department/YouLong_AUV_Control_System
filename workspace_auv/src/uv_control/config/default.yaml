@@ -8,3 +8,26 @@
     # TEMPORARY real-mode override: BasicMotion ignores MCU nav_valid for readiness.
     # Keep state freshness, origin, ARM, and safe-stop checks enabled.
     force_nav_valid: true
+    # Initial BLINE values; require simulation validation and vehicle tuning.
+    line.default_speed: 0.15
+    line.max_speed: 0.25
+    line.acceleration: 0.05
+    line.deceleration: 0.05
+    line.vector_acceleration: 0.05
+    line.brake_acceleration: 0.03
+    line.cross_gain: 0.5
+    line.cross_speed: 0.10
+    line.capture_enter: 0.30
+    line.capture_exit: 0.15
+    line.capture_speed: 0.05
+    line.reverse_speed: 0.05
+    line.terminal_speed: 0.08
+    line.terminal_radius: 0.20
+    line.position_tolerance: 0.10
+    line.stop_speed: 0.03
+    line.yaw_tolerance: 5.0
+    line.stable_seconds: 1.0
+    line.align_timeout: 30.0
+    line.yaw_gain: 0.8
+    line.yaw_rate_limit: 15.0
+    line.brake_delay: 0.25

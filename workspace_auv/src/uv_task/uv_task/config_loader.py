@@ -13,6 +13,12 @@ from typing import Any
 
 import yaml
 
+from uv_task.golf_search_config import SEARCH_SCHEMA, validate_search_params
+from uv_task.drop_search_config import DROP_SEARCH_SCHEMA, validate_drop_search_params
+from uv_task.hit_ball_config import SCHEMA as HIT_SCHEMA, validate_hit_params
+
+from uv_task.gate_config import SCHEMA as GATE_SCHEMA, ALIASES as GATE_ALIASES, validate_gate_params
+
 
 
 class ConfigError(ValueError):
@@ -122,106 +128,11 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "ascent_timeout": float,
     },
     "btravelx": {"dx": float},
+    "bline": {"dx": float, "dy": float, "dz": float,
+              "speed_mps": float, "timeout": float},
     "setz": {"z": float},
-    "26rb_hit_balls": {
-        "order": (list, str),
-        "active_localization": bool,
-        "search_yaw_step_deg": float,
-        "search_settle_time": float,
-        "search_direction_dwell_time": float,
-        "search_observation_max_age": float,
-        "search_timeout": float,
-        "search_rotate_timeout": float,
-        "min_confidence": float,
-        "approach_distance": float,
-        "approach_timeout": float,
-        "position_correction_duration": float,
-        "position_correction_period": float,
-        "position_correction_command_timeout": float,
-        "position_correction_min_update_deg": float,
-        "charge_duration": float,
-        "charge_speed_mps": float,
-        "charge_publish_period": float,
-        "return_timeout": float,
-    },
-    "26rb_gate_task": {
-        "gate_count": int,
-        "timeout": float,
-        "image_input": str,
-        "search_start_offset_deg": float,
-        "search_sweep_deg": float,
-        "search_retry_sweep_deg": float,
-        "search_final_sweep_deg": float,
-        "right_yaw_sign": float,
-        "search_yaw_rate_deg_s": float,
-        "search_yaw_publish_period": float,
-        "search_settle_time": float,
-        "search_timeout": float,
-        "rotate_timeout": float,
-        "search_stop_height_fraction": float,
-        "min_gate_extent_fraction": float,
-        "target_gate_extent_fraction": float,
-        "target_gate_height_fraction": float,
-        "extent_tolerance": float,
-        "heading_check_seconds": float,
-        "post_turn_settle_seconds": float,
-        "post_turn_observation_timeout": float,
-        "bbox_filter_alpha": float,
-        "bbox_log_period": float,
-        "bbox_ratio_target": float,
-        "bbox_ratio_hold_seconds": float,
-        "minimum_attitude_correction_seconds": float,
-        "alignment_timeout": float,
-        "control_period": float,
-        "command_timeout": float,
-        "max_forward_step": float,
-        "max_back_step": float,
-        "max_lateral_step": float,
-        "max_vertical_step": float,
-        "lost_observation_timeout": float,
-        "detection_timeout": float,
-        "min_gate_detection_confidence": float,
-        "image_center_tolerance_fraction": float,
-        "stereo_vertical_tolerance_fraction": float,
-        "distance_control_min_m": float,
-        "distance_control_max_m": float,
-        "monocular_reference_distance_m": float,
-        "max_yaw_step_deg": float,
-        "velocity_period": float,
-        "max_forward_speed_mps": float,
-        "max_reverse_speed_mps": float,
-        "max_lateral_speed_mps": float,
-        "max_vertical_speed_mps": float,
-        "max_yaw_rate_deg_s": float,
-        "distance_velocity_gain": float,
-        "vertical_velocity_gain": float,
-        "yaw_velocity_gain_deg_s": float,
-        "height_pid_kp": float,
-        "height_pid_ki": float,
-        "height_pid_kd": float,
-        "height_pid_integral_limit": float,
-        "height_pid_stable_error_m": float,
-        "height_pid_stable_derivative_mps": float,
-        "height_pid_stable_seconds": float,
-        "yaw_pid_kp": float,
-        "yaw_pid_ki": float,
-        "yaw_pid_kd": float,
-        "yaw_pid_integral_limit_deg": float,
-        "arc_lateral_speed_mps": float,
-        "yaw_center_kp": float,
-        "arc_probe_seconds": float,
-        "arc_probe_speed_mps": float,
-        "arc_gradient_window_seconds": float,
-        "arc_timeout_seconds": float,
-        "arc_objective_deadband": float,
-        "arc_reverse_cooldown_seconds": float,
-        "arc_near_extremum_speed_scale": float,
-        "lost_command_hold_seconds": float,
-        "pass_distance_m": float,
-        "pass_timeout": float,
-        "post_pass_pause": float,
-        "image_timeout": float,
-    },
+    "26rb_hit_balls": HIT_SCHEMA,
+    "26rb_gate_task": GATE_SCHEMA,
     "26rb_find_collection_frame": {
         "platform_name": str,
         "rack_name": str,
@@ -242,12 +153,14 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "collection_depth_m": float,
         "move_timeout": float,
     },
-    "26rb_grab_ball": {
-        "ball_color": str,
+    "26rb_grab_golf": {
+        **SEARCH_SCHEMA,
+        "golf_color": str,
         "collection_frame_class": str,
         "collection_frame_observe_seconds": float,
         "golf_observe_seconds": float,
         "detection_timeout": float,
+        "camera_priority_seconds": float,
         "horizontal_servo_timeout": float,
         "horizontal_servo_period": float,
         "horizontal_servo_log_period": float,
@@ -274,6 +187,19 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "max_grab_retries": int,
     },
     "26rb_drop_ball_target_rack": {
+        **DROP_SEARCH_SCHEMA,
+        "observation_seconds": float,
+        "alignment_timeout": float,
+        "alignment_observation_timeout": float,
+        "alignment_settle_seconds": float,
+        "release_angle_deg": float,
+        "release_repeat_count": int,
+        "release_repeat_period": float,
+        "release_settle_seconds": float,
+        "light_pulse_seconds": float,
+        "light_gap_seconds": float,
+        # Retain parsing compatibility for old task files. The drop task no
+        # longer consumes the track-selection/coarse-position/light keys.
         "frame_name": str,
         "light_color": str,
         "above_z_m": float,
@@ -289,13 +215,13 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "horizontal_servo_period": float,
         "horizontal_servo_min_update_m": float,
         "horizontal_command_timeout": float,
-        # The final alignment is performed from the down-view stereo image.
-        # Keep the old horizontal-servo keys above readable for old custom
-        # task files, while the new canonical keys make the data source
-        # explicit.
+        # Monocular detections drive the pixel servo; alignment uses only the
+        # successful camera's fixed mounting offset. Legacy stereo keys stay
+        # readable for old task files but are no longer consumed.
         "down_visual_servo_timeout": float,
         "down_visual_servo_stable_seconds": float,
         "down_detection_timeout": float,
+        "down_camera_priority_seconds": float,
         "down_pixel_tolerance_fraction": float,
         "down_epipolar_vertical_tolerance_fraction": float,
         "down_projection_depth_m": float,
@@ -313,45 +239,10 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
 # ``horizontal_servo_timeout``).  The resulting keys are still exactly the
 # names used by the existing task classes.
 PARAMETER_ALIASES = {
-    "26rb_hit_balls": {
-        "search.yaw_step_deg": "search_yaw_step_deg",
-        "search.settle_time": "search_settle_time",
-        "search.direction_dwell_time": "search_direction_dwell_time",
-        "search.observation_max_age": "search_observation_max_age",
-        "search.timeout": "search_timeout",
-        "search.rotate_timeout": "search_rotate_timeout",
-        "approach.distance": "approach_distance",
-        "approach.timeout": "approach_timeout",
-        "position_correction.duration": "position_correction_duration",
-        "position_correction.period": "position_correction_period",
-        "position_correction.command_timeout": "position_correction_command_timeout",
-        "position_correction.min_update_deg": "position_correction_min_update_deg",
-        "charge.duration": "charge_duration",
-        "charge.speed_mps": "charge_speed_mps",
-        "charge.publish_period": "charge_publish_period",
-        "return.timeout": "return_timeout",
-    },
-    "26rb_gate_task": {
-        "search.start_offset_deg": "search_start_offset_deg",
-        "search.sweep_deg": "search_sweep_deg",
-        "search.retry_sweep_deg": "search_retry_sweep_deg",
-        "search.final_sweep_deg": "search_final_sweep_deg",
-        "search.yaw_rate_deg_s": "search_yaw_rate_deg_s",
-        "search.yaw_publish_period": "search_yaw_publish_period",
-        "search.stop_height_fraction": "search_stop_height_fraction",
-        "velocity.distance_gain": "distance_velocity_gain",
-        "velocity.vertical_gain": "vertical_velocity_gain",
-        "velocity.yaw_gain_deg_s": "yaw_velocity_gain_deg_s",
-        "alignment.yaw_pid.kp": "yaw_pid_kp",
-        "alignment.yaw_pid.ki": "yaw_pid_ki",
-        "alignment.yaw_pid.kd": "yaw_pid_kd",
-        "alignment.yaw_pid.integral_limit_deg": "yaw_pid_integral_limit_deg",
-        "arc.timeout_seconds": "arc_timeout_seconds",
-        "pass.distance_m": "pass_distance_m",
-        "pass.timeout": "pass_timeout",
-        "pass.pause": "post_pass_pause",
-    },
-    "26rb_grab_ball": {
+    "26rb_hit_balls": {},
+    "26rb_gate_task": GATE_ALIASES,
+    "26rb_grab_golf": {
+        "servo.camera_priority_seconds": "camera_priority_seconds",
         "claw.prepare_angle_rad": "claw_prepare_angle_rad",
         "claw.prepare_repeat_count": "claw_prepare_repeat_count",
         "claw.prepare_repeat_period": "claw_prepare_repeat_period",
@@ -374,6 +265,16 @@ PARAMETER_ALIASES = {
         "verification.max_retries": "max_grab_retries",
     },
     "26rb_drop_ball_target_rack": {
+        "observation.seconds": "observation_seconds",
+        "alignment.timeout": "alignment_timeout",
+        "alignment.observation_timeout": "alignment_observation_timeout",
+        "alignment.settle_seconds": "alignment_settle_seconds",
+        "release.angle_deg": "release_angle_deg",
+        "release.repeat_count": "release_repeat_count",
+        "release.repeat_period": "release_repeat_period",
+        "release.settle_seconds": "release_settle_seconds",
+        "light.pulse_seconds": "light_pulse_seconds",
+        "light.gap_seconds": "light_gap_seconds",
         "target.timeout": "target_timeout",
         "servo.timeout": "horizontal_servo_timeout",
         "servo.stable_seconds": "horizontal_servo_stable_seconds",
@@ -385,6 +286,7 @@ PARAMETER_ALIASES = {
         "visual_servo.timeout": "down_visual_servo_timeout",
         "visual_servo.stable_seconds": "down_visual_servo_stable_seconds",
         "visual_servo.detection_timeout": "down_detection_timeout",
+        "visual_servo.camera_priority_seconds": "down_camera_priority_seconds",
         "visual_servo.pixel_tolerance_fraction":
             "down_pixel_tolerance_fraction",
         "visual_servo.epipolar_vertical_tolerance_fraction":
@@ -501,6 +403,16 @@ def _validate_params(task_name: str, params: dict[str, Any],
             raise ConfigError(
                 f"参数 {key!r} 的类型为 {type(value).__name__}；"
                 f"应为 {_type_name(expected)}")
+    if task_name == "26rb_gate_task":
+        try:
+            validate_gate_params(flattened)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+    if task_name == "26rb_hit_balls":
+        try:
+            validate_hit_params(flattened)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
     if (class_registry is not None
             and task_name == "26rb_hit_balls" and "order" in flattened):
         values = flattened["order"]
@@ -513,18 +425,27 @@ def _validate_params(task_name: str, params: dict[str, Any],
             raise ConfigError(
                 "26rb_hit_balls.order 必须使用共享模型映射中的 "
                 "canonical impact-ball class name")
-    if (class_registry is not None
-            and task_name == "26rb_grab_ball" and "ball_color" in flattened):
-        allowed = {
-            entry.name for entry in getattr(class_registry, "entries", ())
-            if entry.object in {
-                "impact_ball_blue", "impact_ball_red", "pink_golf", "yellow_golf"
+    if task_name == "26rb_grab_golf":
+        try:
+            validate_search_params(flattened)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+    if task_name == "26rb_drop_ball_target_rack":
+        try:
+            validate_drop_search_params(flattened)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+    if task_name == "26rb_grab_golf" and "golf_color" in flattened:
+        allowed = {"pink_golf", "yellow_golf"}
+        if class_registry is not None:
+            allowed &= {
+                entry.name for entry in getattr(class_registry, "entries", ())
+                if entry.object in {"pink_golf", "yellow_golf"}
             }
-        }
-        if flattened["ball_color"] not in allowed:
+        if flattened["golf_color"] not in allowed:
             raise ConfigError(
-                "26rb_grab_ball.ball_color 必须使用共享模型映射中的 "
-                "canonical class name")
+                "26rb_grab_golf.golf_color 必须为共享模型映射中的 "
+                "pink_golf 或 yellow_golf 高尔夫球类别")
     return flattened
 
 

@@ -1,0 +1,7 @@
+task: bline
+params:
+  dx: 1.0
+  dy: 0.0
+  dz: 0.0
+  speed_mps: 0.15
+  timeout: 0.0

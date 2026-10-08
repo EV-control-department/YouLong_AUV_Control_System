@@ -1,0 +1,81 @@
+task: 26rb_grab_golf
+
+params:
+  # 使用 robotcup20260901.yaml 中的 canonical detector class name。
+  golf_color: pink_golf # 可选 pink_golf / yellow_golf。
+  collection_frame_class: collection_frame_down
+
+  # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
+  # 初始值需按实际场地填写；不会从定位器覆盖。
+  collection_frame_position: [5.8, -0.3, 0.5]
+  search:
+    cruise_depth_m: 0.2 # 寻找期间巡游深度，与 frame 平面 z 分开配置。
+    timeout: 40.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时，重新发线不清零。
+    near_radius_m: 0.5 # 到预设 [x,y] 的二维水平距离，不考虑深度差。
+    near_timeout: 10.0 # 首次进入半径后累计 BLINE 运行时间；停车校准暂停，离开半径不重置。
+    front_observe_seconds: 2.0
+    front_align_seconds: 3.0 # 单目 yaw 对准，同时尝试标定双目对准。
+    yaw_tolerance_deg: 2.0
+    yaw_stable_seconds: 0.2
+    yaw_gain: 1.2
+    max_yaw_rate_deg_s: 10.0
+    depth_gain: 0.8
+    max_vertical_speed_mps: 0.08
+    speed_mps: 0.15 # BLINE 要求 0 < speed < 0.18。
+    detection_timeout: 0.8
+    min_confidence: 0.02
+    detection_stop_delay: 0.5 # 巡游时下视看到 frame 后继续半秒，再取消 BLINE。
+    fallback_observe_seconds: 2.0 # 定点到预设 XY/巡游深度后等待新的下视检测。
+    move_timeout: 60.0 # 到巡游深度、朝向、停车保持和兜底定点的动作超时。
+    period: 0.05
+    stereo_pair_slop: 0.15 # 同 ID 配对，缺失 ID 时按时间戳配对。
+    stereo_min_angle_deg: 0.1
+    stereo_max_ray_gap_m: 0.05
+    stereo_max_distance_m: 20.0
+    cancel_timeout: 2.0 # 取消 BLINE 后必须确认动作结束，才能继续伺服。
+
+  # 到达任务位后先看置物盘；对准盘后再观察高尔夫球。
+  collection_frame_observe_seconds: 2.0
+  golf_observe_seconds: 2.0
+
+  # 左右下视均可观测；每一段伺服单独竞争相机优先权，不做双目定位。
+  vision:
+    detection_timeout: 0.8 # 检测结果最大允许年龄，单位：秒。
+    pixel_tolerance_fraction: 0.02 # 目标中心归一化误差容差。
+  servo:
+    camera_priority_seconds: 3.0 # 谁先观测谁获得固定时长优先权，丢目标或超时提前释放。
+    timeout: 30.0 # 单次水平视觉伺服最长时间，单位：秒。
+    period: 0.15 # 水平伺服周期，单位：秒。
+    log_period: 0.5 # 水平伺服日志周期，单位：秒。
+    hold_seconds: 0.5 # 高尔夫球心进入容差后的保持时间，单位：秒。
+    projection_depth_m: 0.6 # 像素修正的固定米制尺度，不是观测出的距离。
+    gain: 0.8 # 像素误差到水平位移的增益。
+    max_step_m: 0.08 # 单次水平修正最大步长，单位：米。
+    position_command_timeout: 10.0 # 单次 SET/BMOVE 超时，单位：秒。
+
+  # 夹爪舵机 1 先重复发送到 0 rad，降低单次消息丢失的影响。
+  claw:
+    prepare_angle_rad: 0.0
+    prepare_repeat_count: 3
+    prepare_repeat_period: 0.1
+  light:
+    pulse_seconds: 0.35
+    gap_seconds: 0.25
+  # 外参平移使用高尔夫球伺服成功的相机：左目 (+0.300,-0.030586)m，右目 (+0.300,+0.030586)m。
+  settle_seconds: 1.0 # 外参平移后，等待艇体和夹爪稳定。
+
+  # 抓取动作：下潜 5 秒、上浮 5 秒，再回到记录位姿。
+  descent:
+    speed_mps: 0.1 # 下沉速度，NED 正值向下，单位：米/秒。
+    duration_seconds: 5.0
+  ascent:
+    speed_mps: 0.1 # 上浮速度，NED 负值向上，单位：米/秒。
+    duration_seconds: 5.0
+  vertical_publish_period: 0.05 # 速度指令周期，单位：秒。
+  return_timeout: 60.0 # 回到水平伺服位置的最长时间，单位：秒。
+
+  # 用本次高尔夫球伺服成功的相机复检；存在则重新竞争相机并执行抓取流程。
+  verification:
+    timeout: 5.0 # 抓取结果检查最长时间，单位：秒。
+    absence_hold_seconds: 0.8 # 连续看不到目标多久才确认已抓走，单位：秒。
+    max_retries: 2 # 最多重试 2 次，共执行 3 次抓取。

@@ -7,6 +7,7 @@ tracked locally (not from external topics).
 
 from __future__ import annotations
 
+from collections import deque
 from importlib import import_module
 import json
 import math
@@ -55,6 +56,7 @@ from uv_task.mission_policy import (
     select_failure_override,
 )
 from uv_task.task_outcome import TaskOutcome
+from uv_task.task_state import TaskState
 from uv_task.basic_motion_test import RosMotionTest
 
 from uv_task.arrow_surfacer import (
@@ -64,11 +66,13 @@ from uv_task.arrow_surfacer import ArrowSurfacer
 # The competition task module names intentionally start with ``26rb_``.
 # Such names cannot be used in a normal ``from package import module``
 # statement, so load them through importlib.
-RB26GrabBallTask = import_module('uv_task.26rb_grab_ball').RB26GrabBallTask
+RB26GrabGolfTask = import_module('uv_task.26rb_grab_golf').RB26GrabGolfTask
 RB26GateTask = import_module('uv_task.26rb_gate_task').RB26GateTask
 RB26HitBallsTask = import_module('uv_task.26rb_hit_balls').RB26HitBallsTask
 RB26FindCollectionFrameTask = import_module(
     'uv_task.26rb_find_collection_frame').RB26FindCollectionFrameTask
+RB26DropBallTargetRackTask = import_module(
+    'uv_task.26rb_drop_ball_target_rack').RB26DropBallTargetRackTask
 RB26DropBeaconTask = import_module(
     'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
@@ -125,6 +129,10 @@ class TaskRunnerNode(Node):
     def __init__(self):
         super().__init__('task_runner')
 
+        # Shared across tasks; bias conversions remain opt-in until all motion
+        # and perception entry points use the same task coordinate reference.
+        self.state = TaskState()
+
         # Commanded position tracker (updated after every motion command).
         # Starts at (0,0,0,0) after START, which matches basic_motion's odom origin.
         # Used by single-axis SET tasks to fill non-targeted axes.
@@ -141,6 +149,9 @@ class TaskRunnerNode(Node):
         # ── 下视感知（release_sampler 对齐用）──
         self._perception_lock = threading.RLock()
         self._down_detections = {}   # camera_name → (monotonic, DetectionArray)
+        # Preserve callback order while a task waits for a motion action.
+        self._down_detection_sequence = 0
+        self._down_detection_events = deque(maxlen=256)
         self._robot_pose = None      # (x, y, z, roll_deg, pitch_deg, yaw_deg)
 
         self.tasks = []
@@ -199,7 +210,6 @@ class TaskRunnerNode(Node):
         self._camera_tf_timer = None
         down = self.camera_configs['down']
         down_left = down.side('left')
-        down_right = down.side('right')
         self._down_fx = float(down_left.matrix[0, 0])
         self._down_fy = float(down_left.matrix[1, 1])
         self._down_cx = float(down_left.matrix[0, 2])
@@ -243,6 +253,7 @@ class TaskRunnerNode(Node):
             'btravelz': self._task_btravelz,
             'btravelxy': self._task_btravelxy,
             'btravelxyz': self._task_btravelxyz,
+            'bline': self._task_bline,
             'navigate': self._task_navigate,
             'wait': self._task_wait,
             'follow_line': self._task_follow_line,
@@ -260,9 +271,8 @@ class TaskRunnerNode(Node):
             'find_rack_and_platform': self._task_find_collection_frame,
             '26rb_find_collection_frame': self._task_find_collection_frame,
             '26rb_drop_ball_target_rack': self._task_drop_ball_target_rack,
-            'grab_ball': self._task_grab_ball,
-            'grab_balls': self._task_grab_ball,
-            '26rb_grab_ball': self._task_grab_ball,
+            'grab_golf': self._task_grab_golf,
+            '26rb_grab_golf': self._task_grab_golf,
             'drop_beacon': self._task_drop_beacon,
             '26rb_drop_beacon': self._task_drop_beacon,
             'take_water_sample': self._task_take_water_sample,
@@ -364,7 +374,11 @@ class TaskRunnerNode(Node):
         if camera_name not in ('down_left', 'down_right'):
             return
         with self._perception_lock:
-            self._down_detections[camera_name] = (time.monotonic(), msg)
+            received_at = time.monotonic()
+            self._down_detections[camera_name] = (received_at, msg)
+            self._down_detection_sequence += 1
+            self._down_detection_events.append((
+                self._down_detection_sequence, received_at, camera_name, msg))
 
     def _pose_cb(self, msg: PoseInfo):
         with self._perception_lock:
@@ -469,228 +483,6 @@ class TaskRunnerNode(Node):
         br = max((d for d in rm.detections if d.class_id == class_id),
                  key=lambda d: d.confidence, default=None)
         return (bl, br) if bl and br else None
-
-    def _down_visual_pair(self, class_id: int, max_age: float,
-                          epipolar_tolerance: float):
-        """Return a fresh, epipolar-consistent down-camera detection pair.
-
-        The localizer's world position is intentionally not used here.  The
-        light task closes its final horizontal loop on the two image centres.
-        A pair ID is preferred when the detector provides one; otherwise the
-        pair with the smallest normalized vertical mismatch is selected.
-        """
-        now = time.monotonic()
-        with self._perception_lock:
-            left_entry = self._down_detections.get('down_left')
-            right_entry = self._down_detections.get('down_right')
-        if left_entry is None or right_entry is None:
-            return None
-
-        left_time, left_msg = left_entry
-        right_time, right_msg = right_entry
-        if now - left_time > max_age or now - right_time > max_age:
-            return None
-
-        left_pair_id = int(getattr(left_msg, 'stereo_pair_id', 0) or 0)
-        right_pair_id = int(getattr(right_msg, 'stereo_pair_id', 0) or 0)
-        if (left_pair_id and right_pair_id
-                and left_pair_id != right_pair_id):
-            return None
-
-        def candidates(message):
-            result = []
-            for detection in getattr(message, 'detections', []):
-                if int(getattr(detection, 'class_id', -1)) != class_id:
-                    continue
-                try:
-                    px = float(detection.pixel_x)
-                    py = float(detection.pixel_y)
-                    confidence = float(detection.confidence)
-                except (AttributeError, TypeError, ValueError):
-                    continue
-                if all(math.isfinite(value)
-                       for value in (px, py, confidence)):
-                    result.append(detection)
-            return result
-
-        left_candidates = candidates(left_msg)
-        right_candidates = candidates(right_msg)
-        if not left_candidates or not right_candidates:
-            return None
-
-        pairs = []
-        for left in left_candidates:
-            left_v = (float(left.pixel_y) - self._down_cy) / self._down_fy
-            for right in right_candidates:
-                right_v = (float(right.pixel_y) - self._down_cy) / self._down_fy
-                vertical_error = abs(left_v - right_v)
-                if vertical_error <= epipolar_tolerance:
-                    pairs.append((
-                        vertical_error,
-                        -(float(left.confidence) +
-                          float(right.confidence)),
-                        left, right,
-                    ))
-        if not pairs:
-            return None
-        _vertical_error, _confidence, left, right = min(
-            pairs, key=lambda item: (item[0], item[1]))
-        return left, right
-
-    def _down_visual_error(self, left, right):
-        """Return normalized image-centre and epipolar errors for a pair."""
-        left_u = (float(left.pixel_x) - self._down_cx) / self._down_fx
-        right_u = (float(right.pixel_x) - self._down_cx) / self._down_fx
-        left_v = (float(left.pixel_y) - self._down_cy) / self._down_fy
-        right_v = (float(right.pixel_y) - self._down_cy) / self._down_fy
-        return (
-            (left_u + right_u) * 0.5,
-            (left_v + right_v) * 0.5,
-            abs(left_v - right_v),
-        )
-
-    @staticmethod
-    def _down_visual_body_step(du: float, dv: float, projection_depth: float,
-                               gain: float, max_step: float):
-        """Map down-view normalized image error to a bounded body XY step."""
-        # PDF v5 maps down-camera x_optical to +y_body and y_optical to -x_body.
-        body_dx = -float(dv) * float(projection_depth) * float(gain)
-        body_dy = float(du) * float(projection_depth) * float(gain)
-        norm = math.hypot(body_dx, body_dy)
-        if norm > max_step:
-            scale = float(max_step) / norm
-            body_dx *= scale
-            body_dy *= scale
-        return body_dx, body_dy
-
-    def _down_visual_servo_target_rack(self, p: dict, target_z: float) -> bool:
-        """Center target_rack_down in the down stereo image before lighting."""
-        servo_timeout = max(
-            1.0, float(p.get('down_visual_servo_timeout',
-                             p.get('horizontal_servo_timeout', 30.0))))
-        stable_seconds = max(
-            0.1, float(p.get('down_visual_servo_stable_seconds',
-                             p.get('horizontal_servo_stable_seconds', 1.0))))
-        detection_timeout = max(
-            0.1, float(p.get('down_detection_timeout', 0.8)))
-        pixel_tolerance = max(
-            0.001, float(p.get('down_pixel_tolerance_fraction', 0.035)))
-        epipolar_tolerance = max(
-            0.001, float(p.get(
-                'down_epipolar_vertical_tolerance_fraction', 0.04)))
-        projection_depth = max(
-            0.1, float(p.get('down_projection_depth_m', 0.8)))
-        gain = max(0.05, float(p.get('down_visual_servo_gain', 0.8)))
-        max_step = max(
-            0.005, float(p.get('down_visual_servo_max_step_m', 0.08)))
-        period = max(
-            0.05, float(p.get('down_visual_servo_period',
-                              p.get('horizontal_servo_period', 0.2))))
-        command_timeout = max(
-            0.2, float(p.get('down_visual_command_timeout',
-                             p.get('horizontal_command_timeout', 10.0))))
-        if not self.camera_extrinsics:
-            self.get_logger().error(
-                '26rb_drop_ball_target_rack：下视相机 TF 未就绪，'
-                '拒绝启动双目视觉伺服')
-            return False
-
-        deadline = time.monotonic() + servo_timeout
-        stable_since = None
-        last_log = float('-inf')
-        self.get_logger().info(
-            '26rb_drop_ball_target_rack：开始下视双目视觉伺服；'
-            f'class_id={self._target_rack_down_class_id}，'
-            f'像素容差={pixel_tolerance:.3f}，'
-            f'极线容差={epipolar_tolerance:.3f}，'
-            f'稳定时间={stable_seconds:.1f}s')
-
-        while not self.stopped and time.monotonic() < deadline:
-            now = time.monotonic()
-            pair = self._down_visual_pair(
-                self._target_rack_down_class_id,
-                detection_timeout,
-                epipolar_tolerance,
-            )
-            # Validate the same detection with TF-derived stereo rays before
-            # allowing the pixel servo to command motion.
-            stereo_target = self._triangulate(
-                self._target_rack_down_class_id)
-            if pair is None or stereo_target is None:
-                stable_since = None
-                if now - last_log >= 1.0:
-                    self.get_logger().warning(
-                        '26rb_drop_ball_target_rack：等待下视双目目标；'
-                        '必须同时看到 target_rack_down 且左右目满足极线一致性')
-                    last_log = now
-                time.sleep(min(period, max(0.0, deadline - now)))
-                continue
-
-            left, right = pair
-            du, dv, epipolar_error = self._down_visual_error(left, right)
-            centered = (
-                abs(du) <= pixel_tolerance
-                and abs(dv) <= pixel_tolerance
-                and epipolar_error <= epipolar_tolerance
-            )
-            if now - last_log >= 1.0:
-                state = '已居中，等待稳定' if centered else '修正中'
-                self.get_logger().info(
-                    f'26rb_drop_ball_target_rack：下视视觉伺服{state}；'
-                    f'归一化误差=(du={du:+.4f},dv={dv:+.4f})，'
-                    f'极线误差={epipolar_error:.4f}')
-                last_log = now
-
-            if centered:
-                if stable_since is None:
-                    stable_since = now
-                elif now - stable_since >= stable_seconds:
-                    self.get_logger().info(
-                        '26rb_drop_ball_target_rack：下视视觉伺服已连续稳定，'
-                        '允许打开指示灯')
-                    return True
-            else:
-                stable_since = None
-                body_dx, body_dy = self._down_visual_body_step(
-                    du, dv, projection_depth, gain, max_step)
-                pose = self._latest_robot_pose()
-                yaw = math.radians(float(pose[5]))
-                cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
-                world_dx = cos_yaw * body_dx - sin_yaw * body_dy
-                world_dy = sin_yaw * body_dx + cos_yaw * body_dy
-                target = [
-                    pose[0] + world_dx,
-                    pose[1] + world_dy,
-                    float(target_z),
-                    float(pose[5]),
-                ]
-                success, message = self._send_action_goal(
-                    BasicMotion.Goal.SET,
-                    target,
-                    'xy',
-                    timeout=command_timeout,
-                    quiet=True,
-                    task_context=self._format_motion_context(
-                        'target_rack下视视觉伺服'))
-                if not success:
-                    self.get_logger().error(
-                        '26rb_drop_ball_target_rack：下视视觉伺服移动失败：'
-                        f'{message}')
-                    return False
-                self._cmd_x = target[0]
-                self._cmd_y = target[1]
-                self._cmd_z = target[2]
-                self._cmd_yaw = target[3]
-
-            time.sleep(min(period, max(0.0, deadline - time.monotonic())))
-
-        if self.stopped:
-            return False
-        self._last_motion_failure_kind = 'timeout'
-        self._last_motion_failure_message = '下视视觉伺服超时'
-        self.get_logger().error(
-            '26rb_drop_ball_target_rack：下视视觉伺服超时，未打开指示灯')
-        return False
 
     def _refresh_camera_extrinsics(self):
         try:
@@ -1029,6 +821,7 @@ class TaskRunnerNode(Node):
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
         self._target_light_indications = set()
+        self._task_failure_light_handled = False
 
         if initial_pose is not None:
             initial_poses = (
@@ -1064,7 +857,7 @@ class TaskRunnerNode(Node):
             else:
                 outcome = self._fallback_failure_outcome(name)
 
-        if not outcome:
+        if not outcome and not self._task_failure_light_handled:
             self._set_task_phase_light(self.LIGHT_RED, f'{name} 执行失败')
         return outcome
 
@@ -1098,7 +891,7 @@ class TaskRunnerNode(Node):
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
                           quiet=False, task_context='', velocity_lease=0.0,
                           light_color=None, light_pattern=None,
-                          light_interval=1.0):
+                          light_interval=1.0, cruise_speed=0.0, wait_deadline=None):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -1120,7 +913,7 @@ class TaskRunnerNode(Node):
         """
         type_names = {
             1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
-            5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY',
+            5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY', 8: 'BLINE',
         }
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
         if cmd_type != BasicMotion.Goal.START and not light_pattern:
@@ -1131,6 +924,7 @@ class TaskRunnerNode(Node):
                 phase_color, f'{type_name} 运动阶段')
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
+        self._last_motion_final_target = None
         task_context = (str(task_context).strip() or self._format_motion_context(
             self._default_motion_purpose(cmd_type, axes)))
 
@@ -1145,11 +939,21 @@ class TaskRunnerNode(Node):
                 f'发送动作目标：{type_name}，目标=[{", ".join(t)}]，'
                 f'超时={effective_timeout:.0f}s，任务上下文="{task_context}"')
 
-        if not self._action_client.wait_for_server(timeout_sec=2.0):
+        server_wait = 2.0 if wait_deadline is None else max(0.0, min(2.0, wait_deadline-time.monotonic()))
+        if not self._action_client.wait_for_server(timeout_sec=server_wait):
             self.get_logger().error('动作服务器不可用')
             self._last_motion_failure_kind = 'motion'
             self._last_motion_failure_message = '动作服务器不可用'
             return False, '动作服务器不可用'
+
+        if wait_deadline is not None:
+            remaining = wait_deadline-time.monotonic()
+            if remaining <= 0:
+                self._last_motion_failure_kind = 'timeout'
+                self._last_motion_failure_message = '动作等待截止时间已到'
+                return False, self._last_motion_failure_message
+            if effective_timeout > 0:
+                effective_timeout = min(effective_timeout, remaining)
 
         goal = BasicMotion.Goal()
         goal.cmd_type = cmd_type
@@ -1158,6 +962,7 @@ class TaskRunnerNode(Node):
         goal.timeout = float(effective_timeout)
         goal.task_context = task_context
         goal.velocity_lease = float(velocity_lease)
+        goal.cruise_speed = float(cruise_speed)
 
         send_future = self._action_client.send_goal_async(goal)
         blink_colors = tuple(int(color) for color in (light_pattern or ()))
@@ -1178,16 +983,30 @@ class TaskRunnerNode(Node):
                     blink_colors[blink_index], f'{type_name} 初始动作闪灯',
                     log=False)
 
-        while rclpy.ok() and not self.stopped and not send_future.done():
+        def cancel_late_goal(future):
+            try:
+                handle = future.result()
+                if handle.accepted:
+                    handle.cancel_goal_async()
+            except Exception:
+                pass
+
+        def within_deadline():
+            return wait_deadline is None or time.monotonic() < wait_deadline
+
+        while rclpy.ok() and not self.stopped and within_deadline() and not send_future.done():
             update_blink_light()
             time.sleep(0.01)
         if not rclpy.ok() or self.stopped:
+            send_future.add_done_callback(cancel_late_goal)
             if not quiet:
                 self.get_logger().warn(f'动作目标被中断（stopped={self.stopped}）')
             self._last_motion_failure_kind = 'motion'
             self._last_motion_failure_message = '已停止'
             return False, '已停止'
         if not send_future.done():
+            # Cancel a late acceptance too; a timed-out goal must not start later.
+            send_future.add_done_callback(cancel_late_goal)
             self.get_logger().error('发送动作目标超时')
             self._last_motion_failure_kind = 'timeout'
             self._last_motion_failure_message = '发送动作目标超时'
@@ -1206,9 +1025,11 @@ class TaskRunnerNode(Node):
             self.get_logger().info('动作目标已接受，等待执行结果……')
 
         result_future = goal_handle.get_result_async()
-        while rclpy.ok() and not self.stopped and not result_future.done():
+        while rclpy.ok() and not self.stopped and within_deadline() and not result_future.done():
             update_blink_light()
             time.sleep(0.01)
+        if not result_future.done():
+            goal_handle.cancel_goal_async()
         self._active_goal_handle = None
         if not rclpy.ok() or self.stopped:
             if not quiet:
@@ -1223,6 +1044,8 @@ class TaskRunnerNode(Node):
             return False, '等待动作结果超时'
 
         result = result_future.result().result
+        if result.success:
+            self._last_motion_final_target = list(result.final_target)
         if not result.success:
             t_str = ', '.join(f'{v:.2f}' for v in target)
             self.get_logger().error(
@@ -1243,7 +1066,7 @@ class TaskRunnerNode(Node):
                             yaw_rate_deg_s: float = 0.0,
                             *, lease_s: float = 0.25,
                             quiet: bool = True,
-                            task_context: str = '', light_color=None):
+                            task_context: str = '', light_color=None, wait_deadline=None):
         """Renew the BasicMotion body-velocity lease.
 
         Tasks deliberately do not construct or publish ``ZitSetpoint``
@@ -1255,7 +1078,7 @@ class TaskRunnerNode(Node):
             [forward_mps, lateral_mps, vertical_mps, yaw_rate_deg_s],
             axes='xyzrz', timeout=0.0, quiet=quiet,
             task_context=task_context, velocity_lease=lease_s,
-            light_color=light_color)
+            light_color=light_color, wait_deadline=wait_deadline)
 
     # ========================================================================
     # Task implementations
@@ -1712,6 +1535,25 @@ class TaskRunnerNode(Node):
 
     # --- Special tasks ---
 
+    def _task_bline(self, p: dict) -> bool:
+        success, message = self._send_action_goal(
+            BasicMotion.Goal.BLINE,
+            [float(p.get('dx', 1.0)), float(p.get('dy', 0.0)),
+             float(p.get('dz', 0.0)), 0.0], 'xyz',
+            timeout=float(p.get('timeout', 0.0)),
+            cruise_speed=float(p.get('speed_mps', 0.15)))
+        if success:
+            target = self._last_motion_final_target
+            if (target is None or len(target) != 4
+                    or not all(math.isfinite(value) for value in target)):
+                self._last_motion_failure_kind = 'motion'
+                self._last_motion_failure_message = 'BLINE 返回的 final_target 无效'
+                self.get_logger().error(self._last_motion_failure_message)
+                return False
+            self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = target
+        self.get_logger().info(f'bline 执行结果：{message}')
+        return success
+
     def _move_to_nearest_object_xy(self, class_id: int) -> bool:
         """SET 绝对定位到 class_id 最近物体的 XY 坐标。
 
@@ -2057,129 +1899,12 @@ class TaskRunnerNode(Node):
         return task.execute()
 
     def _task_drop_ball_target_rack(self, p: dict) -> TaskOutcome:
-        """粗定位到目标架上方，下视视觉伺服对正后亮灯代替丢球。
+        """从目标架上方开始视觉伺服，圆盘爪对准后释放球。"""
+        return RB26DropBallTargetRackTask(self, p).execute()
 
-        ``find_collection_frame`` has already confirmed the localizer targets
-        before this task is normally called.  Its world position is used only
-        for the initial coarse move.  The final alignment is closed on the
-        ``target_rack_down`` detections from both down cameras, so the light
-        command is issued only after the rack is visually centred and stable.
-        """
-        self._set_task_phase_light(
-            self.LIGHT_YELLOW, '目标架搜索与移动阶段')
-        if not self._ensure_camera_extrinsics():
-            return TaskOutcome.failed(
-                '26rb_drop_ball_target_rack.camera_tf', '下视相机 TF 未就绪')
-        if self._target_rack_down_class_id is None:
-            return TaskOutcome.failed(
-                '26rb_drop_ball_target_rack.mapping',
-                '共享类别映射中没有 target_rack_down')
-        target_name = self._normalize_localizer_target_name(
-            p.get('frame_name', p.get('target_name', 'target_rack')))
-        if target_name is None:
-            self.get_logger().error(
-                '26rb_drop_ball_target_rack：目标名称无效')
-            return TaskOutcome.failed(
-                '26rb_drop_ball_target_rack.target', '目标名称无效')
-
-        target_timeout = max(1.0, float(p.get('target_timeout',
-                                              p.get('timeout', 120.0))))
-        deadline = time.monotonic() + target_timeout
-        target = None
-        last_wait_log = float('-inf')
-        while not self.stopped and time.monotonic() < deadline:
-            target = self._best_localizer_target(target_name, p)
-            if target is not None:
-                break
-            now = time.monotonic()
-            if now - last_wait_log >= 1.0:
-                self.get_logger().info(
-                    f'26rb_drop_ball_target_rack：等待定位器提供 '
-                    f'{target_name} 的位置')
-                last_wait_log = now
-            time.sleep(0.05)
-
-        if self.stopped or target is None:
-            code = (
-                '26rb_drop_ball_target_rack.timeout'
-                if time.monotonic() >= deadline
-                else '26rb_drop_ball_target_rack.target')
-            self.get_logger().error(
-                f'26rb_drop_ball_target_rack：等待 {target_name} 超时')
-            return TaskOutcome.failed(code, f'等待 {target_name} 超时')
-
-        target_z = max(0.0, float(p.get('above_z_m', 0.20)))
-        pose = self._latest_robot_pose()
-        dx = float(target['x']) - pose[0]
-        dy = float(target['y']) - pose[1]
-        target_yaw = float(pose[5])
-        if math.hypot(dx, dy) > 1e-6:
-            target_yaw = self._wrap_yaw_degrees(math.degrees(math.atan2(dy, dx)))
-
-        self.get_logger().info(
-            f'26rb_drop_ball_target_rack：移动到 {target_name} 中心上方 '
-            f'({target["x"]:.2f}, {target["y"]:.2f}, {target_z:.2f})，'
-            f'偏航角={target_yaw:.1f}°')
-        success, message = self._send_action_goal(
-            BasicMotion.Goal.SET,
-            [float(target['x']), float(target['y']), target_z, target_yaw],
-            'xyzrz',
-            timeout=max(1.0, float(p.get('move_timeout', 120.0))),
-            task_context=self._format_motion_context(
-                f'移动到{target_name}正上方'))
-        if not success:
-            self.get_logger().error(
-                f'26rb_drop_ball_target_rack：移动失败：{message}')
-            return self._fallback_failure_outcome(
-                '26rb_drop_ball_target_rack', 'move', message)
-        self._cmd_x = float(target['x'])
-        self._cmd_y = float(target['y'])
-        self._cmd_z = target_z
-        self._cmd_yaw = target_yaw
-
-        # 世界坐标只负责把目标送入下视相机视场，最终位置不再由
-        # object_tracks 的世界坐标闭环决定。
-        if not self._down_visual_servo_target_rack(p, target_z):
-            return self._fallback_failure_outcome(
-                '26rb_drop_ball_target_rack', 'visual_servo')
-
-        light_value = p.get('light_color', p.get('light', 'yellow'))
-        if isinstance(light_value, str):
-            light_value = {
-                'off': self.LIGHT_OFF,
-                'yellow': self.LIGHT_YELLOW,
-                'green': self.LIGHT_GREEN,
-                'red': self.LIGHT_RED,
-                'blue': self.LIGHT_BLUE,
-            }.get(light_value.strip().lower(), self.LIGHT_YELLOW)
-        try:
-            light_value = int(light_value)
-        except (TypeError, ValueError):
-            light_value = self.LIGHT_YELLOW
-        if light_value not in (self.LIGHT_OFF, self.LIGHT_YELLOW,
-                               self.LIGHT_GREEN, self.LIGHT_RED,
-                               self.LIGHT_BLUE):
-            light_value = self.LIGHT_YELLOW
-
-        hold_seconds = max(0.0, float(p.get('light_hold_seconds', 1.0)))
-        try:
-            self.set_light(light_value, f'{target_name} 中心')
-            if hold_seconds > 0.0:
-                end = time.monotonic() + hold_seconds
-                while not self.stopped and time.monotonic() < end:
-                    time.sleep(min(0.05, end - time.monotonic()))
-            if self.stopped:
-                return TaskOutcome.failed(
-                    '26rb_drop_ball_target_rack.light', '任务被中止')
-            self.get_logger().info(
-                f'26rb_drop_ball_target_rack：{target_name} 中心亮灯完成')
-            return TaskOutcome.ok()
-        finally:
-            self.light_off()
-
-    def _task_grab_ball(self, p: dict) -> TaskOutcome:
-        """使用左下视相机完成单个指定颜色球的抓取动作。"""
-        grab_task = RB26GrabBallTask(self, p)
+    def _task_grab_golf(self, p: dict) -> TaskOutcome:
+        """使用左右下视相机竞争单目伺服，抓取指定颜色的高尔夫球并回位复检。"""
+        grab_task = RB26GrabGolfTask(self, p)
         return grab_task.execute()
 
     # ── 投信标 / 采水 / 释放取水器 ─────────────────────────────────

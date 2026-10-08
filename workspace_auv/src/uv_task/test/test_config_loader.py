@@ -24,7 +24,7 @@ EXPECTED_TASKS = [
     "26rb_hit_balls",
     "26rb_gate_task",
     "26rb_find_collection_frame",
-    "26rb_grab_ball",
+    "26rb_grab_golf",
     "26rb_drop_ball_target_rack",
     "return_origin",
 ]
@@ -41,13 +41,13 @@ def test_default_mission_preserves_order_and_values():
     assert tasks[4]["params"]["order"] == ["impact_ball_blue"]
     assert tasks[4]["params"]["charge_speed_mps"] == 5
     assert tasks[5]["params"]["gate_count"] == 4
-    assert tasks[5]["params"]["height_pid_kp"] == 0.8
-    assert tasks[5]["params"]["max_forward_speed_mps"] == 0.18
-    assert tasks[5]["params"]["search_stop_height_fraction"] == 0.4
-    assert tasks[5]["params"]["yaw_pid_kp"] == 1.2
+    assert tasks[5]["params"]["depth_kp"] == 0.8
+    assert tasks[5]["params"]["fore_aft_speed_mps"] == 0.10
+    assert tasks[5]["params"]["fore_aft_target_area_percent"] == 80.0
+    assert tasks[5]["params"]["pass_yaw_kp"] == 1.2
     assert tasks[6]["params"]["look_order"] == [
         "collection_frame", "target_rack"]
-    assert tasks[7]["params"]["ball_color"] == "pink_golf"
+    assert tasks[7]["params"]["golf_color"] == "pink_golf"
     assert tasks[8]["params"]["light_color"] == "green"
     assert "return_timeout" not in tasks[8]["params"]
     assert tasks[8]["params"]["down_visual_servo_timeout"] == 30.0
@@ -80,7 +80,7 @@ def test_default_mission_has_initial_pose_and_one_hop_timeout_hooks():
 
     # These are mission-level initial parameter overrides, not task defaults.
     assert tasks[4]["params"]["order"] == ["impact_ball_blue"]
-    assert tasks[7]["params"]["ball_color"] == "pink_golf"
+    assert tasks[7]["params"]["golf_color"] == "pink_golf"
 
 
 def test_standalone_task_file_loads_as_one_task():
@@ -90,7 +90,7 @@ def test_standalone_task_file_loads_as_one_task():
     assert tasks[0]["name"] == "26rb_gate_task"
     assert tasks[0]["params"]["gate_count"] == 4
     assert tasks[0]["params"]["search_timeout"] == 60.0
-    assert tasks[0]["params"]["yaw_pid_kp"] == 1.2
+    assert tasks[0]["params"]["pass_yaw_kp"] == 1.2
 
 
 def test_nested_parameters_are_merged_and_flattened(tmp_path):
@@ -102,11 +102,10 @@ params:
   search:
     start_offset_deg: -30.0
     timeout: 60.0
-  height_pid:
+  depth:
     kp: 0.8
-  alignment:
-    yaw_pid:
-      kp: 3.6
+  pass:
+    yaw_kp: 3.6
 """,
         encoding="utf-8",
     )
@@ -120,7 +119,7 @@ params:
       params:
         search:
           timeout: 12.0
-        height_pid:
+        depth:
           kp: 1.2
 """,
         encoding="utf-8",
@@ -133,8 +132,8 @@ params:
             "gate_count": 4,
             "search_start_offset_deg": -30.0,
             "search_timeout": 12.0,
-            "height_pid_kp": 1.2,
-            "yaw_pid_kp": 3.6,
+            "depth_kp": 1.2,
+            "pass_yaw_kp": 3.6,
         },
     }]
 

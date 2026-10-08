@@ -12,6 +12,10 @@ from types import SimpleNamespace as NS
 import pytest
 
 from uv_control.coordinate import Coordinate
+from uv_control.line_guidance import (
+    LineConfig, LineGuidance, norm, rotate_body_to_world,
+    rotate_world_to_body, validate_goal,
+)
 
 
 class Publisher:
@@ -25,7 +29,8 @@ class Publisher:
 class Goal:
     def __init__(self, cmd_type=6, target=None, timeout=0.0):
         self.request = NS(cmd_type=cmd_type, target=target or [0.0] * 4,
-                          timeout=timeout, axes='', task_context='', velocity_lease=0.25)
+                          timeout=timeout, axes='', task_context='', velocity_lease=0.25,
+                          cruise_speed=0.0)
         self.is_cancel_requested = False
         self.terminal = None
 
@@ -50,8 +55,12 @@ def node():
         'Node': object, 'Coordinate': Coordinate, 'threading': threading,
         'time': time, 'math': __import__('math'),
         'wrap_deg': lambda value: (value + 180.0) % 360.0 - 180.0,
-        'BasicMotion': NS(Goal=NS(START=6, BODY_VELOCITY=7), Result=NS),
+        'BasicMotion': NS(Goal=NS(START=6, BODY_VELOCITY=7, BLINE=8), Result=NS),
         'GoalResponse': NS(ACCEPT='accept', REJECT='reject'),
+        'CancelResponse': NS(ACCEPT='accept'),
+        'LineConfig': LineConfig, 'LineGuidance': LineGuidance, 'norm': norm,
+        'rotate_body_to_world': rotate_body_to_world,
+        'rotate_world_to_body': rotate_world_to_body, 'validate_goal': validate_goal,
         'Future': lambda executor=None: asyncio.Future(),
         'UInt32': NS, 'StateResetRequest': NS, 'StateResetResult': NS, 'ZitSetpoint': NS,
         'DEFAULT_VELOCITY_LEASE': 0.25, 'CK_POS': 0, 'CK_VEL_BODY': 0x11,
@@ -62,6 +71,10 @@ def node():
     logger = NS(info=lambda *_: None, error=lambda *_: None, warning=lambda *_: None)
     values = dict(
         _state_lock=threading.Lock(), _velocity_lock=threading.Lock(),
+        _line_output_lock=threading.RLock(), _line_stop_requested=threading.Event(),
+        _line_reserved=False, _line_feedback=None, _line_config=LineConfig(),
+        _twist_received_at=float('-inf'),
+        vel_body=dict(x=0.0, y=0.0, z=0.0, rz=0.0),
         _shutdown_requested=False, _safe_stop_latched=False,
         _start_in_progress=False, _motion_reserved=False, _started=False,
         _heartbeat_enabled=False, _active_origin_generation=None,
@@ -72,7 +85,8 @@ def node():
         _nav_valid=True, _origin_generation=0, _nav_timestamp_ms=0,
         _reset_request_id=500, _pending_reset_id=None, _reset_result=None, _reset_invalidated=False,
         _start_waiter=None, _velocity_active=False, _velocity_deadline=0.0,
-        _action_goal_handle=None, _action_target=None, executor=None,
+        _action_goal_handle=None, _action_target=None, _action_abort_reason=None,
+        executor=None,
         status=NS(is_armed=False), pose=Coordinate(), _target=Coordinate(),
         pub_setpoint=Publisher(), pub_arm_heartbeat=Publisher(),
         pub_state_reset=Publisher(), _timers=[], get_logger=lambda: logger,

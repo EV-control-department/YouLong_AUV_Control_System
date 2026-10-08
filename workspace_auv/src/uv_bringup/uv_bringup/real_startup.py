@@ -96,6 +96,7 @@ class RealStartupManager(Node):
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.children = []
         self.component_state = {}
+        self._observed_phases = {}
         self.startup_blocked = False
         self._last_dashboard = 0.0
         self._last_monitor = 0.0
@@ -597,6 +598,13 @@ class RealStartupManager(Node):
         self.component_state[component] = 'READY'
         self._dashboard()
 
+    def _observe_phase(self, component, predicate, description):
+        """Report data readiness without blocking independent component startup."""
+        self._observed_phases[component] = (predicate, description)
+        self.component_state[component] = (
+            'READY' if predicate() else f'WAITING (observation only: {description})')
+        self._dashboard()
+
     def _start_core(self):
         components = [
             ('model_mapping', ['ros2', 'launch', 'uv_perception',
@@ -632,7 +640,7 @@ class RealStartupManager(Node):
             if not required:
                 raise StartupBlocked('adopt mode cannot start missing core nodes')
         if self.args.check_backend_health:
-            self._phase(
+            self._observe_phase(
                 'backend gate', self._healthy_backend,
                 'fresh healthy MCU status, heartbeat, localization, and odom')
         else:
@@ -677,7 +685,7 @@ class RealStartupManager(Node):
                     'sim_mode': False, 'camera_mode': 'real',
                     'enable_front': True, 'enable_down': True,
                     'camera_config_dir': camera_dir}})
-            self._phase('camera gate', lambda: bool(self._healthy_cameras()),
+            self._observe_phase('camera gate', lambda: bool(self._healthy_cameras()),
                         'at least one fresh calibrated camera view')
         else:
             self.component_state['camera gate'] = 'SKIPPED (enable_camera=false)'
@@ -715,13 +723,10 @@ class RealStartupManager(Node):
                 self.component_state['perception gate'] = (
                     'SKIPPED (enable_perception_gate=false)')
                 self._dashboard()
-            elif self._healthy_cameras():
-                self._phase('perception gate', self._healthy_perception,
-                            'fresh detector output for each healthy camera and fresh tracks')
             else:
-                self.component_state['perception gate'] = (
-                    'DEFERRED (waiting for external camera frames)')
-                self._dashboard()
+                self._observe_phase(
+                    'perception gate', self._healthy_perception,
+                    'camera detections and odom-based tracks; waiting does not block startup')
         else:
             self.component_state['perception'] = 'SKIPPED (enable_ai=false)'
             self.component_state['perception gate'] = 'SKIPPED'
@@ -738,7 +743,7 @@ class RealStartupManager(Node):
         if self.args.startup_mode == 'adopt' \
                 and self.component_state.get('navigation') != 'REUSED':
             raise StartupBlocked('adopt mode requires an existing navigator')
-        self._phase(
+        self._observe_phase(
             'navigation gate',
             lambda: (self._nav_health is True
                      and time.monotonic() - self._nav_health_at <= self.max_age),
@@ -957,9 +962,11 @@ class RealStartupManager(Node):
             f'record={self.args.record_session}; '
             f'detected nodes={sorted(self._node_names())}')
         self._start_core()
+        # START must be available before odom-dependent perception/navigation
+        # readiness. The operator manages origin initialization independently.
+        self._start_motion_component()
         self._start_camera_perception()
         self._start_navigation()
-        self._start_motion_component()
         self._start_auxiliary()
         self.component_state['startup'] = 'COMPLETE'
         self._dashboard()
@@ -969,6 +976,9 @@ class RealStartupManager(Node):
         if now - self._last_monitor < 0.5:
             return
         self._last_monitor = now
+        for component, (predicate, description) in self._observed_phases.items():
+            self.component_state[component] = (
+                'READY' if predicate() else f'WAITING (observation only: {description})')
         for component, process, _log in self.children:
             code = process.poll()
             if code is not None:

@@ -35,8 +35,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'check_backend_health', default_value='false',
             description=(
-                'Require healthy MCU/localization/odom during startup. '
-                'Health is always printed for observation.')),
+                'Display MCU/localization/odom readiness during startup. '
+                'Health checks never block component startup.')),
         DeclareLaunchArgument('enable_hardware', default_value='true'),
         DeclareLaunchArgument(
             'enable_camera', default_value='false',
@@ -46,7 +46,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'enable_perception_gate', default_value='false',
             description=(
-                'Require healthy perception output before startup advances.')),
+                'Display perception readiness; waiting never blocks startup.')),
         DeclareLaunchArgument('enable_stream', default_value='true'),
         DeclareLaunchArgument('enable_perception_gui', default_value='false'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),

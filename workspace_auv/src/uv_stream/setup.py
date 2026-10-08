@@ -16,6 +16,7 @@ setup(
     # declare pip's opencv-python distribution here: pkg_resources would then
     # reject the ROS-provided cv2 at runtime.
     install_requires=['setuptools', 'numpy'],
+    tests_require=['pytest'],
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',

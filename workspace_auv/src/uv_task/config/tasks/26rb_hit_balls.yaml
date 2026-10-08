@@ -1,37 +1,56 @@
 task: 26rb_hit_balls
 
 params:
-  # 使用 robotcup20260901.yaml 中的 canonical detector class name。
-  order: [impact_ball_blue]
-  # 是否主动旋转搜索并更新目标球定位。
-  active_localization: true
-
-  # 主动搜索参数。
+  order: [impact_ball_blue] # 可配置红蓝顺序：[impact_ball_blue, impact_ball_red]。
+  targets:
+    # 世界 odom 坐标 [x,y,z]。按用户要求两球暂用同一位置，实际场地分别修改。
+    # z 只描述球的位置，不用于中途深度修正；靠近半径只检查 XY。
+    blue_position: [2.0, 0.0, 0.2]
+    red_position: [2.0, 0.0, 0.2]
+  depth:
+    task_depth_m: 0.2 # 任务入场定深一次，之后不再发送 z 定位或垂向修正速度。
+    timeout: 30.0
   search:
-    yaw_step_deg: 15.0 # 搜索时向左右各旋转的角度，单位：度。
-    settle_time: 5.0 # 正前方方向观察时间，单位：秒。
-    direction_dwell_time: 5.0 # 左右方向各停留并搜索视觉目标的时间，单位：秒。
-    observation_max_age: 5.0 # 测量射线缓存有效期，单位：秒。
-    timeout: 60.0 # 单个目标搜索最长时间，单位：秒。
-    rotate_timeout: 10.0 # 单次搜索旋转位置环超时，单位：秒。
-    min_confidence: 0.02 # 目标结果最低置信度。
-
-  # 首轮对准后沿机体系前向 BTRAVEL，再次对准后冲撞。
+    initial_observe_seconds: 2.0 # 朝向预设位置后完整观察两秒。
+    align_seconds: 3.0 # 单目 yaw 对准，同时尝试双目联合对准。
+    detection_timeout: 5.0 # 保留旧撞球观测最大年龄 5 秒；空检测立即使该目无效。
+    min_confidence: 0.02
+    yaw_tolerance_deg: 2.0
+    yaw_stable_seconds: 0.2
+    yaw_gain: 1.2
+    max_yaw_rate_deg_s: 10.0
+    rotate_timeout: 10.0
+    period: 0.05
+    stereo_pair_slop: 0.15
+    stereo_min_angle_deg: 0.1
+    stereo_max_ray_gap_m: 0.05
+    stereo_max_distance_m: 20.0
+  light:
+    pulse_seconds: 0.35 # 单目对准绿灯一次；双目对准绿灯两次。
+    gap_seconds: 0.25
+  cruise:
+    radius_m: 1.5 # 到当前颜色球预设 XY 的二维水平距离。
+    speed_mps: 0.15
+    timeout: 40.0 # 靠近总预算；途中首次发现目标并修正不重置。
+  observe:
+    timeout: 5.0 # 到水平半径内停车，当前方向等待目标最多 5 秒。
+    yaw_step_deg: 15.0 # NED 航向：相对停车航向左 -15°、右 +15°。
+    direction_dwell_seconds: 5.0 # 左右方向各最多观察 5 秒，发现即对准。
   approach:
-    distance: 0.5 # BTRAVEL前进距离，单位：米。
-    timeout: 30.0 # BTRAVEL动作超时，单位：秒。
-
-  # 接近阶段的位置修正。
-  position_correction:
-    duration: 5.0
-    period: 0.2
-    command_timeout: 10.0
-    min_update_deg: 1.0
-
-  # 撞击阶段速度指令。
+    distance_m: 0.5
+    speed_mps: 0.15
+    timeout: 30.0
   charge:
-    duration: 5.0 # 持续前冲时间，单位：秒。
-    speed_mps: 2 # 机体系前向速度，单位：米/秒。
-    publish_period: 0.05 # 速度指令周期，单位：秒。
-  return:
-    timeout: 20.0 # 撞击后返回记录位置的最长时间，单位：秒。
+    alignment_seconds: 2.0 # 前进 0.5m 后，再进行两秒 yaw 对准。
+    duration: 8.0 # 从 BLINE 正向速度反馈开始计时，到时取消并停车。
+    speed_mps: 0.15 # BLINE 必须严格满足 0 < speed < 0.18，不能使用旧 2m/s。
+    timeout: 45.0 # 包括起步的动作总时限，必须大于 duration。
+  fallback:
+    duration: 15.0 # 观测失败红灯一次；直接前往预设 XY，最多前进 15 秒。
+    speed_mps: 0.15
+    timeout: 50.0
+  motion:
+    cancel_timeout: 2.0 # BLINE 取消未确认结束时，禁止后续运动。
+    start_timeout: 30.0 # 等待首次正向速度反馈的最长时间。
+    accept_timeout: 5.0
+  between_balls_pause: 0.5

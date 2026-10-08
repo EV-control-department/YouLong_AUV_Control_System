@@ -75,6 +75,7 @@ import math
 import secrets
 import threading
 import time
+from dataclasses import fields
 
 import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
@@ -97,6 +98,10 @@ from zit6_interfaces.msg import ZitSetpoint, ZitStatus
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import PoseInfo, StateResetRequest, StateResetResult
 from uv_control.coordinate import Coordinate, wrap_deg
+from uv_control.line_guidance import (
+    LineConfig, LineGuidance, norm, rotate_body_to_world,
+    rotate_world_to_body, validate_goal,
+)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ZIT6 control_key 常量
@@ -164,6 +169,11 @@ class BasicMotionNode(Node):
         self._target = Coordinate()     # 当前目标 (odom 系)
         self._state_lock = threading.Lock()
         self._velocity_lock = threading.Lock()
+        self._line_output_lock = threading.RLock()
+        self._line_stop_requested = threading.Event()
+        self._line_reserved = False
+        self._line_feedback = None
+        self._twist_received_at = float('-inf')
         self._shutdown_requested = False
         self._safe_stop_latched = False
         self._timers = []
@@ -178,6 +188,14 @@ class BasicMotionNode(Node):
         self.declare_parameter('arm_confirmation_timeout', 20.0)
         self.declare_parameter('state_timeout', 1.0)
         self.declare_parameter('force_nav_valid', False)
+        line_defaults = LineConfig()
+        for field in fields(LineConfig):
+            self.declare_parameter('line.' + field.name,
+                                   getattr(line_defaults, field.name))
+        self._line_config = LineConfig(**{
+            field.name: float(self.get_parameter('line.' + field.name).value)
+            for field in fields(LineConfig)})
+        self._line_config.validate()
         self._sim_mode = _as_bool(self.get_parameter('sim_mode').value)
         self._force_nav_valid = (
             not self._sim_mode
@@ -293,12 +311,14 @@ class BasicMotionNode(Node):
         timers prevents those callbacks from publishing through an already
         destroyed DDS handle.
         """
-        if not self._shutdown_requested:
-            try:
-                self._publish_body_velocity()
-            except Exception:
-                pass
-        self._shutdown_requested = True
+        with self._line_output_lock:
+            self._line_stop_requested.set()
+            if not self._shutdown_requested:
+                try:
+                    self._publish_body_velocity()
+                except Exception:
+                    pass
+            self._shutdown_requested = True
         self._stop_arm_heartbeat()
         waiter = self._start_waiter
         if waiter is not None and not waiter[0].done():
@@ -367,7 +387,14 @@ class BasicMotionNode(Node):
             f'发往ZIT6: odom=({x:.2f}, {y:.2f}, {z:.2f}, '
             f'{math.degrees(yaw_rad):.1f}°)')
 
-    def _publish_body_velocity(self, forward_mps: float = 0.0,
+    def _publish_body_velocity(self, forward_mps=0.0, lateral_mps=0.0,
+                               vertical_mps=0.0, yaw_rate_deg_s=0.0,
+                               lease_s=DEFAULT_VELOCITY_LEASE):
+        with self._line_output_lock:
+            self._publish_body_velocity_locked(
+                forward_mps, lateral_mps, vertical_mps, yaw_rate_deg_s, lease_s)
+
+    def _publish_body_velocity_locked(self, forward_mps: float = 0.0,
                                lateral_mps: float = 0.0,
                                vertical_mps: float = 0.0,
                                yaw_rate_deg_s: float = 0.0,
@@ -419,15 +446,16 @@ class BasicMotionNode(Node):
 
     def _velocity_watchdog_cb(self):
         """Stop a velocity command when its action lease is not renewed."""
-        with self._velocity_lock:
-            expired = (
-                self._velocity_active
-                and time.monotonic() >= self._velocity_deadline
-            )
-        if expired:
-            self.get_logger().warning(
-                'BODY_VELOCITY command lease expired; sending zero velocity')
-            self._publish_body_velocity()
+        with self._line_output_lock:
+            with self._velocity_lock:
+                expired = (self._velocity_active
+                           and time.monotonic() >= self._velocity_deadline)
+            if expired:
+                if self._line_reserved:
+                    self._line_stop_requested.set()
+                self.get_logger().warning(
+                    'BODY_VELOCITY command lease expired; sending zero velocity')
+                self._publish_body_velocity()
 
     def _status_cb(self, msg: ZitStatus):
         with self._state_lock:
@@ -489,6 +517,7 @@ class BasicMotionNode(Node):
                     'z': float(twist.linear.z), 'rx': float(twist.angular.x),
                     'ry': float(twist.angular.y), 'rz': float(twist.angular.z),
                 }
+                self._twist_received_at = time.monotonic()
 
 
     def _nav_valid_for_motion_locked(self):
@@ -1288,10 +1317,162 @@ class BasicMotionNode(Node):
     # Action Server 回调
     # ═════════════════════════════════════════════════════════════════════════
 
+    def _line_state(self, goal_handle, generation=None):
+        if goal_handle.is_cancel_requested or self._line_stop_requested.is_set():
+            raise RuntimeError('BLINE interrupted by cancellation or zero-speed stop')
+        with self._state_lock:
+            blockers = self._motion_block_reasons_locked()
+            if blockers:
+                raise RuntimeError('BLINE state invalid: ' + '; '.join(blockers))
+            if (generation is not None
+                    and self._origin_generation != generation):
+                raise RuntimeError('BLINE origin changed')
+            age = time.monotonic() - self._twist_received_at
+            if age > self._state_timeout:
+                raise RuntimeError(f'BLINE velocity feedback stale ({age:.2f}s)')
+            pose = self.pose
+            position = (pose.x, pose.y, pose.z)
+            attitude = (pose.rx, pose.ry, pose.rz)
+            body_velocity = tuple(self.vel_body[axis] for axis in ('x', 'y', 'z'))
+            origin = self._origin_generation
+        return position, attitude, rotate_body_to_world(
+            body_velocity, *attitude), origin
+
+    def _line_report(self, guide, phase, sample, command, last_report):
+        now = time.monotonic()
+        previous_phase, previous_at = last_report
+        self._line_feedback = (phase, sample.measured_speed, sample.cross_error)
+        if phase != previous_phase or now - previous_at >= 1.0:
+            self.get_logger().info(
+                f'BLINE {phase}: progress={sample.progress:.3f}/{guide.length:.3f}m, '
+                f'remaining={sample.remaining:.3f}m, cross={sample.cross_error:.3f}m, '
+                f'target={guide.end}, yaw={guide.yaw:.1f}deg, '
+                f'along command={command:.3f}, measured={sample.measured_speed:.3f}m/s')
+            return phase, now
+        return last_report
+
+    def _line_stop_and_hold(self, generation):
+        with self._line_output_lock:
+            self._publish_body_velocity()
+            with self._state_lock:
+                valid = (self._motion_ready_locked()
+                         and generation == self._origin_generation)
+                pose = self.pose
+                target = (pose.x, pose.y, pose.z, pose.rz)
+            if valid:
+                self._send_setpoint(CK_POS, 0, *target[:3], math.radians(target[3]))
+
+    def _execute_body_line(self, goal_handle):
+        req = goal_handle.request
+        result = BasicMotion.Result()
+        result.success = False
+        generation = None
+        guide = None
+        last_report = (None, float('-inf'))
+        try:
+            started = time.monotonic()
+            speed = validate_goal(req.target, req.axes, req.cruise_speed,
+                                  req.timeout, self._line_config)
+            position, attitude, world_velocity, generation = self._line_state(goal_handle)
+            guide = LineGuidance(position, attitude[2], req.target[:3], speed,
+                                 self._line_config)
+            result.final_target = [float(v) for v in (*guide.end, guide.yaw)]
+            timeout = (float(req.timeout) if req.timeout > 0.0
+                       else max(60.0, guide.length / speed + 50.0))
+            deadline = started + timeout
+            align_deadline = min(deadline, started + self._line_config.align_timeout)
+            self._action_target = dict(zip(('x', 'y', 'z', 'yaw'), result.final_target))
+            with self._line_output_lock:
+                self._line_state(goal_handle, generation)
+                self._publish_body_velocity()
+                self._send_setpoint(CK_POS, 0, *guide.start, math.radians(guide.yaw))
+            phase = 'ALIGN'
+            stable_since = None
+            last_tick = time.monotonic()
+            while True:
+                tick = time.monotonic()
+                if tick >= deadline:
+                    raise RuntimeError('BLINE total timeout')
+                dt = tick - last_tick
+                if dt > DEFAULT_VELOCITY_LEASE:
+                    raise RuntimeError('BLINE control loop stalled; velocity lease ended')
+                last_tick = tick
+                with self._line_output_lock:
+                    position, attitude, world_velocity, _ = self._line_state(
+                        goal_handle, generation)
+                    sample = guide.sample(position, world_velocity)
+                    along_command = 0.0
+                    if phase == 'ALIGN':
+                        aligned = (
+                            all(abs(p - a) <= self._line_config.position_tolerance
+                                for p, a in zip(position, guide.start))
+                            and abs(wrap_deg(guide.yaw - attitude[2]))
+                            <= self._line_config.yaw_tolerance
+                            and norm(world_velocity) <= self._line_config.stop_speed)
+                        last_report = self._line_report(
+                            guide, phase, sample, 0.0, last_report)
+                        if aligned:
+                            phase = 'CRUISE'
+                        elif tick >= align_deadline:
+                            raise RuntimeError('BLINE alignment timeout')
+                    elif phase == 'HOLD':
+                        if guide.reached(position, world_velocity, attitude[2]):
+                            stable_since = tick if stable_since is None else stable_since
+                            if tick - stable_since >= self._line_config.stable_seconds:
+                                result.success = True
+                                result.message = ''
+                                goal_handle.succeed()
+                                return result
+                        else:
+                            stable_since = None
+                        last_report = self._line_report(
+                            guide, phase, sample, 0.0, last_report)
+                    else:
+                        if guide.reached(position, world_velocity, attitude[2]):
+                            self._publish_body_velocity()
+                            self._send_setpoint(CK_POS, 0, *guide.end,
+                                                math.radians(guide.yaw))
+                            phase = 'HOLD'
+                            stable_since = None
+                        else:
+                            velocity, phase, sample = guide.step(
+                                position, world_velocity, max(dt, 1e-6))
+                            body_velocity = rotate_world_to_body(velocity, *attitude)
+                            self._publish_body_velocity(
+                                *body_velocity, guide.yaw_rate(attitude[2]))
+                            along_command = sum(v * d for v, d in zip(
+                                velocity, guide.direction))
+                        last_report = self._line_report(
+                            guide, phase, sample, along_command, last_report)
+                time.sleep(max(0.0, 0.05 - (time.monotonic() - tick)))
+        except Exception as exc:
+            result.message = str(exc)
+            self._line_feedback = ('ABORT', 0.0, 0.0)
+            self.get_logger().error(f'BLINE ABORT: {result.message}')
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
+            return result
+        finally:
+            if not result.success:
+                try:
+                    self._line_stop_and_hold(generation)
+                except Exception as exc:
+                    self.get_logger().error(f'BLINE cleanup failed: {exc}')
+
     def _action_goal_cb(self, goal_request):
         if self._safe_stop_latched or self._shutdown_requested:
             return GoalResponse.REJECT
-        with self._state_lock:
+        if goal_request.cmd_type == BasicMotion.Goal.BLINE:
+            try:
+                validate_goal(goal_request.target, goal_request.axes,
+                              goal_request.cruise_speed, goal_request.timeout,
+                              self._line_config)
+            except (ValueError, TypeError) as exc:
+                self.get_logger().warning(f'BLINE goal rejected: {exc}')
+                return GoalResponse.REJECT
+        with self._line_output_lock, self._state_lock:
             if goal_request.cmd_type == BasicMotion.Goal.START:
                 if self._start_in_progress:
                     return GoalResponse.REJECT
@@ -1302,6 +1483,13 @@ class BasicMotionNode(Node):
                 if self._motion_reserved:
                     return GoalResponse.REJECT
                 self._motion_reserved = True
+                if goal_request.cmd_type == BasicMotion.Goal.BLINE:
+                    self._line_reserved = True
+                    self._line_stop_requested.clear()
+            elif self._line_reserved and any(
+                    not math.isfinite(float(value)) or abs(value) > 1e-6
+                    for value in goal_request.target):
+                return GoalResponse.REJECT
         self.get_logger().info(
             f'Action goal received: cmd_type={goal_request.cmd_type}, '
             f'axes="{goal_request.axes}", target={list(goal_request.target)}, '
@@ -1313,7 +1501,10 @@ class BasicMotionNode(Node):
         # Cancelling a position goal must also leave the vehicle out of any
         # previously leased velocity mode.
         try:
-            self._publish_body_velocity()
+            with self._line_output_lock:
+                if self._line_reserved:
+                    self._line_stop_requested.set()
+                self._publish_body_velocity()
         except Exception:
             if not self._shutdown_requested:
                 raise
@@ -1345,9 +1536,28 @@ class BasicMotionNode(Node):
                     self._action_target = None
                 with self._state_lock:
                     self._motion_reserved = False
+                    if req.cmd_type == BasicMotion.Goal.BLINE:
+                        self._line_reserved = False
+                        self._line_feedback = None
 
     def _execute_motion(self, goal_handle):
         req = goal_handle.request
+        if req.cmd_type == BasicMotion.Goal.BLINE:
+            return self._execute_body_line(goal_handle)
+        # A zero-speed stop is always accepted, including after state loss.
+        if (req.cmd_type == BasicMotion.Goal.BODY_VELOCITY
+                and len(req.target) >= 4
+                and all(math.isfinite(float(value)) and abs(value) <= 1e-6
+                        for value in req.target[:4])):
+            with self._line_output_lock:
+                if self._line_reserved:
+                    self._line_stop_requested.set()
+                self._publish_body_velocity()
+            result = BasicMotion.Result()
+            result.success = True
+            result.message = ''
+            goal_handle.succeed()
+            return result
         blockers = self._motion_block_reasons()
         if blockers:
             result = BasicMotion.Result()
@@ -1372,12 +1582,14 @@ class BasicMotionNode(Node):
                 goal_handle.abort()
                 return result
             vx, vy, vz, yaw_rate_deg_s = req.target[:4]
-            self._publish_body_velocity(
-                vx, vy, vz, yaw_rate_deg_s,
-                lease_s=(req.velocity_lease
-                         if req.velocity_lease > 0.0
-                         else DEFAULT_VELOCITY_LEASE),
-            )
+            with self._line_output_lock:
+                if self._line_reserved:
+                    raise RuntimeError('BLINE owns motion output')
+                self._publish_body_velocity(
+                    vx, vy, vz, yaw_rate_deg_s,
+                    lease_s=(req.velocity_lease
+                             if req.velocity_lease > 0.0
+                             else DEFAULT_VELOCITY_LEASE))
             result = BasicMotion.Result()
             result.success = True
             result.message = ''
@@ -1519,6 +1731,11 @@ class BasicMotionNode(Node):
             dz = t['z'] - self.pose.z
         feedback = BasicMotion.Feedback()
         feedback.distance_remaining = float(math.sqrt(dx**2 + dy**2 + dz**2))
+        line_feedback = self._line_feedback
+        if line_feedback is not None:
+            feedback.phase = line_feedback[0]
+            feedback.along_speed_mps = float(line_feedback[1])
+            feedback.cross_track_error_m = float(line_feedback[2])
         try:
             self._action_goal_handle.publish_feedback(feedback)
         except Exception:

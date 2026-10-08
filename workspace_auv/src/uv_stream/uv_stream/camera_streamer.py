@@ -30,8 +30,11 @@ from uv_image_transport.iceoryx2 import (
 )
 
 
-DISPLAY_WIDTH = 1280
-DISPLAY_HEIGHT = 960
+from .stream_geometry import (
+    DISPLAY_HEIGHT, DISPLAY_WIDTH, resize_stitched_bgr, scale_detection_box,
+)
+
+
 FPS_SAMPLE_FRAMES = 7
 OVERLAY_WINDOW_NS = 300_000_000
 
@@ -211,9 +214,8 @@ def _label(detection) -> str:
 
 def _draw_detections(image: np.ndarray, detections: Iterable) -> np.ndarray:
     output = image.copy()
-    # The source is a stitched 2560x960 frame.  Each half is compressed to
-    # 640x960 in the 1280x960 display frame, so X is scaled by 0.5 and Y is
-    # unchanged.
+    # The source is a stitched 2560x960 frame. Each half is scaled uniformly
+    # to 640x480 in the 1280x480 stream, so both X and Y use a 0.5 scale.
     for detection in detections:
         x1 = float(getattr(detection, 'bbox_x1', 0.0))
         y1 = float(getattr(detection, 'bbox_y1', 0.0))
@@ -223,13 +225,8 @@ def _draw_detections(image: np.ndarray, detections: Iterable) -> np.ndarray:
         # Detection.msg intentionally has no camera_name because the enclosing
         # DetectionArray carries it.  The caller sets the half through a
         # temporary attribute-compatible tuple below when needed.
-        half_offset = 0
-        if camera_name.endswith('_right'):
-            half_offset = DISPLAY_WIDTH // 2
-        x1 = int(round(x1 * 0.5 + half_offset))
-        x2 = int(round(x2 * 0.5 + half_offset))
-        y1 = int(round(y1))
-        y2 = int(round(y2))
+        x1, y1, x2, y2 = scale_detection_box(
+            (x1, y1, x2, y2), camera_name)
         cv2.rectangle(output, (x1, y1), (x2, y2), (0, 220, 0), 2)
         text = f'{_label(detection)} {float(getattr(detection, "confidence", 0.0)):.2f}'
         cv2.putText(output, text, (max(0, x1), max(18, y1 - 6)),
@@ -257,12 +254,7 @@ def _draw_batch(image: np.ndarray, camera_name: str, detections: Iterable) -> np
 
 
 def _resize_stitched(packet: FramePacket) -> np.ndarray:
-    image = packet.bgr()
-    if image.shape[1] != 2560 or image.shape[0] != 960:
-        return cv2.resize(image, (DISPLAY_WIDTH, DISPLAY_HEIGHT),
-                          interpolation=cv2.INTER_AREA)
-    return cv2.resize(image, (DISPLAY_WIDTH, DISPLAY_HEIGHT),
-                      interpolation=cv2.INTER_AREA)
+    return resize_stitched_bgr(packet.bgr())
 
 
 def _ffmpeg_process(output_fps: float):
