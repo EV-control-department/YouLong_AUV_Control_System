@@ -120,6 +120,8 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "approach_standoff_m": float,
         "insert_depth_m": float,
         "stroke_yaw_deg": float,
+        "contact_ascent_m": float,
+        "contact_descent_m": float,
     },
     "26rb_find_collection_frame": {
         "platform_name": str,

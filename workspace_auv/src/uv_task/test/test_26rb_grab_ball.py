@@ -98,6 +98,73 @@ def test_sea_cucumber_scan_rejects_old_capture_and_accepts_fresh_frame():
     assert task._best_left_detection().pixel_x == 2
 
 
+def _sea_flow_fake():
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._node = SimpleNamespace(stopped=False, set_servo=lambda *a: None,
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=1)))
+    task._logger = _Logger()
+    task._total_timeout = 10
+    task._search_pose = (0,0,.8,0)
+    task._search_travel_timeout = task._servo_timeout = task._return_timeout = 1
+    task._target_count, task._max_failed_attempts = 5, 3
+    task._pickup_angle, task._descent_duration = 0, .1
+    task.confirmed_removed = task.delivery_commands = 0
+    task._measured_pose = lambda: (0,0,.8,0,0,0)
+    task._travel = lambda *a: True
+    task._servo_horizontally = lambda: (0,0,.8,0)
+    task._apply_gripper_offset = task._wait_pre_descent_settle = task._descend = lambda: True
+    task._return_to_recorded_pose = lambda p: True
+    task._retry_perception = lambda reason, failures, deadline: failures <= 3
+    return task
+
+
+@pytest.mark.parametrize('failure', ['alignment', 'count_missing', 'count_zero'])
+def test_sea_visual_failure_retries_instead_of_stopping(failure):
+    task = _sea_flow_fake()
+    deliveries = []
+    if failure == 'alignment':
+        positions = iter((None, (0,0,.8,0)))
+        task._servo_horizontally = lambda: next(positions)
+        counts = iter((5,0))
+    else:
+        counts = iter((None if failure == 'count_missing' else 0, 5, 0))
+    task._count_visible = lambda *a: next(counts)
+    task._deliver = lambda *a, **kw: deliveries.append(True) or True
+    assert task.execute()
+    assert task.confirmed_removed == 5 and len(deliveries) == 1
+
+
+def test_sea_unknown_postgrab_count_delivers_without_claiming_success():
+    task = _sea_flow_fake()
+    counts = iter((5,None,5,0))
+    deliveries = []
+    task._count_visible = lambda *a: next(counts)
+    task._deliver = lambda *a, **kw: deliveries.append(
+        (task.confirmed_removed, kw['return_to_search'])) or True
+    assert task.execute()
+    assert deliveries == [(0,True), (5,False)]
+
+
+def test_sea_partial_count_accepts_two_but_not_one_fresh_frames(monkeypatch):
+    module = import_module('uv_task.grab_sea_cucumber')
+    for number in (1,2):
+        clock = SimpleNamespace(value=0.)
+        task = _sea_flow_fake()
+        task._count_frames, task._count_timeout, task._detection_timeout = 3, .25, 1
+        task._node._perception_lock = threading.Lock()
+        task._node._down_detections = {'down_left': (0., SimpleNamespace(
+            header=SimpleNamespace(stamp=SimpleNamespace(sec=0,nanosec=1))))}
+        task._segmented_detections = lambda msg: [object()] * 5
+        def sleep(dt):
+            clock.value += dt
+            if number == 2 and clock.value <= .1:
+                task._node._down_detections['down_left'] = (.1, SimpleNamespace(
+                    header=SimpleNamespace(stamp=SimpleNamespace(sec=0,nanosec=2))))
+        monkeypatch.setattr(module, 'time', SimpleNamespace(monotonic=lambda: clock.value, sleep=sleep))
+        result = task._count_visible(-1., 0, 10., 'before')
+        assert result == (5 if number == 2 else None)
+
+
 def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
     # 仅提取方法执行：无需创建节点，测试不会向DDS发布或触发硬件。
     import ast

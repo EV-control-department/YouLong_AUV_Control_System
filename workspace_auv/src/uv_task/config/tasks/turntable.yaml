@@ -1,4 +1,4 @@
-# 真机独立任务：视觉对孔后执行三次预设 yaw 推盘，不判断实际盘体转角。
+# 真机独立任务：左下孔插入一次 → 上浮 → yaw转动 → 下沉 → 退杆。
 # 现场测量和放行见 docs/turntable_calibration_checklist.md；未确认前禁止接触。
 task: turntable
 params:
@@ -9,3 +9,7 @@ params:
   approach_standoff_m: 0.2
   insert_depth_m: 0.03
   stroke_yaw_deg: 6.0  # 单次预设行程；建议从更小角度试起，最大 12°
+  # 待水中实测；以下是小行程调试占位值，不保证圆盘180°转动。
+  # yaw为AUV角度，不是圆盘角度；切勿直接填180。
+  contact_ascent_m: 0.02  # 插入后上浮距离，正数，最大0.05m
+  contact_descent_m: 0.02 # yaw后下沉距离，正数，最大0.05m；无需与上浮相等

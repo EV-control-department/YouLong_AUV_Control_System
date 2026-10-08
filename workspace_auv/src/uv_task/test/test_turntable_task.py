@@ -39,8 +39,9 @@ def test_turntable_template_loads_new_disk_dimensions_without_enabling_contact()
     config = Path(__file__).resolve().parents[1] / 'config/tasks/turntable.yaml'
     params = load_task(config)[0]['params']
     assert DISK_DIAMETER_M == pytest.approx(0.230)
-    assert STROKE_COUNT == 3
+    assert STROKE_COUNT == 1
     assert params['stroke_yaw_deg'] == pytest.approx(6.0)
+    assert params['contact_ascent_m'] == params['contact_descent_m'] == pytest.approx(.02)
     assert params['allow_contact_motion'] is False
     assert params['force_limited_control_confirmed'] is False
     assert 'min_progress_deg' not in params
@@ -62,6 +63,7 @@ def test_calibrated_but_contact_disabled_never_commands_motion():
         'rod_radius_m': 0.005,
         'approach_standoff_m': 0.1, 'insert_depth_m': 0.02,
         'stroke_yaw_deg': 6.0,
+        'contact_ascent_m': .02, 'contact_descent_m': .02,
         'allow_contact_motion': False,
     }
     task.log = Logger()
@@ -112,7 +114,7 @@ def test_initial_visual_timeout_reports_camera_rejection_reason():
         task._wait_new_observation(0, timeout=0.01)
 
 
-def test_three_strokes_do_not_require_yellow_progress():
+def test_single_insert_ascent_yaw_descent_does_not_require_yellow_progress():
     class Logger:
         def info(self, _message):
             pass
@@ -133,6 +135,7 @@ def test_three_strokes_do_not_require_yellow_progress():
         'approach_standoff_m': 0.05,
         'insert_depth_m': 0.01,
         'stroke_yaw_deg': 4.0,
+        'contact_ascent_m': .02, 'contact_descent_m': .03,
     }
     observations = iter({
         'capture_stamp_ns': index,
@@ -141,7 +144,7 @@ def test_three_strokes_do_not_require_yellow_progress():
         'axis_ratio': 0.95,
         'plane_residual_m': 0.005,
         'phase_valid': True,
-        'angle_deg': 45.0,  # 故意不变：不应据此判定失败
+        'angle_deg': 0.0,  # 故意不变：不应据此判定失败
     } for index in range(1, 8))
     task._wait_new_observation = lambda *_args, **_kwargs: next(observations)
     task._after_motion_observation = lambda *_args: next(observations)
@@ -151,6 +154,16 @@ def test_three_strokes_do_not_require_yellow_progress():
     task._motion = lambda command, target, axes, context, timeout=30.0: commands.append(
         (command, tuple(target), axes, context))
     assert task.execute()
-    assert sum('次推盘' in context for _, _, _, context in commands) == 6
-    assert sum('次插入' in context for _, _, _, context in commands) == 9
-    assert sum('盘外复位' == context for _, _, _, context in commands) == 2
+    contexts = [context for _, _, _, context in commands]
+    assert contexts == ['视觉正视对准', '左下孔盘外对准'] + \
+        ['单次插入'] * 3 + ['插杆后上浮'] * 2 + \
+        ['上浮后yaw推盘'] * 2 + ['yaw后下沉'] * 3 + ['单次退出'] * 3
+    assert sum(target[2] for _, target, axes, _ in commands if axes == 'z') == pytest.approx(.01)
+    assert sum(target[3] for _, target, axes, _ in commands if axes == 'rz') == pytest.approx(4.)
+
+
+def test_hole_selection_prefers_lower_left_real_opening():
+    assert TurntableTask._hole_angle({'phase_valid': True, 'angle_deg': 0.}) == pytest.approx(225.)
+    assert TurntableTask._hole_angle({'phase_valid': True, 'angle_deg': 10.}) == pytest.approx(235.)
+    with pytest.raises(RuntimeError, match='黄色条幅'):
+        TurntableTask._hole_angle({'phase_valid': False})
