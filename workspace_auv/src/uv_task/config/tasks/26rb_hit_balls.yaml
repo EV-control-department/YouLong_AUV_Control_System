@@ -8,22 +8,22 @@ params:
 
   # 主动搜索参数。
   search:
-    yaw_step_deg: 15.0              # 搜索时向左右各旋转的角度，单位：度。
-    settle_time: 5.0                # 正前方方向观察时间，单位：秒。
-    direction_dwell_time: 5.0       # 左右方向各停留并搜索视觉目标的时间，单位：秒。
-    observation_max_age: 5.0        # 测量射线缓存有效期，单位：秒。
-    timeout: 60.0                  # 单个目标搜索最长时间，单位：秒。
-    rotate_timeout: 10.0           # 单次搜索旋转位置环超时，单位：秒。
-    min_confidence: 0.02           # 目标结果最低置信度。
+    yaw_step_deg: 15.0 # 搜索时向左右各旋转的角度，单位：度。
+    settle_time: 5.0 # 正前方方向观察时间，单位：秒。
+    direction_dwell_time: 5.0 # 左右方向各停留并搜索视觉目标的时间，单位：秒。
+    observation_max_age: 5.0 # 测量射线缓存有效期，单位：秒。
+    timeout: 60.0 # 单个目标搜索最长时间，单位：秒。
+    rotate_timeout: 10.0 # 单次搜索旋转位置环超时，单位：秒。
+    min_confidence: 0.02 # 目标结果最低置信度。
 
   # 撞击模式与预接近。
   impact:
-    mode: staged_charge_return      # 先接近、冲刺、再返回。
+    mode: staged_charge_return # 先接近、冲刺、再返回。
   approach:
-    distance: 1                     # 撞击前预接近距离，单位：米。
-    min_clearance: 0.05             # 预接近点保留的最小间隙，单位：米。
-    z_offset: -0.2                  # 相对目标球的垂向偏移，单位：米。
-    detect_timeout: 30.0            # 目标定位结果最大等待时间，单位：秒。
+    distance: 0.5 # 撞击前预接近距离，单位：米。
+    min_clearance: 0.05 # 预接近点保留的最小间隙，单位：米。
+    z_offset: -0.1 # 相对目标球的垂向偏移，单位：米。
+    detect_timeout: 30.0 # 目标定位结果最大等待时间，单位：秒。
 
   # 接近阶段的位置修正。
   position_correction:
@@ -35,8 +35,8 @@ params:
 
   # 撞击阶段速度指令。
   charge:
-    duration: 5.0                  # 持续前冲时间，单位：秒。
-    speed_mps: 2                   # 机体系前向速度，单位：米/秒。
-    publish_period: 0.05           # 速度指令周期，单位：秒。
+    duration: 5.0 # 持续前冲时间，单位：秒。
+    speed_mps: 2 # 机体系前向速度，单位：米/秒。
+    publish_period: 0.05 # 速度指令周期，单位：秒。
   return:
-    timeout: 20.0                  # 撞击后返回记录位置的最长时间，单位：秒。
+    timeout: 20.0 # 撞击后返回记录位置的最长时间，单位：秒。

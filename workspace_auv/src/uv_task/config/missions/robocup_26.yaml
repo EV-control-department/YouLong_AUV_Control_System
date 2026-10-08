@@ -10,40 +10,6 @@ mission:
           target: [0.0, 0.0, 0.0, 0.0]
       on_failure:
         "start.timeout": {}
-
-    - name: return_origin
-      config: ../tasks/return_origin.yaml
-      initial:
-        pose:
-          command: SET
-          axes: xyzrz
-          target: [5.0, -2.0, 0.0, 89.9544] # yaw: 1.57 rad converted to degrees
-      on_failure:
-        "return_origin.timeout": {}
-
-    - name: btravelx
-      config: ../tasks/btravelx.yaml
-      initial:
-        poses:
-          - command: WTRAVEL
-            axes: xyz
-            target: [5.0, -1.5, 0.0, 89.9544] # 世界系绝对位置；航向先沿行进方向。
-          - command: SET
-            axes: rz
-            target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
-      on_failure:
-        "btravelx.timeout": {}
-
-    # - name: setz
-    #   config: ../tasks/setz.yaml
-    #   initial:
-    #     pose:
-    #       command: BMOVE
-    #       axes: xyzrz
-    #       target: [0.0, 0.0, 0.0, 0.0]
-    #   on_failure:
-    #     "setz.timeout": {}
-
     - name: 26rb_hit_balls
       config: ../tasks/26rb_hit_balls.yaml
       initial:
@@ -59,7 +25,38 @@ mission:
             target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
       on_failure:
         "26rb_hit_balls.timeout": {}
+    # - name: return_origin
+    #   config: ../tasks/return_origin.yaml
+    #   initial:
+    #     pose:
+    #       command: SET
+    #       axes: xyzrz
+    #       target: [5.0, -2.0, 0.0, 89.9544] # yaw: 1.57 rad converted to degrees
+    #   on_failure:
+    #     "return_origin.timeout": {}
 
+    # - name: btravelx
+    #   config: ../tasks/btravelx.yaml
+    #   initial:
+    #     poses:
+    #       - command: WTRAVEL
+    #         axes: xyz
+    #         target: [5.0, -1.5, 0.0, 89.9544] # 世界系绝对位置；航向先沿行进方向。
+    #       - command: SET
+    #         axes: rz
+    #         target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
+    #   on_failure:
+    #     "btravelx.timeout": {}
+
+    # - name: setz
+    #   config: ../tasks/setz.yaml
+    #   initial:
+    #     pose:
+    #       command: BMOVE
+    #       axes: xyzrz
+    #       target: [0.0, 0.0, 0.0, 0.0]
+    #   on_failure:
+    #     "setz.timeout": {}
     # - name: 26rb_gate_task
     #   config: ../tasks/26rb_gate_task.yaml
     #   initial:

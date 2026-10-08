@@ -1348,39 +1348,81 @@ class TaskRunnerNode(Node):
         return success
 
     def _task_return_origin(self, p: dict) -> bool:
-        """任务开始后回到 odom 原点，只修正水平位置和航向。
+        """开环上浮到目标 z：按起始深度和速度估算持续时间。"""
+        target_z = float(p.get('ascent_target_z_m', -0.3))
+        ascent_speed = abs(float(p.get('ascent_speed_mps', 0.05)))
+        timeout = max(0.1, float(p.get('ascent_timeout', 30.0)))
+        publish_period = max(
+            0.02, float(p.get('ascent_publish_period', 0.05)))
+        start_z = float(self._latest_robot_pose()[2])
 
-        START 会把当前所在位置定义为 odom 原点，因此通常这里无需再移动；
-        保留该步骤是为了让任务时序明确，并处理 START 前仍有残余目标的情况。
-        深度不参与归零，避免把当前深度误当成需要回到 z=0 的目标。
-        """
-        settle_time = max(0.0, float(p.get('state_settle_time', 0.3)))
-        if settle_time > 0.0:
-            time.sleep(settle_time)
+        if (not all(math.isfinite(value) for value in
+                    (target_z, ascent_speed, timeout, publish_period, start_z))
+                or ascent_speed <= 0.0):
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = 'return_origin 上浮参数无效'
+            self.get_logger().error(self._last_motion_failure_message)
+            return False
 
-        pose = self._latest_robot_pose()
-        horizontal_error = math.hypot(pose[0], pose[1])
-        yaw_error = abs(((pose[5] + 180.0) % 360.0) - 180.0)
-        if horizontal_error <= 0.1 and yaw_error <= 5.0:
-            self._cmd_x = self._cmd_y = self._cmd_yaw = 0.0
+        ascent_distance = start_z - target_z
+        if ascent_distance <= 0.0:
             self.get_logger().info(
-                'return_origin: 已在 odom 原点附近，跳过重复定位 '
-                f'(xy={horizontal_error:.3f}m, yaw={yaw_error:.1f}°)')
+                f'return_origin：当前 z={start_z:.3f}m 已到达或高于目标 '
+                f'z={target_z:.3f}m，无需上浮')
             return True
 
-        timeout = max(1.0, float(p.get('timeout', 30.0)))
-        success, msg = self._send_action_goal(
-            BasicMotion.Goal.SET,
-            [0.0, 0.0, 0.0, 0.0],
-            'xyrz',
-            timeout=timeout,
-            task_context=self._format_motion_context(
-                '回到里程计原点(保持当前深度)'),
-        )
-        self.get_logger().info(f'return_origin 执行结果：{msg}')
-        if success:
-            self._cmd_x = self._cmd_y = self._cmd_yaw = 0.0
-        return success
+        duration = ascent_distance / ascent_speed
+        if duration > timeout:
+            self._last_motion_failure_kind = 'timeout'
+            self._last_motion_failure_message = (
+                f'开环上浮预计需要 {duration:.1f}s，超过超时限制 {timeout:.1f}s')
+            self.get_logger().error(self._last_motion_failure_message)
+            return False
+
+        lease_s = max(0.25, publish_period * 4.0)
+        deadline = time.monotonic() + duration
+        self.get_logger().info(
+            f'return_origin：开环上浮 z={start_z:.3f}→{target_z:.3f}m，'
+            f'速度={ascent_speed:.3f}m/s，预计 {duration:.1f}s')
+        ascent_ok = True
+        ascent_message = ''
+        try:
+            while not self.stopped and time.monotonic() < deadline:
+                ascent_ok, ascent_message = self._send_body_velocity(
+                    vertical_mps=-ascent_speed,
+                    lease_s=lease_s,
+                    task_context=self._format_motion_context(
+                        'return_origin 开环上浮'))
+                if not ascent_ok:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining > 0.0:
+                    time.sleep(min(publish_period, remaining))
+        finally:
+            stop_ok, stop_message = self._send_body_velocity(
+                lease_s=lease_s,
+                task_context=self._format_motion_context(
+                    'return_origin 上浮结束，发送零速度'))
+
+        if not ascent_ok:
+            self.get_logger().error(
+                f'return_origin：上浮速度指令失败：{ascent_message}')
+            return False
+        if not stop_ok:
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = stop_message
+            self.get_logger().error(
+                f'return_origin：停止上浮速度失败：{stop_message}')
+            return False
+        if self.stopped:
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = 'return_origin 上浮被停止'
+            return False
+
+        self._cmd_z = target_z
+        self.get_logger().info(
+            f'return_origin：开环上浮完成，估算目标 z={target_z:.3f}m')
+        return True
 
     # --- SET tasks (absolute positioning) ---
 
