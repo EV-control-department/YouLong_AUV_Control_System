@@ -25,6 +25,7 @@ from uv_msgs.msg import (
 )
 
 from .detector.yolo_detector import YoloDetector
+from .ring_orientation import estimate_ring_orientation
 from uv_image_transport.iceoryx2 import Iceoryx2Reader
 
 
@@ -79,6 +80,7 @@ class ObjectDetector:
         self._aruco_period_s = 1.0 / aruco_fps
         self._guide_line_class_id = None
         self._gate_front_class_id = None
+        self._red_ring_class_id = None
         self._mapping_registry = None
         self._mapping_ready = threading.Event()
         mapping_qos = QoSProfile(
@@ -92,6 +94,21 @@ class ObjectDetector:
             node.declare_parameter('gate_feature_mode', 'auto').value).strip().lower()
         if self._gate_feature_mode not in {'auto', 'bbox', 'centerline', 'segmentation'}:
             self._gate_feature_mode = 'auto'
+        self._ring_orientation_enabled = bool(node.declare_parameter(
+            'ring_orientation_enabled', True).value)
+        self._ring_roi_scale = float(node.declare_parameter(
+            'ring_roi_scale', 1.2).value)
+        self._ring_min_pixels = int(node.declare_parameter(
+            'ring_min_pixels', 24).value)
+        self._ring_min_quality = float(node.declare_parameter(
+            'ring_min_quality', 0.8).value)
+        if not math.isfinite(self._ring_roi_scale) or self._ring_roi_scale < 1.0:
+            raise ValueError('ring_roi_scale must be finite and >= 1.0')
+        if self._ring_min_pixels < 2:
+            raise ValueError('ring_min_pixels must be >= 2')
+        if (not math.isfinite(self._ring_min_quality)
+                or not 0.0 <= self._ring_min_quality <= 1.0):
+            raise ValueError('ring_min_quality must be finite and in [0,1]')
         self.confidence = float(node.declare_parameter('confidence', 0.5).value)
         self.device = str(node.declare_parameter('device', '').value or '')
         configured_model = str(
@@ -174,6 +191,8 @@ class ObjectDetector:
                 'guide_line', required=False)
             self._gate_front_class_id = registry.model_class_id(
                 'gate_front', required=False)
+            self._red_ring_class_id = registry.model_class_id(
+                'red_ring', required=False)
             self._mapping_ready.set()
             self.node.get_logger().info(
                 'object_detector received model mapping {}'.format(registry.model))
@@ -252,10 +271,27 @@ class ObjectDetector:
             detection.feature_pixel_y = detection.pixel_y
             polygon = polygons[index] if index < len(polygons) else None
             self._set_gate_feature(detection, polygon, image)
+            self._set_ring_orientation(detection, camera, image)
             message.detections.append(detection)
         self.publisher.publish(message)
         line = self._line_state(message, image, results, polygons)
         self._line_publishers[message.camera_name].publish(line)
+
+    def _set_ring_orientation(self, detection, camera, image):
+        detection.orientation_valid = False
+        detection.orientation_axis_deg = 0.0
+        detection.orientation_quality = 0.0
+        if (camera != 'down' or not self._ring_orientation_enabled
+                or int(detection.class_id) != self._red_ring_class_id):
+            return
+        orientation = estimate_ring_orientation(
+            image, (detection.bbox_x1, detection.bbox_y1,
+                    detection.bbox_x2, detection.bbox_y2),
+            roi_scale=self._ring_roi_scale, min_pixels=self._ring_min_pixels,
+            min_quality=self._ring_min_quality)
+        detection.orientation_valid = orientation.valid
+        detection.orientation_axis_deg = orientation.axis_deg
+        detection.orientation_quality = orientation.quality
 
     @staticmethod
     def _segmentation_center(polygon):

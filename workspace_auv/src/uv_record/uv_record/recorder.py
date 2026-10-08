@@ -432,7 +432,8 @@ class Recorder:
         self.syncer = SegmentSyncer([])
         self.children: list[ChildSupervisor] = []
         self.video_directories: list[Path] = []
-        self.performance = ProcessSampler(os.getppid())
+        self.performance = ProcessSampler(
+            os.getppid(), storage_path=self.paths.root)
         self.health_errors = 0
         self._stopped = False
         self._prepare_video_streams()
@@ -607,6 +608,15 @@ class Recorder:
         self.raw_recorder = RawFrameRecorder(self.paths.root)
         self.raw_recorder.start()
 
+    def _raw_camera_health(self):
+        if self.raw_recorder is None:
+            return {}
+        status = self.raw_recorder.snapshot()
+        return {
+            'raw_camera_diagnostics': status.get('diagnostics', {}),
+            'raw_camera_error': status.get('error_detail'),
+        }
+
     def _start_bag_child(self):
         existing = [
             int(match.group(1))
@@ -646,6 +656,20 @@ class Recorder:
                 next_sample = time.monotonic() + 5.0
                 sample = self.performance.sample()
                 sample['disk_free_bytes'] = shutil.disk_usage(self.paths.root).free
+                try:
+                    filesystem = os.statvfs(self.paths.root)
+                    sample['filesystem'] = {
+                        'path': str(self.paths.root),
+                        'free_bytes': filesystem.f_bavail * filesystem.f_frsize,
+                        'free_inodes': filesystem.f_favail,
+                        'total_bytes': filesystem.f_blocks * filesystem.f_frsize,
+                        'total_inodes': filesystem.f_files,
+                    }
+                except OSError as error:
+                    sample['filesystem'] = {
+                        'path': str(self.paths.root),
+                        'error': str(error),
+                    }
                 sample['children'] = snapshots
                 sample['video'] = {}
                 if self.raw_recorder is not None:
@@ -702,6 +726,7 @@ class Recorder:
                 'format': 'png',
                 'frame_index': 'frames.jsonl',
                 'timestamp_source': 'iceoryx2_frame_header',
+                'probe_version': 1,
             } if self.record_mode == 'raw' else {}),
             recorder={
                 'pid': os.getpid(),
@@ -779,6 +804,7 @@ class Recorder:
                 recording_health={
                     'sync_errors': self.syncer.errors,
                     'health_errors': self.health_errors,
+                    **self._raw_camera_health(),
                     'children': {
                         child.name_label: child.snapshot()
                         for child in self.children
@@ -821,7 +847,10 @@ class Recorder:
         alignment = {'status': 'aligned', 'mode': self.record_mode}
         if self.raw_recorder is not None:
             raw_status = self.raw_recorder.snapshot()
-            alignment.update(raw_status)
+            alignment.update({
+                key: value for key, value in raw_status.items()
+                if key not in ('diagnostics', 'error_detail')
+            })
             if raw_status['alignment_status'] != 'aligned':
                 alignment['status'] = 'degraded'
         if self.record_mode == 'go2rtc':
@@ -846,6 +875,7 @@ class Recorder:
             recording_health={
                 'sync_errors': self.syncer.errors,
                 'health_errors': self.health_errors,
+                **self._raw_camera_health(),
                 'shutdown_warnings': shutdown_warnings,
                 'children': {
                     child.name_label: child.snapshot()
