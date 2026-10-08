@@ -20,7 +20,7 @@ mission:
             target: [0.0, 0.0, 0.2, 0.0] # 下潜0.2m
           - command: WTRAVEL
             axes: xyz
-            target: [5.0, -1.5, 0.2, 89.9544] # 世界系绝对位置；航向先沿行进方向。
+            target: [4.0, -1.8, 0.2, 89.9544] # 世界系绝对位置；航向先沿行进方向。
           - command: SET
             axes: rz
             target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。

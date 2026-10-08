@@ -18,7 +18,7 @@ params:
 
   # 首轮对准后沿机体系前向 BTRAVEL，再次对准后冲撞。
   approach:
-    distance: 0.8 # BTRAVEL前进距离，单位：米。
+    distance: 0.5 # BTRAVEL前进距离，单位：米。
     timeout: 30.0 # BTRAVEL动作超时，单位：秒。
 
   # 接近阶段的位置修正。
