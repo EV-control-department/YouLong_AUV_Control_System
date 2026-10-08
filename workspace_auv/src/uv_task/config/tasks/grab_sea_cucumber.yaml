@@ -38,7 +38,7 @@ params:
     travel_timeout_seconds: 90.0       # 首次前往抓取区最多允许多久，单位秒。
     # 程序先用 WTRAVEL 前往上述位置和深度，再进行下视识别与水平对准。
     # 如目标深度更浅，先直接低速上浮到目标附近，再执行 WTRAVEL。
-    # 当前 WTRAVEL 通常以行进方向作为到达航向，不能保证最终按 yaw_deg 对准。
+    # WTRAVEL 后由任务显式 SET 水平位置和 yaw_deg；实测归位后才开始扫描/投放。
 
   vision:
     min_confidence: 0.35                # 分割结果的最低置信度。

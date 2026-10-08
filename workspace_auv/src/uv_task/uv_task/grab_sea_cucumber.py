@@ -229,7 +229,35 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         if not success:
             self._logger.error(f'抓海参：{label}失败：{message}')
             return False
+        # WTRAVEL 水平前进结束时保持行进航向，而非配置中的 rz。
+        # 显式水平定位并归向，不能只修改 _cmd_yaw 就当作机器人已归位。
+        remaining = motion_deadline - time.monotonic()
+        measured = self._measured_pose()
+        if remaining <= 0 or measured is None or self._node.stopped:
+            return False
+        target[2] = measured[2]  # 不用位置环拉升可能携带海参的机器人。
+        self._logger.info(f'抓海参：{label}运输到位，开始水平定位及归向：'
+                          f'x={target[0]:.3f}，y={target[1]:.3f}，yaw={target[3]:.1f}°')
+        success, message = self._node._send_action_goal(
+            BasicMotion.Goal.SET, target, 'xyrz', timeout=remaining,
+            task_context=self._node._format_motion_context(label + '到位归向'))
+        if not success:
+            self._logger.error(f'抓海参：{label}到位归向失败：{message}')
+            return False
+        # 动作结果和实测位姿同时确认；旧指令位姿不能作为返回扫描区的证据。
+        while not self._node.stopped and time.monotonic() < motion_deadline:
+            measured = self._measured_pose()
+            if measured is not None:
+                yaw_error = abs((measured[5] - target[3] + 180.0) % 360.0 - 180.0)
+                if (abs(measured[0] - target[0]) <= 0.1
+                        and abs(measured[1] - target[1]) <= 0.1 and yaw_error <= 5.0):
+                    break
+            time.sleep(0.05)
+        else:
+            self._logger.error(f'抓海参：{label}实测位置/航向未归位，禁止释放或重新扫描')
+            return False
         self._node._cmd_x, self._node._cmd_y, self._node._cmd_z, self._node._cmd_yaw = target
+        self._logger.info(f'抓海参：{label}位置及航向已确认')
         return True
 
     def _measured_pose(self):
@@ -329,7 +357,12 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._logger.info('抓海参：已发释放指令；实际投放仍须靠视觉/现场验证')
         if not return_to_search:
             return True
-        return self._travel(search_pose, '返回海参搜索区', deadline, self._drop_timeout)
+        self._logger.info('抓海参：投放结束，返回配置扫描点；返回成功前不启动扫描')
+        if not self._travel(search_pose, '返回海参搜索区', deadline,
+                            self._search_travel_timeout):
+            return False
+        self._logger.info('抓海参：已返回扫描点并恢复扫描航向，允许开始下一轮识别')
+        return True
 
     def execute(self) -> bool:
         deadline = time.monotonic() + self._total_timeout

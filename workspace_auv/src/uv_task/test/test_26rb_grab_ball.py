@@ -386,6 +386,9 @@ def test_sea_cucumber_delivery_ascent_precedes_horizontal_travel():
 
     def send_goal(command, target, axes, **_kwargs):
         commands.append((command, list(target), axes))
+        if command == _grab.BasicMotion.Goal.SET:
+            node._robot_pose = (target[0], target[1], node._robot_pose[2],
+                                0., 0., target[3])
         if command == _grab.BasicMotion.Goal.BMOVE:
             pose = list(node._robot_pose)
             pose[2] += target[2]
@@ -412,7 +415,43 @@ def test_sea_cucumber_delivery_ascent_precedes_horizontal_travel():
 
     assert task._travel((3.0, 4.0, 0.40, 10.0), '投放',
                         time.monotonic() + 5.0, 5.0)
-    assert len(commands) == 1
+    assert len(commands) == 2
     assert velocities and velocities[-1] == 0.
-    assert commands[-1][0] == _grab.BasicMotion.Goal.WTRAVEL
+    assert commands[0][0] == _grab.BasicMotion.Goal.WTRAVEL
+    assert commands[-1][0] == _grab.BasicMotion.Goal.SET
+    assert commands[-1][2] == 'xyrz'
+    assert commands[-1][1][3] == 10.0
     assert commands[-1][1][2] >= node._robot_pose[2]
+
+
+def test_sea_delivery_returns_to_configured_search_before_next_scan():
+    task = _sea_flow_fake()
+    task._drop_pose = (9., 8., .2, 90.)
+    task._drop_timeout = 7.
+    task._search_travel_timeout = 11.
+    task._release_angle, task._release_wait = 1.57, 0.
+    calls = []
+    task._travel = lambda pose, label, deadline, timeout: calls.append(
+        (pose, timeout)) or True
+    assert task._deliver(task._search_pose, time.monotonic() + 2., True)
+    assert calls == [(task._drop_pose, 7.), (task._search_pose, 11.)]
+
+
+def test_sea_delivery_return_failure_is_not_scan_success():
+    task = _sea_flow_fake()
+    task._drop_pose = (9., 8., .2, 90.)
+    task._drop_timeout = 7.
+    task._release_angle, task._release_wait = 1.57, 0.
+    task._travel = lambda pose, *args: pose == task._drop_pose
+    assert not task._deliver(task._search_pose, time.monotonic() + 2., True)
+
+
+def test_sea_travel_does_not_trust_success_when_measured_pose_is_wrong():
+    task = _sea_flow_fake()
+    del task._travel
+    task._ascent_tolerance = .01
+    task._node._send_action_goal = lambda *args, **kwargs: (True, 'ok')
+    task._node._format_motion_context = lambda label: label
+    # 动作声称成功，但遥测一直在原地：不能在投放区继续扫描。
+    assert not task._travel((3., 4., .8, 90.), '返回搜索区',
+                            time.monotonic() + .06, .06)
