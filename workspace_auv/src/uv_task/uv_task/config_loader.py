@@ -168,6 +168,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "grab_sea_cucumber": {
         "sea_cucumber_class_id": int,
+        "down_camera_mount_yaw_deg": float,
         "image_width": int,
         "image_height": int,
         "search_pose": (list, float),

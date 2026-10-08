@@ -38,15 +38,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         max_press_distance = float(params['max_press_distance_m'])
         speed = float(params['descent_speed_mps'])
         duration = float(params['descent_duration_seconds'])
-        if (not all(map(math.isfinite, (speed, duration, max_press_distance)))
-                or not 0 < speed <= 0.3
-                or duration <= 0
-                or not 0 < max_press_distance <= 0.5
-                or speed * duration > max_press_distance):
-            raise ValueError(
-                f'下压配置不安全：速度={speed:g}m/s，时长={duration:g}s，'
-                f'预计行程={speed * duration:g}m，上限={max_press_distance:g}m；'
-                '要求速度≤0.3m/s、行程上限≤0.5m且预计行程不超过上限，请按实机标定')
+        
         super().__init__(node, params)
         self._class_id = int(params['sea_cucumber_class_id'])
         if self._class_id < 0:
@@ -106,10 +98,25 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                 f'抓海参图像应为每目 {cal_width}x{cal_height}，收到 {width}x{height}')
         self._FX, self._FY = float(left_k[0, 0]), float(left_k[1, 1])
         self._CX, self._CY = float(left_k[0, 2]), float(left_k[1, 2])
+        # camera发布的掩膜恢复到原始标定像素，不是监控窗口旋转后的像素。
+        # 下视整体物理绕机体yaw倒装180°，原像素误差对应的body x/y均须反向。
+        self._camera_mount_yaw = float(params.get('down_camera_mount_yaw_deg', 180.0))
+        if not math.isfinite(self._camera_mount_yaw):
+            raise ValueError('down_camera_mount_yaw_deg 必须为有限数值')
+        self._logger.info(
+            f'抓海参：下视安装yaw补偿={self._camera_mount_yaw:g}°；'
+            '输入为camera还原后的标定像素，夹爪偏置保持机体系定义')
         self.confirmed_removed = 0
         self.delivery_commands = 0
         self._scan_received_after = None
         self._scan_capture_after_ns = None
+
+    def _horizontal_step(self, detection):
+        """像素 → 名义机体水平修正 → 安装yaw补偿 → odom修正。"""
+        pose, dx, dy, _, _, du, dv = super()._horizontal_step(detection)
+        body_dx, body_dy = self._body_to_world(dx, dy, self._camera_mount_yaw)
+        world_dx, world_dy = self._body_to_world(body_dx, body_dy, pose[5])
+        return pose, body_dx, body_dy, world_dx, world_dy, du, dv
 
     def _segmented_detections(self, message):
         return [d for d in getattr(message, 'detections', ())

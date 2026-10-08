@@ -53,6 +53,24 @@ def test_unsafe_sea_descent_reports_distance_before_initialization():
         GrabSeaCucumberTask(None, params)
 
 
+@pytest.mark.parametrize('robot_yaw', [0., 90., -45.])
+@pytest.mark.parametrize('pixel', [(420.,240.), (320.,340.), (420.,340.)])
+def test_sea_camera_mount_180_reverses_body_and_world_correction(robot_yaw, pixel):
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._node = SimpleNamespace(_latest_robot_pose=lambda: (1,2,.8,0,0,robot_yaw))
+    task._CX, task._CY, task._FX, task._FY = 320.,240.,500.,500.
+    task._projection_depth, task._servo_gain, task._max_xy_step = .8,.8,.08
+    detection = SimpleNamespace(pixel_x=pixel[0], pixel_y=pixel[1])
+    task._camera_mount_yaw = 0.
+    nominal = task._horizontal_step(detection)
+    task._camera_mount_yaw = 180.
+    corrected = task._horizontal_step(detection)
+    assert corrected[0] == nominal[0]
+    assert corrected[1:5] == pytest.approx(tuple(-v for v in nominal[1:5]))
+    assert corrected[5:] == nominal[5:]
+    assert math.hypot(corrected[1], corrected[2]) <= .08 + 1e-9
+
+
 def test_sea_cucumber_retries_and_delivers_until_five_removed():
     task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
     calls = []
