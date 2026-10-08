@@ -18,8 +18,7 @@
 #   - uv_stream/go2rtc：提供视频预览。
 #   - uv_record_recorder：record_session=true 时创建会话并录制 go2rtc 视频、rosbag 和日志。
 #
-# enable_task=false 很重要：本模式不会自动执行 mission；可确认节点和数据就绪后，
-# 再单独执行：
+# real.launch.py 不启动 task_runner，也不读取任务状态；需要运行任务时单独启动：
 #   ros2 launch uv_task task_launch.py camera_mode:=real
 schema_version: 1
 runtime: real
@@ -31,7 +30,6 @@ arguments:
   enable_motion: true
   enable_camera: true
   enable_nav: false
-  enable_task: false
   enable_stream: true
   record_session: true
   record_mode: go2rtc

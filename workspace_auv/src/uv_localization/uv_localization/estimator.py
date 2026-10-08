@@ -141,7 +141,6 @@ class EstimatorNode(Node):
                 and pending.boot_epoch == self._boot_epoch
                 and pending.origin_generation is not None
                 and message is not None and message.origin_initialized
-                and message.nav_valid
                 and int(message.origin_generation) == pending.origin_generation
                 and _at_least_u32(message.nav_timestamp_ms,
                                   pending.nav_timestamp_ms)
@@ -270,7 +269,9 @@ class EstimatorNode(Node):
             pose.robot_roll, pose.robot_pitch, pose.robot_yaw = (
                 math.degrees(float(value)) for value in values[3:])
             pose.origin_initialized = bool(message.origin_initialized)
-            pose.nav_valid = bool(message.nav_valid and fresh)
+            # TEMPORARY override: trust finite, fresh MCU odom even when the
+            # MCU's nav_valid flag is false. Freshness is still required.
+            pose.nav_valid = bool(fresh)
             pose.origin_generation = int(message.origin_generation)
             pose.nav_timestamp_ms = int(message.nav_timestamp_ms)
         self._odom_pub.publish(pose)
@@ -278,7 +279,7 @@ class EstimatorNode(Node):
         twist = TwistWithCovarianceStamped()
         twist.header.stamp = stamp
         twist.header.frame_id = 'base_link'
-        if message is not None and fresh and message.nav_valid:
+        if message is not None and fresh:
             values = message.twist_body
             twist.twist.twist.linear.x = float(values[0])
             twist.twist.twist.linear.y = float(values[1])
@@ -294,9 +295,11 @@ class EstimatorNode(Node):
         health.sensor_name = 'localization'
         health.available = bool(pose.nav_valid)
         health.quality = 1.0 if health.available else 0.0
-        health.detail = ('versioned MCU odom' if pose.origin_initialized and health.available
-                         else 'MCU navigation valid; origin not initialized' if health.available
-                         else 'MCU navigation stale/invalid')
+        health.detail = (
+            'fresh MCU odom; nav_valid ignored'
+            if health.available and pose.origin_initialized else
+            'fresh MCU odom; origin not initialized; nav_valid ignored'
+            if health.available else 'MCU odom stale')
         self._health_pub.publish(health)
 
         if self._publish_tf_enabled and pose.origin_initialized and pose.nav_valid:

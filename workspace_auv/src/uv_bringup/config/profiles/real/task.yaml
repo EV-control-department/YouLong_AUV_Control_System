@@ -1,6 +1,6 @@
-# 真机任务模式：启动硬件、定位、运动控制、相机、完整 AI 感知、go2rtc、录制和 uv_task，
-# 并自动执行 mission。适合：确认车辆、电源、急停、ZIT6 状态、相机和感知全部正常后，
-# 正式运行竞赛任务。
+# 真机任务准备模式：启动任务依赖的硬件、定位、运动控制、相机、AI 感知、go2rtc 和录制。
+# real.launch.py 不启动 task_runner、不发送 BasicMotion START，也不读取任务状态。
+# 任务进程由操作者在单独终端启动、停止和重启。
 #
 # 调用方式：
 #   ros2 launch uv_bringup real.launch.py profile:=task
@@ -15,22 +15,20 @@
 #   - object_detector、object_localizer、object_estimator：提供检测、目标定位和轨迹。
 #   - uv_stream/go2rtc：提供视频预览。
 #   - uv_record_recorder：录制 go2rtc 视频、rosbag 和运行日志。
-#   - task_runner：读取 mission_file；默认是 uv_task/config/missions/robocup_26.yaml，
-#     加载成功后自动从第一个 start 任务开始执行，不是只启动一个空闲节点。
+#   - task_runner：不由本 profile 启动；需要时单独执行：
+#     ros2 launch uv_task task_launch.py camera_mode:=real
 #
-# 安全注意：profile:=task 会直接让 AUV 进入任务流程；下水/解锁前必须确认任务文件、
-# 运动空间、ZIT6 状态、急停和 heartbeat 均正常。导航仍由 enable_nav=false 关闭。
+# profile:=task 只准备系统组件；是否启动任务由操作者单独决定。导航仍由 enable_nav=false 关闭。
 schema_version: 1
 runtime: real
 profile: task
-description: Run AI, motion control, and the default full mission with go2rtc recording.
+description: Prepare real AI and motion components for a separately managed task process.
 arguments:
   enable_hardware: true
   enable_ai: true
   enable_motion: true
   enable_camera: true
   enable_nav: false
-  enable_task: true
   enable_stream: true
   record_session: true
   record_mode: go2rtc

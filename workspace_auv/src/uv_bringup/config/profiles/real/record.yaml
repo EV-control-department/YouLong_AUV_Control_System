@@ -1,4 +1,4 @@
-# 真机原始数据采集模式：保留硬件、定位、运动控制和相机，关闭 AI、导航、任务和 go2rtc，
+# 真机原始数据采集模式：保留硬件、定位、运动控制和相机，关闭 AI、导航和 go2rtc，
 # 并启动 uv_record 采集 raw 源图像、rosbag 和运行日志。适合：采集训练/回放数据、
 # 相机标定检查、记录未经过 AI/视频编码处理的原始传感器输入。
 #
@@ -17,7 +17,7 @@
 # 关闭的组件：
 #   - enable_ai=false：不启动 object_detector、object_localizer、object_estimator。
 #   - enable_nav=false：不启动导航。
-#   - enable_task=false：不启动 task_runner。
+#   - real.launch.py 不管理 task_runner；任务进程由操作者独立管理。
 #   - enable_stream=false：不启动 go2rtc，避免预览编码占用资源。
 schema_version: 1
 runtime: real
@@ -29,7 +29,6 @@ arguments:
   enable_motion: true
   enable_camera: true
   enable_nav: false
-  enable_task: false
   enable_stream: false
   record_session: true
   record_mode: raw

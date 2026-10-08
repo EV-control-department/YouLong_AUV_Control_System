@@ -28,7 +28,7 @@
 
 1. `hw_manager` 默认 `arm_mode=1`，启动后直接向 `/zit6/cmd/agxhbt` 发送 5Hz `UInt32` 心跳，`data` 为 `arm_mode`；仓库固件要求至少 10 次心跳、持续至少 1s 且导航有效，5Hz 下通常约 2s 后会自动解锁。首次陆上检查使用下方的 `test_disarmed.yaml`，同时物理隔离推进器动力。
 2. **已解锁后把 `arm_mode` 改为 0 不会立即上锁。** 固件在已解锁分支只检查心跳超时。停止所有心跳发布者后，仓库固件约 1s 后上锁；`hw_manager.watchdog_timeout=7s` 是上位机监控阈值，两者不是同一个时间。
-3. `profile:=task` 默认自动执行比赛 mission。测试采用 `profile:=debug enable_task:=false`，然后单独启动处于 `debug_mode=true` 的任务节点。
+3. real bringup 的所有 profile 都不启动或监控 task_runner，不发送 BasicMotion START 或 safe-stop；状态页只显示硬件、定位、相机、感知和导航健康。测试采用 `profile:=debug`，然后单独启动处于 `debug_mode=true` 的任务节点。
 4. 真机固件发布 `/zit6/state/*`，`hw_manager` 将状态适配到 `/auv/hardware/zit6/state/*`。`basic_motion` 同时发布新旧 setpoint；解锁心跳由 `hw_manager` 直接发送到 `/zit6/cmd/agxhbt`。原 `/auv/hardware/zit6/cmd/heartbeat` 和 `/zit6/cmd/heartbeat` 已弃用，不再发布或转发。
 5. canonical 灯光和舵机命令由 `hw_manager` 转发到固件 `/zit6/cmd/light`、`/zit6/cmd/servo`；舵机命令类型为 `zit6_interfaces/msg/ZitServo`（`servo_id` 为 1 或 2，`angle` 单位为弧度）。固件 `/zit6/state/servo` 的已接受目标角会适配到 `/auv/hardware/zit6/state/servo`；它不是物理角度测量。INS 命令仍需使用固件实际接口。
 6. 相机像素经 `youlong/camera/front`、`youlong/camera/down` 共享内存服务传输。没有 ROS `Image` 持续发布不代表相机坏了。相机状态和 CameraInfo 当前也不是周期健康心跳，不能用它们的频率来验收持续采集。
@@ -36,7 +36,9 @@
 8. `/auv/hardware/zit6/state/thruster` 的六个数是 `[Fx,Fy,Fz,Mroll,Mpitch,Myaw]` 控制力/矩，不是 M0–M5 的独立 RPM/电流反馈。
 9. **仓库 MCU 固件将 `battery_voltage` 固定发布为 0.0，当前没有电压遥测。** `hw_manager` 的低压告警会跳过这个值，调高告警阈值也不能产生真实电压监控。本任务默认拒绝在没有电压依据时运动：每轮需通过电压表/单节检测仪测量，填写 `external_battery_voltage`，并由现场独立仪表监控带载电压。任务不能靠这一份静态读数判断运行中的压降；若部署固件已提供真实非零遥测，则按遥测检查，外部数值不能覆盖实际低压。
 
-BasicMotion 的 real 上游链路为 **MCU `zit6_node` → `hw_manager` 状态适配 → `uv_localization` → `basic_motion`**。核心输入是 `/auv/state/odom`（PoseInfo，位置、角度及 origin_* 原点字段）和 `/auv/state/twist`（TwistWithCovarianceStamped，速度）；它还订阅 MCU status，但目前主要缓存，未自动阻止所有不健康运动。本测试 task 因此额外检查定位 health 与 MCU status。`task_runner` 是运动指令来源，感知和 navigator 不属于基本运动闭环必须的上游。
+BasicMotion 的 real 上游链路为 **MCU `zit6_node` → `hw_manager` 状态适配 → `uv_localization` → `basic_motion`**。核心输入是 `/auv/state/odom`（PoseInfo，位置、角度及 origin_* 原点字段）和 `/auv/state/twist`（TwistWithCovarianceStamped，速度）；它还订阅 MCU status，但目前主要缓存，未自动阻止所有不健康运动。当前 localizer 临时忽略 MCU `ZitOdom.nav_valid`：只要 odom 有限且新鲜，就会报告定位可用并发布速度，原点已初始化时也会发布 TF。因此健康 `available=true` 不代表 MCU 的 `navigation_ready=true`；实机操作仍须单独检查 MCU status。`task_runner` 是运动指令来源，感知和 navigator 不属于基本运动闭环必须的上游。
+
+real bringup 只启动 BasicMotion 节点，不发送 START。操作员在运行任务中手动发送 START 会让 BasicMotion 重置原点；bringup 会继续运行并只打印健康状态，但正在执行的任务可能因坐标原点变化而失败。手动 START 前应先让任务进入空闲/停止状态，START 完成后再按任务流程启动。
 
 ## 3. 准备环境与三个独立终端
 
@@ -81,7 +83,7 @@ ros2 launch uv_hm hardware_launch.py \
 
 ```bash
 ros2 launch uv_bringup real.launch.py profile:=debug \
-  enable_hardware:=false enable_task:=false enable_motion:=true \
+  enable_hardware:=false enable_motion:=true \
   enable_nav:=false enable_ai:=false enable_stream:=true \
   record_session:=true record_mode:=raw \
   record_use_sim_time:=false

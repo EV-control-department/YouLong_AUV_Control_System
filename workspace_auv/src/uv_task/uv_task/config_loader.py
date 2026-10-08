@@ -126,6 +126,8 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "active_localization": bool,
         "search_yaw_step_deg": float,
         "search_settle_time": float,
+        "search_direction_dwell_time": float,
+        "search_observation_max_age": float,
         "search_timeout": float,
         "search_rotate_timeout": float,
         "min_confidence": float,
@@ -308,6 +310,8 @@ PARAMETER_ALIASES = {
     "26rb_hit_balls": {
         "search.yaw_step_deg": "search_yaw_step_deg",
         "search.settle_time": "search_settle_time",
+        "search.direction_dwell_time": "search_direction_dwell_time",
+        "search.observation_max_age": "search_observation_max_age",
         "search.timeout": "search_timeout",
         "search.rotate_timeout": "search_rotate_timeout",
         "impact.mode": "impact_mode",

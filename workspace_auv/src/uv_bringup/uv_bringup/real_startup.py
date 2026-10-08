@@ -20,9 +20,9 @@ import sys
 import time
 
 from auv_protocol.topics import (
-    BASIC_MOTION, BASIC_MOTION_SAFE_STOP, CAMERA_HEALTH,
+    CAMERA_HEALTH,
     DOWN_LEFT_INFO, DOWN_RIGHT_INFO,
-    FRONT_LEFT_INFO, FRONT_RIGHT_INFO, MISSION_RUN, MISSION_STATUS, MISSION_STOP,
+    FRONT_LEFT_INFO, FRONT_RIGHT_INFO,
     MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, PERCEPTION_HEALTH,
     PLANNING_STATUS, STATE_HEALTH,
     STATE_ODOM, TRACKS, ZIT6_HEARTBEAT_STATE, ZIT6_STATUS,
@@ -30,7 +30,6 @@ from auv_protocol.topics import (
 from rcl_interfaces.msg import Parameter as ParameterMsg
 from rcl_interfaces.srv import GetParameters
 import rclpy
-from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import (
@@ -43,15 +42,9 @@ except ImportError:  # Foxy predates SignalHandlerOptions.
     SignalHandlerOptions = None
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import UInt32
-from std_srvs.srv import Trigger
-from uv_msgs.action import BasicMotion
 from uv_msgs.msg import (
     DetectionArray, ModelClassMapping, ObjectTrackArray, PoseInfo,
-    SensorHealth, TaskStatus,
-)
-from uv_msgs.srv import RunTask
-from uv_task.config_loader import (
-    ConfigError, default_mission_path, load_mission_or_task,
+    SensorHealth,
 )
 from zit6_interfaces.msg import ZitStatus
 
@@ -80,25 +73,6 @@ def _as_bool(value):
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-def _resolve_mission(value):
-    text = str(value or '').strip()
-    if not text:
-        return default_mission_path().resolve()
-    candidate = Path(os.path.expanduser(text))
-    if candidate.is_absolute():
-        return candidate.resolve()
-    if candidate.exists():
-        return candidate.resolve()
-    root = default_mission_path().parent
-    for folder in (root, root.parent / 'tasks'):
-        for name in (candidate, candidate.with_suffix('.yaml')
-                     if not candidate.suffix else candidate):
-            target = folder / name
-            if target.is_file():
-                return target.resolve()
-    return (root / candidate).resolve()
-
-
 class RealStartupManager(Node):
     """Launch and gate real vehicle components without duplicating ROS nodes."""
 
@@ -112,22 +86,10 @@ class RealStartupManager(Node):
             raise ValueError('ready-timeout and max-age must be positive')
         if args.startup_mode not in ('auto', 'adopt', 'managed'):
             raise ValueError('startup-mode must be auto, adopt, or managed')
-        if args.enable_task and not args.enable_motion:
-            raise ValueError('enable_task requires enable_motion=true')
         if not args.check_backend_health:
             self.get_logger().warning(
-                'Backend-health gates are disabled in real_startup; '
-                'BasicMotion START/ARM checks and other stop paths remain active')
-
-        self.mission_path = _resolve_mission(args.mission_file)
-        if not self.mission_path.is_file():
-            raise StartupBlocked(f'mission file does not exist: {self.mission_path}')
-        try:
-            self.validated_tasks = load_mission_or_task(self.mission_path)
-        except (ConfigError, OSError, ValueError) as exc:
-            raise StartupBlocked(f'invalid mission file {self.mission_path}: {exc}') from exc
-        if args.enable_task and not self.validated_tasks:
-            raise StartupBlocked(f'mission contains no tasks: {self.mission_path}')
+                'Backend-health startup gate is disabled; '
+                'runtime health will still be displayed for observation')
 
         log_root = Path(os.environ.get('ROS_LOG_DIR', Path.home() / '.ros' / 'log'))
         self.log_dir = log_root / f'real_startup_{datetime.now():%Y%m%d_%H%M%S}'
@@ -135,14 +97,6 @@ class RealStartupManager(Node):
         self.children = []
         self.component_state = {}
         self.startup_blocked = False
-        self.runtime_fault = False
-        self.monitoring_enabled = False
-        self.startup_sequence_complete = False
-        self.startup_stages_started = False
-        self._mission_stop_applied = False
-        self._motion_stop_applied = False
-        self._last_safety_retry = 0.0
-        self.mission_was_triggered = False
         self._last_dashboard = 0.0
         self._last_monitor = 0.0
         self._last_odom = 0.0
@@ -169,10 +123,7 @@ class RealStartupManager(Node):
         self._tracks_at = 0.0
         self._nav_health = None
         self._nav_health_at = 0.0
-        self._task_status = None
-        self._task_status_at = 0.0
 
-        self.action = ActionClient(self, BasicMotion, BASIC_MOTION)
         self.create_subscription(PoseInfo, STATE_ODOM, self._odom_cb,
                                  qos_profile_sensor_data)
         self.create_subscription(SensorHealth, STATE_HEALTH, self._localization_cb, 10)
@@ -207,14 +158,9 @@ class RealStartupManager(Node):
             qos_profile_sensor_data)
         self.create_subscription(
             SensorHealth, PLANNING_STATUS, self._nav_cb, 10)
-        self.create_subscription(TaskStatus, MISSION_STATUS, self._task_cb, 10)
-        self._mission_run = self.create_client(RunTask, MISSION_RUN)
-        self._mission_stop = self.create_client(Trigger, MISSION_STOP)
-        self._safe_stop = self.create_client(
-            Trigger, BASIC_MOTION_SAFE_STOP)
         self.get_logger().info(
             f'profile={args.profile} mode={args.startup_mode} '
-            f'mission={self.mission_path} logs={self.log_dir}')
+            f'logs={self.log_dir}; task lifecycle is external to real bringup')
 
     def _odom_cb(self, msg):
         values = (msg.robot_x, msg.robot_y, msg.robot_z, msg.robot_yaw)
@@ -244,10 +190,6 @@ class RealStartupManager(Node):
             and float(msg.k[4]) > 0.0)
 
     def _camera_health_cb(self, msg):
-        # The default real profile leaves cameras disabled; ignore health from
-        # an optional camera node started independently by the user.
-        if not self.args.enable_camera:
-            return
         name = str(msg.sensor_name).strip().lower()
         if name.startswith('camera/'):
             name = name[len('camera/'):]
@@ -294,12 +236,6 @@ class RealStartupManager(Node):
 
     def _mapping_cb(self, _msg):
         self._mapping_ready = True
-
-    def _task_cb(self, msg):
-        self._task_status = msg
-        self._task_status_at = time.monotonic()
-        if int(msg.status) == TaskStatus.STATUS_RUNNING:
-            self.monitoring_enabled = True
 
     def _node_names(self):
         names = Counter(
@@ -352,10 +288,6 @@ class RealStartupManager(Node):
                     value = Parameter.from_parameter_msg(parameter_msg).value
                 except (AttributeError, IndexError, TypeError):
                     return False, f'{node_name} does not expose parameter {name}'
-                if name == 'mission_file' and not str(value or '').strip():
-                    value = str(default_mission_path().resolve())
-                elif name == 'mission_file' and value:
-                    value = str(Path(str(value)).expanduser().resolve())
                 if isinstance(wanted, float):
                     matches = isinstance(value, (int, float)) and abs(value - wanted) < 1e-6
                 else:
@@ -458,21 +390,19 @@ class RealStartupManager(Node):
                  or bool(os.environ.get('FORCE_COLOR'))
                  or os.environ.get('TERM', '') not in ('', 'dumb')))
 
-        def colored_row(name, state, *, mission=False):
+        def colored_row(name, state):
             normalized = str(state).upper()
             if any(token in normalized for token in (
                     'BLOCKED', 'ERROR', 'FAILED', 'EXITED', 'CONFLICT',
-                    'DEGRADED', 'UNAVAILABLE', 'FAULT', 'LATCHED',
+                    'DEGRADED', 'UNAVAILABLE', 'STALE', 'FAULT', 'LATCHED',
                     'UNVERIFIED')):
                 color = '\033[31m'  # red: failed or unsafe
-            elif mission and normalized == 'WAITING':
-                color = '\033[90m'  # gray: mission not started
             elif any(token in normalized for token in (
                     'STARTING', 'WAITING', 'DEFERRED', 'PAUSED', 'RETRY')):
                 color = '\033[33m'  # yellow: startup/readiness in progress
             elif any(token in normalized for token in (
                     'READY', 'REUSED', 'COMPLETE', 'TRIGGERED',
-                    'ATTACHED', 'RUNNING', 'DONE', 'HEALTHY')):
+                    'ATTACHED', 'RUNNING', 'DONE', 'HEALTHY', 'FRESH')):
                 color = '\033[32m'  # green: active and healthy
             else:
                 color = '\033[90m'  # gray: disabled, missing, or not started
@@ -481,25 +411,88 @@ class RealStartupManager(Node):
 
         rows = [colored_row(name, state)
                 for name, state in sorted(self.component_state.items())]
-        mission_state = 'WAITING' if self.args.enable_task else 'NOT STARTED'
-        if self._task_status is not None:
-            labels = {
-                TaskStatus.STATUS_IDLE: 'IDLE',
-                TaskStatus.STATUS_RUNNING: 'RUNNING',
-                TaskStatus.STATUS_PAUSED: 'PAUSED',
-                TaskStatus.STATUS_DONE: 'DONE',
-                TaskStatus.STATUS_ERROR: 'ERROR',
-            }
-            mission_state = labels.get(
-                int(self._task_status.status), 'UNKNOWN')
-            if self._task_status.current_task_name:
-                mission_state += f' ({self._task_status.current_task_name})'
-        rows.append(colored_row('mission', mission_state, mission=True))
+
+        status = self._mcu_status
+        if status is None:
+            mcu_state = 'NO DATA'
+        elif now - self._mcu_status_at > self.max_age:
+            mcu_state = 'STALE'
+        elif int(status.error_flags) != 0:
+            mcu_state = f'ERROR flags=0x{int(status.error_flags):x}'
+        else:
+            mcu_state = (
+                f'HEALTHY armed={bool(status.is_armed)} '
+                f'navigation={bool(status.navigation_ready)}')
+        rows.append(colored_row('MCU', mcu_state))
+
+        if self._heartbeat is None:
+            heartbeat_state = 'NO DATA'
+        elif now - self._heartbeat_at > max(3.0, self.max_age):
+            heartbeat_state = f'STALE counter={self._heartbeat}'
+        elif self._heartbeat_samples < 2:
+            heartbeat_state = f'WAITING counter change={self._heartbeat}'
+        else:
+            heartbeat_state = f'FRESH counter={self._heartbeat}'
+        rows.append(colored_row('ARM heartbeat', heartbeat_state))
+
+        if self._localization_at <= 0:
+            localization_state = 'NO DATA'
+        elif now - self._localization_at > self.max_age:
+            localization_state = 'STALE'
+        else:
+            localization_state = (
+                'HEALTHY' if self._localization_ok else 'UNAVAILABLE')
+        rows.append(colored_row('localization', localization_state))
+
+        if self._odom_samples < 2:
+            odom_state = f'WAITING samples={self._odom_samples}'
+        elif now - self._last_odom > self.max_age:
+            odom_state = f'STALE samples={self._odom_samples}'
+        else:
+            odom_state = f'HEALTHY samples={self._odom_samples}'
+        rows.append(colored_row('odom', odom_state))
+
+        for camera in ('front', 'down'):
+            camera_data = self._camera[camera]
+            calibrated = all(
+                self._calibration[side] for side in CAMERA_SIDES[camera])
+            if camera_data['health_at'] <= 0:
+                camera_state = 'NO DATA'
+            elif now - camera_data['health_at'] > self.max_age:
+                camera_state = 'STALE'
+            elif not camera_data['available']:
+                camera_state = f'UNAVAILABLE ({camera_data["detail"]})'
+            elif not calibrated:
+                camera_state = 'WAITING for calibration'
+            else:
+                camera_state = 'HEALTHY and calibrated'
+            rows.append(colored_row(f'camera/{camera}', camera_state))
+
+        if not self.args.enable_ai:
+            perception_state = 'SKIPPED (AI disabled)'
+        elif self._healthy_perception():
+            perception_state = 'HEALTHY'
+        elif self._detections or self._tracks:
+            perception_state = 'WAITING or stale data'
+        else:
+            perception_state = 'WAITING for camera frames'
+        rows.append(colored_row('perception', perception_state))
+
+        if not self.args.enable_nav:
+            navigation_state = 'SKIPPED (navigation disabled)'
+        elif self._nav_health is None:
+            navigation_state = 'NO DATA'
+        elif now - self._nav_health_at > self.max_age:
+            navigation_state = 'STALE'
+        else:
+            navigation_state = (
+                'HEALTHY' if self._nav_health else 'UNAVAILABLE')
+        rows.append(colored_row('navigation', navigation_state))
         discovered = ', '.join(sorted(
             name for name in self._node_names()
             if name != '/real_startup_manager')) or '(none)'
         rows.append(f'{"ROS nodes":18} {discovered}')
-        title = 'REAL STARTUP STATUS'
+        title = 'REAL BRINGUP STATUS'
         if color_enabled:
             title = f'\033[1;36m{title}\033[0m'
         table = '\n'.join([title, *rows])
@@ -532,14 +525,6 @@ class RealStartupManager(Node):
                   and now - self._localization_at <= self.max_age)
         return mcu_ok and hb_ok and odom_ok and loc_ok
 
-    def _healthy_armed(self):
-        if not self.args.check_backend_health:
-            return (self._mcu_status is not None
-                    and bool(self._mcu_status.is_armed))
-        return (self._healthy_backend() and self._mcu_status is not None
-                and bool(self._mcu_status.navigation_ready)
-                and bool(self._mcu_status.is_armed))
-
     def _healthy_cameras(self):
         now = time.monotonic()
         cameras = [name for name, state in self._camera.items()
@@ -567,24 +552,6 @@ class RealStartupManager(Node):
         tracks_ok = (self._tracks >= 2
                      and now - self._tracks_at <= self.max_age)
         return detector_ok and detections_ok and tracks_ok
-
-    def _healthy_for_mission_start(self):
-        if (self.args.check_backend_health
-                and not self._healthy_backend()):
-            return False
-        if self.args.enable_motion and (
-                not self.action.server_is_ready() or not self._healthy_armed()):
-            return False
-        if self.args.enable_camera and not self._healthy_cameras():
-            return False
-        if (self.args.enable_ai and self.args.enable_perception_gate
-                and not self._healthy_perception()):
-            return False
-        if self.args.enable_nav and (
-                self._nav_health is not True
-                or time.monotonic() - self._nav_health_at > self.max_age):
-            return False
-        return True
 
     def _port_accepting(self, port):
         try:
@@ -673,7 +640,7 @@ class RealStartupManager(Node):
                 'SKIPPED (check_backend_health=false)')
             self._dashboard()
 
-    def _start_motion_and_reset_origin(self):
+    def _start_motion_component(self):
         if not self.args.enable_motion:
             self.component_state['basic_motion'] = 'SKIPPED'
             self._dashboard()
@@ -688,46 +655,14 @@ class RealStartupManager(Node):
                                'arm_confirmation_timeout': 20.0}})
         if self.args.startup_mode == 'adopt' \
                 and self.component_state.get('basic_motion') != 'REUSED':
-            raise StartupBlocked('adopt mode requires an existing BasicMotion server')
-        self._phase(
-            'motion ready gate',
-            lambda: (self.action.server_is_ready()
-                     and (not self.args.check_backend_health
-                          or (self._healthy_backend()
-                              and self._mcu_status is not None
-                              and bool(self._mcu_status.navigation_ready)))),
-            ('BasicMotion Action Server and fresh navigation before START'
-             if self.args.check_backend_health else
-             'BasicMotion Action Server before START; backend health gate disabled'))
-        # Deliberately sent exactly once, even when the Action Server and/or a
-        # task_runner were already present.  An ambiguous timeout is fatal;
-        # this goal is never retried by the coordinator.
-        goal = BasicMotion.Goal()
-        goal.cmd_type = BasicMotion.Goal.START
-        goal.axes = ''
-        goal.target = [0.0, 0.0, 0.0, 0.0]
-        goal.timeout = 0.0
-        goal.task_context = 'real.launch startup origin reset'
-        goal_future = self.action.send_goal_async(goal)
-        self._wait_future(goal_future, 'BasicMotion START acceptance')
-        handle = goal_future.result()
-        if handle is None or not handle.accepted:
-            raise StartupBlocked('BasicMotion rejected the one-time START origin reset')
-        result_future = handle.get_result_async()
-        self._wait_future(result_future, 'BasicMotion START result')
-        wrapped = result_future.result()
-        if wrapped is None or not wrapped.result.success:
-            detail = getattr(getattr(wrapped, 'result', None), 'message', 'no result')
-            raise StartupBlocked(f'BasicMotion origin reset failed: {detail}')
-        self.component_state['origin reset'] = 'DONE (START sent once)'
-        self._phase('armed gate', self._healthy_armed,
-                    'fresh armed healthy MCU after START')
+            raise StartupBlocked('adopt mode requires an existing BasicMotion node')
+        motion_state = self.component_state['basic_motion']
+        if motion_state == 'READY':
+            motion_state = 'READY (node only; no START sent)'
+        elif motion_state == 'REUSED':
+            motion_state = 'REUSED (no START sent)'
+        self.component_state['basic_motion'] = motion_state
         self._dashboard()
-
-    def _wait_future(self, future, description):
-        self._wait_for(future.done, description)
-        if future.exception() is not None:
-            raise StartupBlocked(f'{description} failed: {future.exception()}')
 
     def _start_camera_perception(self):
         if self.args.enable_camera:
@@ -783,9 +718,6 @@ class RealStartupManager(Node):
             elif self._healthy_cameras():
                 self._phase('perception gate', self._healthy_perception,
                             'fresh detector output for each healthy camera and fresh tracks')
-            elif self.args.enable_task:
-                self._phase('perception gate', self._healthy_perception,
-                            'camera frames, detector output, and fresh tracks for task')
             else:
                 self.component_state['perception gate'] = (
                     'DEFERRED (waiting for external camera frames)')
@@ -901,7 +833,6 @@ class RealStartupManager(Node):
             ('perception_gui', self.args.enable_ai and
              self.args.enable_perception_gui, ['/perception_gui']),
             ('navigation', self.args.enable_nav, ['/navigator']),
-            ('task_runner', self.args.enable_task, ['/task_runner']),
         ]
         rows = []
         for component, enabled, nodes in components:
@@ -946,82 +877,6 @@ class RealStartupManager(Node):
             'Initial component decisions (existing nodes still undergo '
             'compatibility/readiness checks):\n' + '\n'.join(rows))
 
-    def _start_or_adopt_task(self):
-        if not self.args.enable_task:
-            self.component_state['task_runner'] = 'SKIPPED (enable_task=false)'
-            return
-        self._launch(
-            'task_runner',
-            ['ros2', 'launch', 'uv_task', 'task_launch.py',
-             'enable_task:=true', 'auto_start:=false', 'camera_mode:=real',
-             f'camera_config_dir:={self.args.camera_config_dir}',
-             f'mission_file:={self.mission_path}'],
-            ['/task_runner'],
-            {'/task_runner': {'mission_file': str(self.mission_path)}})
-        if self.args.startup_mode == 'adopt' \
-                and self.component_state.get('task_runner') != 'REUSED':
-            raise StartupBlocked('adopt mode requires an existing task_runner')
-        self._phase(
-            'task load gate',
-            lambda: (self._task_status is not None
-                     and time.monotonic() - self._task_status_at <= self.max_age
-                     and int(self._task_status.total_tasks) > 0
-                     and int(self._task_status.status) in (
-                         TaskStatus.STATUS_IDLE, TaskStatus.STATUS_RUNNING,
-                         TaskStatus.STATUS_DONE)),
-            'task file loaded and task status known')
-        status = int(self._task_status.status)
-        if status in (TaskStatus.STATUS_RUNNING, TaskStatus.STATUS_DONE):
-            self.component_state['mission'] = (
-                'ATTACHED (already running)' if status == TaskStatus.STATUS_RUNNING
-                else 'ATTACHED (already done)')
-            self._dashboard()
-            return
-        if status != TaskStatus.STATUS_IDLE:
-            raise StartupBlocked(
-                f'existing mission status {status} is not safe to auto-start')
-        if self.args.startup_mode == 'adopt':
-            self.component_state['mission'] = 'NOT TRIGGERED (adopt mode)'
-            self._dashboard()
-            return
-        self._phase(
-            'final mission gate', self._healthy_for_mission_start,
-            'fresh backend/armed BasicMotion and enabled camera, perception, navigation')
-        self._wait_for(
-            self._mission_run.service_is_ready,
-            '/auv/mission/run service', duration=self.timeout)
-        self._spin()
-        if (self._task_status is None
-                or time.monotonic() - self._task_status_at > self.max_age
-                or int(self._task_status.total_tasks) <= 0):
-            raise StartupBlocked('task status became stale before mission trigger')
-        latest_status = int(self._task_status.status)
-        if latest_status in (TaskStatus.STATUS_RUNNING, TaskStatus.STATUS_DONE):
-            self.monitoring_enabled = latest_status == TaskStatus.STATUS_RUNNING
-            self.component_state['mission'] = (
-                'ATTACHED (already running)' if
-                latest_status == TaskStatus.STATUS_RUNNING else
-                'ATTACHED (already done)')
-            self._dashboard()
-            return
-        if latest_status != TaskStatus.STATUS_IDLE:
-            raise StartupBlocked(
-                f'mission changed to non-launchable status {latest_status} '
-                'before trigger')
-        request = RunTask.Request()
-        request.start = True
-        request.task_name = str(self.mission_path)
-        future = self._mission_run.call_async(request)
-        self.mission_was_triggered = True
-        self.monitoring_enabled = True
-        self._wait_future(future, 'single mission trigger response')
-        response = future.result()
-        if response is None or not response.success:
-            raise StartupBlocked(
-                'mission trigger rejected: ' + str(getattr(response, 'message', 'no response')))
-        self.component_state['mission'] = 'TRIGGERED ONCE'
-        self._dashboard()
-
     def _ensure_startup_mode_nodes_absent(self):
         if self.args.startup_mode != 'adopt':
             if self.args.enable_stream and self._port_accepting(self.args.preview_port):
@@ -1050,8 +905,6 @@ class RealStartupManager(Node):
                     targets.append('/perception_gui')
             if self.args.enable_nav:
                 targets.append('/navigator')
-            if self.args.enable_task:
-                targets.append('/task_runner')
             missing = [name for name in targets if not self._has_node(name)]
             if missing:
                 raise StartupBlocked(f'adopt mode is missing required nodes: {missing}')
@@ -1073,8 +926,6 @@ class RealStartupManager(Node):
                 targets.append('/perception_gui')
         if self.args.enable_nav:
             targets.append('/navigator')
-        if self.args.enable_task:
-            targets.append('/task_runner')
         existing = [name for name in targets if self._has_node(name)]
         if existing:
             raise StartupBlocked(
@@ -1089,172 +940,47 @@ class RealStartupManager(Node):
         if self.args.enable_hardware:
             planned.append('hardware')
         if self.args.enable_motion:
-            planned.append('BasicMotion + one-time origin reset')
+            planned.append('BasicMotion node (no START command)')
         planned.append('camera + calibration gate' if self.args.enable_camera
                        else 'camera skipped')
         if self.args.enable_ai:
             planned.append('perception')
         if self.args.enable_nav:
             planned.append('navigation')
-        if self.args.enable_task:
-            planned.append(f'task ({len(self.validated_tasks)} entries; gated)')
         self.get_logger().info(
             f'planned profile={self.args.profile}: {", ".join(planned)}; '
-            f'mission validated: {self.mission_path}; '
             f'flags: hardware={self.args.enable_hardware}, '
             f'motion={self.args.enable_motion}, camera={self.args.enable_camera}, '
             f'ai={self.args.enable_ai}, '
             f'perception_gate={self.args.enable_perception_gate}, '
-            f'nav={self.args.enable_nav}, '
-            f'task={self.args.enable_task}, stream={self.args.enable_stream}, '
+            f'nav={self.args.enable_nav}, stream={self.args.enable_stream}, '
             f'record={self.args.record_session}; '
             f'detected nodes={sorted(self._node_names())}')
-        if self.args.enable_task and self._has_node('/task_runner'):
-            existing_task_node = self._matching_nodes('/task_runner')[0]
-            compatible, detail = self._parameters_match(
-                existing_task_node, {'mission_file': str(self.mission_path)})
-            if not compatible:
-                raise StartupBlocked(
-                    f'pre-existing task_runner configuration conflict: {detail}')
-            self._phase(
-                'existing task inspection',
-                lambda: (self._task_status is not None
-                         and time.monotonic() - self._task_status_at <= self.max_age
-                         and int(self._task_status.total_tasks) > 0),
-                'existing task file and status')
-            if int(self._task_status.status) not in (
-                    TaskStatus.STATUS_IDLE, TaskStatus.STATUS_RUNNING,
-                    TaskStatus.STATUS_DONE):
-                raise StartupBlocked(
-                    f'existing task status {int(self._task_status.status)} '
-                    'is not safe to adopt or trigger')
-            if int(self._task_status.status) == TaskStatus.STATUS_RUNNING:
-                self.monitoring_enabled = True
-        self.startup_stages_started = True
         self._start_core()
         self._start_camera_perception()
         self._start_navigation()
-        # Wait for the backend and every enabled navigation dependency before
-        # START captures the MCU's raw nav pose and re-arms the vehicle.
-        self._start_motion_and_reset_origin()
+        self._start_motion_component()
         self._start_auxiliary()
-        self._start_or_adopt_task()
-        self.startup_sequence_complete = True
         self.component_state['startup'] = 'COMPLETE'
         self._dashboard()
-
-    def _request_trigger(self, client, description):
-        if not client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error(f'{description}: service unavailable')
-            return False
-        future = client.call_async(Trigger.Request())
-        deadline = time.monotonic() + 2.0
-        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.1)
-        if future.done() and future.result() and future.result().success:
-            self.get_logger().info(f'{description}: {future.result().message}')
-            return True
-        else:
-            self.get_logger().error(f'{description}: failed or timed out')
-            return False
-
-    def _trigger_safe_stop(self, reason):
-        now = time.monotonic()
-        first_fault = not self.runtime_fault
-        if first_fault:
-            self.runtime_fault = True
-            self.get_logger().fatal(
-                f'critical runtime failure: {reason}; stopping mission and motion')
-            self.component_state['runtime safety'] = 'LATCHED; manual clear required'
-            self._dashboard()
-        if now - self._last_safety_retry < 2.0:
-            return
-        self._last_safety_retry = now
-        if not self._mission_stop_applied:
-            self._mission_stop_applied = self._request_trigger(
-                self._mission_stop, 'mission stop')
-        if not self._motion_stop_applied:
-            self._motion_stop_applied = self._request_trigger(
-                self._safe_stop, 'BasicMotion safe stop')
 
     def monitor(self):
         now = time.monotonic()
         if now - self._last_monitor < 0.5:
             return
         self._last_monitor = now
-        try:
-            self._check_children()
-        except StartupBlocked as exc:
-            if self.monitoring_enabled:
-                self._trigger_safe_stop(str(exc))
-        if self.runtime_fault:
-            self._trigger_safe_stop('retrying unconfirmed safety-stop requests')
-            return
-        if not self.startup_sequence_complete or not self.monitoring_enabled:
-            return
-        if self._task_status is not None \
-                and int(self._task_status.status) == TaskStatus.STATUS_RUNNING:
-            has_node = self._has_node
-            if (now - self._task_status_at > self.max_age
-                    or not has_node('/basic_motion')
-                    or not has_node('/uv_localization')
-                    or (self.args.enable_hardware
-                        and not has_node('/hw_manager'))
-                    or not self.action.server_is_ready()):
-                self._trigger_safe_stop('a critical task dependency disappeared or became stale')
-            elif (self.args.check_backend_health
-                  and not self._healthy_backend()):
-                self._trigger_safe_stop(
-                    'hardware/localization/odom data stale or unhealthy')
-            elif (self.args.enable_ai and self.args.enable_perception_gate
-                  and not self._healthy_cameras()):
-                self._trigger_safe_stop('no calibrated camera stream is currently healthy')
-            elif (self.args.enable_ai and self.args.enable_perception_gate
-                  and self._healthy_cameras() and not self._healthy_perception()):
-                self._trigger_safe_stop('perception output is stale')
-            elif self.args.enable_nav and (
-                    self._nav_health is not True
-                    or now - self._nav_health_at > self.max_age):
-                self._trigger_safe_stop('navigation readiness lost')
+        for component, process, _log in self.children:
+            code = process.poll()
+            if code is not None:
+                state = f'EXITED({code})'
+                if self.component_state.get(component) != state:
+                    self.component_state[component] = state
+                    self.get_logger().warning(
+                        f'{component} process exited with status {code}; '
+                        'reported for observation only')
+        self._dashboard()
 
     def cleanup_owned(self):
-        # Stop a mission only if it belongs to this launch. Adopted user tasks
-        # remain untouched on normal shutdown.
-        owned_names = {name for name, _proc, _log in self.children}
-        task_running = (
-            self._task_status is not None
-            and int(self._task_status.status) == TaskStatus.STATUS_RUNNING)
-        if rclpy.ok():
-            owns_active_task_dependency = task_running and bool(
-                owned_names.intersection(
-                    {'task_runner', 'basic_motion', 'hardware', 'localization'}))
-            owns_task_control = (
-                'task_runner' in owned_names or owns_active_task_dependency)
-            safety_requests = []
-            if owns_task_control:
-                safety_requests.append(
-                    (self._mission_stop, 'owned mission shutdown'))
-            if ((('basic_motion' in owned_names or owns_active_task_dependency)
-                 and not self.runtime_fault)
-                    or (self.runtime_fault and not self._motion_stop_applied)):
-                safety_requests.append(
-                    (self._safe_stop, 'owned BasicMotion safe-stop'))
-            if self.runtime_fault and not self._mission_stop_applied \
-                    and not owns_task_control:
-                safety_requests.append(
-                    (self._mission_stop, 'final mission stop retry'))
-
-            # Treat the service calls as independent best-effort requests: a
-            # failed mission stop must not prevent BasicMotion safe-stop, and
-            # neither may prevent process-group cleanup.
-            for client, description in safety_requests:
-                try:
-                    self._request_trigger(client, description)
-                except Exception as exc:
-                    self.get_logger().error(
-                        f'{description}: request raised {exc}; continuing '
-                        'shutdown cleanup')
-
         self._terminate_owned_process_groups()
 
     @staticmethod
@@ -1345,13 +1071,12 @@ def _parse_args(argv=None):
     parser.add_argument('--startup-mode', default='auto')
     parser.add_argument('--ready-timeout', type=float, default=120.0)
     parser.add_argument('--max-age', type=float, default=2.0)
-    parser.add_argument('--mission-file', default='')
     for name, default in (
         ('enable_hardware', True), ('enable_motion', True),
         ('check_backend_health', False),
         ('enable_camera', False), ('enable_ai', True),
         ('enable_perception_gate', False), ('enable_nav', False),
-        ('enable_task', False), ('enable_stream', True),
+        ('enable_stream', True),
         ('enable_perception_gui', False), ('record_session', False),
     ):
         parser.add_argument('--' + name.replace('_', '-'),
@@ -1371,7 +1096,7 @@ def _parse_args(argv=None):
     args, ros_args = parser.parse_known_args(argv)
     for name in ('enable_hardware', 'enable_motion', 'check_backend_health',
                  'enable_camera', 'enable_ai', 'enable_perception_gate',
-                 'enable_nav', 'enable_task',
+                 'enable_nav',
                  'enable_stream',
                  'enable_perception_gui', 'record_session'):
         setattr(args, name, _as_bool(getattr(args, name)))
@@ -1395,9 +1120,8 @@ def main(argv=None):
         for signum in managed_signals:
             previous_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, request_orderly_shutdown)
-        # Keep the ROS context alive while cleanup calls the mission-stop and
-        # BasicMotion safe-stop services. The Python handlers above turn Ctrl-C
-        # into an orderly exit instead of shutting ROS down before cleanup.
+        # Keep the ROS context alive for orderly shutdown and cleanup of
+        # component process groups started by this bringup.
         if SignalHandlerOptions is None:
             rclpy.init(args=ros_args)
         else:
@@ -1406,7 +1130,7 @@ def main(argv=None):
         manager = RealStartupManager(args)
         # Foxy installs its SIGINT guard when the global executor is created.
         # Re-apply our orderly-shutdown handlers afterward so Ctrl-C leaves
-        # the ROS context alive for the safe-stop request and child cleanup.
+        # the ROS context alive while owned component processes are cleaned up.
         rclpy.get_global_executor()
         for signum in managed_signals:
             signal.signal(signum, request_orderly_shutdown)
@@ -1423,12 +1147,6 @@ def main(argv=None):
             manager.get_logger().fatal(
                 f'STARTUP BLOCKED: {exc}. Previously started components remain '
                 'running; no later phase will be started.')
-            if (manager.startup_stages_started
-                    and manager._task_status is not None
-                    and int(manager._task_status.status)
-                    == TaskStatus.STATUS_RUNNING):
-                manager._trigger_safe_stop(
-                    f'startup readiness failed while an existing mission was running: {exc}')
             manager._dashboard()
         except Exception as exc:
             manager.startup_blocked = True
@@ -1436,12 +1154,6 @@ def main(argv=None):
             manager.get_logger().fatal(
                 f'STARTUP BLOCKED by an unexpected error: {exc}. '
                 'Previously started components remain running.')
-            if (manager.startup_stages_started
-                    and manager._task_status is not None
-                    and int(manager._task_status.status)
-                    == TaskStatus.STATUS_RUNNING):
-                manager._trigger_safe_stop(
-                    f'startup failed while an existing mission was running: {exc}')
             manager._dashboard()
         while rclpy.ok() and not manager._shutdown_requested:
             rclpy.spin_once(manager, timeout_sec=0.2)
@@ -1456,12 +1168,6 @@ def main(argv=None):
                 manager.get_logger().error(
                     f'owned-process cleanup raised unexpectedly: {exc}')
             finally:
-                try:
-                    # Foxy's ActionClient destructor accesses its parent node;
-                    # explicitly destroy it before destroying that node.
-                    manager.action.destroy()
-                except Exception:
-                    pass
                 try:
                     manager.destroy_node()
                 except Exception:

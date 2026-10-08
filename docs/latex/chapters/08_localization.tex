@@ -31,10 +31,11 @@
 \section{健康状态}
 健康消息至少应包含传感器/估计器名称、可用标志、质量分数、时间戳和人类可读的 detail。健康状态用于 readiness、评测和故障诊断，但不能被误认为是一个具有统计意义的完整协方差。
 
+当前有一项临时覆盖：真机 localizer 忽略 MCU \code{ZitOdom.nav\_valid}，只按有限值和 odom 时间戳新鲜度发布有效状态、速度及（原点已初始化时）动态 TF。此时 \topic{/auv/state/health} 的 \code{available=true} 不代表 MCU 的 \code{navigation\_ready=true}；需要单独读取 MCU status。
+
 \section{未来定位后端接口}
 未来 FGO、ESKF 或 SLAM 后端必须满足：继续发布相同的估计状态 Topic；明确状态坐标系和时间基准；提供协方差或质量含义；可处理 DVL 丢失、USBL 离群、视觉间歇观测和时间延迟；不得订阅仿真真值。算法替换应通过同一包内的实现选择或插件边界完成。
 
 \begin{warningbox}
 当前的 bootstrap 估计器适合接口打通、SIL/HIL 回归和控制链路验证，不应在实验报告中写成高精度融合定位系统。若需要发表定位精度结果，必须说明传感器组合、估计器版本、真值对齐方法和数据集来源。
 \end{warningbox}
-

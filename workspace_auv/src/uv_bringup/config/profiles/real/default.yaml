@@ -12,13 +12,13 @@
 #   - uv_localization：读取 ZIT6/传感器状态，发布 /auv/state/odom、/auv/tf。
 #   - uv_camera：本 profile 通过 enable_camera=false 跳过；需要时单独启动。
 # 本文件中的 enable_hardware、enable_motion、enable_camera、enable_ai、
-# enable_nav、enable_task
+# enable_nav
 # 决定是否额外启用：
 #   - hw_manager（ZIT6 命令/服务代理、状态适配和 watchdog）。
 #   - basic_motion（拥有 ARM 心跳并提供 /auv/basic_motion Action Server）。
 #   - object_detector、object_localizer、object_estimator（AI 检测、几何定位和跟踪）。
 #   - uv_planning/uv_nav（导航；本模式关闭）。
-#   - task_runner（任务；本模式关闭）。
+#   - task_runner 不由 real.launch.py 管理；需要时单独启动和停止。
 # enable_stream=true 时还会启动 go2rtc 视频服务；它用于预览，不是运动控制的硬依赖。
 # record_session=false 表示不启动 uv_record 录制节点。
 # 单独启动相机：
@@ -33,7 +33,6 @@ arguments:
   enable_motion: true
   enable_camera: false
   enable_nav: false
-  enable_task: false
   enable_stream: true
   record_session: false
   record_mode: go2rtc

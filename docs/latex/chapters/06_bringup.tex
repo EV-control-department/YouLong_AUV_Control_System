@@ -93,17 +93,18 @@ ros2 launch uv_bringup real.launch.py profile:=debug
 ros2 launch uv_sim_bringup sim.launch.py profile:=debug
 ros2 launch uv_sim_bringup hil.launch.py profile:=debug
 
-# 一键运行默认 Mission；也可附加 mission_file:=/path/to/mission.yaml
+# Sim/HIL task profile 会启动任务；real profile 只准备系统组件，任务需单独启动
 ros2 launch uv_bringup real.launch.py profile:=task
 ros2 launch uv_sim_bringup sim.launch.py profile:=task
 ros2 launch uv_sim_bringup hil.launch.py profile:=task
+ros2 launch uv_task task_launch.py camera_mode:=real
 \end{lstlisting}
 
 \begin{warningbox}
-\code{profile:=task} 会自动开始 Mission，不只是启动一个空闲的任务节点。真机入口同时启用运动控制；使用前应确认车辆处于允许运动的安全环境，并检查实际传入的 \code{mission_file}。
+Sim/HIL 的 \code{profile:=task} 会启动并运行任务。real 的 \code{profile:=task} 只准备系统组件；\pkg{uv_bringup} 不启动或监控 task_runner，不发送 BasicMotion START 或 safe-stop，健康状态只打印在 bringup 终端。需要运行 real 任务时，在另一个终端启动 \pkg{uv_task} 并由操作者管理。
 \end{warningbox}
 \section{启动顺序与就绪}
-典型依赖顺序是：描述/固定 TF、硬件或仿真输入、定位、控制、相机/感知、规划、任务。常规启动默认不执行任务；选择 \code{profile:=task} 时会启用任务执行器并自动开始默认 Mission。\pkg{uv_bringup} 提供 readiness 检查，可按 backend、control、sensors、perception 阶段确认 Topic 和节点已达到运行条件。
+典型依赖顺序是：描述/固定 TF、硬件或仿真输入、定位、控制、相机/感知、规划、任务。real bringup 只启动系统组件并在终端打印健康状态；Sim/HIL 的 \code{profile:=task} 会启动任务执行器并自动开始默认 Mission。\pkg{uv_bringup} 提供启动 readiness 检查，可按 backend、control、sensors、perception 阶段确认 Topic 和节点已达到运行条件。
 
 \section{参数事实来源}
 整机启动 profile 设置 launch 开关和录制参数的默认值；组件参数采用各包默认值，可由支持 \code{params_file} 的 launch 显式覆盖；Mission/Task 参数保存在任务 YAML。相机的 real/sim 模式和内参保存在 \code{uv_camera/stereos/} 中，场景由 \code{uv_sim} 的 \code{world} 选择。参数优先级和最终生效值应通过启动日志或 ROS 参数查询确认；LaTeX 不复制完整参数树，附录只列出入口和语义。

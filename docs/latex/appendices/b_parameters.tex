@@ -19,8 +19,8 @@
   \code{enable_motion} & 所有运行模式 & 是否启动 BasicMotion。 \\
   \code{enable_ai} & real/sim/hil & 是否启动 AI/目标定位。 \\
   \code{enable_nav} & real/sim/hil & 是否启动导航节点。 \\
-  \code{enable_task} & real/sim/hil & 是否启动任务执行器。 \\
-  \code{mission_file} & 任务模式 & Mission 或单个 Task YAML。 \\
+  \code{enable_task} & sim/hil & 是否启动任务执行器；real.launch.py 不提供此开关。 \\
+  \code{mission_file} & task_launch / sim / hil & Mission 或单个 Task YAML；real 任务由独立 task_launch 加载。 \\
   \code{record_session} & real/sim/hil & 是否创建 session，记录图像、rosbag 和运行日志。 \\
   \code{record_mode} & real/sim/hil & 图像路径：raw 源帧或 go2rtc 视频。 \\
   \code{go2rtc_stream_mode} & go2rtc 录制 & 选择未标注流、标注流或两者。 \\

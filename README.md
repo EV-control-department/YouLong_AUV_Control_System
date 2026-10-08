@@ -125,12 +125,16 @@ YOULONG_GPU=nvidia 后再运行启动脚本。
 
 ### 整机启动 profile
 
-uv_bringup 真机入口以及 uv_sim_bringup 的 SIL/HIL 入口使用 profile 选择整机启停组合。真机 default 保留基础启动组合并关闭 navigation；record 关闭 AI 和 task，保留 motion 并采集 raw 源帧；debug 启动 AI、motion 和 go2rtc 录制，不自动启动 task；task 启动 AI、motion、task runner，默认自动执行完整 robocup_26.yaml mission。真机所有 profile 默认关闭尚未形成闭环的 navigation，需要时可显式传 enable_nav:=true。
+uv_bringup 真机入口以及 uv_sim_bringup 的 SIL/HIL 入口使用 profile 选择整机启动组合。真机 default 保留基础启动组合并关闭 navigation；record 关闭 AI，保留 motion 并采集 raw 源帧；debug 启动 AI、motion 和 go2rtc 录制；task 准备 AI、motion、相机和录制组件。真机 bringup 不启动或监控 task_runner，不发送 BasicMotion START 或 safe-stop；硬件、定位、相机、感知和导航健康只显示在 bringup 终端。任务进程需在单独终端启动和管理。真机所有 profile 默认关闭尚未形成闭环的 navigation，需要时可显式传 enable_nav:=true。
 
     ros2 launch uv_bringup real.launch.py profile:=default
     ros2 launch uv_bringup real.launch.py profile:=record
     ros2 launch uv_bringup real.launch.py profile:=debug
     ros2 launch uv_bringup real.launch.py profile:=task
+
+    # 在另一个终端单独启动任务；运行、停止和重启由操作者管理
+    ros2 launch uv_task task_launch.py camera_mode:=real \
+      mission_file:=/workspace/workspace_auv/src/uv_task/config/missions/robocup_26.yaml
 
 Sim/HIL 也用 profile:=default|record|debug|task 选择整机启动组合；原有启停和录制组合保留。相机和其他组件不再各自选择 profile，组件从默认参数运行。
 
@@ -142,7 +146,7 @@ Sim/HIL 也用 profile:=default|record|debug|task 选择整机启动组合；原
     ros2 launch uv_sim_bringup hil.launch.py profile:=debug
     ros2 launch uv_sim_bringup hil.launch.py profile:=task
 
-任务 profile 未指定 mission_file 时使用默认的 robocup_26.yaml。单项任务文件示例见下方任务配置说明。
+Sim/HIL 的 task profile 未指定 mission_file 时使用默认的 robocup_26.yaml。real bringup 不接收 mission_file；单项任务文件示例见下方任务配置说明。
 
 仿真场景通过 uv_sim 的 world 选择，例如：
 
@@ -166,7 +170,7 @@ workspace_auv/src/uv_task/config/
 └── tasks/*.yaml
 ```
 
-未指定时默认自动加载 `robocup_26.yaml`。`mission_file` 同时支持任务链
+task_runner 未指定任务文件时默认自动加载 `robocup_26.yaml`。`mission_file` 同时支持任务链
 YAML 和单个 task YAML；例如直接执行过门任务：
 
 ```bash

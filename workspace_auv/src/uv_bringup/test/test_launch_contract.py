@@ -44,7 +44,7 @@ def test_real_mode_delegates_only_to_startup_coordinator():
     assert ast.literal_eval(keywords["executable"]) == "real_startup"
 
 
-def test_real_startup_contract_is_staged_and_task_launch_is_deferred():
+def test_real_startup_contract_is_staged_and_task_control_is_external():
     startup = (PACKAGE_ROOT / "uv_bringup" / "real_startup.py").read_text(
         encoding="utf-8")
     task_launch = (AUV_SOURCE_ROOT / "uv_task" / "launch" /
@@ -52,35 +52,40 @@ def test_real_startup_contract_is_staged_and_task_launch_is_deferred():
     task_runner = (AUV_SOURCE_ROOT / "uv_task" / "uv_task" /
                    "task_runner.py").read_text(encoding="utf-8")
     assert "_start_core()" in startup
-    assert "_start_motion_and_reset_origin()" in startup
+    assert "_start_motion_component()" in startup
     assert "_start_camera_perception()" in startup
     assert "_start_navigation()" in startup
-    assert "_start_or_adopt_task()" in startup
     startup_stages = (
         "self._start_core()",
         "self._start_camera_perception()",
         "self._start_navigation()",
-        "self._start_motion_and_reset_origin()",
-        "self._start_or_adopt_task()",
+        "self._start_motion_component()",
     )
     startup_positions = [startup.index(stage) for stage in startup_stages]
     assert startup_positions == sorted(startup_positions)
     assert "startup_mode" in startup
-    assert "startup_sequence_complete" in startup
     assert "Initial component decisions" in startup
     assert "no later phase will be started" in startup
     assert "SignalHandlerOptions.NO" in startup
     assert "except ImportError" in startup
     assert "rclpy.get_global_executor()" in startup
-    assert "manager.action.destroy()" in startup
     assert "_terminate_owned_process_groups" in startup
     assert "start_new_session=True" in startup
+    for control_or_task in (
+            "MISSION_STATUS", "MISSION_RUN", "TaskStatus", "RunTask",
+            "BASIC_MOTION_SAFE_STOP", "send_goal_async", "task_launch.py",
+            "enable_task"):
+        assert control_or_task not in startup
+    assert "origin reset" not in startup
     assert "sigterm_timeout='22'" in _source("real.launch.py")
     assert "auto_start" in task_launch
     assert '"auto_start", default_value="true"' in task_launch
     assert "node._auto_start" in task_runner
     assert "declare_parameter('auto_start', True)" in task_runner
-    assert "'auto_start:=false'" in startup
+    assert "'auto_start:=false'" not in startup
+    real_launch = _source("real.launch.py")
+    assert "LaunchConfiguration('enable_task')" not in real_launch
+    assert "LaunchConfiguration('mission_file')" not in real_launch
 
 
 def test_bringup_uses_the_invoking_terminal():
@@ -123,7 +128,7 @@ def test_real_profiles_have_expected_startup_combinations():
     assert record["enable_camera"] is True
     assert record["enable_ai"] is False
     assert record["enable_motion"] is True
-    assert record["enable_task"] is False
+    assert "enable_task" not in record
     assert record["record_mode"] == "raw"
     assert record["record_session"] is True
 
@@ -131,7 +136,7 @@ def test_real_profiles_have_expected_startup_combinations():
     assert debug["enable_camera"] is True
     assert debug["enable_ai"] is True
     assert debug["enable_motion"] is True
-    assert debug["enable_task"] is False
+    assert "enable_task" not in debug
     assert debug["record_mode"] == "go2rtc"
     assert debug["enable_stream"] is True
 
@@ -139,7 +144,7 @@ def test_real_profiles_have_expected_startup_combinations():
     assert task["enable_camera"] is True
     assert task["enable_ai"] is True
     assert task["enable_motion"] is True
-    assert task["enable_task"] is True
+    assert "enable_task" not in task
     assert task["record_mode"] == "go2rtc"
 
     default = loaded["default"]["arguments"]

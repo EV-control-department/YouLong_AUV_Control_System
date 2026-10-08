@@ -115,11 +115,12 @@ def declare_feature_arguments(
             "enable_nav", default_value=enable_nav,
             description="Enable navigation node",
         ),
-        DeclareLaunchArgument(
+    ]
+    if enable_task is not None:
+        arguments.append(DeclareLaunchArgument(
             "enable_task", default_value=enable_task,
             description="Enable task runner",
-        ),
-    ]
+        ))
     if enable_motion is not None:
         arguments.append(DeclareLaunchArgument(
             "enable_motion", default_value=enable_motion,

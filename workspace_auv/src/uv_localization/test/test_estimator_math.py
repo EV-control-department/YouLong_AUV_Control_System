@@ -104,9 +104,9 @@ def test_adapter_rejects_nonfinite_and_malformed_feedback():
     assert not EstimatorNode._valid_odom(message)
 
 
-def test_typed_odom_is_forwarded_without_second_origin_transform(adapter):
+def test_fresh_odom_is_forwarded_when_mcu_nav_valid_is_false(adapter):
     node, _clock = adapter
-    message = odom()
+    message = odom(valid=False)
     node._odom_cb(message)
     node._publish_tick()
     pose = node._odom_pub.messages[-1]
@@ -120,9 +120,9 @@ def test_typed_odom_is_forwarded_without_second_origin_transform(adapter):
     assert node._tf_pub.messages[-1].transforms[0].transform.translation.x == 3.0
 
 
-def test_valid_navigation_before_first_origin_does_not_deadlock_startup(adapter):
+def test_fresh_odom_before_first_origin_is_reported_available(adapter):
     node, _clock = adapter
-    node._odom_cb(odom(generation=0, initialized=False))
+    node._odom_cb(odom(generation=0, initialized=False, valid=False))
     node._publish_tick()
     assert node._health_pub.messages[-1].available
     assert node._odom_pub.messages[-1].nav_valid
@@ -141,7 +141,7 @@ def test_duplicate_raw_timestamp_cannot_keep_stale_nav_healthy(adapter):
     assert node._twist_pub.messages[-1].twist.twist.linear.x == 0.0
 
 
-def test_success_waits_for_valid_frame_matching_response_version_and_sample(adapter):
+def test_success_waits_for_fresh_versioned_frame_but_ignores_nav_valid(adapter):
     node, _clock = adapter
     node._odom_cb(odom())
     future = reset(node)
@@ -150,8 +150,6 @@ def test_success_waits_for_valid_frame_matching_response_version_and_sample(adap
     node._odom_cb(odom(generation=1, stamp=1050))
     node._odom_cb(odom(generation=2, stamp=1090))
     node._odom_cb(odom(generation=2, stamp=1100, valid=False))
-    assert not node._reset_result_pub.messages
-    node._odom_cb(odom(generation=2, stamp=1110))
     result = node._reset_result_pub.messages[-1]
     assert result.request_id == 11 and result.success and result.origin_generation == 2
     assert node._odom_pub.messages[-1].robot_x == 3.0

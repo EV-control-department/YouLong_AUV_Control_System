@@ -7,7 +7,6 @@ from launch_ros.actions import Node
 
 from uv_bringup.launch_common import (
     declare_feature_arguments,
-    declare_mission_file,
     declare_observability_arguments,
     declare_profile,
 )
@@ -17,12 +16,11 @@ def generate_launch_description():
     profile_actions = declare_profile(
         'real', 'uv_bringup', choices=('default', 'record', 'debug', 'task'))
     features = declare_feature_arguments(
-        enable_ai='true', enable_nav='false', enable_task='false',
+        enable_ai='true', enable_nav='false', enable_task=None,
         enable_motion='true')
     observability = declare_observability_arguments()
     declarations = [
         *profile_actions,
-        declare_mission_file(),
         *features,
         DeclareLaunchArgument('camera_stitch_fps', default_value='5.0'),
         *observability,
@@ -37,7 +35,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'check_backend_health', default_value='false',
             description=(
-                'Enable real_startup MCU/localization/odom health gates.')),
+                'Require healthy MCU/localization/odom during startup. '
+                'Health is always printed for observation.')),
         DeclareLaunchArgument('enable_hardware', default_value='true'),
         DeclareLaunchArgument(
             'enable_camera', default_value='false',
@@ -47,8 +46,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'enable_perception_gate', default_value='false',
             description=(
-                'Require healthy perception output before mission start and '
-                'during mission monitoring. Temporarily disabled by default.')),
+                'Require healthy perception output before startup advances.')),
         DeclareLaunchArgument('enable_stream', default_value='true'),
         DeclareLaunchArgument('enable_perception_gui', default_value='false'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
@@ -60,14 +58,12 @@ def generate_launch_description():
         '--ready-timeout', LaunchConfiguration('ready_timeout'),
         '--max-age', LaunchConfiguration('readiness_max_age'),
         '--check-backend-health', LaunchConfiguration('check_backend_health'),
-        '--mission-file', LaunchConfiguration('mission_file'),
         '--enable-hardware', LaunchConfiguration('enable_hardware'),
         '--enable-motion', LaunchConfiguration('enable_motion'),
         '--enable-camera', LaunchConfiguration('enable_camera'),
         '--enable-ai', LaunchConfiguration('enable_ai'),
         '--enable-perception-gate', LaunchConfiguration('enable_perception_gate'),
         '--enable-nav', LaunchConfiguration('enable_nav'),
-        '--enable-task', LaunchConfiguration('enable_task'),
         '--enable-stream', LaunchConfiguration('enable_stream'),
         '--enable-perception-gui', LaunchConfiguration('enable_perception_gui'),
         '--camera-config-dir', LaunchConfiguration('camera_config_dir'),
