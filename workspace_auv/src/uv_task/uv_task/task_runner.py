@@ -309,14 +309,15 @@ class TaskRunnerNode(Node):
         self.get_logger().info('💡 灯光已关闭')
 
     def set_servo(self, angle_rad: float, label: str):
-        """统一舵机1出口；0 rad抓取/置零，π/2 rad释放，不发送旧Float32。"""
+        """内部接口保留弧度兼容旧任务；真机ZitServo.angle发送角度值。"""
         angle_rad = float(angle_rad)
         if not math.isfinite(angle_rad) or not 0.0 <= angle_rad <= math.pi:
             raise ValueError('舵机角度必须为0~π的有限弧度值；90°请使用π/2，不要填90')
-        msg = ZitServo(servo_id=1, angle=angle_rad)
+        angle_deg = math.degrees(angle_rad)
+        msg = ZitServo(servo_id=1, angle=angle_deg)
         self.pub_servo.publish(msg)
         self.get_logger().info(
-            f'⚙️  舵机1：{label}（角度={math.degrees(angle_rad):.1f}° / {angle_rad:.4f} rad，已发指令）')
+            f'⚙️  舵机1：{label}（发布angle={angle_deg:.1f}°；内部={angle_rad:.4f} rad，已发指令）')
 
     # ── 下视对齐工具 ───────────────────────────────────────────────
 

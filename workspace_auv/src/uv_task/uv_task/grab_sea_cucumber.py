@@ -62,7 +62,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         release_deg = float(params.get('release_servo_angle_deg', 90.0))
         if not math.isclose(pickup_deg, 0.0, abs_tol=0.01) or not math.isclose(release_deg, 90.0, abs_tol=0.01):
             raise ValueError('舵机1固定定义为抓0°、放90°')
-        # 配置使用角度；现有ZitServo线协议/固件仍接收弧度，统一出口不得发送90rad。
+        # 配置使用角度；任务内部沿用弧度接口，set_servo出口再转为真机角度协议。
         self._release_angle = math.radians(release_deg)
         self._pickup_angle = math.radians(pickup_deg)
         # 兼容旧配置，但拒绝与实机定义相反的角度，不允许静默改变抓放方向。

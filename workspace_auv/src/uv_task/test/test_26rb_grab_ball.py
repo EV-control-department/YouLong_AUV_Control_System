@@ -53,7 +53,7 @@ def test_negative_sea_descent_rejected_before_initialization():
         GrabSeaCucumberTask(None, params)
 
 
-def test_sea_degree_config_converts_to_existing_radian_protocol_without_old_descent_cap():
+def test_sea_degree_config_preserves_internal_radians_without_old_descent_cap():
     from uv_task.config_loader import load_task
     params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
     params.update(descent_speed_mps=.5, descent_duration_seconds=3.,
@@ -238,7 +238,9 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
     fake.set_servo = lambda angle, label: namespace['set_servo'](fake, angle, label)
     fake.set_servo(math.pi/2, '放')
     assert messages[-1].servo_id == 1
-    assert messages[-1].angle == pytest.approx(math.pi/2)
+    assert messages[-1].angle == pytest.approx(90.)
+    fake.set_servo(math.pi, '180度')
+    assert messages[-1].angle == pytest.approx(180.)
     assert namespace['_do_start'](fake)
     assert messages[-1].angle == 0
     assert messages[-1].servo_id == 1

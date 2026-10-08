@@ -52,8 +52,9 @@ ros2 run uv_task task_runner --ros-args \
 实现方向限制或专用抓取模式，不能靠此任务保证。
 
 舵机任务配置已采用 `gripper.pickup_angle_deg: 0.0` 和
-`gripper.release_angle_deg: 90.0`。现有ZitServo消息/MCU接口仍为弧度，
-发送时转换为0和π/2；不更改公共协议、不把90直接当作rad发送。
+`gripper.release_angle_deg: 90.0`。按最新真机rqt实测，ZitServo.angle单位为度，
+发布值是0和90。任务内部set_servo接口仍接受弧度以兼容旧任务，出口统一转换为度。
+本地旧固件副本的rad注释不适用于当前真机；未修改或烧录该固件副本。
 
 海参下视视觉伺服的物理安装方向：任务配置 `down_camera_mount_yaw_deg: 180.0`
 表示下视双目整体绕机体yaw旋转180°。camera的 `down_rotate_180` 是显示/推理

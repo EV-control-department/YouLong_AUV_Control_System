@@ -83,10 +83,10 @@ raw/annotated 推流同步旋转，位姿文字在旋转后叠加；前视不变
 该方式绕过位置环而不是速度环；MCU仍可能制动或反向出力，严格限推力需固件支持。
 
 舵机唯一出口为 `/zit6/cmd/servo`，类型 **`zit6_interfaces/msg/ZitServo`**：
-`servo_id=1`，`angle=0.0` 是抓取，`angle=1.5707963267948966` 是90°释放。
+`servo_id=1`，`angle=0.0` 是抓取，`angle=90.0` 是90°释放（当前真机rqt实测角度制）。
 START 的跳过准备、回车和正常准备路径均发送舵机1置零。
-任务YAML采用 `pickup_angle_deg: 0`、`release_angle_deg: 90`；发消息时转换为弧度。
-线协议单位仍是弧度，不得向话题直接发送90；关闭旧的Float32发布器。发布成功不等于机械到位，
+任务YAML采用 `pickup_angle_deg: 0`、`release_angle_deg: 90`；最终消息同样使用度。
+旧任务内部接口仍使用弧度，统一出口转换为度；关闭旧的Float32发布器。发布成功不等于机械到位，
 `ZitServoState` 也只是UART接受的目标角度，并非实测舵机位置。
 
 现场先核对海参类别2、每目640×480，填写 `search.pose`、`delivery.pose`、
