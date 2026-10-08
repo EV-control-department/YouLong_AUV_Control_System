@@ -396,12 +396,13 @@ class TaskRunnerNode(Node):
 
     # ── 灯光 / 舵机控制 ────────────────────────────────────────────
 
-    def set_light(self, color: int, label: str):
+    def set_light(self, color: int, label: str, *, log: bool = True):
         color = int(color)
         msg = UInt8(data=color)
         self.pub_light.publish(msg)
         self._light_state = color
-        self.get_logger().info(f'💡 灯光已打开：{label}（数值={color}）')
+        if log:
+            self.get_logger().info(f'💡 灯光已打开：{label}（数值={color}）')
 
     def light_off(self):
         msg = UInt8(data=0)
@@ -409,11 +410,11 @@ class TaskRunnerNode(Node):
         self._light_state = self.LIGHT_OFF
         self.get_logger().info('💡 灯光已关闭')
 
-    def _set_task_phase_light(self, color: int, label: str):
+    def _set_task_phase_light(self, color: int, label: str, *, log: bool = True):
         """Publish a task phase color only when it changes."""
         color = int(color)
         if self._light_state != color:
-            self.set_light(color, label)
+            self.set_light(color, label, log=log)
 
     def _pulse_task_light(self, color: int, label: str, *,
                           duration: float = 1.0,
@@ -1165,7 +1166,8 @@ class TaskRunnerNode(Node):
         next_blink_at = time.monotonic() + blink_interval
         if blink_colors:
             self._set_task_phase_light(
-                blink_colors[blink_index], f'{type_name} 初始动作闪灯')
+                blink_colors[blink_index], f'{type_name} 初始动作闪灯',
+                log=False)
 
         def update_blink_light():
             nonlocal blink_index, next_blink_at
@@ -1173,7 +1175,8 @@ class TaskRunnerNode(Node):
                 blink_index = (blink_index + 1) % len(blink_colors)
                 next_blink_at = time.monotonic() + blink_interval
                 self._set_task_phase_light(
-                    blink_colors[blink_index], f'{type_name} 初始动作闪灯')
+                    blink_colors[blink_index], f'{type_name} 初始动作闪灯',
+                    log=False)
 
         while rclpy.ok() and not self.stopped and not send_future.done():
             update_blink_light()

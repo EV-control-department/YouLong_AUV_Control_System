@@ -30,8 +30,8 @@ class RB26HitBallsTask:
         self._node = node
         self._params = params
         self._impact_ball_observations = {}
+        self._impact_ball_positions = {}
         self._indicated_targets = set()
-        self._measurements_callback_count = 0
         self._measurements_subscription = node.create_subscription(
             ObjectMeasurementArray, MEASUREMENTS,
             self._measurements_cb, 10)
@@ -44,71 +44,91 @@ class RB26HitBallsTask:
             self._node.destroy_subscription(subscription)
 
     def _measurements_cb(self, msg: ObjectMeasurementArray):
-        """Log every received object measurement and cache front-camera rays."""
+        """Cache best front rays and positions for configured targets."""
         node = self._node
-        self._measurements_callback_count += 1
-        callback_count = self._measurements_callback_count
-        item_summaries = []
-        for index, measurement in enumerate(msg.measurements, start=1):
-            class_id = int(measurement.class_id)
-            mapped_name = node._model_mapping.model_class_name(class_id)
-            mapped_physical = node._model_mapping.physical_class_name(class_id)
-            class_name = str(
-                getattr(measurement, 'class_name', '') or mapped_name)
-            physical_name = str(
-                getattr(measurement, 'physical_class_name', '')
-                or mapped_physical)
-            camera = str(getattr(measurement, 'source_camera', '')).strip()
-            confidence = float(measurement.confidence)
-            details = (
-                f'#{index} {physical_name} (class={class_name}, id={class_id}, '
-                f'camera={camera or "?"}, confidence={confidence:.3f}, '
-                f'form={int(measurement.measurement_form)})')
-            if measurement.has_ray:
-                details += (
-                    f', ray_dir=({float(measurement.ray_direction_x):.3f},'
-                    f'{float(measurement.ray_direction_y):.3f},'
-                    f'{float(measurement.ray_direction_z):.3f})')
-            else:
-                details += ', ray=none'
-            if measurement.has_position:
-                details += (
-                    f', xyz=({float(measurement.world_x):.3f},'
-                    f'{float(measurement.world_y):.3f},'
-                    f'{float(measurement.world_z):.3f})')
-            item_summaries.append(details)
-        item_text = '; '.join(item_summaries) if item_summaries else '无测量项'
-        node.get_logger().info(
-            f'hit_balls：/auv/perception/measurements 回调 '
-            f'#{callback_count}，frame={msg.header.frame_id or "?"}，'
-            f'{len(msg.measurements)} 条测量：{item_text}')
+        values = self._params.get(
+            'order', ['impact_ball_blue', 'impact_ball_red'])
+        if isinstance(values, (str, int, np.integer)):
+            values = [values]
+        target_names_by_class = {}
+        for value in values:
+            name = self._normalize_impact_ball_name(value)
+            if name is None:
+                continue
+            class_id = node._model_mapping.model_class_id(
+                name, required=False)
+            if class_id is not None:
+                target_names_by_class[int(class_id)] = name
 
         received_at = time.monotonic()
+        min_confidence = float(self._params.get('min_confidence', 0.05))
         latest_by_class = {}
+        latest_positions_by_class = {}
         for measurement in msg.measurements:
+            class_id = int(measurement.class_id)
+            if class_id not in target_names_by_class:
+                continue
             source = str(measurement.source_camera).strip().lower()
-            if not source.startswith('front') or not measurement.has_ray:
+            if not source.startswith('front'):
                 continue
             confidence = float(measurement.confidence)
-            if not math.isfinite(confidence):
+            if not math.isfinite(confidence) or confidence < min_confidence:
                 continue
-            class_id = int(measurement.class_id)
+
+            if measurement.has_position:
+                position = (
+                    float(measurement.world_x),
+                    float(measurement.world_y),
+                    float(measurement.world_z),
+                )
+                if all(math.isfinite(value) for value in position):
+                    candidate = {
+                        'received_at': received_at,
+                        'confidence': confidence,
+                        'source': source,
+                        'measurement_form': int(measurement.measurement_form),
+                        'position': position,
+                    }
+                    previous = latest_positions_by_class.get(class_id)
+                    if (previous is None
+                            or confidence > previous['confidence']):
+                        latest_positions_by_class[class_id] = candidate
+
+            if not measurement.has_ray:
+                continue
+            ray_direction = (
+                float(measurement.ray_direction_x),
+                float(measurement.ray_direction_y),
+                float(measurement.ray_direction_z),
+            )
+            if (not all(math.isfinite(value) for value in ray_direction)
+                    or math.hypot(ray_direction[0], ray_direction[1]) <= 1e-6):
+                continue
             observation = {
                 'received_at': received_at,
                 'confidence': confidence,
                 'source': source,
-                'ray_direction': (
-                    float(measurement.ray_direction_x),
-                    float(measurement.ray_direction_y),
-                    float(measurement.ray_direction_z),
-                ),
+                'measurement_form': int(measurement.measurement_form),
+                'ray_direction': ray_direction,
             }
             previous = latest_by_class.get(class_id)
-            if previous is None or confidence >= previous['confidence']:
+            if previous is None or confidence > previous['confidence']:
                 latest_by_class[class_id] = observation
-        if latest_by_class:
-            with node._perception_lock:
-                self._impact_ball_observations.update(latest_by_class)
+
+        if not latest_by_class and not latest_positions_by_class:
+            return
+        with node._perception_lock:
+            self._impact_ball_observations.update(latest_by_class)
+            self._impact_ball_positions.update(latest_positions_by_class)
+
+        for class_id, observation in latest_by_class.items():
+            ray_x, ray_y, ray_z = observation['ray_direction']
+            node.get_logger().info(
+                f'hit_balls：采纳 {target_names_by_class[class_id]} 观测 '
+                f'(id={class_id}, camera={observation["source"]}, '
+                f'form={observation["measurement_form"]})，'
+                f'confidence={observation["confidence"]:.3f}，'
+                f'ray_dir=({ray_x:.3f},{ray_y:.3f},{ray_z:.3f})')
 
     def _normalize_impact_ball_name(self, value):
         """Accept only canonical impact-ball names from the model registry."""
@@ -172,6 +192,30 @@ class RB26HitBallsTask:
             return None
         yaw = math.degrees(math.atan2(ray_y, ray_x))
         return {**cached, 'yaw_deg': node._wrap_yaw_degrees(yaw)}
+
+    def _latest_impact_ball_position(
+            self, name: str, params: dict, *, reference_received=None):
+        """Return a fresh direct front-camera XYZ position, if available."""
+        node = self._node
+        class_id = node._model_mapping.model_class_id(name, required=False)
+        if class_id is None:
+            return None
+        with node._perception_lock:
+            cached = self._impact_ball_positions.get(int(class_id))
+        if cached is None:
+            return None
+        received_at = float(cached['received_at'])
+        max_age = max(0.0, float(params.get(
+            'search_observation_max_age', 5.0)))
+        if (time.monotonic() - received_at > max_age
+                or (reference_received is not None
+                    and received_at + 1e-6 < float(reference_received))
+                or cached['confidence'] < float(
+                    params.get('min_confidence', 0.05))):
+            return None
+        if not all(math.isfinite(value) for value in cached['position']):
+            return None
+        return cached
 
     def _wait_for_impact_ball_observation(
             self, name: str, params: dict, *, timeout: float,
@@ -441,6 +485,19 @@ class RB26HitBallsTask:
             if observation is None:
                 continue
             last_observation_received = observation['received_at']
+            target_position = self._latest_impact_ball_position(
+                name, params, reference_received=last_observation_received)
+            if target_position is not None:
+                pose = node._latest_robot_pose()
+                target_x, target_y, target_z = target_position['position']
+                horizontal_distance = math.hypot(
+                    target_x - pose[0], target_y - pose[1])
+                node.get_logger().info(
+                    f'hit_balls：{name} 实时目标位置(odom)='
+                    f'({target_x:.3f}, {target_y:.3f}, {target_z:.3f})，'
+                    f'水平距离={horizontal_distance:.3f}m，'
+                    f'camera={target_position["source"]}，'
+                    f'confidence={target_position["confidence"]:.3f}')
             yaw = float(observation['yaw_deg'])
             if (last_sent_yaw is not None
                     and abs(node._wrap_yaw_degrees(
