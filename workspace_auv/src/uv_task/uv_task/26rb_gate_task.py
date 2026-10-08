@@ -1403,17 +1403,8 @@ class RB26GateTask:
         """按 60°、120°、180° 三轮扫描寻找最大门框。"""
 
         start_yaw = float(self._node._cmd_yaw)
-        if initial:
-            # 在 NED 坐标系中，从上方俯视时正偏航为顺时针方向。先建立
-            # 面向东方的参考方向，再进行第一次视觉扫描。
-            start_yaw += 90.0
-            if not self._rotate_to(start_yaw, '开始扫描前位置环顺时针旋转90度'):
-                return None
-            if self._scan_settle > 0.0:
-                time.sleep(self._scan_settle)
-            start_yaw = float(self._node._cmd_yaw)
 
-        # 保留原有的相对起始偏移，然后从这个航向开始执行三轮扫描。
+        # 从当前航向加上配置的相对起始偏移，开始执行三轮扫描。
         start_yaw += self._search_start_offset_deg
         if not self._rotate_to(start_yaw, '位置环转到搜索起点'):
             return None
