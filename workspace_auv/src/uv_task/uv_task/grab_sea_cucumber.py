@@ -35,10 +35,12 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             raise ValueError(
                 f'抓海参缺少必填参数：{", ".join(missing)}；'
                 '请在任务 YAML 或 params 中填写现场标定值')
-        max_press_distance = float(params['max_press_distance_m'])
         speed = float(params['descent_speed_mps'])
         duration = float(params['descent_duration_seconds'])
-        
+        # 不恢复旧的0.3m/s和0.5m行程限幅；现场决定速度、持续时间。
+        # 仍拒绝NaN、负速度或零时长，避免反向运动和无法终止的指令。
+        if not math.isfinite(speed) or not math.isfinite(duration) or speed <= 0 or duration <= 0:
+            raise ValueError('下压速度和时长必须是有限正数')
         super().__init__(node, params)
         self._class_id = int(params['sea_cucumber_class_id'])
         if self._class_id < 0:
@@ -56,8 +58,13 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._drop_pose = tuple(float(v) for v in params['drop_pose'])
         if len(self._drop_pose) != 4 or not all(map(math.isfinite, self._drop_pose)):
             raise ValueError('drop_pose 必须是有限数值 [x, y, z, yaw_deg]')
-        self._release_angle = math.pi / 2
-        self._pickup_angle = 0.0
+        pickup_deg = float(params.get('pickup_servo_angle_deg', 0.0))
+        release_deg = float(params.get('release_servo_angle_deg', 90.0))
+        if not math.isclose(pickup_deg, 0.0, abs_tol=0.01) or not math.isclose(release_deg, 90.0, abs_tol=0.01):
+            raise ValueError('舵机1固定定义为抓0°、放90°')
+        # 配置使用角度；现有ZitServo线协议/固件仍接收弧度，统一出口不得发送90rad。
+        self._release_angle = math.radians(release_deg)
+        self._pickup_angle = math.radians(pickup_deg)
         # 兼容旧配置，但拒绝与实机定义相反的角度，不允许静默改变抓放方向。
         for key, expected in (('pickup_servo_angle_rad', self._pickup_angle),
                               ('release_servo_angle_rad', self._release_angle)):
@@ -70,10 +77,9 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._min_confidence = float(params.get('min_confidence', 0.35))
         self._drop_timeout = float(params.get('drop_timeout_seconds', 90.0))
         self._release_wait = float(params.get('release_wait_seconds', 2.0))
-        self._ascent_step = float(params.get('ascent_step_m', 0.03))
-        self._ascent_step_timeout = float(params.get('ascent_step_timeout_seconds', 8.0))
-        self._ascent_pause = float(params.get('ascent_pause_seconds', 0.5))
-        self._ascent_tolerance = float(params.get('ascent_tolerance_m', 0.015))
+        self._ascent_speed = float(params.get('ascent_speed_mps', 0.01))
+        self._ascent_period = float(params.get('ascent_publish_period', 0.05))
+        self._ascent_tolerance = float(params.get('ascent_tolerance_m', 0.01))
         self._max_failed_attempts = int(params.get('max_failed_attempts', 3))
         self._pixel_tolerance = float(params.get('pixel_tolerance_fraction', 0.035))
         width = float(params.get('image_width', 640.0))
@@ -84,11 +90,6 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                 or self._total_timeout <= 0 or self._drop_timeout <= 0
                 or self._max_failed_attempts < 0 or not 0 < self._min_confidence <= 1):
             raise ValueError('抓海参视觉、计数或超时参数无效')
-        if (not 0.01 <= self._ascent_step <= 0.05
-                or not 0 < self._ascent_tolerance < self._ascent_step
-                or self._ascent_step_timeout <= 0
-                or not 0 <= self._ascent_pause <= 5.0):
-            raise ValueError('抓海参上浮步长、容差或等待参数无效')
         # 真机左目像素伺服必须使用与当前采集模式一致的实测 K，不再沿用
         # 抓球任务由名义 HFOV 推算的焦距。
         cal_width, cal_height, left_k, _, _, _, _, _ = \
@@ -235,69 +236,62 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         """上浮只能依据实测位姿，不能使用任务节点的指令位姿兜底。"""
         with self._node._perception_lock:
             pose = self._node._robot_pose
+            received = getattr(self._node, '_robot_pose_received', time.monotonic())
+        if time.monotonic() - received > 1.0:
+            return None
         if pose is None or len(pose) < 6 or not all(math.isfinite(float(v)) for v in pose):
             return None
         return tuple(float(v) for v in pose)
 
     def _ascend_to_depth(self, target_z, deadline):
-        """对所有上浮路径使用小幅 z-only BMOVE，等待每步实测到位。"""
+        """绕过位置步进环，直接持续发布负body-z速度；不发送向下修正。"""
         pose = self._measured_pose()
         if pose is None:
             self._logger.error('抓海参：没有实测位姿，拒绝盲目上浮')
             return False
         self._logger.info(
-            f'抓海参：开始慢速步进上浮，当前z={pose[2]:.3f}m，'
-            f'目标z={target_z:.3f}m，单步≤{self._ascent_step:.3f}m')
-
-        # z 正方向向下。BMOVE 本身没有推力/速度限制，必须等实测深度
-        # 达到当前小步目标后才允许发送下一步，避免指令在容差内快速累积。
-        while not self._node.stopped and time.monotonic() < deadline:
-            pose = self._measured_pose()
-            if pose is None:
-                self._logger.error('抓海参：上浮期间丢失实测位姿')
-                return False
-            current_z = pose[2]
-            if current_z < target_z - self._ascent_step:
-                self._logger.error('抓海参：上浮超出目标深度，停止后续步进')
-                return False
-            if current_z <= target_z + self._ascent_tolerance:
-                break
-            step_target_z = max(target_z, current_z - self._ascent_step)
-            step_deadline = min(deadline, time.monotonic() + self._ascent_step_timeout)
-            success, message = self._node._send_action_goal(
-                BasicMotion.Goal.BMOVE,
-                [0.0, 0.0, step_target_z - current_z, 0.0], 'z',
-                timeout=max(0.1, step_deadline - time.monotonic()),
-                task_context=self._node._format_motion_context('抓海参后小步上浮'))
-            if not success:
-                self._logger.error(f'抓海参：上浮 BMOVE 失败：{message}')
-                return False
-            while not self._node.stopped and time.monotonic() < step_deadline:
+            f'抓海参：直接速度上浮，当前z={pose[2]:.3f}m，目标z={target_z:.3f}m，'
+            f'速度上限={self._ascent_speed:.3f}m/s；不使用BMOVE位置拉升')
+        last_log = float('-inf')
+        try:
+            while not self._node.stopped and time.monotonic() < deadline:
                 pose = self._measured_pose()
                 if pose is None:
-                    self._logger.error('抓海参：等待上浮到位时丢失实测位姿')
+                    self._logger.error('抓海参：速度上浮期间丢失实测位姿')
                     return False
-                if pose[2] <= step_target_z + self._ascent_tolerance:
-                    break
-                time.sleep(min(0.05, max(0.0, step_deadline - time.monotonic())))
-            else:
-                self._logger.error(
-                    f'抓海参：单步上浮未到位，目标z={step_target_z:.3f}m；'
-                    '停止发送后续上浮指令')
-                return False
-            self._logger.info(
-                f'抓海参：上浮单步到位，实测z={pose[2]:.3f}m，'
-                f'目标z={target_z:.3f}m')
-            pause_end = min(deadline, time.monotonic() + self._ascent_pause)
-            while not self._node.stopped and time.monotonic() < pause_end:
-                time.sleep(min(0.05, pause_end - time.monotonic()))
-        else:
+                remaining = pose[2] - target_z
+                if remaining <= self._ascent_tolerance:
+                    self._node._cmd_z = pose[2]
+                    self._logger.info(f'抓海参：速度上浮到位，实测z={pose[2]:.3f}m；不向下纠偏')
+                    return True
+                # 距目标越近，指令越缓；不突然从下压切到大幅上浮速度。
+                speed = min(self._ascent_speed, max(0.001, remaining * 0.1))
+                self._node._publish_body_velocity(vertical_mps=-speed)
+                if time.monotonic() - last_log >= 1.0:
+                    last_log = time.monotonic()
+                    self._logger.info(f'抓海参：上浮z={pose[2]:.3f}m，剩余={remaining:.3f}m，vz={-speed:.4f}m/s')
+                time.sleep(min(self._ascent_period, max(0., deadline-time.monotonic())))
             self._logger.error('抓海参：上浮超时或任务被停止')
             return False
-        return True
+        finally:
+            # 零速度仍是MCU速度环，不等于原始推进器零推力。
+            self._node._publish_body_velocity()
+
+    def _descend(self):
+        """一次连续下压，不拆成位置步进；异常/停止时也发送零速度。"""
+        self._logger.info(f'抓海参：连续下压，vz={self._descent_speed:g}m/s，'
+                          f'持续={self._descent_duration:g}s；行程由现场配置决定')
+        deadline = time.monotonic() + self._descent_duration
+        try:
+            while not self._node.stopped and time.monotonic() < deadline:
+                self._node._publish_body_velocity(vertical_mps=self._descent_speed)
+                time.sleep(min(self._descent_period, max(0., deadline-time.monotonic())))
+            return not self._node.stopped
+        finally:
+            self._node._publish_body_velocity()
 
     def _return_to_recorded_pose(self, recorded_pose):
-        """先用 z-only BMOVE 小步上浮，再做不含 z 的水平回位。"""
+        """先直接低速上浮，再做不含 z 的水平回位。"""
         if len(recorded_pose) != 4 or not all(math.isfinite(float(v)) for v in recorded_pose):
             self._logger.error('抓海参：记录位姿无效，拒绝上浮')
             return False

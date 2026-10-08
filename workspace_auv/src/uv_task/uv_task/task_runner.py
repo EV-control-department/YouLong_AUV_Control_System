@@ -126,6 +126,7 @@ class TaskRunnerNode(Node):
         self._perception_lock = threading.RLock()
         self._down_detections = {}   # camera_name → (monotonic, DetectionArray)
         self._robot_pose = None      # (x, y, z, roll_deg, pitch_deg, yaw_deg)
+        self._robot_pose_received = 0.0
 
         self.tasks = []
         self.current_index = 0
@@ -289,6 +290,7 @@ class TaskRunnerNode(Node):
         with self._perception_lock:
             self._robot_pose = (msg.robot_x, msg.robot_y, msg.robot_z,
                                 msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
+            self._robot_pose_received = time.monotonic()
 
     def _mcu_status_cb(self, msg: ZitStatus):
         self._mcu_status = msg

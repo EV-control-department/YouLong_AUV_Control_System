@@ -44,13 +44,50 @@ def test_failed_start_prevents_grab_and_movement():
     assert node.stopped and not node.running
 
 
-def test_unsafe_sea_descent_reports_distance_before_initialization():
+def test_negative_sea_descent_rejected_before_initialization():
     params = dict(sea_cucumber_class_id=2, image_width=640, image_height=480,
                   gripper_offset_x_m=.3, gripper_offset_y_m=0.,
-                  descent_speed_mps=.5, descent_duration_seconds=4.,
+                  descent_speed_mps=-.5, descent_duration_seconds=4.,
                   max_press_distance_m=1.3, drop_pose=[0,0,.3,0], search_pose=[1,1,.3,0])
-    with pytest.raises(ValueError, match='预计行程=2m'):
+    with pytest.raises(ValueError, match='有限正数'):
         GrabSeaCucumberTask(None, params)
+
+
+def test_sea_degree_config_converts_to_existing_radian_protocol_without_old_descent_cap():
+    from uv_task.config_loader import load_task
+    params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
+    params.update(descent_speed_mps=.5, descent_duration_seconds=3.,
+                  max_press_distance_m=1.3, pickup_servo_angle_deg=0., release_servo_angle_deg=90.)
+    node = SimpleNamespace(get_logger=lambda: _Logger())
+    task = GrabSeaCucumberTask(node, params)
+    assert task._pickup_angle == 0.
+    assert task._release_angle == pytest.approx(math.pi/2)
+    assert task._descent_speed == .5 and task._descent_duration == 3.
+    assert task._ascent_speed == .01
+
+
+def test_sea_descent_exception_still_sends_zero_velocity():
+    task = _sea_flow_fake()
+    del task._descend
+    task._descent_speed, task._descent_duration, task._descent_period = .5, 3., .05
+    packets = []
+    def publish(vertical_mps=0.):
+        packets.append(vertical_mps)
+        if vertical_mps:
+            raise RuntimeError('publish failed')
+    task._node._publish_body_velocity = publish
+    with pytest.raises(RuntimeError, match='publish failed'):
+        task._descend()
+    assert packets == [.5,0.]
+
+
+def test_sea_rejects_stale_pose_before_direct_velocity_control():
+    task = _sea_flow_fake()
+    del task._measured_pose  # 检查真实方法，不使用流程测试替身。
+    task._node._perception_lock = threading.Lock()
+    task._node._robot_pose = (0,0,.8,0,0,0)
+    task._node._robot_pose_received = time.monotonic() - 2.
+    assert task._measured_pose() is None
 
 
 @pytest.mark.parametrize('robot_yaw', [0., 90., -45.])
@@ -260,7 +297,7 @@ def test_execute_retries_when_ball_remains_after_return():
     ]
 
 
-def test_sea_cucumber_ascent_uses_measured_small_bmove_steps():
+def test_sea_cucumber_ascent_uses_direct_slow_velocity():
     commands = []
     node = SimpleNamespace(
         stopped=False,
@@ -279,6 +316,14 @@ def test_sea_cucumber_ascent_uses_measured_small_bmove_steps():
         return True, 'ok'
 
     node._send_action_goal = send_goal
+    velocities = []
+    def publish(vertical_mps=0.):
+        velocities.append(vertical_mps)
+        if vertical_mps < 0:
+            pose = list(node._robot_pose)
+            pose[2] -= .03  # 模拟艇体到达下一次测量深度。
+            node._robot_pose = tuple(pose)
+    node._publish_body_velocity = publish
     task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
     task._node = node
     task._logger = _Logger()
@@ -287,12 +332,13 @@ def test_sea_cucumber_ascent_uses_measured_small_bmove_steps():
     task._ascent_step_timeout = 0.5
     task._ascent_pause = 0.0
     task._ascent_tolerance = 0.015
+    task._ascent_speed, task._ascent_period = .01, .001
 
     assert task._return_to_recorded_pose((1.1, 2.1, 0.40, 5.0))
-    climbs = [target[2] for command, target, _ in commands
-              if command == _grab.BasicMotion.Goal.BMOVE]
-    assert len(climbs) >= 3
-    assert all(-0.031 <= dz < 0 for dz in climbs)
+    assert len(velocities) >= 4
+    assert all(-.01 <= v <= 0 for v in velocities)
+    assert velocities[-1] == 0.
+    assert len(commands) == 1  # 上浮不再发送任何BMOVE。
     assert commands[-1][0] == _grab.BasicMotion.Goal.SET
     assert commands[-1][2] == 'xyrz'
     assert commands[-1][1][2] == node._robot_pose[2]
@@ -316,10 +362,14 @@ def test_sea_cucumber_ascent_stops_if_measured_depth_does_not_change():
     task._ascent_step_timeout = 0.05
     task._ascent_pause = 0.0
     task._ascent_tolerance = 0.015
+    task._ascent_speed, task._ascent_period = .01, .02
+    velocities = []
+    node._publish_body_velocity = lambda vertical_mps=0.: velocities.append(vertical_mps)
 
     assert not task._return_to_recorded_pose((1.0, 2.0, 0.40, 0.0))
-    assert len(commands) == 1
-    assert commands[0][0] == _grab.BasicMotion.Goal.BMOVE
+    assert commands == []
+    assert velocities and velocities[-1] == 0.
+    assert all(-.01 <= v <= 0 for v in velocities)
 
 
 def test_sea_cucumber_delivery_ascent_precedes_horizontal_travel():
@@ -341,6 +391,14 @@ def test_sea_cucumber_delivery_ascent_precedes_horizontal_travel():
         return True, 'ok'
 
     node._send_action_goal = send_goal
+    velocities = []
+    def publish(vertical_mps=0.):
+        velocities.append(vertical_mps)
+        if vertical_mps < 0:
+            pose = list(node._robot_pose)
+            pose[2] -= .03
+            node._robot_pose = tuple(pose)
+    node._publish_body_velocity = publish
     task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
     task._node = node
     task._logger = _Logger()
@@ -348,10 +406,11 @@ def test_sea_cucumber_delivery_ascent_precedes_horizontal_travel():
     task._ascent_step_timeout = 0.5
     task._ascent_pause = 0.0
     task._ascent_tolerance = 0.015
+    task._ascent_speed, task._ascent_period = .01, .001
 
     assert task._travel((3.0, 4.0, 0.40, 10.0), '投放',
                         time.monotonic() + 5.0, 5.0)
-    assert all(command == _grab.BasicMotion.Goal.BMOVE
-               for command, _, _ in commands[:-1])
+    assert len(commands) == 1
+    assert velocities and velocities[-1] == 0.
     assert commands[-1][0] == _grab.BasicMotion.Goal.WTRAVEL
     assert commands[-1][1][2] >= node._robot_pose[2]
