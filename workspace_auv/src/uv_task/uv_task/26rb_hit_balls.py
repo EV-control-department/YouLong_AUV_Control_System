@@ -14,7 +14,7 @@ import rclpy
 
 from auv_protocol.topics import MEASUREMENTS
 from uv_msgs.action import BasicMotion
-from uv_msgs.msg import ObjectMeasurementArray, ObjectTrack
+from uv_msgs.msg import ObjectMeasurementArray
 from uv_task.task_outcome import TaskOutcome
 
 
@@ -234,70 +234,6 @@ class RB26HitBallsTask:
             time.sleep(min(0.05, remaining))
         return None
 
-    def _best_impact_ball_target(self, name: str, params: dict):
-        """Choose the best usable estimate for one suspended impact ball."""
-        node = self._node
-        class_id = node._model_mapping.model_class_id(name)
-        min_confidence = float(params.get('min_confidence', 0.05))
-        min_observations = int(params.get('min_observations', 1))
-        with node._perception_lock:
-            tracks = list(node.object_tracks.tracks)
-
-        candidates = []
-        for target in tracks:
-            target_name = str(
-                getattr(target, 'physical_class_name', '') or
-                getattr(target, 'class_name', '')).strip().lower()
-            if (int(getattr(target, 'class_id', -1)) != class_id
-                    and target_name != name):
-                continue
-            source = str(getattr(target, 'estimate_source', '')).strip().lower()
-            if source and not source.startswith('front'):
-                continue
-            status = int(getattr(
-                target, 'status', ObjectTrack.STATUS_TENTATIVE))
-            confidence = float(getattr(target, 'confidence', 0.0))
-            observations = int(getattr(target, 'measurement_count', 0))
-            if (not math.isfinite(confidence)
-                    or confidence < min_confidence
-                    or observations < min_observations):
-                continue
-            x = float(target.world_x)
-            y = float(target.world_y)
-            z = float(target.world_z)
-            if not all(math.isfinite(value) for value in (x, y, z)):
-                continue
-            distance = math.hypot(x - node._cmd_x, y - node._cmd_y)
-            candidates.append((
-                status != ObjectTrack.STATUS_STABLE,
-                distance,
-                -confidence,
-                {'name': name, 'x': x, 'y': y, 'z': z,
-                 'confidence': confidence, 'observations': observations,
-                 'source': source or 'tracks'},
-            ))
-
-        if not candidates:
-            return None
-        candidates.sort(key=lambda item: item[:3])
-        return candidates[0][3]
-
-    def _wait_for_impact_ball(self, name: str, params: dict):
-        """Wait for a usable target estimate while allowing task stop."""
-        node = self._node
-        timeout = max(0.0, float(params.get('detect_timeout', 30.0)))
-        deadline = time.monotonic() + timeout
-        while rclpy.ok() and not node.stopped:
-            target = self._best_impact_ball_target(name, params)
-            if target is not None:
-                return target
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.1)
-        node.get_logger().error(
-            f'hit_balls：等待 {name} 目标估计超时（{timeout:.1f}s）')
-        return None
-
     def _rotate_for_impact_scan(self, yaw: float, timeout: float) -> bool:
         """Rotate in place so the front stereo cameras scan their surroundings."""
         node = self._node
@@ -318,7 +254,7 @@ class RB26HitBallsTask:
         return success
 
     def _active_localize_impact_balls(self, order: list[str], params: dict):
-        """Search a left/right arc, align to a ray, and localize each ball."""
+        """Search a left/right arc and align to each target bearing."""
         node = self._node
         node._set_task_phase_light(
             node.LIGHT_YELLOW, '撞球 15° 旋转与目标搜索阶段')
@@ -394,70 +330,14 @@ class RB26HitBallsTask:
             if not rclpy.ok() or node.stopped:
                 return None
 
-            target = self._best_impact_ball_target(name, params)
-            if target is None:
-                target = self._wait_for_impact_ball(name, params)
-            if target is None:
-                node.set_light(node.LIGHT_RED, f'{name} 定位失败')
-                return None
-            found[name] = target
+            found[name] = observation
             node.get_logger().info(
-                f'hit_balls：{name} 定位完成，位置='
-                f'({target["x"]:.2f}, {target["y"]:.2f}, '
-                f'{target["z"]:.2f})')
+                f'hit_balls：{name} 首轮搜索与射线对准完成，'
+                f'偏航角={ray_yaw:.1f}°')
 
         node.get_logger().info(
-            f'hit_balls：搜索与定位完成，已找到={list(found.keys())}')
+            f'hit_balls：搜索与首轮对准完成，目标={list(found.keys())}')
         return found
-
-    def _travel_to_impact_point(self, x: float, y: float, z: float,
-                                timeout: float, label: str,
-                                light_color=None) -> bool:
-        """Travel in a straight world-frame segment and update command pose."""
-        node = self._node
-        dx = x - node._cmd_x
-        dy = y - node._cmd_y
-        if math.hypot(dx, dy) > 1e-6:
-            yaw = math.degrees(math.atan2(dy, dx))
-        else:
-            yaw = node._cmd_yaw
-        success, message = node._send_action_goal(
-            BasicMotion.Goal.WTRAVEL,
-            [x, y, z, yaw], 'xyz', timeout=timeout,
-            task_context=node._format_motion_context(label),
-            light_color=light_color)
-        if success:
-            node._cmd_x, node._cmd_y, node._cmd_z = x, y, z
-            if math.hypot(dx, dy) > 1e-6:
-                node._cmd_yaw = yaw
-            node.get_logger().info(
-                f'hit_balls：{label} 已完成，当前位置='
-                f'({x:.2f}, {y:.2f}, {z:.2f})')
-        else:
-            node.get_logger().error(f'hit_balls：{label} 执行失败：{message}')
-        return success
-
-    def _impact_staging_pose(self, target: dict, staging_distance: float,
-                             z_offset: float = 0.0):
-        """Calculate a point before the ball and a yaw pointing at the ball."""
-        node = self._node
-        pose = node._latest_robot_pose()
-        dx = float(target['x']) - pose[0]
-        dy = float(target['y']) - pose[1]
-        distance = math.hypot(dx, dy)
-        if distance > 1e-6:
-            direction_x, direction_y = dx / distance, dy / distance
-            yaw = math.degrees(math.atan2(dy, dx))
-        else:
-            yaw = float(pose[5])
-            yaw_rad = math.radians(yaw)
-            direction_x, direction_y = math.cos(yaw_rad), math.sin(yaw_rad)
-        return (
-            float(target['x']) - direction_x * staging_distance,
-            float(target['y']) - direction_y * staging_distance,
-            float(target['z']) + z_offset,
-            node._wrap_yaw_degrees(yaw),
-        )
 
     def _hold_impact_alignment(self, name: str, params: dict, *,
                                after_received=None):
@@ -556,165 +436,83 @@ class RB26HitBallsTask:
         if not order:
             return TaskOutcome.failed(
                 '26rb_hit_balls.localization', '没有有效的撞球目标')
+        if not bool(params.get('active_localization', True)):
+            return TaskOutcome.failed(
+                '26rb_hit_balls.localization',
+                '撞球流程要求启用主动搜索与首轮对准')
 
         approach_distance = max(
-            0.0, float(params.get('approach_distance', 0.5)))
-        pass_distance = max(
-            0.0, float(params.get('pass_distance', 0.35)))
-        min_clearance = max(
-            0.0, float(params.get('min_clearance', 0.05)))
-        z_offset = float(params.get('z_offset', 0.2))
-        approach_timeout = max(
-            1.0, float(params.get('approach_timeout', 90.0)))
-        hit_timeout = max(1.0, float(params.get('hit_timeout', 45.0)))
+            0.0, float(params.get('approach_distance', 0.8)))
         pause = max(0.0, float(params.get('between_balls_pause', 0.5)))
-
         node.get_logger().info(
-            f'hit_balls：撞球顺序={order}，接近距离={approach_distance:.2f}m，'
-            f'穿过距离={pass_distance:.2f}m')
-        found = {}
-        active_localization = bool(params.get('active_localization', True))
-        if active_localization:
-            found = self._active_localize_impact_balls(order, params)
-            if found is None or any(name not in found for name in order):
-                return TaskOutcome.failed(
-                    '26rb_hit_balls.localization',
-                    '左右各 15°扫描后未能完成撞球目标定位')
-
-        impact_mode = str(params.get('impact_mode', '')).strip().lower()
-        if impact_mode == 'staged_charge_return':
-            if len(order) != 1:
-                node.get_logger().error(
-                    'hit_balls：分段冲撞返回模式要求恰好配置一个球')
-                return TaskOutcome.failed(
-                    '26rb_hit_balls.impact',
-                    '分段冲撞返回模式要求恰好配置一个球')
-            name = order[0]
-            target = self._best_impact_ball_target(name, params) or found.get(name)
-            if target is None:
-                target = self._wait_for_impact_ball(name, params)
-            if target is None:
-                return TaskOutcome.failed(
-                    '26rb_hit_balls.localization',
-                    f'无法获得 {name} 的撞球位置')
-            self._indicate_target_found(name)
-            return self._staged_charge_return(name, target, params)
+            f'hit_balls：撞球顺序={order}，流程=主动搜索并对准 -> '
+            f'BTRAVEL前进{approach_distance:.2f}m -> 二次对准 -> 冲撞')
 
         for index, name in enumerate(order):
-            target = self._best_impact_ball_target(name, params)
-            if target is None:
-                target = found.get(name)
-            if target is None:
-                target = self._wait_for_impact_ball(name, params)
-            if target is None:
+            found = self._active_localize_impact_balls([name], params)
+            if found is None or name not in found:
                 return TaskOutcome.failed(
                     '26rb_hit_balls.localization',
-                    f'无法获得 {name} 的撞球位置')
-            self._indicate_target_found(name)
-
-            dx = target['x'] - node._cmd_x
-            dy = target['y'] - node._cmd_y
-            distance = (dx * dx + dy * dy) ** 0.5
-            if distance > 1e-6:
-                direction = (dx / distance, dy / distance)
-            else:
-                import math
-                yaw_rad = math.radians(node._cmd_yaw)
-                direction = (math.cos(yaw_rad), math.sin(yaw_rad))
-
-            staging_distance = min(
-                approach_distance,
-                max(0.0, distance - min_clearance),
-            )
-            staging_x = target['x'] - direction[0] * staging_distance
-            staging_y = target['y'] - direction[1] * staging_distance
-            hit_z = target['z'] + z_offset
-            node.get_logger().info(
-                f'hit_balls：[{index + 1}/{len(order)}] {name} '
-                f'估计位置=({target["x"]:.2f}, {target["y"]:.2f}, '
-                f'{target["z"]:.2f})，置信度={target["confidence"]:.2f}')
-
-            if not self._travel_to_impact_point(
-                    staging_x, staging_y, hit_z, approach_timeout,
-                    f'{name} approach', light_color=node.LIGHT_BLUE):
-                return TaskOutcome.failed(
-                    '26rb_hit_balls.approach',
-                    f'{name} 接近位置移动失败')
-
-            refreshed = self._best_impact_ball_target(name, params)
-            if refreshed is not None:
-                target = refreshed
-            dx = target['x'] - node._cmd_x
-            dy = target['y'] - node._cmd_y
-            distance = (dx * dx + dy * dy) ** 0.5
-            if distance > 1e-6:
-                direction = (dx / distance, dy / distance)
-            hit_x = target['x'] + direction[0] * pass_distance
-            hit_y = target['y'] + direction[1] * pass_distance
-            hit_z = target['z'] + z_offset
-            if not self._travel_to_impact_point(
-                    hit_x, hit_y, hit_z, hit_timeout,
-                    f'{name} impact pass'):
-                return TaskOutcome.failed(
-                    '26rb_hit_balls.impact',
-                    f'{name} 撞击移动失败')
-            node.get_logger().info(
-                f'hit_balls：{name} 撞击路径已完成')
+                    f'{name} 主动搜索或首轮对准失败')
+            outcome = self._staged_charge_return(name, params)
+            if not outcome:
+                return outcome
             if index + 1 < len(order) and pause > 0.0:
-                import time
                 time.sleep(pause)
         return TaskOutcome.ok()
 
-    def _staged_charge_return(self, name: str, target: dict,
+    def _staged_charge_return(self, name: str,
                               params: dict) -> TaskOutcome:
-        """Align before one ball, charge through it, then return."""
+        """Move forward from the first alignment, re-align, charge, and return."""
         node = self._node
         approach_distance = max(
-            0.0, float(params.get('approach_distance', 0.5)))
-        min_clearance = max(0.0, float(params.get('min_clearance', 0.05)))
-        z_offset = float(params.get('z_offset', 0.2))
+            0.0, float(params.get('approach_distance', 0.8)))
         approach_timeout = max(
-            1.0, float(params.get('approach_timeout', 90.0)))
+            1.0, float(params.get('approach_timeout', 30.0)))
         return_timeout = max(
             1.0, float(params.get('return_timeout', 60.0)))
 
-        pose = node._latest_robot_pose()
-        distance = math.hypot(float(target['x']) - pose[0],
-                              float(target['y']) - pose[1])
-        effective_distance = min(
-            approach_distance,
-            max(0.0, distance - min_clearance),
-        )
-        staging = self._impact_staging_pose(
-            target, effective_distance, z_offset)
         node.get_logger().info(
-            f'hit_balls：{name} 在目标前方 {effective_distance:.2f}m 处待命，'
-            f'位置=({staging[0]:.2f}, {staging[1]:.2f}, {staging[2]:.2f})，'
-            f'偏航角={staging[3]:.1f}°')
-        if not self._travel_to_impact_point(
-                staging[0], staging[1], staging[2], approach_timeout,
-                f'{name} {effective_distance:.2f}m staging',
-                light_color=node.LIGHT_BLUE):
+            f'hit_balls：{name} 首轮对准完成，BTRAVEL机体系前进'
+            f'{approach_distance:.2f}m')
+        success, message = node._send_action_goal(
+            BasicMotion.Goal.BTRAVEL,
+            [approach_distance, 0.0, 0.0, 0.0],
+            'x',
+            timeout=approach_timeout,
+            task_context=node._format_motion_context(
+                f'{name} 首轮对准后 BTRAVEL 前进 {approach_distance:.2f}m'),
+            light_color=node.LIGHT_BLUE)
+        if not success:
             return TaskOutcome.failed(
-                '26rb_hit_balls.approach', '撞球接近位置移动失败')
+                '26rb_hit_balls.approach',
+                f'{name} BTRAVEL前进失败：{message}')
+
+        pose = node._latest_robot_pose()
+        node._cmd_x, node._cmd_y, node._cmd_z, node._cmd_yaw = (
+            pose[0], pose[1], pose[2], pose[5])
+        node.get_logger().info(
+            f'hit_balls：{name} BTRAVEL后当前位置='
+            f'({pose[0]:.2f}, {pose[1]:.2f}, {pose[2]:.2f})，'
+            f'偏航角={pose[5]:.1f}°，开始二次对准')
 
         arrived_at = time.monotonic()
         if not self._hold_impact_alignment(
                 name, params, after_received=arrived_at):
             return TaskOutcome.failed(
-                '26rb_hit_balls.approach', '撞球对准失败')
+                '26rb_hit_balls.approach', f'{name} 二次对准失败')
 
         recorded_pose = self._record_current_impact_pose()
         node.get_logger().info(
-            f'hit_balls：对准完成，已记录位置 '
-            f'=({recorded_pose[0]:.2f}, {recorded_pose[1]:.2f}, '
+            f'hit_balls：{name} 二次对准完成，记录冲撞后返回位置='
+            f'({recorded_pose[0]:.2f}, {recorded_pose[1]:.2f}, '
             f'{recorded_pose[2]:.2f}, {recorded_pose[3]:.1f}°)')
 
         if not self._charge_forward(params):
             return TaskOutcome.failed(
-                '26rb_hit_balls.impact', '撞球前冲失败')
+                '26rb_hit_balls.impact', f'{name} 前向冲撞失败')
         node.get_logger().info(
-            f'hit_balls：前向速度冲撞完成，持续 '
+            f'hit_balls：{name} 前向冲撞完成，持续 '
             f'{float(params.get("charge_duration", 5.0)):.1f}s')
 
         success, message = node._send_action_goal(
@@ -731,5 +529,5 @@ class RB26HitBallsTask:
                 '26rb_hit_balls.return', message)
         node._cmd_x, node._cmd_y, node._cmd_z, node._cmd_yaw = recorded_pose
         node.get_logger().info(
-            'hit_balls：红球任务完成，已返回记录位置')
+            f'hit_balls：{name}任务完成，已返回记录位置')
         return TaskOutcome.ok()

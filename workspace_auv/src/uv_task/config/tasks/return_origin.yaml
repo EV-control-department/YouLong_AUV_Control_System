@@ -1,7 +1,11 @@
 task: return_origin
 
 params:
-  # 启动或上一动作后等待位姿反馈稳定的时间，单位：秒。
-  state_settle_time: 0.3
-  # 回原点位置环动作的最长等待时间，单位：秒。
-  timeout: 30.0
+  # 开环上浮目标 odom z（NED 约定向下为正），单位：米。
+  ascent_target_z_m: -0.3
+  # 上浮速度大小；任务向控制器发送负 z 速度，单位：米/秒。
+  ascent_speed_mps: 0.05
+  # 速度租约续发周期，单位：秒。
+  ascent_publish_period: 0.05
+  # 开环上浮动作最长持续时间，单位：秒。
+  ascent_timeout: 30.0

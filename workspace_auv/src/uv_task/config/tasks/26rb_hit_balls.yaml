@@ -16,21 +16,16 @@ params:
     rotate_timeout: 10.0 # 单次搜索旋转位置环超时，单位：秒。
     min_confidence: 0.02 # 目标结果最低置信度。
 
-  # 撞击模式与预接近。
-  impact:
-    mode: staged_charge_return # 先接近、冲刺、再返回。
+  # 首轮对准后沿机体系前向 BTRAVEL，再次对准后冲撞。
   approach:
-    distance: 0.5 # 撞击前预接近距离，单位：米。
-    min_clearance: 0.05 # 预接近点保留的最小间隙，单位：米。
-    z_offset: -0.1 # 相对目标球的垂向偏移，单位：米。
-    detect_timeout: 30.0 # 目标定位结果最大等待时间，单位：秒。
+    distance: 0.8 # BTRAVEL前进距离，单位：米。
+    timeout: 30.0 # BTRAVEL动作超时，单位：秒。
 
   # 接近阶段的位置修正。
   position_correction:
     duration: 5.0
     period: 0.2
     command_timeout: 10.0
-    min_update_m: 0.03
     min_update_deg: 1.0
 
   # 撞击阶段速度指令。
