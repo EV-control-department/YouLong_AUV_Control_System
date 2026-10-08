@@ -30,7 +30,8 @@ class RB26HitBallsTask:
         self._node = node
         self._params = params
         self._impact_ball_observations = {}
-        self._measurements_callback_logged = False
+        self._indicated_targets = set()
+        self._measurements_callback_count = 0
         self._measurements_subscription = node.create_subscription(
             ObjectMeasurementArray, MEASUREMENTS,
             self._measurements_cb, 10)
@@ -43,13 +44,45 @@ class RB26HitBallsTask:
             self._node.destroy_subscription(subscription)
 
     def _measurements_cb(self, msg: ObjectMeasurementArray):
-        """Cache the best front-camera measurement ray for each class."""
+        """Log every received object measurement and cache front-camera rays."""
         node = self._node
-        if not self._measurements_callback_logged:
-            node.get_logger().info(
-                'hit_balls：进入 /auv/perception/measurements 回调，'
-                f'本次数组包含 {len(msg.measurements)} 条测量')
-            self._measurements_callback_logged = True
+        self._measurements_callback_count += 1
+        callback_count = self._measurements_callback_count
+        item_summaries = []
+        for index, measurement in enumerate(msg.measurements, start=1):
+            class_id = int(measurement.class_id)
+            mapped_name = node._model_mapping.model_class_name(class_id)
+            mapped_physical = node._model_mapping.physical_class_name(class_id)
+            class_name = str(
+                getattr(measurement, 'class_name', '') or mapped_name)
+            physical_name = str(
+                getattr(measurement, 'physical_class_name', '')
+                or mapped_physical)
+            camera = str(getattr(measurement, 'source_camera', '')).strip()
+            confidence = float(measurement.confidence)
+            details = (
+                f'#{index} {physical_name} (class={class_name}, id={class_id}, '
+                f'camera={camera or "?"}, confidence={confidence:.3f}, '
+                f'form={int(measurement.measurement_form)})')
+            if measurement.has_ray:
+                details += (
+                    f', ray_dir=({float(measurement.ray_direction_x):.3f},'
+                    f'{float(measurement.ray_direction_y):.3f},'
+                    f'{float(measurement.ray_direction_z):.3f})')
+            else:
+                details += ', ray=none'
+            if measurement.has_position:
+                details += (
+                    f', xyz=({float(measurement.world_x):.3f},'
+                    f'{float(measurement.world_y):.3f},'
+                    f'{float(measurement.world_z):.3f})')
+            item_summaries.append(details)
+        item_text = '; '.join(item_summaries) if item_summaries else '无测量项'
+        node.get_logger().info(
+            f'hit_balls：/auv/perception/measurements 回调 '
+            f'#{callback_count}，frame={msg.header.frame_id or "?"}，'
+            f'{len(msg.measurements)} 条测量：{item_text}')
+
         received_at = time.monotonic()
         latest_by_class = {}
         for measurement in msg.measurements:
@@ -85,6 +118,13 @@ class RB26HitBallsTask:
         return (name if name in {'impact_ball_blue', 'impact_ball_red'}
                 and self._node._model_mapping.model_class_id(
                     name, required=False) is not None else None)
+
+    def _indicate_target_found(self, name: str):
+        if name in self._indicated_targets:
+            return
+        self._indicated_targets.add(name)
+        self._node._pulse_task_light(
+            self._node.LIGHT_GREEN, f'观测到 {name}', duration=1.0)
 
     def _impact_ball_order(self, params: dict) -> list[str]:
         """Read the requested canonical detector class-name order."""
@@ -236,6 +276,8 @@ class RB26HitBallsTask:
     def _active_localize_impact_balls(self, order: list[str], params: dict):
         """Search a left/right arc, align to a ray, and localize each ball."""
         node = self._node
+        node._set_task_phase_light(
+            node.LIGHT_YELLOW, '撞球 15° 旋转与目标搜索阶段')
         step = float(params.get('search_yaw_step_deg', 15.0))
         step = min(180.0, max(5.0, abs(step)))
         settle_time = max(0.0, float(params.get('search_settle_time', 5.0)))
@@ -254,6 +296,8 @@ class RB26HitBallsTask:
             if observation is None and settle_time > 0.0:
                 observation = self._wait_for_impact_ball_observation(
                     name, params, timeout=settle_time)
+            if observation is not None:
+                self._indicate_target_found(name)
 
             if observation is None:
                 node.get_logger().info(
@@ -276,7 +320,12 @@ class RB26HitBallsTask:
                         name, params,
                         timeout=min(observation_timeout, remaining))
                     if observation is not None:
+                        self._indicate_target_found(name)
                         break
+                    node._pulse_task_light(
+                        node.LIGHT_RED,
+                        f'{name} 在 {offset_deg:+.1f}° 未观测到目标',
+                        duration=1.0)
 
             if observation is None:
                 node.set_light(node.LIGHT_RED, f'{name} 搜索失败')
@@ -318,7 +367,8 @@ class RB26HitBallsTask:
         return found
 
     def _travel_to_impact_point(self, x: float, y: float, z: float,
-                                timeout: float, label: str) -> bool:
+                                timeout: float, label: str,
+                                light_color=None) -> bool:
         """Travel in a straight world-frame segment and update command pose."""
         node = self._node
         dx = x - node._cmd_x
@@ -330,7 +380,8 @@ class RB26HitBallsTask:
         success, message = node._send_action_goal(
             BasicMotion.Goal.WTRAVEL,
             [x, y, z, yaw], 'xyz', timeout=timeout,
-            task_context=node._format_motion_context(label))
+            task_context=node._format_motion_context(label),
+            light_color=light_color)
         if success:
             node._cmd_x, node._cmd_y, node._cmd_z = x, y, z
             if math.hypot(dx, dy) > 1e-6:
@@ -402,7 +453,8 @@ class RB26HitBallsTask:
                 timeout=min(command_timeout, max(0.20, remaining)),
                 quiet=True,
                 task_context=node._format_motion_context(
-                    f'{name} measurement 射线偏航对准'))
+                    f'{name} measurement 射线偏航对准'),
+                light_color=node.LIGHT_BLUE)
             if success:
                 node._cmd_yaw = yaw
                 last_sent_yaw = yaw
@@ -488,6 +540,7 @@ class RB26HitBallsTask:
                 return TaskOutcome.failed(
                     '26rb_hit_balls.localization',
                     f'无法获得 {name} 的撞球位置')
+            self._indicate_target_found(name)
             return self._staged_charge_return(name, target, params)
 
         for index, name in enumerate(order):
@@ -500,6 +553,7 @@ class RB26HitBallsTask:
                 return TaskOutcome.failed(
                     '26rb_hit_balls.localization',
                     f'无法获得 {name} 的撞球位置')
+            self._indicate_target_found(name)
 
             dx = target['x'] - node._cmd_x
             dy = target['y'] - node._cmd_y
@@ -525,7 +579,7 @@ class RB26HitBallsTask:
 
             if not self._travel_to_impact_point(
                     staging_x, staging_y, hit_z, approach_timeout,
-                    f'{name} approach'):
+                    f'{name} approach', light_color=node.LIGHT_BLUE):
                 return TaskOutcome.failed(
                     '26rb_hit_balls.approach',
                     f'{name} 接近位置移动失败')
@@ -582,7 +636,8 @@ class RB26HitBallsTask:
             f'偏航角={staging[3]:.1f}°')
         if not self._travel_to_impact_point(
                 staging[0], staging[1], staging[2], approach_timeout,
-                f'{name} {effective_distance:.2f}m staging'):
+                f'{name} {effective_distance:.2f}m staging',
+                light_color=node.LIGHT_BLUE):
             return TaskOutcome.failed(
                 '26rb_hit_balls.approach', '撞球接近位置移动失败')
 

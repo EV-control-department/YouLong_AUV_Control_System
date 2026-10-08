@@ -1442,6 +1442,9 @@ class RB26GateTask:
                 start_yaw, sweep_deg=sweep, deadline=search_deadline)
             if best is not None:
                 break
+            self._node._pulse_task_light(
+                self._node.LIGHT_RED,
+                f'第 {attempt} 轮未发现门框', duration=1.0)
             start_yaw = best_heading
 
         if best is None:
@@ -2335,6 +2338,8 @@ class RB26GateTask:
     def execute(self) -> TaskOutcome:
         """执行顺时针搜索，并通过配置数量的门框。"""
 
+        self._node._set_task_phase_light(
+            self._node.LIGHT_YELLOW, '过门运动与搜索阶段')
         deadline = time.monotonic() + self._task_timeout
         initial = True
         for index in range(1, self._gates_to_pass + 1):
@@ -2362,6 +2367,9 @@ class RB26GateTask:
                 f'过门任务：已选择第 {index} 个门；已完成左右目配对，'
                 f'机体坐标代理中心={selected.center_body.tolist()}，'
                 f'边界框占比={selected.extent_fraction:.3f}')
+            self._node._pulse_task_light(
+                self._node.LIGHT_GREEN,
+                f'发现第 {index} 个门框', duration=1.0)
             if not self._align_and_hold(selected):
                 return TaskOutcome.failed(
                     '26rb_gate_task.alignment', '过门对准阶段失败')

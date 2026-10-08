@@ -161,6 +161,9 @@ class RB26GrabBallTask:
         hold_since = None
         last_command = None
         last_status_log = float('-inf')
+        target_indicated = False
+        self._node._set_task_phase_light(
+            self._node.LIGHT_YELLOW, f'搜索 {self._color} 球')
         self._logger.info(
             f'26rb_grab_ball：水平视觉伺服已启动；'
             f'话题=/auv/perception/detections (camera_name=down_left)，'
@@ -188,6 +191,12 @@ class RB26GrabBallTask:
                     last_status_log = now
                 time.sleep(min(self._servo_period, max(0.0, deadline - time.monotonic())))
                 continue
+
+            if not target_indicated:
+                self._node._pulse_task_light(
+                    self._node.LIGHT_GREEN,
+                    f'观测到 {self._color} 球', duration=1.0)
+                target_indicated = True
 
             pose, body_dx, body_dy, world_dx, world_dy, du, dv = (
                 self._horizontal_step(detection))

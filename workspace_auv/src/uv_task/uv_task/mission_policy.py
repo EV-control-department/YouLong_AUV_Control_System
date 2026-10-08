@@ -16,14 +16,14 @@ def select_failure_override(
 
 def apply_failure_override(
         base_params: dict[str, Any],
-        initial_pose: dict[str, Any] | None,
+        initial_pose: dict[str, Any] | list[dict[str, Any]] | None,
         override: dict[str, Any] | None,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
+) -> tuple[dict[str, Any], dict[str, Any] | list[dict[str, Any]] | None]:
     """Apply one pending override to the next task.
 
-    Parameters are merged over the task's already-resolved values.  A pose is
-    replaced only when the failure profile explicitly contains ``pose``;
-    otherwise the next task's own initial pose remains active.
+    Parameters are merged over the task's already-resolved values. Initial
+    poses are replaced only when the failure profile explicitly contains
+    ``pose``; otherwise the next task's own initial poses remain active.
     """
     params = dict(base_params)
     pose = initial_pose

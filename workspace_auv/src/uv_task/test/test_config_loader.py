@@ -48,7 +48,7 @@ def test_default_mission_preserves_order_and_values():
     assert tasks[6]["params"]["look_order"] == [
         "collection_frame", "target_rack"]
     assert tasks[7]["params"]["ball_color"] == "pink_golf"
-    assert tasks[8]["params"]["light_color"] == "yellow"
+    assert tasks[8]["params"]["light_color"] == "green"
     assert "return_timeout" not in tasks[8]["params"]
     assert tasks[8]["params"]["down_visual_servo_timeout"] == 30.0
     assert tasks[8]["params"]["down_visual_servo_stable_seconds"] == 1.0

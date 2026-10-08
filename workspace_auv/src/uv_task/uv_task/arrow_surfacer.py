@@ -277,6 +277,9 @@ class ArrowSurfacer:
 
             if self._best_detection([class_id]) is not None:
                 self._logger.info(f'ArrowSurfacer：搜索过程中发现 {label}！')
+                self._node._pulse_task_light(
+                    self._node.LIGHT_GREEN,
+                    f'发现 {label}', duration=1.0)
                 return True
 
             dx_norm, dy_norm = self._SEARCH_DIRS[search_dir]
@@ -310,6 +313,9 @@ class ArrowSurfacer:
                 if self._best_detection([class_id]) is not None:
                     self._logger.info(
                         f'ArrowSurfacer：微步移动过程中检测到 {label}！')
+                    self._node._pulse_task_light(
+                        self._node.LIGHT_GREEN,
+                        f'发现 {label}', duration=1.0)
                     return True
 
             search_dir = (search_dir + 1) % 8
@@ -321,6 +327,9 @@ class ArrowSurfacer:
 
         self._logger.warn(
             f'ArrowSurfacer：[{label}] 搜索范围耗尽，未找到目标')
+        self._node._pulse_task_light(
+            self._node.LIGHT_RED,
+            f'未找到 {label}', duration=1.0)
         return False
 
     def _search_for_arrow(self) -> bool:
@@ -372,10 +381,16 @@ class ArrowSurfacer:
             self._node._cmd_yaw = self._view_yaw + 15.0
             time.sleep(0.5)
             if self._aruco_ids:
+                self._node._pulse_task_light(
+                    self._node.LIGHT_GREEN,
+                    '观测到 ArUco 标记', duration=1.0)
                 self._logger.info(
                     f'ArrowSurfacer：在 +15° 处发现 ArUco：'
                     f'{sorted(self._aruco_ids)}')
                 return
+            self._node._pulse_task_light(
+                self._node.LIGHT_RED,
+                'ArUco +15° 未发现标记', duration=1.0)
 
             # 左转 15°
             self._node._send_action_goal(
@@ -386,10 +401,16 @@ class ArrowSurfacer:
             self._node._cmd_yaw = self._view_yaw - 15.0
             time.sleep(0.5)
             if self._aruco_ids:
+                self._node._pulse_task_light(
+                    self._node.LIGHT_GREEN,
+                    '观测到 ArUco 标记', duration=1.0)
                 self._logger.info(
                     f'ArrowSurfacer：在 -15° 处发现 ArUco：'
                     f'{sorted(self._aruco_ids)}')
                 return
+            self._node._pulse_task_light(
+                self._node.LIGHT_RED,
+                'ArUco -15° 未发现标记', duration=1.0)
 
             # 恢复朝向
             self._node._send_action_goal(
@@ -406,10 +427,16 @@ class ArrowSurfacer:
             self._node._cmd_z += 0.5
             time.sleep(0.5)
             if self._aruco_ids:
+                self._node._pulse_task_light(
+                    self._node.LIGHT_GREEN,
+                    '观测到 ArUco 标记', duration=1.0)
                 self._logger.info(
                     f'ArrowSurfacer：下潜后发现 ArUco：'
                     f'{sorted(self._aruco_ids)}')
                 return
+            self._node._pulse_task_light(
+                self._node.LIGHT_RED,
+                '下潜观察未发现 ArUco', duration=1.0)
 
             # 上升 0.5m
             self._node._send_action_goal(
@@ -418,10 +445,16 @@ class ArrowSurfacer:
             self._node._cmd_z -= 0.5
             time.sleep(0.5)
             if self._aruco_ids:
+                self._node._pulse_task_light(
+                    self._node.LIGHT_GREEN,
+                    '观测到 ArUco 标记', duration=1.0)
                 self._logger.info(
                     f'ArrowSurfacer：上升后发现 ArUco：'
                     f'{sorted(self._aruco_ids)}')
                 return
+            self._node._pulse_task_light(
+                self._node.LIGHT_RED,
+                '上升观察未发现 ArUco', duration=1.0)
 
         self._logger.warn('ArrowSurfacer：ArUco 前视搜索范围耗尽')
 
@@ -444,6 +477,8 @@ class ArrowSurfacer:
 
         # 1. 转向 view_yaw
         self._logger.info(f'ArrowSurfacer：旋转到偏航角={self._view_yaw:.1f}°')
+        self._node._set_task_phase_light(
+            self._node.LIGHT_YELLOW, '箭头运动与搜索阶段')
         success, msg = self._node._send_action_goal(
             BasicMotion.Goal.SET,
             [self._node._cmd_x, self._node._cmd_y,
@@ -515,17 +550,10 @@ class ArrowSurfacer:
             f'ArrowSurfacer：已选择 {color_name} 扇区 '
             f'（class_id={sector_cid}）')
 
-        # 7. 亮对应颜色灯
-        color_light = {
-            'yellow': self._node.LIGHT_YELLOW,
-            'red':    self._node.LIGHT_RED,
-            'green':  self._node.LIGHT_GREEN,
-        }.get(color_name, 0)
-        if color_light:
-            self._node.set_light(
-                color_light, f'{color_name} 扇区')
-            self._logger.info(
-                f'🏮 ArrowSurfacer：{color_name.upper()} 扇区指示灯已打开！')
+        # Target acquisition always uses green; movement resumes in yellow.
+        self._node._pulse_task_light(
+            self._node.LIGHT_GREEN,
+            f'找到 {color_name} 扇区目标', duration=1.0)
 
         # 8. WTRAVEL to sector position
         self._logger.info(

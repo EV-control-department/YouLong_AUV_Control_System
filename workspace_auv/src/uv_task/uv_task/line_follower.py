@@ -380,6 +380,9 @@ class LineFollower:
         """
         deadline = time.monotonic() + self._timeout
         stop_when_marker = self._params.get("stop_when_marker", False)
+        line_indicated = False
+        self._node._set_task_phase_light(
+            self._node.LIGHT_YELLOW, '巡线运动与搜索阶段')
         self._logger.info(
             f'LineFollower：开始巡线，超时={self._timeout:.0f}s，'
             f'遇到标记时停止={stop_when_marker}，'
@@ -389,6 +392,10 @@ class LineFollower:
             line = self._latest_line()
             if line is not None:
                 # 有管道 → 正常跟踪
+                if not line_indicated:
+                    self._node._pulse_task_light(
+                        self._node.LIGHT_GREEN, '发现巡线目标', duration=1.0)
+                    line_indicated = True
                 self._lost_count = 0
                 self._last_valid_line = line
                 ok = self._follow_step(line)
@@ -423,14 +430,9 @@ class LineFollower:
                             # 1. 对准三角形
                             self._node._align_to_class(
                                 self._triangle_cid, 'triangle')
-                            # 亮红灯 — 识别到三角形
-                            self._node.set_light(
-                                self._node.LIGHT_RED, '检测到三角形标记')
-                            self._logger.info(
-                                '🚨 LineFollower：红灯已亮——检测到三角形标记！')
-                            time.sleep(1)
-                            # 关灯
-                            self._node.light_off()
+                            self._node._pulse_task_light(
+                                self._node.LIGHT_GREEN,
+                                '检测到三角形标记', duration=1.0)
                             # 2. 前移 + 右移 (对齐后微调) → 下沉 → 上浮
                             self._node._send_action_goal(
                                 BasicMotion.Goal.BMOVE,
@@ -490,18 +492,9 @@ class LineFollower:
                             # 1. 对准正方形
                             self._node._align_to_class(
                                 self._square_cid, 'square')
-                            # 闪两次绿灯 — 识别到正方形
-                            for flash in range(2):
-                                self._node.set_light(
-                                    self._node.LIGHT_GREEN,
-                                    f'正方形标记——第 {flash+1} 次闪烁')
-                                self._logger.info(
-                                    f'🟢 LineFollower：第 {flash+1} 次绿灯——'
-                                    '检测到正方形标记！')
-                                time.sleep(2)
-                                # 关灯
-                                self._node.light_off()
-                                time.sleep(2)
+                            self._node._pulse_task_light(
+                                self._node.LIGHT_GREEN,
+                                '检测到正方形标记', duration=1.0)
                             # 2. 自转 N×M°（BMOVE rz）
                             total_deg = (self._square_rotation_count
                                          * self._square_rotation_step)
@@ -548,6 +541,7 @@ class LineFollower:
                 # 否则进入搜索模式
                 self._lost_count = 0
                 self._last_valid_line = None
+                line_indicated = False
                 if not self._search_for_line():
                     time.sleep(0.05)
 
@@ -592,6 +586,10 @@ class LineFollower:
                 self._node._cmd_x, self._node._cmd_y,
                 self._node._cmd_z, self._node._cmd_yaw,
                 dx, dy, 0.0, 0.0)
+            if self._latest_line() is None:
+                self._node._pulse_task_light(
+                    self._node.LIGHT_RED,
+                    '本次巡线搜索步未发现管道', duration=1.0)
 
         self._search_spiral_dir = (self._search_spiral_dir + 1) % 8
         if self._search_spiral_dir == 0:

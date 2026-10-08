@@ -108,6 +108,9 @@ class TaskRunnerNode(Node):
     LIGHT_YELLOW = 1
     LIGHT_GREEN = 2
     LIGHT_RED = 3
+    # The canonical ROS UInt8 topic forwards the state byte unchanged. 4 is
+    # reserved here for blue; the attached MCU/light controller must support it.
+    LIGHT_BLUE = 4
 
     # Firmware logical servo channels.
     SERVO_ID_GOLF = 1
@@ -150,6 +153,8 @@ class TaskRunnerNode(Node):
         self._motion_stop_sent = False
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
+        self._light_state = None
+        self._target_light_indications = set()
         self._last_failure_code = ''
         self._last_failure_message = ''
         self._mission_status_code = TaskStatus.STATUS_IDLE
@@ -392,14 +397,36 @@ class TaskRunnerNode(Node):
     # ── 灯光 / 舵机控制 ────────────────────────────────────────────
 
     def set_light(self, color: int, label: str):
+        color = int(color)
         msg = UInt8(data=color)
         self.pub_light.publish(msg)
+        self._light_state = color
         self.get_logger().info(f'💡 灯光已打开：{label}（数值={color}）')
 
     def light_off(self):
         msg = UInt8(data=0)
         self.pub_light.publish(msg)
+        self._light_state = self.LIGHT_OFF
         self.get_logger().info('💡 灯光已关闭')
+
+    def _set_task_phase_light(self, color: int, label: str):
+        """Publish a task phase color only when it changes."""
+        color = int(color)
+        if self._light_state != color:
+            self.set_light(color, label)
+
+    def _pulse_task_light(self, color: int, label: str, *,
+                          duration: float = 1.0,
+                          restore_color: int = LIGHT_YELLOW):
+        """Show a timed search result and restore the active phase color."""
+        self.set_light(color, label)
+        deadline = time.monotonic() + max(0.0, float(duration))
+        while (rclpy.ok() and not self.stopped
+               and time.monotonic() < deadline):
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        if rclpy.ok() and not self.stopped:
+            self._set_task_phase_light(
+                restore_color, f'{label}提示结束，恢复阶段灯')
 
     def set_servo(self, angle_rad: float, label: str,
                   servo_id: int = SERVO_ID_GOLF):
@@ -990,36 +1017,49 @@ class TaskRunnerNode(Node):
 
     def _execute_task(
             self, name: str, params: dict,
-            initial_pose: dict | None = None) -> TaskOutcome:
+            initial_pose: dict | list[dict] | None = None) -> TaskOutcome:
         """Execute one task and normalize its result to ``TaskOutcome``."""
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
+        self._target_light_indications = set()
 
         if initial_pose is not None:
-            outcome = self._execute_initial_pose(name, initial_pose)
-            if not outcome:
-                return outcome
+            initial_poses = (
+                initial_pose if isinstance(initial_pose, list)
+                else [initial_pose])
+            for pose in initial_poses:
+                outcome = self._execute_initial_pose(name, pose)
+                if not outcome:
+                    self._set_task_phase_light(
+                        self.LIGHT_RED, f'{name} 初始动作失败')
+                    return outcome
 
         self._last_basic_motion_test_outcome = None
         handler = self.task_map.get(name)
         if handler is None:
             self.get_logger().warn(f'未知任务：{name}')
-            return TaskOutcome.failed(f'{name}.motion', '未知任务')
+            outcome = TaskOutcome.failed(f'{name}.motion', '未知任务')
+            self._set_task_phase_light(self.LIGHT_RED, f'{name} 执行失败')
+            return outcome
 
         try:
             raw_outcome = handler(params)
         except Exception as exc:
-            return TaskOutcome.failed(f'{name}.exception', str(exc))
+            outcome = TaskOutcome.failed(f'{name}.exception', str(exc))
+        else:
+            if isinstance(raw_outcome, TaskOutcome):
+                if raw_outcome.success or raw_outcome.failure_code:
+                    outcome = raw_outcome
+                else:
+                    outcome = self._fallback_failure_outcome(name)
+            elif raw_outcome:
+                outcome = TaskOutcome.ok()
+            else:
+                outcome = self._fallback_failure_outcome(name)
 
-        if isinstance(raw_outcome, TaskOutcome):
-            if raw_outcome.success:
-                return raw_outcome
-            if raw_outcome.failure_code:
-                return raw_outcome
-            return self._fallback_failure_outcome(name)
-        if raw_outcome:
-            return TaskOutcome.ok()
-        return self._fallback_failure_outcome(name)
+        if not outcome:
+            self._set_task_phase_light(self.LIGHT_RED, f'{name} 执行失败')
+        return outcome
 
     # ========================================================================
     # Action helper
@@ -1049,7 +1089,8 @@ class TaskRunnerNode(Node):
         return f'{purpose}({axes or "all"})'
 
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
-                          quiet=False, task_context='', velocity_lease=0.0):
+                          quiet=False, task_context='', velocity_lease=0.0,
+                          light_color=None):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -1074,6 +1115,12 @@ class TaskRunnerNode(Node):
             5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY',
         }
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
+        if cmd_type != BasicMotion.Goal.START:
+            phase_color = (
+                self.LIGHT_YELLOW if light_color is None
+                else int(light_color))
+            self._set_task_phase_light(
+                phase_color, f'{type_name} 运动阶段')
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
         task_context = (str(task_context).strip() or self._format_motion_context(
@@ -1168,7 +1215,7 @@ class TaskRunnerNode(Node):
                             yaw_rate_deg_s: float = 0.0,
                             *, lease_s: float = 0.25,
                             quiet: bool = True,
-                            task_context: str = ''):
+                            task_context: str = '', light_color=None):
         """Renew the BasicMotion body-velocity lease.
 
         Tasks deliberately do not construct or publish ``ZitSetpoint``
@@ -1179,7 +1226,8 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.BODY_VELOCITY,
             [forward_mps, lateral_mps, vertical_mps, yaw_rate_deg_s],
             axes='xyzrz', timeout=0.0, quiet=quiet,
-            task_context=task_context, velocity_lease=lease_s)
+            task_context=task_context, velocity_lease=lease_s,
+            light_color=light_color)
 
     # ========================================================================
     # Task implementations
@@ -1197,6 +1245,8 @@ class TaskRunnerNode(Node):
         return skip.is_set()
 
     def _task_basic_motion_test(self, p: dict) -> TaskOutcome:
+        self._set_task_phase_light(
+            self.LIGHT_YELLOW, 'basic_motion_test 运动阶段')
         outcome = self._basic_motion_test.run(p)
         self._last_basic_motion_test_outcome = outcome
         if not outcome:
@@ -1804,7 +1854,7 @@ class TaskRunnerNode(Node):
             return None
 
         target = max(valid, key=lambda item: item[:-1])[-1]
-        return {
+        result = {
             'name': wanted,
             'x': float(target.world_x),
             'y': float(target.world_y),
@@ -1816,6 +1866,11 @@ class TaskRunnerNode(Node):
             'source': str(getattr(target, 'estimate_source', 'unknown')),
             'instance_id': int(target.track_id),
         }
+        if wanted not in self._target_light_indications:
+            self._target_light_indications.add(wanted)
+            self._pulse_task_light(
+                self.LIGHT_GREEN, f'发现 {wanted} 目标', duration=1.0)
+        return result
 
     def _current_localizer_targets(self, p: dict):
         """Return at most one current estimate for each required target."""
@@ -1919,6 +1974,11 @@ class TaskRunnerNode(Node):
                     f'发现 {", ".join(sorted(found))}')
                 if len(found) >= 2:
                     return True
+            elif len(found) < 2:
+                self._pulse_task_light(
+                    self.LIGHT_RED,
+                    f'扫描航向 {heading:.1f}° 未发现目标',
+                    duration=1.0)
         return any_found
 
     def _task_find_collection_frame(self, p: dict) -> TaskOutcome:
@@ -1935,6 +1995,8 @@ class TaskRunnerNode(Node):
         ``target_rack_down`` detections from both down cameras, so the light
         command is issued only after the rack is visually centred and stable.
         """
+        self._set_task_phase_light(
+            self.LIGHT_YELLOW, '目标架搜索与移动阶段')
         if not self._ensure_camera_extrinsics():
             return TaskOutcome.failed(
                 '26rb_drop_ball_target_rack.camera_tf', '下视相机 TF 未就绪')
@@ -2018,13 +2080,15 @@ class TaskRunnerNode(Node):
                 'yellow': self.LIGHT_YELLOW,
                 'green': self.LIGHT_GREEN,
                 'red': self.LIGHT_RED,
+                'blue': self.LIGHT_BLUE,
             }.get(light_value.strip().lower(), self.LIGHT_YELLOW)
         try:
             light_value = int(light_value)
         except (TypeError, ValueError):
             light_value = self.LIGHT_YELLOW
         if light_value not in (self.LIGHT_OFF, self.LIGHT_YELLOW,
-                               self.LIGHT_GREEN, self.LIGHT_RED):
+                               self.LIGHT_GREEN, self.LIGHT_RED,
+                               self.LIGHT_BLUE):
             light_value = self.LIGHT_YELLOW
 
         hold_seconds = max(0.0, float(p.get('light_hold_seconds', 1.0)))

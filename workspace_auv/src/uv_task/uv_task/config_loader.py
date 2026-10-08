@@ -617,11 +617,15 @@ def load_mission(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
         initial = entry.get("initial", {})
         if not isinstance(initial, dict):
             raise ConfigError(f"{mission_path}：第 {index} 个任务的 initial 必须是映射")
-        unknown = set(initial) - {"params", "pose"}
+        unknown = set(initial) - {"params", "pose", "poses"}
         if unknown:
             raise ConfigError(
                 f"{mission_path}：第 {index} 个任务的 initial 存在未知键："
                 f"{sorted(unknown)}")
+        if "pose" in initial and "poses" in initial:
+            raise ConfigError(
+                f"{mission_path}：第 {index} 个任务的 initial.pose 与 "
+                "initial.poses 不能同时配置")
         initial_params = initial.get("params", {})
         if not isinstance(initial_params, dict):
             raise ConfigError(
@@ -631,6 +635,21 @@ def load_mission(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
             initial_pose = _validate_pose(
                 initial["pose"],
                 context=f"{mission_path}：第 {index} 个任务的 initial.pose")
+        elif "poses" in initial:
+            pose_sequence = initial["poses"]
+            if not isinstance(pose_sequence, list) or not pose_sequence:
+                raise ConfigError(
+                    f"{mission_path}：第 {index} 个任务的 "
+                    "initial.poses 必须是非空列表")
+            initial_pose = [
+                _validate_pose(
+                    pose,
+                    context=(
+                        f"{mission_path}：第 {index} 个任务的 "
+                        f"initial.poses[{pose_index}]"),
+                )
+                for pose_index, pose in enumerate(pose_sequence)
+            ]
 
         on_failure = entry.get("on_failure", {})
         if not isinstance(on_failure, dict):

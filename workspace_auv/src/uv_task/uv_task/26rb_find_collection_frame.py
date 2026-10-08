@@ -18,6 +18,9 @@ class RB26FindCollectionFrameTask:
         params = self._params
         import time
 
+        node._set_task_phase_light(
+            node.LIGHT_YELLOW, '置物台/目标架搜索阶段')
+
         timeout = max(5.0, float(params.get('timeout', 120.0)))
         deadline = time.monotonic() + timeout
         platform_name = node._normalize_localizer_target_name(

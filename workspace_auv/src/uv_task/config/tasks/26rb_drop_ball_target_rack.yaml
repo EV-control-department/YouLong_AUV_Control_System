@@ -28,5 +28,5 @@ params:
 
   # 亮灯代替丢球。
   light:
-    color: yellow                    # yellow、green、red 或数值 1、2、3。
+    color: green                     # 找到并对准目标架后亮绿灯。
     hold_seconds: 1.0                # 开灯保持时间，单位：秒。
