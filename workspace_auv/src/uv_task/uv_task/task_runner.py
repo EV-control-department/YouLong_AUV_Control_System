@@ -105,9 +105,9 @@ class TaskRunnerNode(Node):
 
     # ── 灯光常量 (/auv/hardware/zit6/cmd/light) ────────────────────
     LIGHT_OFF = 0
-    LIGHT_YELLOW = 1
+    LIGHT_YELLOW = 3
     LIGHT_GREEN = 2
-    LIGHT_RED = 3
+    LIGHT_RED = 1
     # The canonical ROS UInt8 topic forwards the state byte unchanged. 4 is
     # reserved here for blue; the attached MCU/light controller must support it.
     LIGHT_BLUE = 4
@@ -905,10 +905,16 @@ class TaskRunnerNode(Node):
                 target,
                 axes,
                 task_context=self._format_motion_context(
-                    f'{task_name}初始位姿'))
+                    f'{task_name}初始位姿'),
+                light_pattern=(self.LIGHT_RED, self.LIGHT_YELLOW),
+                light_interval=1.0)
         except Exception as exc:
             return TaskOutcome.failed(
                 f'{task_name}.exception', str(exc))
+        finally:
+            if rclpy.ok() and not self.stopped:
+                self._set_task_phase_light(
+                    self.LIGHT_YELLOW, f'{task_name}初始动作结束')
         if not success:
             code = (
                 f'{task_name}.timeout'
@@ -1090,7 +1096,8 @@ class TaskRunnerNode(Node):
 
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
                           quiet=False, task_context='', velocity_lease=0.0,
-                          light_color=None):
+                          light_color=None, light_pattern=None,
+                          light_interval=1.0):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -1115,7 +1122,7 @@ class TaskRunnerNode(Node):
             5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY',
         }
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
-        if cmd_type != BasicMotion.Goal.START:
+        if cmd_type != BasicMotion.Goal.START and not light_pattern:
             phase_color = (
                 self.LIGHT_YELLOW if light_color is None
                 else int(light_color))
@@ -1152,7 +1159,24 @@ class TaskRunnerNode(Node):
         goal.velocity_lease = float(velocity_lease)
 
         send_future = self._action_client.send_goal_async(goal)
+        blink_colors = tuple(int(color) for color in (light_pattern or ()))
+        blink_interval = max(0.05, float(light_interval))
+        blink_index = 0
+        next_blink_at = time.monotonic() + blink_interval
+        if blink_colors:
+            self._set_task_phase_light(
+                blink_colors[blink_index], f'{type_name} 初始动作闪灯')
+
+        def update_blink_light():
+            nonlocal blink_index, next_blink_at
+            if blink_colors and time.monotonic() >= next_blink_at:
+                blink_index = (blink_index + 1) % len(blink_colors)
+                next_blink_at = time.monotonic() + blink_interval
+                self._set_task_phase_light(
+                    blink_colors[blink_index], f'{type_name} 初始动作闪灯')
+
         while rclpy.ok() and not self.stopped and not send_future.done():
+            update_blink_light()
             time.sleep(0.01)
         if not rclpy.ok() or self.stopped:
             if not quiet:
@@ -1180,6 +1204,7 @@ class TaskRunnerNode(Node):
 
         result_future = goal_handle.get_result_async()
         while rclpy.ok() and not self.stopped and not result_future.done():
+            update_blink_light()
             time.sleep(0.01)
         self._active_goal_handle = None
         if not rclpy.ok() or self.stopped:

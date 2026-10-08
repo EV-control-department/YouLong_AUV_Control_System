@@ -51,7 +51,7 @@ YOULONG_RUNTIME=real ./scripts/compose_up.sh up -d
 docker exec -it youlong_auv bash
 ```
 
-默认 front `/dev/video2`、down `/dev/video0`、MCU `/dev/ttyUSB0`。若实际不同，先调整 Compose 的 `CAMERA_FRONT_DEVICE`、`CAMERA_DOWN_DEVICE`、`HARDWARE_SERIAL_DEVICE` 映射，并让相机 real 配置中的 device 与容器内路径一致。相机标定文件为 `workspace_auv/src/uv_camera/stereos/front.yaml`、`down.yaml`，real 分支采集 2560×960、每目 1280×960。
+默认 front `/dev/video0`、down `/dev/video2`、MCU `/dev/ttyUSB0`。若实际不同，先调整 Compose 的 `CAMERA_FRONT_DEVICE`、`CAMERA_DOWN_DEVICE`、`HARDWARE_SERIAL_DEVICE` 映射，并让相机 real 配置中的 device 与容器内路径一致。相机标定文件为 `workspace_auv/src/uv_camera/stereos/front.yaml`、`down.yaml`，real 分支采集 2560×960、每目 1280×960。
 
 首次应用新增测试任务后，在推进器动力隔离时构建：
 

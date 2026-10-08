@@ -3,8 +3,8 @@ services:
     # The real profile uses the two stitched V4L2 devices configured by
     # uv_camera. Override these variables for a different host enumeration.
     devices:
-      - "${CAMERA_FRONT_DEVICE:-/dev/video2}:${CAMERA_FRONT_DEVICE:-/dev/video2}"
-      - "${CAMERA_DOWN_DEVICE:-/dev/video0}:${CAMERA_DOWN_DEVICE:-/dev/video0}"
+      - "${CAMERA_FRONT_DEVICE:-/dev/video0}:${CAMERA_FRONT_DEVICE:-/dev/video0}"
+      - "${CAMERA_DOWN_DEVICE:-/dev/video2}:${CAMERA_DOWN_DEVICE:-/dev/video2}"
       - "${HARDWARE_SERIAL_DEVICE:-/dev/ttyUSB0}:${HARDWARE_SERIAL_DEVICE:-/dev/ttyUSB0}"
     environment:
       UV_RUNTIME_MODE: real

@@ -34,7 +34,7 @@ modes:
     camera_info_topics:
       left: /auv/sensors/camera/front/left/camera_info
       right: /auv/sensors/camera/front/right/camera_info
-    device: /dev/video2
+    device: /dev/video0
     calibration_source: yaml
     intrinsics:
       left:
