@@ -8,6 +8,7 @@ from types import SimpleNamespace as NS
 
 import numpy as np
 import pytest
+import yaml
 
 from uv_camera.camera_config import load_camera_config
 from uv_task.gate_config import validate_gate_params
@@ -423,10 +424,11 @@ def test_invalid_configuration_rejected_by_runtime_and_loader(params):
 def test_five_yaml_groups_load():
     source = Path(__file__).parents[1]/'config/tasks/26rb_gate_task.yaml'
     params = load_task(source)[0]['params']
-    assert params['depth_front'] == [.1]*4
-    assert params['lateral_front'] == [0]*4
-    assert params['fore_aft_target_area_percent'] == 80
-    assert params['pass_timeout'] == 60
+    configured = yaml.safe_load(source.read_text())['params']
+    assert params['depth_front'] == configured['depth']['front']
+    assert params['lateral_front'] == configured['lateral']['front']
+    assert params['fore_aft_target_area_percent'] == configured['fore_aft']['target_area_percent']
+    assert params['pass_timeout'] == configured['pass']['timeout']
     assert 'bbox_ratio_target' not in params
 
 
@@ -582,3 +584,31 @@ def test_detection_callback_releases_lost_camera_with_ros_logger(rig, monkeypatc
     assert task.owner == 'right'
     assert task.generation > generation
     assert task._latest['right'] is not None
+
+
+@pytest.mark.parametrize('ack_seconds', [0.08, 0.35])
+def test_flash_allows_delayed_ack_without_consuming_lamp_deadline(rig, monkeypatch, ack_seconds):
+    task, node, clock = rig
+    original_send = node._send_body_velocity
+    phase_deadline = task._phase_deadline
+    def delayed_send(*args, **kwargs):
+        clock.sleep(ack_seconds)
+        if clock.now() >= kwargs['wait_deadline']:
+            return False, '发送动作目标超时'
+        return original_send(*args, **kwargs)
+    monkeypatch.setattr(node, '_send_body_velocity', delayed_send)
+    task._flash(node.LIGHT_GREEN, 1, '上下对正完成')
+    assert node.lights == [node.LIGHT_GREEN, node.LIGHT_OFF]
+    assert node.velocity == [0., 0., 0., 0.]
+    assert task._phase_deadline == phase_deadline
+
+
+def test_flash_delayed_ack_still_obeys_task_timeout(rig, monkeypatch):
+    task, node, clock = rig
+    task._deadline = clock.now()+0.1
+    def delayed_send(*args, **kwargs):
+        clock.sleep(0.15)
+        return False, '发送动作目标超时'
+    monkeypatch.setattr(node, '_send_body_velocity', delayed_send)
+    with pytest.raises(mod.GateFailure, match='过门任务总超时'):
+        task._flash(node.LIGHT_GREEN, 1)

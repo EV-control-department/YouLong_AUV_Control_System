@@ -359,7 +359,7 @@ class RB26GateTask:
         self._light_color = color
         self.node._set_task_phase_light(color, label, log=False)
 
-    def _velocity(self, horizontal=(0.0, 0.0), yaw_rate=0.0, color=None):
+    def _velocity(self, horizontal=(0.0, 0.0), yaw_rate=0.0, color=None, wait_deadline=None):
         self._check()
         if self._bline_active:
             raise GateFailure('handoff', 'BLINE 执行中禁止旧伺服速度输出')
@@ -370,14 +370,15 @@ class RB26GateTask:
         body = rotation(pose).T @ world
         self._velocity_active = True
         self._light_color = self.node.LIGHT_YELLOW if color is None else color
+        deadline = min(self._deadline, self._phase_deadline if wait_deadline is None else wait_deadline)
         ok, message = self.node._send_body_velocity(
             *body.tolist(), yaw_rate_deg_s=float(yaw_rate),
             lease_s=max(0.25, 3*self.p['search_velocity_period']),
             task_context='26rb_gate_task 定深视觉伺服',
             light_color=self._light_color,
-            wait_deadline=min(self._deadline, self._phase_deadline))
+            wait_deadline=deadline)
         if not ok:
-            self._check(self._phase_deadline)
+            self._check(deadline)
             raise GateFailure('motion', message)
 
     def _neutral(self, wait_deadline=None):
@@ -401,11 +402,14 @@ class RB26GateTask:
             raise GateFailure(kind, message)
 
     def _depth_hold(self, seconds, color=None):
-        deadline = self._limit(seconds)
-        while self._now() < deadline:
+        # Lamp duration is not an action acknowledgement timeout. Keep the
+        # caller's phase deadline intact and allow each hold command up to 2s.
+        until = min(self._deadline, self._now()+seconds)
+        while self._now() < until:
             self._check()
-            self._velocity(color=color)
-            self._tick()
+            self._velocity(color=color, wait_deadline=self._now()+2.0)
+            if self._now() < until:
+                self._tick(until)
 
     def _flash(self, color, count, label="门框观察闪灯"):
         self._neutral()

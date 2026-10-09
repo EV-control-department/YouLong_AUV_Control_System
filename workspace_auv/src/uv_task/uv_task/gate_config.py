@@ -2,7 +2,7 @@
 import math
 
 GROUPS = {
-    'depth': dict(front=[0.1]*4, set_timeout=30.0, kp=0.8,
+    'depth': dict(front=[0.1]*4, set_timeout=10.0, kp=0.8,
                   max_speed_mps=0.12, tolerance_m=0.03),
     'search': dict(observe_seconds=2.0, start_offset_deg=-30.0,
                    sweep_degrees=[60.0, 120.0, 180.0], yaw_rate_deg_s=10.0,
