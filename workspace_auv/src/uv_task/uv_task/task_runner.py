@@ -99,9 +99,9 @@ class TaskRunnerNode(Node):
 
     # ── 灯光常量 (/zit6/cmd/light) ─────────────────────────────────
     LIGHT_OFF = 0
-    LIGHT_YELLOW = 1
+    LIGHT_YELLOW = 3
     LIGHT_GREEN = 2
-    LIGHT_RED = 3
+    LIGHT_RED = 1
 
     # ── 舵机角度 (/zit6/cmd/servo, rad) ────────────────────────────
     ANGLE_DROP_BEACON = math.pi / 2  # 90°，接口单位为弧度
@@ -1355,21 +1355,35 @@ class TaskRunnerNode(Node):
         msg.seq = 0
         self.pub_setpoint.publish(msg)
 
+    def _run_major_task_with_light(self, task_type, p, label):
+        """三项大任务统一灯态：黄运行、绿成功、红失败/停止/异常。
+
+        保留结束灯态直到下一任务开始，不把红灯在清理阶段熄灭。
+        初始化和资源清理异常也必须显示失败，异常仍交给任务列表处理。
+        """
+        self.set_light(self.LIGHT_YELLOW, f'{label}执行中')
+        success = False
+        try:
+            task = task_type(self, p)
+            try:
+                result = bool(task.execute())
+            finally:
+                destroy = getattr(task, 'destroy', None)
+                if destroy is not None:
+                    destroy()
+            success = result and not self.stopped
+            return success
+        finally:
+            self.set_light(self.LIGHT_GREEN if success else self.LIGHT_RED,
+                           f'{label}完成' if success else f'{label}失败或停止')
+
     def _task_mapping_grid(self, p: dict) -> bool:
         """消费 camera 的小型观测，完成九宫格建图与遍历。"""
-        task = MappingTask(self, p)
-        try:
-            return task.execute()
-        finally:
-            task.destroy()
+        return self._run_major_task_with_light(MappingTask, p, '建图及遍历')
 
     def _task_turntable(self, p: dict) -> bool:
         """真机调试专用；注册任务名，但不加入任一自动仿真任务链。"""
-        task = TurntableTask(self, p)
-        try:
-            return task.execute()
-        finally:
-            task.destroy()
+        return self._run_major_task_with_light(TurntableTask, p, '转盘')
 
     # ── 置物台 / target-rack 搜索任务 ─────────────────────────────
 
@@ -1711,7 +1725,7 @@ class TaskRunnerNode(Node):
 
     def _task_grab_sea_cucumber(self, p: dict) -> bool:
         """前往配置抓取区，重复抓取、复检计数和投放；保留慢速步进上浮。"""
-        return GrabSeaCucumberTask(self, p).execute()
+        return self._run_major_task_with_light(GrabSeaCucumberTask, p, '抓海参')
 
     # ── 投信标 / 采水 / 释放取水器 ─────────────────────────────────
 

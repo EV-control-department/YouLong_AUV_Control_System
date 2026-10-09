@@ -14,6 +14,46 @@ from uv_task.turntable_task import (
 )
 
 
+@pytest.mark.parametrize('outcome, stopped, expected', [
+    ('success', False, 2), ('failure', False, 1), ('success', True, 1),
+    ('init_error', False, 1), ('execute_error', False, 1),
+    ('cleanup_error', False, 1),
+])
+def test_major_task_status_light(outcome, stopped, expected):
+    from uv_task.task_runner import TaskRunnerNode
+    lights, cleanup = [], []
+    node = SimpleNamespace(
+        LIGHT_YELLOW=TaskRunnerNode.LIGHT_YELLOW,
+        LIGHT_GREEN=TaskRunnerNode.LIGHT_GREEN,
+        LIGHT_RED=TaskRunnerNode.LIGHT_RED,
+        stopped=stopped,
+        set_light=lambda color, label: lights.append(color))
+
+    class Task:
+        def __init__(self, node, params):
+            if outcome == 'init_error':
+                raise ValueError('init')
+
+        def execute(self):
+            if outcome == 'execute_error':
+                raise RuntimeError('execute')
+            return outcome != 'failure'
+
+        def destroy(self):
+            cleanup.append(True)
+            if outcome == 'cleanup_error':
+                raise RuntimeError('cleanup')
+
+    if outcome.endswith('error'):
+        with pytest.raises((ValueError, RuntimeError)):
+            TaskRunnerNode._run_major_task_with_light(node, Task, {}, '测试')
+    else:
+        assert TaskRunnerNode._run_major_task_with_light(
+            node, Task, {}, '测试') == (expected == 2)
+    assert lights == [3, expected]
+    assert bool(cleanup) == (outcome != 'init_error')
+
+
 def test_rod_tip_inverse_kinematics():
     tip_body = (0.42, -0.08, 0.02)
     desired_tip = (2.1, 3.2, 0.7)
