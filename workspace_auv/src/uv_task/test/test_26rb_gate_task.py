@@ -354,14 +354,28 @@ def test_bline_neutral_before_line_and_final_target_sync(rig):
     assert [node._cmd_x, node._cmd_y, node._cmd_z, node._cmd_yaw] == node._last_motion_final_target
 
 
-def test_full_sequence_four_depths_and_no_old_servo_after_bline(rig):
+def test_full_sequence_four_depths_and_no_old_servo_after_bline(rig, monkeypatch):
     task, node, clock = rig
+    alignment_flashes = []
+    original_flash = task._flash
+    def record_flash(color, count, label="门框观察闪灯"):
+        if label in ('上下对正完成', '左右对正完成', '前后对正完成'):
+            assert color == node.LIGHT_GREEN and count == 1
+            assert node.velocity == [0., 0., 0., 0.]
+            before = len(node.lights)
+            original_flash(color, count, label)
+            assert node.lights[before:] == [node.LIGHT_GREEN, node.LIGHT_OFF]
+            alignment_flashes.append(label)
+        else:
+            original_flash(color, count, label)
+    monkeypatch.setattr(task, '_flash', record_flash)
     # All gates initially fill 80% of image and are centered on each owning eye.
     clock.hook = lambda: frame(task, area=80)
     result = task.execute()
     assert result, result.message
     lines = [c for c in node.calls if c[0] == 'action' and c[1] == mod.BasicMotion.Goal.BLINE]
     assert len(lines) == 4
+    assert alignment_flashes == ['上下对正完成', '左右对正完成', '前后对正完成']*4
     assert node._cmd_x == pytest.approx(6.4)
     assert node._cmd_z == .1
 

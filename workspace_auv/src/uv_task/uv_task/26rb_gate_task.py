@@ -407,10 +407,10 @@ class RB26GateTask:
             self._velocity(color=color)
             self._tick()
 
-    def _flash(self, color, count):
+    def _flash(self, color, count, label="门框观察闪灯"):
         self._neutral()
         for index in range(count):
-            self._light(color, '门框观察闪灯')
+            self._light(color, label)
             self._depth_hold(self.p['search_light_pulse_seconds'], color)
             self._light(self.node.LIGHT_OFF, '闪灯间隔')
             self._depth_hold(self.p['search_light_gap_seconds'], self.node.LIGHT_OFF)
@@ -690,6 +690,7 @@ class RB26GateTask:
                     self._velocity()
                     self._tick(depth_deadline)
                 self._neutral()
+                self._flash(self.node.LIGHT_GREEN, 1, '上下对正完成')
                 try:
                     self._search()
                 except GateFailure as exc:
@@ -699,9 +700,11 @@ class RB26GateTask:
                     raise
                 self._align(self.p['search_align_observe_seconds'])
                 self._lateral(self.p['lateral_front'][index])
+                self._flash(self.node.LIGHT_GREEN, 1, '左右对正完成')
                 floor = self._align(self.p['fore_aft_observe_seconds'])
                 self._record_ray(self._fresh_after(floor))
                 self._fore_aft()
+                self._flash(self.node.LIGHT_GREEN, 1, '前后对正完成')
                 self._final_yaw()
                 self._pass()
             return TaskOutcome.ok('四阶段视觉伺服及 BLINE 过门完成')
