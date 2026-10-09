@@ -11,7 +11,7 @@ params:
   timeout: 720.0
   # 门深：米；kp 输出 m/s，容限米。
   depth:
-    front: [0.1, 0.1, 0.1, 0.1]
+    front: [0.2, 0.2, 0.2, 0.2]
     set_timeout: 30.0
     kp: 0.8
     max_speed_mps: 0.12
@@ -47,7 +47,7 @@ params:
     max_path_speed_mps: 0.03
   # 面积容限单位为“百分点”，位移米，速度 m/s；不使用视觉高度。
   fore_aft:
-    target_area_percent: 80.0
+    target_area_percent: 70.0
     area_tolerance_percent: 1.0
     stable_seconds: 0.5
     speed_mps: 0.1

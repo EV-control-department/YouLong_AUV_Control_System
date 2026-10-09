@@ -68,9 +68,15 @@ mission:
     - name: return_origin
       config: ../tasks/return_origin.yaml
       initial:
-        pose:
-          command: WTRAVEL
-          axes: xyz
-          target: [3.0, -1.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+        poses:
+          - command: WTRAVEL
+            axes: xyz
+            target: [3.0, -1.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+          - command: WTRAVEL
+            axes: xy
+            target: [0.0, 0.0, 0.2, 0.0] # 下潜0.2m
+          - command: SET
+            axes: rz
+            target: [0.0, 0.0, 0.0, 0.0] # 下潜0.2m
       on_failure:
         "return_origin.timeout": {}
