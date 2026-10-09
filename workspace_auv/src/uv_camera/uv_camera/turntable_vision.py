@@ -19,6 +19,17 @@ from .object_localizer import StereoCalibration
 EXPECTED_DISK_DIAMETER_M = 0.230
 
 
+def _installed_extrinsics(left, right, rotation, upside_down):
+    """在原始标定目序中计算倒装外参；前向光学z不反转。"""
+    left, right = np.asarray(left, float), np.asarray(right, float)
+    rotation = np.asarray(rotation, float).reshape(3, 3)
+    if not upside_down:
+        return left, right, rotation
+    midpoint = (left + right) / 2
+    return (2 * midpoint - left, 2 * midpoint - right,
+            rotation @ np.diag([-1., -1., 1.]))
+
+
 def _polygon(detection):
     xs = list(getattr(detection, 'mask_x', ()))
     ys = list(getattr(detection, 'mask_y', ()))
@@ -186,6 +197,12 @@ class TurntableVision:
         self.left_translation = np.asarray(node.get_parameter('turntable_left_translation').value, float)
         self.right_translation = np.asarray(node.get_parameter('turntable_right_translation').value, float)
         self.body_rotation = np.asarray(node.get_parameter('turntable_camera_rotation').value, float).reshape(3, 3)
+        self.upside_down = (not bool(node.get_parameter('sim_mode').value)
+                            and bool(node.get_parameter('turntable_camera_upside_down').value))
+        # 外参输入保持正装名义值，禁止同时手工翻转矩阵造成双重补偿。
+        self.left_translation, self.right_translation, self.body_rotation = \
+            _installed_extrinsics(self.left_translation, self.right_translation,
+                                  self.body_rotation, self.upside_down)
         self.black_limit = int(node.get_parameter('turntable_black_threshold').value)
         self.min_points = int(node.get_parameter('turntable_min_depth_points').value)
         self.expected_size = tuple(int(v) for v in node.get_parameter('turntable_image_size').value)
@@ -254,6 +271,13 @@ class TurntableVision:
         mid = frame.shape[1]//2
         observation = estimate(left, self.disk_class_id, self.label_class_id,
                                self.min_confidence, frame=frame[:, :mid])
+        observation['expected_disk_class_id'] = self.disk_class_id
+        observation['detected_classes'] = [
+            {'id': int(d.class_id), 'confidence': round(float(d.confidence), 3),
+             'mask_points': len(getattr(d, 'mask_x', ()))}
+            for d in getattr(left, 'detections', ())]
+        if self.upside_down and observation.get('phase_valid'):
+            observation['angle_deg'] = (observation['angle_deg'] + 180.) % 360.
         observation['capture_stamp_ns'] = stamp_ns
         observation['camera'] = 'front_left'
         if observation['valid']:
@@ -313,6 +337,9 @@ class TurntableVision:
                 observation['valid'] = False
                 observation['reason'] = str(exc)
         if not observation['valid'] and time.monotonic()-self._last_warning > 5.0:
-            self.node.get_logger().warn(f'转盘视觉无效：{observation["reason"]}')
+            self.node.get_logger().warn(
+                f'转盘视觉无效：{observation["reason"]}；期望类别={self.disk_class_id}，'
+                f'置信度阈值={self.min_confidence}，左目实际检测={observation["detected_classes"]}，'
+                f'图像={frame.shape[1]}x{frame.shape[0]}，倒装补偿={self.upside_down}')
             self._last_warning = time.monotonic()
         self.publisher.publish(String(data=json.dumps(observation, allow_nan=False)))

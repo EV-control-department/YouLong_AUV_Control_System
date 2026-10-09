@@ -6,6 +6,30 @@
 
 ## 必须填写的 3 个尺寸
 
+### 前视倒装、方向及视觉缺失诊断
+
+真机 `real_default.yaml` 现在启用 `front_rotate_180: true` 和
+`turntable_camera_upside_down: true`，适用于相机绕光轴物理倒装180°。
+前者让预览/YOLO输入正向（输出掩膜恢复原标定像素），后者修正三维
+外参、左右目的物理偏置及黄色条幅角度。原始左右图像不交换，标定K/D
+不修改；`turntable_camera_rotation` 和 left/right translation 输入保持
+正装名义值，不能再手动翻一次。正装相机将两个开关均关闭。
+倒装只反转光学横纵轴，前向距离不反转；不能直接把body-x目标取负。
+
+camera命令可追加 `-p turntable_disk_class_id:=3`、
+`-p turntable_min_confidence:=0.35`。类别应以实际模型为准，通用YOLO
+`confidence` 也不能高于期望的检测阈值。`missing_disk_mask` 表示左目没有
+满足类别、置信度和有效segment条件的转盘，并非深度/动作超时。
+新增日志列出期望类别、实际检测类别/置信度/掩膜点数、输入尺寸及倒装状态。
+
+新增任务调试参数均位于 `turntable.yaml`：`front_standoff_m` 为盘前观察距离；
+`front_camera_center_body`、`rod_tip_body` 为米制机体系外参；
+`observation_timeout_s`、`post_motion_observation_timeout_s` 为初始/动作后
+新帧等待时间；`motion_timeout_s` 为每个定位动作超时；
+`arrival_verify_timeout_s` 为动作成功后的实测精度复核时间。
+修改相机中心还需同步camera的左右目平移外参，不能只改任务侧。
+接触精度、安全放行和拖曳检查未放宽，延长等待不能替代有效视觉。
+
 ### 可选：输入盘心的 odom 位姿
 
 在上述 `turntable.yaml` 的 `params.disk_pose_odom` 填写

@@ -8,6 +8,13 @@ params:
   # 实测后例如填写 [1.0, 2.0, 0.6, 90.0]；示例不是安全运动目标。
   # 自动粗定位也要求下面两个放行开关均为true；路径须人工确认无障碍。
   disk_pose_odom: []
+  front_standoff_m: 0.55  # 粗定位/正视时相机距盘面的距离，米；不是棍尖距离。
+  front_camera_center_body: [0.230, 0.0, 0.076] # 相机中心机体系外参，米。
+  rod_tip_body: [0.390, -0.090, 0.076] # 棍尖机体系外参，米；需实测。
+  observation_timeout_s: 8.0 # 粗定位后首次等待视觉；缺失掩膜不能靠延长时间解决。
+  post_motion_observation_timeout_s: 3.0 # 对准后等待新采集的视觉帧。
+  motion_timeout_s: 90.0 # 每个WTRAVEL/最终SET动作的超时，不是任务总超时。
+  arrival_verify_timeout_s: 10.0 # 动作成功后的实测精度复核时间。
   allow_contact_motion: false
   force_limited_control_confirmed: false
   # 以下仅为待复核的调试占位值；现场测量并确认限推力前不得放行接触。

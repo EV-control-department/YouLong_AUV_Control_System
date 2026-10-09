@@ -115,6 +115,13 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "turntable": {
         "disk_pose_odom": (list, float),
+        "front_standoff_m": float,
+        "front_camera_center_body": (list, float),
+        "rod_tip_body": (list, float),
+        "observation_timeout_s": float,
+        "post_motion_observation_timeout_s": float,
+        "motion_timeout_s": float,
+        "arrival_verify_timeout_s": float,
         "allow_contact_motion": bool,
         "force_limited_control_confirmed": bool,
         "rod_radius_m": float,

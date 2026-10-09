@@ -6,7 +6,19 @@ import cv2
 import numpy as np
 import pytest
 
-from uv_camera.turntable_vision import _sgbm_disk, estimate
+from uv_camera.turntable_vision import _sgbm_disk, estimate, _installed_extrinsics
+
+
+def test_front_upside_down_reverses_transverse_axes_not_forward_depth():
+    left, right, rotation = _installed_extrinsics(
+        [.23, -.05, .076], [.23, .05, .076],
+        [0., 0., 1., 1., 0., 0., 0., 1., 0.], True)
+    assert left == pytest.approx([.23, .05, .076])
+    assert right == pytest.approx([.23, -.05, .076])
+    assert rotation @ [0., 0., 1.] == pytest.approx([1., 0., 0.])
+    assert rotation @ [1., 0., 0.] == pytest.approx([0., -1., 0.])
+    assert rotation @ [0., 1., 0.] == pytest.approx([0., 0., -1.])
+    assert np.linalg.det(rotation) == pytest.approx(1.)
 
 
 def detection(class_id, points):

@@ -167,7 +167,18 @@ class TurntableTask:
     def _after_motion_observation(self, last_stamp):
         # 不能把动作执行途中采集的帧误当作到位后的闭环测量。
         cutoff = max(last_stamp, self.node.get_clock().now().nanoseconds)
-        return self._wait_new_observation(cutoff)
+        return self._wait_new_observation(
+            cutoff, self._positive_parameter('post_motion_observation_timeout_s', 3.0))
+
+    def _positive_parameter(self, name, default):
+        return _required_float({name: self.params.get(name, default)}, name, positive=True)
+
+    def _camera_center(self):
+        value = tuple(float(v) for v in self.params.get(
+            'front_camera_center_body', FRONT_CAMERA_CENTER_BODY))
+        if len(value) != 3 or not all(math.isfinite(v) for v in value):
+            raise ValueError('front_camera_center_body必须为有限数值[x,y,z]')
+        return value
 
     def _calibration(self):
         p = self.params
@@ -179,7 +190,11 @@ class TurntableTask:
             raise ValueError('孔位与 20mm 条幅的切向净空不足')
         _required_float(p, 'approach_standoff_m', positive=True)
         _required_float(p, 'insert_depth_m', positive=True)
-        return ROD_TIP_BODY, CONTACT_RADIUS_M
+        tip = tuple(float(v) for v in p.get('rod_tip_body', ROD_TIP_BODY))
+        if len(tip) != 3 or not all(math.isfinite(v) for v in tip):
+            raise ValueError('rod_tip_body必须为有限数值[x,y,z]')
+        self._camera_center()
+        return tip, CONTACT_RADIUS_M
 
     def _vision_geometry(self, observation, require_front=True):
         center = tuple(float(v) for v in observation['disk_center_world'])
@@ -232,6 +247,8 @@ class TurntableTask:
         if self.node.stopped:
             raise RuntimeError('任务被停止')
         before = self._measured_pose()
+        self.log.info(f'转盘动作[{context}]：实测={before}，目标={list(target)}，'
+                      f'轴={axes}，超时={timeout:.1f}s')
         ok, message = self.node._send_action_goal(
             command, [float(v) for v in target], axes, timeout,
             task_context=f'turntable:{context}')
@@ -274,7 +291,7 @@ class TurntableTask:
                 time.sleep(0.05)
             raise RuntimeError(f'{context} 未产生预期升沉；禁止继续接触')
         if command == BasicMotion.Goal.WTRAVEL:
-            deadline = time.monotonic() + 10.0
+            deadline = time.monotonic() + self._positive_parameter('arrival_verify_timeout_s', 10.0)
             while time.monotonic() < deadline and not self.node.stopped:
                 pose = self._measured_pose()
                 position_error = math.dist(pose[:3], target[:3])
@@ -319,12 +336,13 @@ class TurntableTask:
                     raise
                 time.sleep(.05)
         axis = math.radians(yaw)
-        camera = (x - .55 * math.cos(axis), y - .55 * math.sin(axis), z)
-        robot = _robot_for_tip(camera, yaw, FRONT_CAMERA_CENTER_BODY)
+        standoff = self._positive_parameter('front_standoff_m', .55)
+        camera = (x - standoff * math.cos(axis), y - standoff * math.sin(axis), z)
+        robot = _robot_for_tip(camera, yaw, self._camera_center())
         self.log.info(f'转盘odom粗定位：盘心={(x, y, z)}，正视航向={yaw:.1f}°，'
-                      f'AUV目标={robot}；相机距盘面0.55m，随后视觉重测')
+                      f'AUV目标={robot}；相机距盘面{standoff:.3f}m，随后视觉重测')
         self._motion(BasicMotion.Goal.WTRAVEL, [*robot, yaw], 'xyzrz',
-                     '盘心odom粗定位', 90.0)
+                     '盘心odom粗定位', self._positive_parameter('motion_timeout_s', 90.0))
         # 清除移动前/移动中的观测，后续只接收新的视觉测量。
         with self._lock:
             self._observation = None
@@ -335,7 +353,8 @@ class TurntableTask:
             tip, radius = self._calibration()
             self._coarse_position()
             observation = self._wait_new_observation(
-                getattr(self, '_coarse_capture_cutoff', 0), timeout=8.0)
+                getattr(self, '_coarse_capture_cutoff', 0),
+                timeout=self._positive_parameter('observation_timeout_s', 8.0))
             self._measured_pose()
             center, axis_yaw = self._vision_geometry(observation, require_front=False)
             p = self.params
@@ -362,11 +381,13 @@ class TurntableTask:
             # 第一阶段只做非接触正视对准。盘轴来自 SGBM 平面法向，
             # 而非任务文件中的名义朝向；盘心也不取手填坐标。
             axis = math.radians(axis_yaw)
-            align_camera = (center[0]-0.55*math.cos(axis),
-                            center[1]-0.55*math.sin(axis), center[2])
-            align_robot = _robot_for_tip(align_camera, axis_yaw, FRONT_CAMERA_CENTER_BODY)
+            front_standoff = self._positive_parameter('front_standoff_m', .55)
+            align_camera = (center[0]-front_standoff*math.cos(axis),
+                            center[1]-front_standoff*math.sin(axis), center[2])
+            align_robot = _robot_for_tip(align_camera, axis_yaw, self._camera_center())
             self._motion(BasicMotion.Goal.WTRAVEL,
-                         [*align_robot, axis_yaw], 'xyzrz', '视觉正视对准', 90.0)
+                         [*align_robot, axis_yaw], 'xyzrz', '视觉正视对准',
+                         self._positive_parameter('motion_timeout_s', 90.0))
             observation = self._after_motion_observation(observation['capture_stamp_ns'])
             insertion = standoff + depth
             center, axis_yaw = self._vision_geometry(observation)
@@ -378,7 +399,8 @@ class TurntableTask:
             self.log.info(f'单次左下孔动作：孔角={hole:.1f}°，上浮={ascent:.3f}m，'
                           f'yaw={stroke_yaw:.1f}°，下沉={descent:.3f}m；待实测圆盘转角')
             self._motion(BasicMotion.Goal.WTRAVEL,
-                         [*pre_robot, axis_yaw], 'xyzrz', '左下孔盘外对准', 90.0)
+                         [*pre_robot, axis_yaw], 'xyzrz', '左下孔盘外对准',
+                         self._positive_parameter('motion_timeout_s', 90.0))
             observation = self._after_motion_observation(observation['capture_stamp_ns'])
             self._check_hole_alignment(observation, tip, radius, standoff)
             # 仅一次插入；升沉/yaw小步是同一次接触动作，不重新插杆。

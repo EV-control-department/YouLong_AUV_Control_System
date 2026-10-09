@@ -199,6 +199,7 @@ class CameraAiNode(Node):
         self.declare_parameter('sim_mode', False)
         # Real installation only. Geometry remains in original calibration pixels.
         self.declare_parameter('down_rotate_180', False)
+        self.declare_parameter('front_rotate_180', False)
         self.declare_parameter('enable_ai', True)
         self.declare_parameter('inference_fps', 5.0)
         self.declare_parameter('dataset_fps', 5.0)
@@ -235,6 +236,7 @@ class CameraAiNode(Node):
         self.declare_parameter('turntable_disk_class_id', -1)
         self.declare_parameter('turntable_label_class_id', -1)
         self.declare_parameter('turntable_min_confidence', 0.5)
+        self.declare_parameter('turntable_camera_upside_down', False)
         self.declare_parameter('turntable_calibration_file', '')
         self.declare_parameter('turntable_image_size', [640, 480])
         self.declare_parameter('turntable_calibration_native_size', [1280, 960])
@@ -413,9 +415,9 @@ class CameraAiNode(Node):
             return self._stream_clients.get((camera, annotated), 0) > 0
 
     def camera_rotate_180(self, camera):
-        return (camera == 'down'
+        return (camera in ('front', 'down')
                 and not bool(self.get_parameter('sim_mode').value)
-                and bool(self.get_parameter('down_rotate_180').value))
+                and bool(self.get_parameter(camera + '_rotate_180').value))
 
     def update_raw_preview(self, camera, frame, stamp=None):
         if not self.stream_requested(camera):

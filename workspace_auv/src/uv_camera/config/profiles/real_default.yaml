@@ -3,6 +3,13 @@
     sim_mode: false
     # 下视倒装：每目独立旋转；检测坐标恢复原标定像素，左右目不交换。
     down_rotate_180: true
+    # 前视物理绕光轴倒装180度：预览/YOLO正向，输出掩膜仍恢复原标定像素。
+    # 若前视实际正装，将下面两个参数均改false。外参输入保持正装名义值。
+    front_rotate_180: true
+    turntable_camera_upside_down: true
+    turntable_disk_class_id: 3
+    turntable_label_class_id: -1
+    turntable_min_confidence: 0.35
     enable_mapping_vision: true
     mapping_tag_dictionary: "DICT_APRILTAG_16h5"
     mapping_allowed_tag_ids: [16, 18]

@@ -1,0 +1,11 @@
+
+# START 会建立本次坐标原点和初始方向，扫描与投放位姿均以此为参照。
+mission:
+  name: turn_table
+  tasks:
+    - name: start
+      config: ../tasks/start.yaml
+      params:
+        skip_preparation: true # 与建图任务链一致：跳过准备倒计时，仍执行 START。
+    - name: turntable
+      config: ../tasks/turntable.yaml
