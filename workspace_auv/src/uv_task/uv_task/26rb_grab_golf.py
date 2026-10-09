@@ -29,6 +29,7 @@ class RB26GrabGolfTask:
         self._logger = node.get_logger()
 
         self._aligned_camera = None
+        self._pending_golf_priority = None
 
         golf_color = params.get('golf_color', 'pink_golf')
         self._golf_color = str(golf_color)
@@ -203,10 +204,20 @@ class RB26GrabGolfTask:
         if not self._node._ensure_camera_extrinsics():
             self._logger.error(f'26rb_grab_golf：{label} 伺服缺少相机 TF')
             return None
-        priority = DownCameraPriority(
-            self._node, class_id, priority_seconds=self._priority_seconds,
-            detection_timeout=self._detection_timeout,
-            label=f'26rb_grab_golf {label}伺服')
+        priority = self._pending_golf_priority if class_id == self._golf_class_id else None
+        if priority is not None:
+            self._pending_golf_priority = None
+        else:
+            priority = DownCameraPriority(
+                self._node, class_id, priority_seconds=self._priority_seconds,
+                detection_timeout=self._detection_timeout,
+                label=f'26rb_grab_golf {label}伺服')
+        ball_priority = None
+        if class_id == self._collection_class_id:
+            ball_priority = DownCameraPriority(
+                self._node, self._golf_class_id, priority_seconds=self._priority_seconds,
+                detection_timeout=self._detection_timeout,
+                label=f'26rb_grab_golf frame修正途中观察{self._golf_color}')
         self._aligned_camera = None
         deadline = time.monotonic() + self._servo_timeout
         hold_generation = None
@@ -222,6 +233,15 @@ class RB26GrabGolfTask:
             f'相机优先权={self._priority_seconds:.1f}s')
         while not self._node.stopped and time.monotonic() < deadline:
             now = time.monotonic()
+            if ball_priority is not None:
+                ball_camera, ball = ball_priority.update()
+                if ball is not None:
+                    self._pending_golf_priority = ball_priority
+                    self._logger.info(
+                        f'26rb_grab_golf：frame 修正途中在 {ball_camera} 看到 '
+                        f'{self._golf_color}，直接切换到球水平伺服')
+                    return [float(self._node._cmd_x), float(self._node._cmd_y),
+                            float(self._node._cmd_z), float(self._node._cmd_yaw)]
             camera_name, detection = priority.update()
             if hold_generation != priority.generation:
                 hold_since = None
@@ -580,6 +600,7 @@ class RB26GrabGolfTask:
         return False, '复检时高尔夫球仍在盘上'
 
     def execute(self) -> TaskOutcome:
+        self._pending_golf_priority = None
         if self._collection_class_id is None:
             return TaskOutcome.failed(
                 '26rb_grab_golf.collection_frame',
@@ -615,16 +636,17 @@ class RB26GrabGolfTask:
                 '26rb_grab_golf.collection_frame',
                 '水平伺服到 collection_frame 正上方失败')
 
-        if self._wait_for_detection(
-                self._golf_class_id, self._golf_color,
-                self._golf_observe_seconds) is None:
-            return TaskOutcome.failed(
-                '26rb_grab_golf.golf',
-                f'伺服到 collection_frame 后，'
-                f'{self._golf_observe_seconds:.1f}s 内没有看到 {self._golf_color}')
-        if not self._flash_green(2, f'已观察到 {self._golf_color}'):
-            return TaskOutcome.failed(
-                '26rb_grab_golf.golf', '目标高尔夫球提示灯中断')
+        if self._pending_golf_priority is None:
+            if self._wait_for_detection(
+                    self._golf_class_id, self._golf_color,
+                    self._golf_observe_seconds) is None:
+                return TaskOutcome.failed(
+                    '26rb_grab_golf.golf',
+                    f'伺服到 collection_frame 后，'
+                    f'{self._golf_observe_seconds:.1f}s 内没有看到 {self._golf_color}')
+            if not self._flash_green(2, f'已观察到 {self._golf_color}'):
+                return TaskOutcome.failed(
+                    '26rb_grab_golf.golf', '目标高尔夫球提示灯中断')
 
         total_attempts = self._max_grab_retries + 1
         for attempt in range(1, total_attempts + 1):

@@ -27,43 +27,43 @@ mission:
     #   on_failure:
     #     "26rb_hit_balls.timeout": {}
 
-    # - name: 26rb_grab_golf
-    #   config: ../tasks/26rb_grab_golf.yaml
-    #   initial:
-    #     poses:
-    #       - command: SET
-    #         axes: z
-    #         target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
-    #       - command: WTRAVEL
-    #         axes: xyz
-    #         target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-    #       - command: WTRAVEL
-    #         axes: xyz
-    #         target: [5.8, -0.3, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-    #       # - command: SET
-    #       #   axes: rz
-    #       #   target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
-    #   on_failure:
-    #     "26rb_grab_golf.timeout": {}
-
-    - name: 26rb_gate_task
-      config: ../tasks/26rb_gate_task.yaml
+    - name: 26rb_grab_golf
+      config: ../tasks/26rb_grab_golf.yaml
       initial:
         poses:
           - command: SET
             axes: z
             target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
-          # - command: WTRAVEL
-          #   axes: xyz
-          #   target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
           - command: WTRAVEL
             axes: xyz
-            target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-          - command: SET
-            axes: rz
-            target: [0.0, 0.0, 0.0, 0.0] # 到点后设置 1.57 rad 航向。
+            target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+          - command: WTRAVEL
+            axes: xyz
+            target: [2.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+          # - command: SET
+          #   axes: rz
+          #   target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
       on_failure:
-        "26rb_gate_task.timeout": {}
+        "26rb_grab_golf.timeout": {}
+
+    # - name: 26rb_gate_task
+    #   config: ../tasks/26rb_gate_task.yaml
+    #   initial:
+    #     poses:
+    #       - command: SET
+    #         axes: z
+    #         target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
+    #       # - command: WTRAVEL
+    #       #   axes: xyz
+    #       #   target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+    #       - command: WTRAVEL
+    #         axes: xyz
+    #         target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+    #       - command: SET
+    #         axes: rz
+    #         target: [0.0, 0.0, 0.0, 0.0] # 到点后设置 1.57 rad 航向。
+    #   on_failure:
+    #     "26rb_gate_task.timeout": {}
 
     - name: return_origin
       config: ../tasks/return_origin.yaml
