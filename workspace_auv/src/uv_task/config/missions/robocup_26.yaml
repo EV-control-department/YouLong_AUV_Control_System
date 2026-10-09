@@ -33,7 +33,7 @@ mission:
     #     poses:
     #       - command: SET
     #         axes: z
-    #         target: [0.0, 0.0, 0.2, 0.0] # 下潜0.2m
+    #         target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
     #       - command: WTRAVEL
     #         axes: xyz
     #         target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
@@ -52,10 +52,10 @@ mission:
         poses:
           - command: SET
             axes: z
-            target: [0.0, 0.0, 0.2, 0.0] # 下潜0.2m
-          - command: WTRAVEL
-            axes: xyz
-            target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+            target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
+          # - command: WTRAVEL
+          #   axes: xyz
+          #   target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
           - command: WTRAVEL
             axes: xyz
             target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
