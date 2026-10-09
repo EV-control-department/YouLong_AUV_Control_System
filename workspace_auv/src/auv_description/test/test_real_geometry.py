@@ -1,4 +1,4 @@
-"""Regression tests for real vehicle geometry from calibration PDF v5."""
+"""Regression tests for PDF v5 geometry and the current disc-claw calibration."""
 
 import math
 from pathlib import Path
@@ -56,7 +56,7 @@ def _assert_matrix_close(actual, expected, tolerance=1e-5):
             assert abs(actual_value - expected_value) <= tolerance
 
 
-def test_real_urdf_contains_pdf_v5_reference_points():
+def test_real_urdf_contains_reference_points_and_disc_claw_calibration():
     origins = _joint_origins(PACKAGE_ROOT / 'urdf' / 'auv.urdf')
     assert origins['front_camera_link'] == (0.23, 0.0, 0.076)
     assert origins['downward_camera_link'] == (-0.13, 0.0, 0.0645)
@@ -66,7 +66,9 @@ def test_real_urdf_contains_pdf_v5_reference_points():
     assert origins['usbl_transducer_a2'] == (0.03, 0.10, 0.105)
     assert origins['usbl_transducer_a3'] == (0.23, 0.10, 0.105)
     assert origins['usbl_array_geometry_center'] == (0.13, 0.0, 0.105)
-    assert origins['disc_claw_link'] == (-0.43, 0.0, 0.29)
+    assert origins['disc_claw_link'] == (-0.38, 0.0, 0.29)
+    assert math.isclose(origins['downward_camera_link'][0]-origins['disc_claw_link'][0],
+                        0.25, abs_tol=1e-12)
     assert origins['hairpin_claw_link'] == (0.08, 0.0, 0.13)
     assert 'dvl_link' not in origins
 
@@ -113,7 +115,7 @@ def test_real_component_registry_contains_pdf_thruster_contract():
     assert config['reference_points']['ins']['orientation_status'] == (
         'not_defined')
     assert config['grippers']['G1_disc_claw']['position_body'] == [
-        -0.430, 0.000, 0.290]
+        -0.380, 0.000, 0.290]
     assert config['grippers']['G2_hairpin_claw']['position_body'] == [
         0.080, 0.000, 0.130]
     assert config['thrusters']['order'] == ['M0', 'M1', 'M2', 'M3', 'M4', 'M5']

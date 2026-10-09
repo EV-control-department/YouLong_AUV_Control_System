@@ -276,10 +276,13 @@ def test_velocity_failure_or_cancel_always_stops_lease(velocity_rig, failure):
 def test_yaml_exposes_velocity_and_depth_parameters():
     from pathlib import Path
     from uv_task.config_loader import load_task
+    import yaml
     for name in ('26rb_grab_golf.yaml', '26rb_grab_ball.yaml'):
-        params = load_task(Path(__file__).parents[1]/'config/tasks'/name)[0]['params']
-        assert params['horizontal_max_speed_mps'] == .08
-        assert params['depth_hold_gain'] == .8
-        assert params['depth_hold_max_speed_mps'] == .08
-        assert params['depth_hold_tolerance_m'] == .03
+        path = Path(__file__).parents[1]/'config/tasks'/name
+        params = load_task(path)[0]['params']
+        configured = yaml.safe_load(path.read_text())['params']['servo']
+        assert params['horizontal_max_speed_mps'] == configured['max_speed_mps']
+        assert params['depth_hold_gain'] == configured['depth_gain']
+        assert params['depth_hold_max_speed_mps'] == configured['max_vertical_speed_mps']
+        assert params['depth_hold_tolerance_m'] == configured['depth_tolerance_m']
         assert 'max_horizontal_step_m' not in params

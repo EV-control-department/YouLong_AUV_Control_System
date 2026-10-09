@@ -46,6 +46,16 @@ mission:
       on_failure:
         "26rb_grab_golf.timeout": {}
 
+    - name: 26rb_drop_ball_target_rack
+      config: ../tasks/26rb_drop_ball_target_rack.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "26rb_grab_golf.timeout": {}
+
     # - name: 26rb_gate_task
     #   config: ../tasks/26rb_gate_task.yaml
     #   initial:

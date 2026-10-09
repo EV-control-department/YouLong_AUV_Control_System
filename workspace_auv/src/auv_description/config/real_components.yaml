@@ -36,7 +36,8 @@ reference_points:
 grippers:
   G1_disc_claw:
     name: disc_claw
-    position_body: [-0.430, 0.000, 0.290]
+    # Position override: 0.25 m aft of down_camera in Body X.
+    position_body: [-0.380, 0.000, 0.290]
     body_R_gripper:
       - [0.000, 0.000, 1.000]
       - [0.000, -1.000, 0.000]
