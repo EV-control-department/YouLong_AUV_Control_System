@@ -2,6 +2,12 @@
 # 现场测量和放行见 docs/turntable_calibration_checklist.md；未确认前禁止接触。
 task: turntable
 params:
+  # 可选粗定位：盘心在 START 后 odom 系中的 [x米, y米, z米, yaw度]。
+  # z向下；yaw=机头正对盘心时的航向，不是盘面黄色条幅的角度。
+  # [] 表示不自动粗定位，需人工/任务列表先到观察位。
+  # 实测后例如填写 [1.0, 2.0, 0.6, 90.0]；示例不是安全运动目标。
+  # 自动粗定位也要求下面两个放行开关均为true；路径须人工确认无障碍。
+  disk_pose_odom: []
   allow_contact_motion: false
   force_limited_control_confirmed: false
   # 以下仅为待复核的调试占位值；现场测量并确认限推力前不得放行接触。

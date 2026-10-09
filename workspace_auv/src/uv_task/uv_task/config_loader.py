@@ -114,6 +114,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "fallback_round_cells": (list, int),
     },
     "turntable": {
+        "disk_pose_odom": (list, float),
         "allow_contact_motion": bool,
         "force_limited_control_confirmed": bool,
         "rod_radius_m": float,

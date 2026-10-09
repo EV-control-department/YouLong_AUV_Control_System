@@ -22,6 +22,41 @@ def test_rod_tip_inverse_kinematics():
     assert actual_tip == pytest.approx(desired_tip)
 
 
+def test_disk_odom_coarse_position_uses_camera_standoff_and_yaw():
+    task = object.__new__(TurntableTask)
+    task.params = {'disk_pose_odom': [1., 2., .6, 90.],
+                   'allow_contact_motion': True,
+                   'force_limited_control_confirmed': True}
+    task.log = SimpleNamespace(info=lambda *_args: None)
+    task.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=123)))
+    task._lock = threading.RLock()
+    task._observation = 'old'
+    task._measured_pose = lambda: (0., 0., .5, 0.)
+    commands = []
+    task._motion = lambda *args: commands.append(args)
+    task._coarse_position()
+    assert commands[0][1] == pytest.approx([1., 1.22, .524, 90.])
+    assert task._observation is None
+    assert task._coarse_capture_cutoff == 123
+
+
+def test_disk_odom_coarse_position_preserves_disabled_motion():
+    task = object.__new__(TurntableTask)
+    task.params = {'disk_pose_odom': [1., 2., .6, 90.],
+                   'allow_contact_motion': False}
+    task.log = SimpleNamespace(info=lambda *_args: None)
+    task._motion = lambda *_args: pytest.fail('未放行却执行粗定位')
+    task._coarse_position()
+
+
+def test_invalid_disk_odom_pose_is_rejected():
+    task = object.__new__(TurntableTask)
+    task.params = {'disk_pose_odom': [1., 2.]}
+    with pytest.raises(ValueError, match='disk_pose_odom'):
+        task._coarse_position()
+
+
 def test_vertical_hole():
     # z 向下；90° 孔位应在盘心上方。
     assert _hole_world((1, 2, 1), 0, 0.2, 90, -0.1) == pytest.approx(

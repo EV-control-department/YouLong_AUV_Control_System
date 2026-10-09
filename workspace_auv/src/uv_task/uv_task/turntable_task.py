@@ -237,6 +237,13 @@ class TurntableTask:
             task_context=f'turntable:{context}')
         if not ok:
             raise RuntimeError(f'{context} 执行失败：{message}')
+        if command == BasicMotion.Goal.WTRAVEL:
+            # WTRAVEL保持行进方向，必须显式恢复正视航向及最终位置。
+            ok, message = self.node._send_action_goal(
+                BasicMotion.Goal.SET, [float(v) for v in target], axes, timeout,
+                task_context=f'turntable:{context}:最终定位归向')
+            if not ok:
+                raise RuntimeError(f'{context} 最终定位归向失败：{message}')
         # BasicMotion 的位置容差约 0.1m，小行程可能立刻返回 SUCCESS。
         # 因此任务再检查实测里程计是否真的产生了相应位移。
         if command == BasicMotion.Goal.BMOVE and axes == 'x':
@@ -288,10 +295,47 @@ class TurntableTask:
             self._motion(BasicMotion.Goal.BMOVE, target, axes, context)
             remaining -= abs(step)
 
+    def _coarse_position(self):
+        """可选盘心名义位姿只用于盘外接近；不可代替视觉插孔坐标。"""
+        nominal = self.params.get('disk_pose_odom', [])
+        if not nominal:
+            return
+        if len(nominal) != 4:
+            raise ValueError('disk_pose_odom必须为[x, y, z, yaw_deg]或空列表')
+        x, y, z, yaw = (float(v) for v in nominal)
+        if not all(math.isfinite(v) for v in (x, y, z, yaw)) or z < 0:
+            raise ValueError('disk_pose_odom必须为有限数值，z向下且非负')
+        if not (self.params.get('allow_contact_motion', False)
+                and self.params.get('force_limited_control_confirmed', False)):
+            self.log.info('转盘名义odom位姿已填写，但运动未放行，不执行粗定位')
+            return
+        pose_deadline = time.monotonic() + 3.0
+        while True:
+            try:
+                self._measured_pose()
+                break
+            except RuntimeError:
+                if self.node.stopped or time.monotonic() >= pose_deadline:
+                    raise
+                time.sleep(.05)
+        axis = math.radians(yaw)
+        camera = (x - .55 * math.cos(axis), y - .55 * math.sin(axis), z)
+        robot = _robot_for_tip(camera, yaw, FRONT_CAMERA_CENTER_BODY)
+        self.log.info(f'转盘odom粗定位：盘心={(x, y, z)}，正视航向={yaw:.1f}°，'
+                      f'AUV目标={robot}；相机距盘面0.55m，随后视觉重测')
+        self._motion(BasicMotion.Goal.WTRAVEL, [*robot, yaw], 'xyzrz',
+                     '盘心odom粗定位', 90.0)
+        # 清除移动前/移动中的观测，后续只接收新的视觉测量。
+        with self._lock:
+            self._observation = None
+        self._coarse_capture_cutoff = self.node.get_clock().now().nanoseconds
+
     def execute(self):
         try:
             tip, radius = self._calibration()
-            observation = self._wait_new_observation(0, timeout=8.0)
+            self._coarse_position()
+            observation = self._wait_new_observation(
+                getattr(self, '_coarse_capture_cutoff', 0), timeout=8.0)
             self._measured_pose()
             center, axis_yaw = self._vision_geometry(observation, require_front=False)
             p = self.params
