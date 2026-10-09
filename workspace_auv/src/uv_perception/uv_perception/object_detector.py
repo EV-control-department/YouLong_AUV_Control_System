@@ -34,7 +34,7 @@ def _model_default() -> str:
     if override:
         return override
 
-    model_filename = 'HQQ6_aug.pt'
+    model_filename = 'HQQ7_aug.pt'
     source_candidate = (Path(__file__).resolve().parents[1] / 'weights' /
                         model_filename)
     if source_candidate.is_file():
