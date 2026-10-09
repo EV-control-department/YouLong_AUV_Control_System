@@ -133,3 +133,14 @@ def body_image_step(camera, du, dv, scale_m, gain, max_step_m):
     if norm > max_step_m:
         step *= float(max_step_m) / norm
     return float(step[0]), float(step[1])
+
+
+def body_to_world_rotation(pose):
+    """Body-to-NED rotation Rz(yaw) Ry(pitch) Rx(roll), angles in degrees."""
+    roll, pitch, yaw = map(math.radians, pose[3:6])
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return np.array([[cy*cp, cy*sp*sr-sy*cr, cy*sp*cr+sy*sr],
+                     [sy*cp, sy*sp*sr+cy*cr, sy*sp*cr-cy*sr],
+                     [-sp, cp*sr, cp*cr]])

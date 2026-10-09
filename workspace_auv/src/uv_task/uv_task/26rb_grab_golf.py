@@ -11,6 +11,7 @@ import numpy as np
 from uv_msgs.action import BasicMotion
 from uv_task.down_camera_servo import (
     DownCameraPriority, best_detection, body_image_step, normalized_image_error,
+    body_to_world_rotation,
 )
 from uv_task.task_outcome import TaskOutcome
 from uv_task.collection_frame_search import CollectionFrameSearch
@@ -30,6 +31,7 @@ class RB26GrabGolfTask:
 
         self._aligned_camera = None
         self._pending_golf_priority = None
+        self._servo_depth = None
 
         golf_color = params.get('golf_color', 'pink_golf')
         self._golf_color = str(golf_color)
@@ -62,8 +64,13 @@ class RB26GrabGolfTask:
             0.1, float(params.get('projection_depth_m', 0.8)))
         self._servo_gain = max(
             0.05, float(params.get('horizontal_servo_gain', 0.8)))
-        self._max_xy_step = max(
-            0.005, float(params.get('max_horizontal_step_m', 0.08)))
+        self._max_xy_speed = _clamp(
+            float(params.get('horizontal_max_speed_mps', 0.08)), 0.005, 0.15)
+        self._depth_hold_gain = max(0.05, float(params.get('depth_hold_gain', 0.8)))
+        self._depth_hold_max_speed = _clamp(
+            float(params.get('depth_hold_max_speed_mps', 0.08)), 0.005, 0.15)
+        self._depth_hold_tolerance = max(
+            0.005, float(params.get('depth_hold_tolerance_m', 0.03)))
         self._command_timeout = max(
             0.2, float(params.get('position_command_timeout', 10.0)))
 
@@ -184,23 +191,68 @@ class RB26GrabGolfTask:
         c, s = math.cos(yaw), math.sin(yaw)
         return c * dx - s * dy, s * dx + c * dy
 
-    def _horizontal_step(self, camera_name, detection):
-        """Convert this eye's calibrated pixel error into a bounded XY step."""
+    def _horizontal_velocity(self, camera_name, detection):
+        """Project pixel error into bounded world-horizontal velocity (m/s)."""
         du, dv = normalized_image_error(self._node, camera_name, detection)
         camera = self._node.camera_extrinsics[camera_name]
-        body_dx, body_dy = body_image_step(
+        body_vx, body_vy = body_image_step(
             camera, du, dv, self._projection_depth,
-            self._servo_gain, self._max_xy_step)
-        pose = self._node._latest_robot_pose()
-        world_dx, world_dy = self._body_to_world(body_dx, body_dy, pose[5])
-        return pose, body_dx, body_dy, world_dx, world_dy, du, dv
+            self._servo_gain, self._max_xy_speed)
+        pose = self._servo_pose()
+        world = body_to_world_rotation(pose) @ np.array([body_vx, body_vy, 0.0])
+        return pose, world[:2], du, dv
+
+    def _servo_pose(self):
+        pose = tuple(float(value) for value in self._node._latest_robot_pose())
+        if len(pose) != 6 or not all(math.isfinite(value) for value in pose):
+            raise ValueError('水平伺服实测位姿无效')
+        return pose
+
+    def _send_horizontal_velocity(self, horizontal, deadline):
+        pose = self._servo_pose()
+        vz = _clamp((self._servo_depth-pose[2])*self._depth_hold_gain,
+                    -self._depth_hold_max_speed, self._depth_hold_max_speed)
+        # BODY_VELOCITY is in the body frame. Transform the complete world
+        # velocity so horizontal motion has no world-Z component at any tilt.
+        body = body_to_world_rotation(pose).T @ np.array([*horizontal, vz])
+        success, message = self._node._send_body_velocity(
+            *body.tolist(), yaw_rate_deg_s=0.0,
+            lease_s=max(0.25, 4*self._servo_period),
+            wait_deadline=min(deadline, time.monotonic()+2.0),
+            task_context='26rb_grab_golf 定深水平速度伺服',
+            light_color=self._node.LIGHT_YELLOW)
+        if not success:
+            raise RuntimeError(f'水平速度指令失败：{message}')
+
+    def _stop_horizontal_velocity(self):
+        """Stop the lease and hand measured XY / locked depth to position hold."""
+        success, message = self._node._send_body_velocity(
+            wait_deadline=time.monotonic()+2.0,
+            task_context='26rb_grab_golf 结束水平速度伺服')
+        if not success:
+            self._logger.error(f'26rb_grab_golf：停止水平速度失败：{message}')
+            return None
+        if self._node.stopped:
+            return None
+        pose = self._servo_pose()
+        recorded = [pose[0], pose[1], self._servo_depth, pose[5]]
+        success, message = self._node._send_action_goal(
+            BasicMotion.Goal.SET, recorded, 'xyzrz',
+            timeout=self._command_timeout,
+            wait_deadline=time.monotonic()+self._command_timeout, quiet=True,
+            task_context='26rb_grab_golf 水平伺服后保持位置和深度')
+        if not success:
+            self._logger.error(f'26rb_grab_golf：水平伺服后定深保持失败：{message}')
+            return None
+        (self._node._cmd_x, self._node._cmd_y,
+         self._node._cmd_z, self._node._cmd_yaw) = recorded
+        return recorded
 
     def _servo_horizontally(self, class_id: int, label: str):
-        """Start a new camera lease for this target and servo its image centre."""
+        """Servo image error with XY velocity while holding one measured depth."""
         if class_id is None:
             self._logger.error(f'26rb_grab_golf：模型映射中没有 {label} 类别')
             return None
-
         if not self._node._ensure_camera_extrinsics():
             self._logger.error(f'26rb_grab_golf：{label} 伺服缺少相机 TF')
             return None
@@ -219,117 +271,80 @@ class RB26GrabGolfTask:
                 detection_timeout=self._detection_timeout,
                 label=f'26rb_grab_golf frame修正途中观察{self._golf_color}')
         self._aligned_camera = None
-        deadline = time.monotonic() + self._servo_timeout
+        deadline = time.monotonic()+self._servo_timeout
         hold_generation = None
         hold_since = None
-        last_command = None
         last_status_log = float('-inf')
+        completed = False
+        recorded = None
         self._node._set_task_phase_light(
-            self._node.LIGHT_YELLOW, f'水平伺服至 {label}')
-        self._logger.info(
-            f'26rb_grab_golf：开始水平视觉伺服至 {label}；'
-            f'class_id={class_id}，容差={self._pixel_tolerance:.3f}，'
-            f'像素修正尺度={self._projection_depth:.2f}m，'
-            f'相机优先权={self._priority_seconds:.1f}s')
-        while not self._node.stopped and time.monotonic() < deadline:
-            now = time.monotonic()
-            if ball_priority is not None:
-                ball_camera, ball = ball_priority.update()
-                if ball is not None:
-                    self._pending_golf_priority = ball_priority
-                    self._logger.info(
-                        f'26rb_grab_golf：frame 修正途中在 {ball_camera} 看到 '
-                        f'{self._golf_color}，直接切换到球水平伺服')
-                    return [float(self._node._cmd_x), float(self._node._cmd_y),
-                            float(self._node._cmd_z), float(self._node._cmd_yaw)]
-            camera_name, detection = priority.update()
-            if hold_generation != priority.generation:
-                hold_since = None
-                last_command = None
-                hold_generation = priority.generation
-            if detection is None:
-                hold_since = None
-                if now - last_status_log >= self._log_period:
-                    self._logger.info(
-                        f'26rb_grab_golf：{label} 水平伺服等待任一下视相机的新检测；'
-                        f'目标类别={class_id}')
-                    last_status_log = now
-                time.sleep(min(
-                    self._servo_period,
-                    max(0.0, deadline - time.monotonic())))
-                continue
-
-            try:
-                pose, body_dx, body_dy, world_dx, world_dy, du, dv = (
-                    self._horizontal_step(camera_name, detection))
-            except (KeyError, ValueError, cv2.error, np.linalg.LinAlgError) as error:
-                self._logger.error(f'26rb_grab_golf：单目伺服计算失败：{error}')
-                return None
-            centered = (abs(du) <= self._pixel_tolerance
-                        and abs(dv) <= self._pixel_tolerance)
-            if now - last_status_log >= self._log_period:
-                state = '已居中' if centered else '修正中'
-                self._logger.info(
-                    f'26rb_grab_golf：{label} 水平伺服状态={state}，'
-                    f'采纳相机={camera_name}；'
-                    f'像素=({float(detection.pixel_x):.1f},'
-                    f'{float(detection.pixel_y):.1f})，'
-                    f'误差=(du={du:+.4f},dv={dv:+.4f})，'
-                    f'机体步长=({body_dx:+.3f},{body_dy:+.3f})m，'
-                    f'世界步长=({world_dx:+.3f},{world_dy:+.3f})m，'
-                    f'位姿=({pose[0]:.3f},{pose[1]:.3f},{pose[2]:.3f},'
-                    f'{pose[5]:.1f}°)')
-                last_status_log = now
-
-            if centered:
-                if hold_since is None:
-                    hold_since = time.monotonic()
-                    self._logger.info(
-                        f'26rb_grab_golf：{label} 已在 {camera_name} 视野居中，'
-                        f'保持 {self._hold_seconds:.1f}s')
-                if time.monotonic() - hold_since >= self._hold_seconds:
-                    self._aligned_camera = camera_name
-                    recorded = [
-                        float(self._node._cmd_x), float(self._node._cmd_y),
-                        float(self._node._cmd_z), float(self._node._cmd_yaw)]
-                    self._logger.info(
-                        f'26rb_grab_golf：{label} 水平伺服完成，相机={camera_name}；'
-                        f'记录相机居中位姿=({recorded[0]:.3f}, '
-                        f'{recorded[1]:.3f}, {recorded[2]:.3f}, '
-                        f'{recorded[3]:.1f}°)')
-                    return recorded
-            else:
-                hold_since = None
-                target_x = pose[0] + world_dx
-                target_y = pose[1] + world_dy
-                target = [target_x, target_y,
-                          float(self._node._cmd_z), float(pose[5])]
-                if (last_command is None
-                        or math.hypot(target_x - last_command[0],
-                                      target_y - last_command[1]) > 1e-4):
-                    success, message = self._node._send_action_goal(
-                        BasicMotion.Goal.SET, target, 'xy',
-                        timeout=self._command_timeout, quiet=True,
-                        task_context=self._node._format_motion_context(
-                            f'{camera_name}抓取{label}水平伺服'))
-                    if not success:
-                        self._logger.warning(
-                            f'26rb_grab_golf：{label} 水平修正失败；'
-                            f'目标=({target_x:.3f},{target_y:.3f})，'
-                            f'误差=({du:+.4f},{dv:+.4f})，消息={message}')
-                    else:
-                        self._node._cmd_x = target_x
-                        self._node._cmd_y = target_y
-                        self._node._cmd_yaw = float(pose[5])
-                        last_command = [target_x, target_y]
+            self._node.LIGHT_YELLOW, f'定深速度伺服至 {label}')
+        try:
+            if self._servo_depth is None:
+                self._servo_depth = self._servo_pose()[2]
+            self._logger.info(
+                f'26rb_grab_golf：开始 {label} 定深速度伺服；'
+                f'锁定深度={self._servo_depth:.3f}m，'
+                f'水平限速={self._max_xy_speed:.3f}m/s，'
+                f'深度容差={self._depth_hold_tolerance:.3f}m')
+            while not self._node.stopped and time.monotonic() < deadline:
+                if ball_priority is not None:
+                    ball_camera, ball = ball_priority.update()
+                    if ball is not None:
+                        self._pending_golf_priority = ball_priority
                         self._logger.info(
-                            f'26rb_grab_golf：{label} 水平修正已接受；'
-                            f'目标=({target_x:.3f},{target_y:.3f})，'
-                            f'世界步长=({world_dx:+.3f},{world_dy:+.3f})m')
-            time.sleep(self._servo_period)
-
-        self._logger.error(f'26rb_grab_golf：{label} 水平视觉伺服超时')
-        return None
+                            f'26rb_grab_golf：frame 修正途中在 {ball_camera} 看到 '
+                            f'{self._golf_color}，直接切换到球水平伺服')
+                        completed = True
+                        break
+                camera_name, detection = priority.update()
+                if hold_generation != priority.generation:
+                    hold_since = None
+                    hold_generation = priority.generation
+                now = time.monotonic()
+                horizontal = np.zeros(2)
+                if detection is None:
+                    hold_since = None
+                    if now-last_status_log >= self._log_period:
+                        self._logger.info(
+                            f'26rb_grab_golf：{label} 未收到有效检测，停止 XY 并继续定深')
+                        last_status_log = now
+                else:
+                    pose, horizontal, du, dv = self._horizontal_velocity(camera_name, detection)
+                    centered = abs(du) <= self._pixel_tolerance and abs(dv) <= self._pixel_tolerance
+                    at_depth = abs(pose[2]-self._servo_depth) <= self._depth_hold_tolerance
+                    if centered:
+                        horizontal = np.zeros(2)
+                    if centered and at_depth:
+                        hold_since = now if hold_since is None else hold_since
+                    else:
+                        hold_since = None
+                    if now-last_status_log >= self._log_period:
+                        self._logger.info(
+                            f'26rb_grab_golf：{label} 定深速度伺服，相机={camera_name}，'
+                            f'误差=({du:+.4f},{dv:+.4f})，'
+                            f'世界水平速度=({horizontal[0]:+.3f},{horizontal[1]:+.3f})m/s，'
+                            f'深度={pose[2]:.3f}/{self._servo_depth:.3f}m')
+                        last_status_log = now
+                    if hold_since is not None and now-hold_since >= self._hold_seconds:
+                        self._aligned_camera = camera_name
+                        completed = True
+                        break
+                self._send_horizontal_velocity(horizontal, deadline)
+                time.sleep(min(self._servo_period, max(0.0, deadline-time.monotonic())))
+        except (KeyError, ValueError, RuntimeError, cv2.error, np.linalg.LinAlgError) as error:
+            self._logger.error(f'26rb_grab_golf：{label} 定深速度伺服失败：{error}')
+        finally:
+            try:
+                recorded = self._stop_horizontal_velocity()
+            except Exception as error:
+                self._logger.error(f'26rb_grab_golf：水平伺服停车失败：{error}')
+        if not completed or recorded is None:
+            self._aligned_camera = None
+            self._pending_golf_priority = None
+            self._logger.error(f'26rb_grab_golf：{label} 伺服未完成、超时或被中止')
+            return None
+        return recorded
 
     def _prepare_claw(self) -> bool:
         """Repeatedly command servo 1 to the requested open/pre-grab angle."""
@@ -600,6 +615,7 @@ class RB26GrabGolfTask:
         return False, '复检时高尔夫球仍在盘上'
 
     def execute(self) -> TaskOutcome:
+        self._servo_depth = None
         self._pending_golf_priority = None
         if self._collection_class_id is None:
             return TaskOutcome.failed(
