@@ -268,7 +268,7 @@ class RB26DropBallTargetRackTask:
         return self._sleep(self._alignment_settle_seconds)
 
     def _release_ball(self) -> bool:
-        angle_rad = math.radians(self._release_angle_deg)
+        angle_rad = self._release_angle_deg
         self._logger.info(
             f'26rb_drop_ball_target_rack：向 servo 1 发送释放指令，'
             f'角度={self._release_angle_deg:.1f}°={angle_rad:.4f}rad，'
