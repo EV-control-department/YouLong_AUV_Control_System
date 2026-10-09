@@ -208,7 +208,9 @@ class RB26GateTask:
         return True
 
     def _detection_cb(self, msg):
-        eye = str(msg.camera_name).removeprefix('front_')
+        eye = str(msg.camera_name)
+        if eye.startswith('front_'):
+            eye = eye[len('front_'):]
         if eye not in self._latest:
             return
         with self._lock:

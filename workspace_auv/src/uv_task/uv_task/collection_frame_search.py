@@ -171,7 +171,7 @@ class FrontDownSearch:
             area = 1.0
             if camera.startswith('front_'):
                 try:
-                    calibration = self.node.camera_configs['front'].side(camera.removeprefix('front_'))
+                    calibration = self.node.camera_configs['front'].side(camera[len('front_'):])
                     xy = cv2.undistortPoints(
                         np.array([[[detection.pixel_x, detection.pixel_y]]], dtype=float),
                         calibration.matrix, calibration.distortion).reshape(2)

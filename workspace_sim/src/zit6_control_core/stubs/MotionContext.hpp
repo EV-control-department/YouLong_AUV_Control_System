@@ -16,7 +16,10 @@
 namespace auv {
 namespace motion {
 
-enum class ControlLevel : uint8_t { NONE = 0, POSITION = 1, VELOCITY = 2, ACTUATOR = 3 };
+enum class ControlLevel : uint8_t {
+  NONE = 0, POSITION = 1, VELOCITY = 2, ACTUATOR = 3, MIXED = 4
+};
+using AxisControlLevels = std::array<ControlLevel, 6>;
 
 /** 6-DOF 导航状态。索引 [x,y,z,roll,pitch,yaw],角度弧度,世界系 NED / 机体系 FRD。 */
 struct NavState {

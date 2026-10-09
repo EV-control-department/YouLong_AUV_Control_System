@@ -101,7 +101,7 @@ class FrontTargetObserver:
                 self.latest[eye] = None
                 return
             try:
-                calibration = self.node.camera_configs['front'].side(eye.removeprefix('front_'))
+                calibration = self.node.camera_configs['front'].side(eye[len('front_'):])
                 xy = cv2.undistortPoints(
                     np.array([[[detection.pixel_x, detection.pixel_y]]], dtype=float),
                     calibration.matrix, calibration.distortion).reshape(2)
