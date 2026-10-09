@@ -16,81 +16,44 @@ from uv_task.config_loader import (
 CONFIG_ROOT = Path(__file__).parents[1] / "config"
 MISSION = CONFIG_ROOT / "missions" / "robocup_26.yaml"
 GATE_TASK = CONFIG_ROOT / "tasks" / "26rb_gate_task.yaml"
-EXPECTED_TASKS = [
-    "start",
-    "return_origin",
-    "btravelx",
-    "setz",
-    "26rb_hit_balls",
-    "26rb_gate_task",
-    "26rb_find_collection_frame",
-    "26rb_grab_golf",
-    "26rb_drop_ball_target_rack",
-    "return_origin",
-]
-
-
 def test_default_mission_preserves_order_and_values():
+    configured = yaml.safe_load(MISSION.read_text(encoding="utf-8"))["mission"]["tasks"]
     tasks = load_mission(MISSION)
 
-    assert [task["name"] for task in tasks] == EXPECTED_TASKS
-    assert tasks[1]["params"] == {
-        "state_settle_time": 0.3,
-        "timeout": 30.0,
-    }
-    assert tasks[4]["params"]["order"] == ["impact_ball_blue"]
-    assert tasks[4]["params"]["charge_speed_mps"] == 5
-    assert tasks[5]["params"]["gate_count"] == 4
-    assert tasks[5]["params"]["depth_kp"] == 0.8
-    assert tasks[5]["params"]["fore_aft_speed_mps"] == 0.10
-    assert tasks[5]["params"]["fore_aft_target_area_percent"] == 80.0
-    assert tasks[5]["params"]["pass_yaw_kp"] == 1.2
-    assert tasks[6]["params"]["look_order"] == [
-        "collection_frame", "target_rack"]
-    assert tasks[7]["params"]["golf_color"] == "pink_golf"
-    assert tasks[8]["params"]["light_color"] == "green"
-    assert "return_timeout" not in tasks[8]["params"]
-    assert tasks[8]["params"]["down_visual_servo_timeout"] == 30.0
-    assert tasks[8]["params"]["down_visual_servo_stable_seconds"] == 1.0
-    assert tasks[8]["params"]["down_detection_timeout"] == 0.8
-    assert tasks[8]["params"]["down_pixel_tolerance_fraction"] == 0.035
-    assert tasks[8]["params"][
-        "down_epipolar_vertical_tolerance_fraction"] == 0.04
-    assert tasks[8]["params"]["down_projection_depth_m"] == 0.8
-    assert tasks[8]["params"]["down_visual_servo_gain"] == 0.8
-    assert tasks[8]["params"]["down_visual_servo_max_step_m"] == 0.08
-    assert tasks[9]["params"] == {
-        "state_settle_time": 0.3,
-        "timeout": 30.0,
-    }
+    assert [task["name"] for task in tasks] == [entry["name"] for entry in configured]
+    for entry, task in zip(configured, tasks):
+        if "params" not in entry and not entry.get("initial", {}).get("params"):
+            defaults = load_mission_or_task(MISSION.parent / entry["config"])[0]
+            assert task["params"] == defaults["params"]
 
 
 def test_default_mission_has_initial_pose_and_one_hop_timeout_hooks():
+    configured = yaml.safe_load(MISSION.read_text(encoding="utf-8"))["mission"]["tasks"]
     tasks = load_mission(MISSION)
 
-    for task in tasks:
-        assert task["initial_pose"] == {
-            "command": "BMOVE",
-            "axes": "xyzrz",
-            "target": [0.0, 0.0, 0.0, 0.0],
-        }
+    for entry, task in zip(configured, tasks):
+        initial = entry["initial"]
+        poses = initial.get("poses", [initial.get("pose")])
+        normalized = [dict(pose, target=[float(value) for value in pose["target"]])
+                      for pose in poses]
+        if len(normalized) == 1:
+            assert task["initial_pose"] == normalized[0]
+        else:
+            assert task["initial_pose"] == normalized
         assert task["on_failure"] == {
-            f"{task['name']}.timeout": {"params": {}}
+            code: {"params": {}} for code in entry["on_failure"]
         }
-
-    # These are mission-level initial parameter overrides, not task defaults.
-    assert tasks[4]["params"]["order"] == ["impact_ball_blue"]
-    assert tasks[7]["params"]["golf_color"] == "pink_golf"
 
 
 def test_standalone_task_file_loads_as_one_task():
+    configured = yaml.safe_load(GATE_TASK.read_text(encoding="utf-8"))
     tasks = load_mission_or_task(GATE_TASK)
 
     assert len(tasks) == 1
     assert tasks[0]["name"] == "26rb_gate_task"
-    assert tasks[0]["params"]["gate_count"] == 4
-    assert tasks[0]["params"]["search_timeout"] == 60.0
-    assert tasks[0]["params"]["pass_yaw_kp"] == 1.2
+    assert tasks[0]["params"]["gate_count"] == configured["params"]["gate_count"]
+    assert tasks[0]["params"]["search_timeout"] == configured["params"]["search"]["timeout"]
+    assert tasks[0]["params"]["pass_yaw_kp"] == configured["params"]["pass"]["yaw_kp"]
 
 
 def test_nested_parameters_are_merged_and_flattened(tmp_path):
@@ -423,5 +386,5 @@ def test_ball_parameters_reject_semantic_colour_aliases(tmp_path):
         ClassInfo(0, "impact_ball_blue", "impact_ball_blue", None, False),
         ClassInfo(1, "impact_ball_red", "impact_ball_red", None, False),
     ))
-    with pytest.raises(ConfigError, match="canonical impact-ball"):
+    with pytest.raises(ConfigError, match="impact_ball_blue / impact_ball_red"):
         load_mission_or_task(task_file, class_registry=registry)

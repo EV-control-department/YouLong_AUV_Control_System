@@ -30,7 +30,10 @@ class ArucoDecoder:
         self._rendered_templates = None
 
     def _make_detector(self):
-        parameters = cv2.aruco.DetectorParameters()
+        if hasattr(cv2.aruco, 'DetectorParameters'):
+            parameters = cv2.aruco.DetectorParameters()
+        else:
+            parameters = cv2.aruco.DetectorParameters_create()
         parameters.adaptiveThreshWinSizeMin = 3
         parameters.adaptiveThreshWinSizeMax = 41
         parameters.adaptiveThreshWinSizeStep = 4

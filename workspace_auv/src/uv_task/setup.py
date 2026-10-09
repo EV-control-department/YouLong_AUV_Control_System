@@ -19,6 +19,7 @@ setup(
          glob('config/tasks/*.yaml')),
     ],
     install_requires=['setuptools'],
+    python_requires='>=3.8',
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',

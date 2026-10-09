@@ -7,11 +7,11 @@
 # pass.speed_mps 必须 0 < speed < 0.18，与 BasicMotion BLINE 接口一致。
 task: 26rb_gate_task
 params:
-  gate_count: 4
+  gate_count: 1
   timeout: 720.0
   # 门深：米；kp 输出 m/s，容限米。
   depth:
-    front: [0.05, 0.05, 0.05, 0.05]
+    front: [0.1, 0.1, 0.1, 0.1]
     set_timeout: 30.0
     kp: 0.8
     max_speed_mps: 0.12

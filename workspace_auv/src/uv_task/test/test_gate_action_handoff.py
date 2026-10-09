@@ -1,4 +1,5 @@
 """Exercise the runner's production waits without importing/starting its node."""
+import __future__
 import ast
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -15,7 +16,9 @@ def method(name, namespace):
     tree = ast.parse(path.read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'TaskRunnerNode')
     function = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == name)
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), 'exec'), namespace)
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), 'exec',
+                 flags=__future__.annotations.compiler_flag,
+                 dont_inherit=True), namespace)
     return namespace[name]
 
 

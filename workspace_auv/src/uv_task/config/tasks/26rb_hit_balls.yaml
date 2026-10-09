@@ -47,7 +47,7 @@ params:
     timeout: 45.0 # 包括起步的动作总时限，必须大于 duration。
   fallback:
     duration: 15.0 # 观测失败红灯一次；直接前往预设 XY，最多前进 15 秒。
-    speed_mps: 0.18
+    speed_mps: 0.15 # BLINE 要求严格小于 0.18；与其余撞球阶段速度一致。
     timeout: 50.0
   motion:
     cancel_timeout: 2.0 # BLINE 取消未确认结束时，禁止后续运动。
