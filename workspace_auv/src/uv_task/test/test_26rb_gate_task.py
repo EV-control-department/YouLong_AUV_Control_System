@@ -539,3 +539,32 @@ def test_next_gate_clears_identity_and_owner(rig):
     assert task._recorded_ray is None
     assert not any(task._history.values())
     assert not any(task._identity.values())
+
+
+@pytest.mark.parametrize('first_warn', [False, True])
+def test_logging_can_alternate_info_and_warning(rig, monkeypatch, first_warn):
+    from rclpy.logging import get_logger, LoggingSeverity
+
+    task, node, _ = rig
+    logger = get_logger(f'gate_logging_alternation_{first_warn}')
+    logger.set_level(LoggingSeverity.INFO)
+    monkeypatch.setattr(node, 'get_logger', lambda: logger)
+    for warn in (first_warn, not first_warn, first_warn, not first_warn):
+        task._log('Gate logging regression', warn=warn)
+
+
+def test_detection_callback_releases_lost_camera_with_ros_logger(rig, monkeypatch):
+    from rclpy.logging import get_logger, LoggingSeverity
+
+    task, node, clock = rig
+    logger = get_logger('gate_logging_camera_release')
+    logger.set_level(LoggingSeverity.INFO)
+    monkeypatch.setattr(node, 'get_logger', lambda: logger)
+    frame(task, 'left')
+    assert task.owner == 'left'
+    generation = task.generation
+    clock.time += task.p['search_priority_release_seconds'] + .1
+    frame(task, 'right')
+    assert task.owner == 'right'
+    assert task.generation > generation
+    assert task._latest['right'] is not None

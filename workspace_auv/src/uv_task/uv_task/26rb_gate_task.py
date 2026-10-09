@@ -111,7 +111,11 @@ class RB26GateTask:
             QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
 
     def _log(self, message, warn=False):
-        (self.node.get_logger().warn if warn else self.node.get_logger().info)(message)
+        logger = self.node.get_logger()
+        if warn:
+            logger.warn(message)
+        else:
+            logger.info(message)
 
     def _pose(self):
         pose = tuple(float(x) for x in self.node._latest_robot_pose())
