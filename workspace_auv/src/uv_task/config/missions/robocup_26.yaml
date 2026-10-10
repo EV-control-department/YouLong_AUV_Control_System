@@ -11,35 +11,38 @@ mission:
       on_failure:
         "start.timeout": {}
 
-    # - name: 26rb_hit_balls
-    #   config: ../tasks/26rb_hit_balls.yaml
-    #   initial:
-    #     poses:
-    #       - command: SET
-    #         axes: xz
-    #         target: [0.5, 0.0, 0.2, 0.0] # 下潜0.2m
-    #       - command: WTRAVEL
-    #         axes: xyz
-    #         target: [4.0, -1.8, 0.2, 89.9544] # 世界系绝对位置；航向先沿行进方向。
-    #       - command: SET
-    #         axes: rz
-    #         target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
-    #   on_failure:
-    #     "26rb_hit_balls.timeout": {}
+    - name: 26rb_hit_balls
+      config: ../tasks/26rb_hit_balls.yaml
+      initial:
+        poses:
+          - command: SET
+            axes: xz
+            target: [0.5, 0.0, 0.2, 0.0] # 下潜0.2m
+          # - command: WTRAVEL
+          #   axes: xyz
+          #   target: [4.0, -1.8, 0.2, 89.9544] # 世界系绝对位置；航向先沿行进方向。
+          # - command: SET
+          #   axes: rz
+          #   target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
+      on_failure:
+        "26rb_hit_balls.timeout": {}
 
     - name: 26rb_grab_ball_ring
       config: ../tasks/26rb_grab_ball_ring.yaml
       initial:
         poses:
-          - command: SET
-            axes: z
-            target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
-          - command: WTRAVEL
-            axes: xyz
-            target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-          - command: WTRAVEL
-            axes: xyz
-            target: [2.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+          - command: BMOVE
+            axes: xyzrz
+            target: [0.0, 0.0, 0.0, 0.0]
+          # - command: SET
+          #   axes: z
+          #   target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
+          # - command: WTRAVEL
+          #   axes: xyz
+          #   target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+          # - command: WTRAVEL
+          #   axes: xyz
+          #   target: [2.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
           # - command: SET
           #   axes: rz
           #   target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
@@ -58,43 +61,43 @@ mission:
       on_failure:
         "26rb_drop_ball_target_rack.timeout": {}
 
-    - name: 26rb_gate_task
-      config: ../tasks/26rb_gate_task.yaml
-      initial:
-        poses:
-          - command: SET
-            axes: z
-            target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
-          - command: WTRAVEL
-            axes: xyz
-            target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-          - command: SET
-            axes: rz
-            target: [0.0, 0.0, 0.0, 0.0]
-      on_failure:
-        default:
-          # 过门任务失败后，覆盖 return_origin 的整段初始路线。
-          poses:
-            - command: WTRAVEL
-              axes: xyz
-              target: [3.0, -1.0, 0.2, 0.0]
-            - command: WTRAVEL
-              axes: xy
-              target: [0.0, 0.0, 0.2, 0.0]
-            - command: SET
-              axes: rz
-              target: [0.0, 0.0, 0.0, 0.0]
+    # - name: 26rb_gate_task
+    #   config: ../tasks/26rb_gate_task.yaml
+    #   initial:
+    #     poses:
+    #       - command: SET
+    #         axes: z
+    #         target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
+    #       - command: WTRAVEL
+    #         axes: xyz
+    #         target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+    #       - command: SET
+    #         axes: rz
+    #         target: [0.0, 0.0, 0.0, 0.0]
+    #   on_failure:
+    #     default:
+    #       # 过门任务失败后，覆盖 return_origin 的整段初始路线。
+    #       poses:
+    #         - command: WTRAVEL
+    #           axes: xyz
+    #           target: [3.0, -1.0, 0.2, 0.0]
+    #         - command: WTRAVEL
+    #           axes: xy
+    #           target: [0.0, 0.0, 0.2, 0.0]
+    #         - command: SET
+    #           axes: rz
+    #           target: [0.0, 0.0, 0.0, 0.0]
 
     - name: return_origin
       config: ../tasks/return_origin.yaml
       initial:
         poses:
-          - command: WTRAVEL
-            axes: xyz
-            target: [3.0, -1.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-          - command: WTRAVEL
-            axes: xy
-            target: [0.0, 0.0, 0.2, 0.0] # 下潜0.2m
+          # - command: WTRAVEL
+          #   axes: xyz
+          #   target: [3.0, -1.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+          # - command: WTRAVEL
+          #   axes: xy
+          #   target: [0.0, 0.0, 0.2, 0.0] # 下潜0.2m
           - command: SET
             axes: rz
             target: [0.0, 0.0, 0.0, 0.0] # 下潜0.2m

@@ -3,7 +3,7 @@ task: 26rb_drop_ball_target_rack
 params:
   # 先定深、朝向预设 rack；前视观测与 yaw 对准后前向巡游。
   # 预设 odom [x,y,z]；z 仅描述 rack 位置，不参与 XY 半径或巡游深度。
-  rack_position: [5.8, -2.0, -1.0]
+  rack_position: [2.0, 5.8, -1.0]
   depth:
     task_depth_m: 0.2 # 进入任务时定深；水平伺服、圆盘爪和发夹爪平移共用锁定深度。
     timeout: 15.0 # 初始定深动作超时，秒。
