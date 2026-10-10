@@ -81,13 +81,12 @@ params:
       open_angle_deg: 270.0             # 抓前张开、投放释放，话题servo_id=2、angle=270。
       close_angle_deg: 150.0            # START初始闭合、下压后夹住，再上浮运输。
       # 以下均是物理安装后的body坐标：x向前、y向右、z向下，单位米。
-      # 下视中心Cd=(-0.130,0,0.0645)m，双目距离0.060m，各目距中心0.030m。
-      # 当前下视物理绕yaw倒装180°：原始左目在body +y，右目在body -y。
+      # 前视双目中点和倒装下视左光心的名义位置沿用real_default.yaml，实机可改。
       front_camera_body_xyz: [0.230, 0.0, 0.076]
-      down_camera_body_xyz: [-0.130, 0.030, 0.0645] # 使用下视左目光心，不是双目中点。
+      down_camera_body_xyz: [-0.130, 0.0305, 0.0645]
       gripper_from_front_xyz: [0.0, 0.0, 0.10] # 新夹爪实际抓取点在前视中点正下10cm。
       # 舵机2仍使用下视海参掩膜对准，再自动补偿camera_xy-gripper_xy。
-      # 名义值给出BMOVE(-0.360,+0.030)m；目标位于艇体前下方抓取点。
+      # 名义值给出BMOVE(-0.360,+0.0305)m；目标位于艇体前下方抓取点。
       # 不使用上面的舵机1 offset/pickup/release参数，安装yaw补偿不会重复作用于安装坐标。
       # 近底开环高度计算以新夹爪抓取点为参考，z偏置自动取front.z+相对z=0.176m。
 
@@ -122,12 +121,13 @@ params:
     # 必填：释放时 AUV 的目标位姿，格式为 [x, y, z, yaw_deg]。
     # x/y/z 单位米，使用本次 START 后的 odom 坐标，z 向下为正。
     # 第三个值 z 就是投放深度；必须考虑夹爪位置和释放高度。
-    pose: [0.0, 0.0, 0.5, 0.0] # [我填的占位值] 示例投放位姿 [x, y, z, yaw_deg]，需现场确认。
+    pose: [0.0, 0.0, 0.5, 0.0] # 示例投放位姿 [x, y, z, yaw_deg]，需现场确认。
     timeout_seconds: 90.0              # 每次运输超时，单位秒。
     # 单次运输预算包括必要的低速上浮；1cm/s上浮1m至少约100秒，90秒可能不足。
     release_wait_seconds: 2.0          # 发送释放角度后等待多久，单位秒。
     # 只等待，不验证是否真正脱离夹爪；投放次数不是实际成功投放数量。
 
+      # ****
   # 近底改为ACTUATOR纯推力，全部水平/姿态轴推力为0，不维持XY或姿态。
   # 先填下面三个实测值，再改为true；未标定时保留原速度下压，不能拿m/s填推力。
   near_floor_open_loop: false
@@ -144,9 +144,10 @@ params:
   collection_class_id: 4              # YOLO-seg收集框/platform类别。
   collection_projection_depth_m: 0.8  # 待校准：左相机到收集框平面的距离m，非水深。
   collection_correct_odom_xy: false   # 独立开关：框心地标修正BasicMotion任务odom；不改MCU原始DVL。
-  collection_center_odom_xy: []        # 开启前填写已测定的固定框心[x,y]，本次START坐标系。
-  collection_camera_body_xy: [-0.130, 0.030] # Cd中心+倒装左目半基线，单位m，与上面的左光心一致。
+  collection_center_odom_xy: [0 , 0]        # 开启前填写已测定的固定框心[x,y]，本次START坐标系。
+  collection_camera_body_xy: [-0.130, 0.030]       # 开启前填写左相机光心相对机体原点[x,y]，含物理倒装后的真实位置。
   odom_correction_max_m: 1.0           # 超过此平移拒绝校正，不把误识别直接写入坐标系。
+    #***
 
   return_timeout: 300.0                 # 慢速上浮及水平回位预算；仍受任务总超时约束。
   # 抓后恢复观察位的预算，不是运输预算；上浮1m以1cm/s计算至少约100秒。
