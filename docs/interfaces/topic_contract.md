@@ -45,7 +45,7 @@
 | `/auv/dvl` | `stonefish_ros2/DVL` | 发布 | `stonefish_simulator` | — | 两者 | `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn:ros_publisher` | 4 波束，**机体系**速度（θ=30° 离竖直）；`beams` 恒空 |
 | `/auv/dvl` | `stonefish_ros2/DVL` | 订阅 | — | `dvl_sim` | SIL | `workspace_sim/src/uv_sim/uv_sim/dvl_sim.py:create_subscription` | |
 | `/sim/sensor/dvl` | `uv_msgs/Dvl` | 发布 | `dvl_sim` | — | SIL | `workspace_sim/src/uv_sim/uv_sim/dvl_sim.py:create_publisher` | **AQUA-SLAM 适配器**：透传 + 合成 4 波束；速度是 **DVL 处**的值（含 `ω×r_dvl`），与 `/zit6/state/vel` 的**原点**值不同（B19） |
-| `/auv/dvl_altitude` | `std_msgs/Float32` | 发布 | `stonefish_simulator` | — | 两者 | `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn:ros_publisher` | 底距；**当前无订阅者**（`/auv/dvl.altitude` 已带同一信息） |
+| `/auv/dvl_altitude` | `sensor_msgs/Range` | 发布 | `stonefish_simulator` | — | 两者 | `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn:ros_publisher` | 20 Hz 底距（`sensor_msgs/Range`，`radiation_type=ULTRASOUND`、`field_of_view=2·beam_angle`；`ROS2Interface.cpp:PublishDVLAltitude`）。**当前无订阅者**（`/auv/dvl.altitude` 已带同一信息）；2026-10-10 实测更正：此前本表写 `std_msgs/Float32` |
 | `/auv/pressure` | `sensor_msgs/FluidPressure` | 发布 | `stonefish_simulator` | — | 两者 | `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn:ros_publisher` | 5 Hz，`variance` 由场景噪声模型填 |
 | `/auv/pressure` | `sensor_msgs/FluidPressure` | 订阅 | — | `pressure_sim` | SIL | `workspace_sim/src/uv_sim/uv_sim/pressure_sim.py:create_subscription` | |
 | `/sim/sensor/pressure` | `sensor_msgs/FluidPressure` | 发布 | `pressure_sim` | — | SIL | `workspace_sim/src/uv_sim/uv_sim/pressure_sim.py:create_publisher` | 当前无订阅者（见 §9） |
@@ -75,7 +75,7 @@
 
 | 话题 | 消息类型 | 方向 | 发布者 | 订阅者 | 模式 | 证据 | 说明 |
 |---|---|---|---|---|---|---|---|
-| `/auv/thrusters_state` | `std_msgs/Float64MultiArray` | 发布 | `stonefish_simulator` | — | SIL | `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn:ros_publisher` | 推进器实际状态（场景 `<ros_publisher thrusters=...>`）；**当前无订阅者** |
+| `/auv/thrusters_state` | `stonefish_ros2/ThrusterState` | 发布 | `stonefish_simulator` | — | SIL | `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn:ros_publisher` | 推进器实际状态（场景 `<ros_publisher thrusters=...>`；`ROS2ScenarioParser.cpp:442` 建 `create_publisher<stonefish_ros2::msg::ThrusterState>`）；**实测 99.8 Hz**（= 物理步长），**当前无订阅者**。2026-10-10 实测更正：此前本表写 `std_msgs/Float64MultiArray` |
 | `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 发布 | `basic_motion` | — | SIL | `workspace_auv/src/uv_control/uv_control/basic_motion.py:create_publisher` | 运动设定值；`type_mask` 1=忽略该轴 |
 | `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 订阅 | — | `mcu_sim` | SIL | `workspace_sim/src/uv_sim/uv_sim/mcu_sim.py:create_subscription` | HIL 下由 MCU 经 micro-ROS 订阅 |
 | `/auv/thrusters_cmd` | `std_msgs/Float64MultiArray` | 发布 | `mcu_sim` | — | 两者 | `workspace_sim/src/uv_sim/uv_sim/mcu_sim.py:create_publisher` | 6 推进器归一化 [−1, 1]，直接驱动 Stonefish（SIL 由 PID 算；HIL 转发 MCU 的力） |

@@ -1,0 +1,12 @@
+date        : 2026-10-10T16:51:28+08:00
+mode        : sil-console
+repo        : /home/origin/YouLong_AUV_Control_System
+ros_distro  : jazzy
+ros_domain  : 96
+with_rates  : 1
+generated_by: scripts/dump_interfaces.sh
+
+Read the mode before comparing snapshots: sil-console has no camera images,
+sil-gpu has them, hil has a real MCU owning /zit6/state/*.  QoS depth shows
+UNKNOWN on this rmw (Fast DDS + ros2 topic info -v): reliability/durability
+are trustworthy, the KEEP_LAST depth is not reported.

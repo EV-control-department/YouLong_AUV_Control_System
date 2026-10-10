@@ -1,0 +1,1074 @@
+### /auv/down_cam/left
+Type: sensor_msgs/msg/Image
+
+Publisher count: 1
+
+Node name: camera_relay
+Node namespace: /
+Topic type: sensor_msgs/msg/Image
+Topic type hash: RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.56.2c.0c.e0.00.00.00.00.00.00.15.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /auv/down_cam/right
+Type: sensor_msgs/msg/Image
+
+Publisher count: 1
+
+Node name: camera_relay
+Node namespace: /
+Topic type: sensor_msgs/msg/Image
+Topic type hash: RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.56.2c.0c.e0.00.00.00.00.00.00.16.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /auv/down_cam/stitched
+Type: sensor_msgs/msg/Image
+
+Publisher count: 1
+
+Node name: camera_relay
+Node namespace: /
+Topic type: sensor_msgs/msg/Image
+Topic type hash: RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.56.2c.0c.e0.00.00.00.00.00.00.18.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /auv/dvl_altitude
+Type: sensor_msgs/msg/Range
+
+Publisher count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: sensor_msgs/msg/Range
+Topic type hash: RIHS01_b42b62562e93cbfe9d42b82fe5994dfa3d63d7d5c90a317981703f7388adff3a
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.18.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /auv/dvl
+Type: stonefish_ros2/msg/DVL
+
+Publisher count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: stonefish_ros2/msg/DVL
+Topic type hash: RIHS01_6283680ee3be02e96adca09174db7cfa22ff138a0facba88ddab109eff309e27
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.17.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: dvl_sim
+Node namespace: /
+Topic type: stonefish_ros2/msg/DVL
+Topic type hash: RIHS01_6283680ee3be02e96adca09174db7cfa22ff138a0facba88ddab109eff309e27
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.52.2c.51.37.00.00.00.00.00.00.14.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /auv/front_cam/left
+Type: sensor_msgs/msg/Image
+
+Publisher count: 1
+
+Node name: camera_relay
+Node namespace: /
+Topic type: sensor_msgs/msg/Image
+Topic type hash: RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.56.2c.0c.e0.00.00.00.00.00.00.13.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /auv/front_cam/right
+Type: sensor_msgs/msg/Image
+
+Publisher count: 1
+
+Node name: camera_relay
+Node namespace: /
+Topic type: sensor_msgs/msg/Image
+Topic type hash: RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.56.2c.0c.e0.00.00.00.00.00.00.14.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /auv/front_cam/stitched
+Type: sensor_msgs/msg/Image
+
+Publisher count: 1
+
+Node name: camera_relay
+Node namespace: /
+Topic type: sensor_msgs/msg/Image
+Topic type hash: RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.56.2c.0c.e0.00.00.00.00.00.00.17.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /auv/imu
+Type: sensor_msgs/msg/Imu
+
+Publisher count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: sensor_msgs/msg/Imu
+Topic type hash: RIHS01_7d9a00ff131080897a5ec7e26e315954b8eae3353c3f995c55faf71574000b5b
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.19.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: imu_sim
+Node namespace: /
+Topic type: sensor_msgs/msg/Imu
+Topic type hash: RIHS01_7d9a00ff131080897a5ec7e26e315954b8eae3353c3f995c55faf71574000b5b
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.51.2c.a0.96.00.00.00.00.00.00.14.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /auv/odometry
+Type: nav_msgs/msg/Odometry
+
+Publisher count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: nav_msgs/msg/Odometry
+Topic type hash: RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.15.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: odom_sim
+Node namespace: /
+Topic type: nav_msgs/msg/Odometry
+Topic type hash: RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.50.2c.72.da.00.00.00.00.00.00.14.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /auv/pressure
+Type: sensor_msgs/msg/FluidPressure
+
+Publisher count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: sensor_msgs/msg/FluidPressure
+Topic type hash: RIHS01_22dfb2b145a0bd5a31a1ac3882a1b32148b51d9b2f3bab250290d66f3595bc32
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.16.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: pressure_sim
+Node namespace: /
+Topic type: sensor_msgs/msg/FluidPressure
+Topic type hash: RIHS01_22dfb2b145a0bd5a31a1ac3882a1b32148b51d9b2f3bab250290d66f3595bc32
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.53.2c.2e.5b.00.00.00.00.00.00.14.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /auv/thrusters_cmd
+Type: std_msgs/msg/Float64MultiArray
+
+Publisher count: 1
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: std_msgs/msg/Float64MultiArray
+Topic type hash: RIHS01_1025ddc6b9552d191f89ef1a8d2f60f3d373e28b283d8891ddcc974e8c55397f
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.13.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: std_msgs/msg/Float64MultiArray
+Topic type hash: RIHS01_1025ddc6b9552d191f89ef1a8d2f60f3d373e28b283d8891ddcc974e8c55397f
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.1a.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /auv/thrusters_state
+Type: stonefish_ros2/msg/ThrusterState
+
+Publisher count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: stonefish_ros2/msg/ThrusterState
+Topic type hash: RIHS01_20fa28747602d33542bdd9f53621261d1a37da6dbe110d9b4f4fa3b97e877184
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.1b.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /basic_motion/pose_info
+Type: uv_msgs/msg/PoseInfo
+
+Publisher count: 1
+
+Node name: basic_motion
+Node namespace: /
+Topic type: uv_msgs/msg/PoseInfo
+Topic type hash: RIHS01_ea21ea13b91e31b9bf6cf633927f712a869bcc6b2c45c90c817cca019f008e4d
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.57.2c.fd.19.00.00.00.00.00.00.1f.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /parameter_events
+Type: rcl_interfaces/msg/ParameterEvent
+
+Publisher count: 10
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.10.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: odom_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.50.2c.72.da.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: imu_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.51.2c.a0.96.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: dvl_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.52.2c.51.37.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: pressure_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.53.2c.2e.5b.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: nav_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.54.2c.7a.b5.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: camera_relay
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.56.2c.0c.e0.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: basic_motion
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.57.2c.fd.19.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: _ros2cli_daemon_96_3835a54746b145e99e50e6b610303c8f
+Node namespace: /
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.b1.2e.42.1f.00.00.00.00.00.00.04.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: rcl_interfaces/msg/ParameterEvent
+Topic type hash: RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.11.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /rosout
+Type: rcl_interfaces/msg/Log
+
+Publisher count: 10
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: odom_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.50.2c.72.da.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: imu_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.51.2c.a0.96.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: dvl_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.52.2c.51.37.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: pressure_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.53.2c.2e.5b.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: nav_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.54.2c.7a.b5.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: camera_relay
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.56.2c.0c.e0.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: basic_motion
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.57.2c.fd.19.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: _ros2cli_daemon_96_3835a54746b145e99e50e6b610303c8f
+Node namespace: /
+Topic type: rcl_interfaces/msg/Log
+Topic type hash: RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.b1.2e.42.1f.00.00.00.00.00.00.03.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: TRANSIENT_LOCAL
+  Lifespan: 10000000000 nanoseconds
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /sim/sensor/dvl
+Type: uv_msgs/msg/Dvl
+
+Publisher count: 1
+
+Node name: dvl_sim
+Node namespace: /
+Topic type: uv_msgs/msg/Dvl
+Topic type hash: RIHS01_f0db1c511e94c34fb08c037cb81923bf9e02dd22b442e18892ef4e61edaeb131
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.52.2c.51.37.00.00.00.00.00.00.13.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /sim/sensor/imu
+Type: sensor_msgs/msg/Imu
+
+Publisher count: 1
+
+Node name: imu_sim
+Node namespace: /
+Topic type: sensor_msgs/msg/Imu
+Topic type hash: RIHS01_7d9a00ff131080897a5ec7e26e315954b8eae3353c3f995c55faf71574000b5b
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.51.2c.a0.96.00.00.00.00.00.00.13.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 2
+
+Node name: nav_sim
+Node namespace: /
+Topic type: sensor_msgs/msg/Imu
+Topic type hash: RIHS01_7d9a00ff131080897a5ec7e26e315954b8eae3353c3f995c55faf71574000b5b
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.54.2c.7a.b5.00.00.00.00.00.00.16.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: sensor_msgs/msg/Imu
+Topic type hash: RIHS01_7d9a00ff131080897a5ec7e26e315954b8eae3353c3f995c55faf71574000b5b
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.1d.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /sim/sensor/odom
+Type: nav_msgs/msg/Odometry
+
+Publisher count: 1
+
+Node name: odom_sim
+Node namespace: /
+Topic type: nav_msgs/msg/Odometry
+Topic type hash: RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.50.2c.72.da.00.00.00.00.00.00.13.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 2
+
+Node name: nav_sim
+Node namespace: /
+Topic type: nav_msgs/msg/Odometry
+Topic type hash: RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.54.2c.7a.b5.00.00.00.00.00.00.15.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: nav_msgs/msg/Odometry
+Topic type hash: RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.1c.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /sim/sensor/pressure
+Type: sensor_msgs/msg/FluidPressure
+
+Publisher count: 1
+
+Node name: pressure_sim
+Node namespace: /
+Topic type: sensor_msgs/msg/FluidPressure
+Topic type hash: RIHS01_22dfb2b145a0bd5a31a1ac3882a1b32148b51d9b2f3bab250290d66f3595bc32
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.53.2c.2e.5b.00.00.00.00.00.00.13.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /tf
+Type: tf2_msgs/msg/TFMessage
+
+Publisher count: 1
+
+Node name: stonefish_simulator_nogpu
+Node namespace: /stonefish_ros2
+Topic type: tf2_msgs/msg/TFMessage
+Topic type hash: RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.4f.2c.68.8e.00.00.00.00.00.00.14.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /zit6/cmd/setpoint
+Type: zit6_interfaces/msg/ZitSetpoint
+
+Publisher count: 1
+
+Node name: basic_motion
+Node namespace: /
+Topic type: zit6_interfaces/msg/ZitSetpoint
+Topic type hash: RIHS01_0b36f36b0cad92139466a77b278e07015ccd90280be9e30c5ebe17559078fc7d
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.57.2c.fd.19.00.00.00.00.00.00.13.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: zit6_interfaces/msg/ZitSetpoint
+Topic type hash: RIHS01_0b36f36b0cad92139466a77b278e07015ccd90280be9e30c5ebe17559078fc7d
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.17.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /zit6/state/pos
+Type: std_msgs/msg/Float32MultiArray
+
+Publisher count: 1
+
+Node name: nav_sim
+Node namespace: /
+Topic type: std_msgs/msg/Float32MultiArray
+Topic type hash: RIHS01_0599f6f85b4bfca379873a0b4375a0aca022156bd2d7021275d116ed1fa8bfe0
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.54.2c.7a.b5.00.00.00.00.00.00.13.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: basic_motion
+Node namespace: /
+Topic type: std_msgs/msg/Float32MultiArray
+Topic type hash: RIHS01_0599f6f85b4bfca379873a0b4375a0aca022156bd2d7021275d116ed1fa8bfe0
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.57.2c.fd.19.00.00.00.00.00.00.15.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /zit6/state/status
+Type: zit6_interfaces/msg/ZitStatus
+
+Publisher count: 1
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: zit6_interfaces/msg/ZitStatus
+Topic type hash: RIHS01_2dd09c8ac2495fbabe594df6cda4451b3290a7e223f342efd65127338c9f23d3
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.14.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: basic_motion
+Node namespace: /
+Topic type: zit6_interfaces/msg/ZitStatus
+Topic type hash: RIHS01_2dd09c8ac2495fbabe594df6cda4451b3290a7e223f342efd65127338c9f23d3
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.57.2c.fd.19.00.00.00.00.00.00.14.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /zit6/state/thr
+Type: std_msgs/msg/Float32MultiArray
+
+Publisher count: 1
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: std_msgs/msg/Float32MultiArray
+Topic type hash: RIHS01_0599f6f85b4bfca379873a0b4375a0aca022156bd2d7021275d116ed1fa8bfe0
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.15.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+
+### /zit6/state/vel
+Type: std_msgs/msg/Float32MultiArray
+
+Publisher count: 1
+
+Node name: nav_sim
+Node namespace: /
+Topic type: std_msgs/msg/Float32MultiArray
+Topic type hash: RIHS01_0599f6f85b4bfca379873a0b4375a0aca022156bd2d7021275d116ed1fa8bfe0
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.54.2c.7a.b5.00.00.00.00.00.00.14.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 1
+
+Node name: basic_motion
+Node namespace: /
+Topic type: std_msgs/msg/Float32MultiArray
+Topic type hash: RIHS01_0599f6f85b4bfca379873a0b4375a0aca022156bd2d7021275d116ed1fa8bfe0
+Endpoint type: SUBSCRIPTION
+GID: 01.0f.8d.a8.57.2c.fd.19.00.00.00.00.00.00.16.04
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+### /zit6/state/zithbt
+Type: std_msgs/msg/UInt32
+
+Publisher count: 1
+
+Node name: mcu_sim
+Node namespace: /
+Topic type: std_msgs/msg/UInt32
+Topic type hash: RIHS01_a5c874829b752bc5fa190024b0ad76f578cc278271e855c7d02a818b3516fb4a
+Endpoint type: PUBLISHER
+GID: 01.0f.8d.a8.55.2c.6e.16.00.00.00.00.00.00.16.03
+QoS profile:
+  Reliability: RELIABLE
+  History (Depth): UNKNOWN
+  Durability: VOLATILE
+  Lifespan: Infinite
+  Deadline: Infinite
+  Liveliness: AUTOMATIC
+  Liveliness lease duration: Infinite
+
+Subscription count: 0
+

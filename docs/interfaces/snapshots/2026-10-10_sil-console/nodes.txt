@@ -1,0 +1,9 @@
+/basic_motion
+/camera_relay
+/dvl_sim
+/imu_sim
+/mcu_sim
+/nav_sim
+/odom_sim
+/pressure_sim
+/stonefish_ros2/stonefish_simulator_nogpu
