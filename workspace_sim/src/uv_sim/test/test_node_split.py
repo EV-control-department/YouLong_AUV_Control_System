@@ -43,8 +43,7 @@ EXPECTED_NODES = {
 }
 
 #: A5-2: the only endpoints the split may add -- the owned sensor namespace.
-EXPECTED_ADDED_ENDPOINTS = {
-    ("/sim/sensor/odom", "发布", "nav_msgs.msg.Odometry"),
+EXPECTED_ADDED_ENDPOINTS = {    ("/sim/sensor/odom", "发布", "nav_msgs.msg.Odometry"),
     ("/sim/sensor/odom", "订阅", "nav_msgs.msg.Odometry"),
     ("/sim/sensor/imu", "发布", "sensor_msgs.msg.Imu"),
     ("/sim/sensor/imu", "订阅", "sensor_msgs.msg.Imu"),
@@ -55,9 +54,16 @@ EXPECTED_ADDED_ENDPOINTS = {
     ("/sim/sensor/laser_points", "发布", "sensor_msgs.msg.PointCloud2"),
 }
 
+#: The only launch arguments of ``bridge_launch.py`` that switch modes.  A second
+#: mode knob is exactly the failure I2 guards against, so this set is pinned.
+MODE_LAUNCH_ARGUMENTS = {"hil_mode", "pid_config_file"}
+
+#: Non-mode tuning knobs ``bridge_launch.py`` is allowed to declare.  Adding one
+#: here (rather than only in the launch file) keeps it a deliberate edit.
+NON_MODE_LAUNCH_ARGUMENTS = {"laser_attenuation_c"}
+
 #: I2: which node owns which state topic, per mode.
-STATE_OWNERS = {
-    "state/pos": "nav_sim",
+STATE_OWNERS = {    "state/pos": "nav_sim",
     "state/vel": "nav_sim",
     "state/status": "mcu_sim",
     "state/thr": "mcu_sim",
@@ -328,6 +334,13 @@ def test_nav_mode_is_derived_from_hil_mode_in_one_place() -> None:
 
 
 def test_bridge_launch_declares_only_the_two_mode_knobs() -> None:
+    """``hil_mode`` is the only SIL/HIL switch; extra knobs must be non-mode ones.
+
+    A second *mode* knob is what invariant I2 is about ("two switches that must
+    agree"), so the exact set is pinned here.  Non-mode tuning knobs are allowed
+    but must be listed in :data:`NON_MODE_LAUNCH_ARGUMENTS`, so adding one is a
+    deliberate edit rather than a silent drift.
+    """
     tree = ast.parse(LAUNCH_FILE.read_text(encoding="utf-8"))
     declared: set[str] = set()
     for node in ast.walk(tree):
@@ -337,4 +350,8 @@ def test_bridge_launch_declares_only_the_two_mode_knobs() -> None:
             continue
         if isinstance(node.args[0], ast.Constant):
             declared.add(str(node.args[0].value))
-    assert declared == {"hil_mode", "pid_config_file"}, declared
+    assert declared & MODE_LAUNCH_ARGUMENTS == MODE_LAUNCH_ARGUMENTS, declared
+    assert declared - MODE_LAUNCH_ARGUMENTS == NON_MODE_LAUNCH_ARGUMENTS, (
+        "only these non-mode launch arguments may be added to bridge_launch.py; "
+        f"got {sorted(declared - MODE_LAUNCH_ARGUMENTS)}"
+    )

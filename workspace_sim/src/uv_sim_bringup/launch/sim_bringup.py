@@ -15,6 +15,7 @@ now the same entry point with the upper layers switched off::
 
 from launch import LaunchDescription
 from launch.actions import LogInfo
+from launch.substitutions import LaunchConfiguration
 
 from uv_bringup.launch_common import arg, include
 from uv_sim_bringup.stonefish_common import (
@@ -49,13 +50,20 @@ def generate_launch_description():
         arg('enable_ai', 'true', 'Enable AI perception nodes'),
         arg('enable_nav', 'false', 'Enable navigation node'),
         arg('enable_task', 'false', 'Enable task runner'),
+        arg('laser_attenuation_c', '0.0',
+            'Water attenuation coefficient [1/m] for the line laser (laser_sim): '
+            '0 disables it, ~0.05 clear ocean, ~0.2 coastal, ~0.5 turbid harbour, '
+            '>=1 muddy. Limits the effective range of the laser stripe'),
 
         LogInfo(msg=['Stonefish asset directory: ', data_dir]),
         *[LogInfo(msg=['[sim] ', warning]) for warning in warnings],
         scenario_check(data_dir),
 
         engine(data_dir),
-        include('uv_sim', 'bridge_launch.py', when='enable_mcu'),
+        include('uv_sim', 'bridge_launch.py',
+                arguments={'laser_attenuation_c': LaunchConfiguration(
+                    'laser_attenuation_c')},
+                when='enable_mcu'),
         include('uv_control', 'control_launch.py', when='enable_motion'),
         include('uv_perception', 'perception_launch.py',
                 arguments={'sim_mode': 'true'}, when='enable_ai'),

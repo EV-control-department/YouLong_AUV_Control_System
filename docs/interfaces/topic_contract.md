@@ -65,7 +65,7 @@
 |---|---|---|---|---|---|---|---|
 | `/auv/laser_scan` | `sensor_msgs/LaserScan` | 发布 | `stonefish_simulator` | — | 两者 | `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn:ros_publisher` | 30 Hz，960 条射线（`fov=87.19°`，`steps=959`）；`ranges[i]=inf` + `intensities[i]=0` 表示该射线没打到（引擎的 `rangeMax` 约定），`frame_id` 是**传感器名** `line_laser` |
 | `/auv/laser_scan` | `sensor_msgs/LaserScan` | 订阅 | — | `laser_sim` | 两者 | `workspace_sim/src/uv_sim/uv_sim/laser_sim.py:create_subscription` | |
-| `/sim/sensor/laser_points` | `sensor_msgs/PointCloud2` | 发布 | `laser_sim` | — | 两者 | `workspace_sim/src/uv_sim/uv_sim/laser_sim.py:create_publisher` | 激光条纹的**三维点**，传感器（激光平面）系、`z≡0`：结构化光测量本身就是"二维剖面 + 已知平面"。丢弃未命中的射线。**当前无订阅者**（见 §9） |
+| `/sim/sensor/laser_points` | `sensor_msgs/PointCloud2` | 发布 | `laser_sim` | — | 两者 | `workspace_sim/src/uv_sim/uv_sim/laser_sim.py:create_publisher` | 激光条纹的**三维点**，传感器（激光平面）系、`z≡0`：结构化光测量本身就是"二维剖面 + 已知平面"。丢弃未命中的射线；`attenuation_c>0` 时再按水质随机丢弃远端（见 `node_parameters.md` §laser_sim）。消费见 §7.5 |
 
 ## 2. SIL：相机链路（Stonefish → camera_relay → 栈）
 

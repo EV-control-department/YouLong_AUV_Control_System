@@ -34,6 +34,8 @@ from sensor_msgs.msg import LaserScan
 from uv_sim.geometry import euler_rpy_to_matrix, parse_scn_sensors
 from uv_sim.laser_sim import (
     LaserSimNode,
+    apply_attenuation,
+    detection_probability,
     scan_angles,
     scan_to_points,
     valid_mask,
@@ -247,6 +249,47 @@ def test_an_all_miss_scan_yields_an_empty_cloud() -> None:
     scan = _scan([float("inf")] * 4, intensities=[0.0] * 4)
     points = scan_to_points(scan)
     assert points.shape == (0, 3)
+
+
+# --------------------------------------------------------------------------- #
+# Water attenuation (Beer-Lambert round-trip loss -> distance-dependent detection)
+# --------------------------------------------------------------------------- #
+def test_attenuation_kills_far_points_more_than_near() -> None:
+    """The water signature: near is always detected, far thins out and vanishes."""
+    z = np.array([0.5, 1.0, 3.0, 5.0, 10.0])
+    prob = detection_probability(z, attenuation_c=0.2, ref_snr=10.0,
+                                 threshold=3.0, spread=1.0, ref_distance=1.0)
+    assert prob[0] == pytest.approx(1.0, abs=1e-3), "near returns survive"
+    assert prob[2] > prob[3] > prob[4], "detection must fall with distance"
+    assert prob[4] < 0.05, "far returns are effectively lost"
+
+
+def test_murky_water_shortens_the_effective_range() -> None:
+    """A larger attenuation coefficient c reaches the limit sooner."""
+    clear = detection_probability(np.array([3.0]), 0.05)[0]
+    murky = detection_probability(np.array([3.0]), 0.5)[0]
+    assert clear > murky, "clearer water keeps more of the stripe at 3 m"
+    assert clear == pytest.approx(1.0, abs=1e-3)
+    assert murky < 0.5
+
+
+def test_attenuation_disabled_is_a_pure_geometric_adapter() -> None:
+    """c <= 0 must leave the geometric validity untouched (no random drops)."""
+    rng = np.random.default_rng(1)
+    out = apply_attenuation(np.ones(500, dtype=bool), np.full(500, 15.0), 0.0, rng)
+    assert out.all(), "attenuation_c=0 must not drop any point"
+
+
+def test_attenuation_is_stochastic_not_a_hard_cutoff() -> None:
+    """Near the limit the stripe gets sparser, not sharply truncated."""
+    rng = np.random.default_rng(42)
+    # 4 m in coastal water: a mid-range, partially-surviving distance.
+    out = apply_attenuation(np.ones(2000, dtype=bool), np.full(2000, 4.0), 0.3, rng)
+    survived = float(out.mean())
+    assert 0.0 < survived < 1.0, (
+        f"at the knee of the curve some points must survive and some must not "
+        f"(got {survived:.2f}); a hard cutoff would give 0 or 1"
+    )
 
 
 # --------------------------------------------------------------------------- #

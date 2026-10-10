@@ -63,6 +63,14 @@ def generate_launch_description():
                 'YAML file with the PID gains for the simulated MCU; empty means '
                 'the packaged uv_sim/config/sim_pid.yaml'
             )),
+        DeclareLaunchArgument(
+            'laser_attenuation_c', default_value='0.0',
+            description=(
+                'Water attenuation coefficient [1/m] for the line laser '
+                '(laser_sim). 0 disables the model; ~0.05 clear ocean, ~0.2 '
+                'coastal, ~0.5 turbid harbour, >=1 muddy. The far end of the '
+                'stripe thins out instead of stopping at a hard cutoff'
+            )),
 
         Node(
             package='uv_sim',
@@ -121,5 +129,8 @@ def generate_launch_description():
             executable='laser_sim',
             name='laser_sim',
             output='screen',
+            parameters=[{
+                'attenuation_c': LaunchConfiguration('laser_attenuation_c'),
+            }],
         ),
     ])

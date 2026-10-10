@@ -44,7 +44,7 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 | `nav_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/nav_sim.py` | 导航解组装：`/sim/sensor/*` → `/zit6/state/{pos,vel}`（SIL）或 `/zit6/sim/nav`（HIL） |
 | `mcu_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/mcu_sim.py` | 仿真 MCU：setpoint→PID→混控；HIL 只做推力转发 |
 | `camera_relay` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/camera_relay.py` | 相机转发 + 拼接 |
-| `laser_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/laser_sim.py` | 线激光适配：`/auv/laser_scan` → `/sim/sensor/laser_points`（条纹三维点，传感器/激光平面系）；**无 ROS 参数** |
+| `laser_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/laser_sim.py` | 线激光适配：`/auv/laser_scan` → `/sim/sensor/laser_points`（条纹三维点，传感器/激光平面系）+ 可选水下衰减模型（见下文 §laser_sim）|
 | `hw_manager` | `uv_hm` | workspace_auv | `uv_hm/hw_manager.py` | 实车硬件管理（心跳 + 状态监控） |
 | `basic_motion` | `uv_control` | workspace_auv | `uv_control/basic_motion.py` | 运动控制 Action Server |
 | `vision` | `uv_perception` | workspace_auv | `uv_perception/vision.py` | YOLO 目标检测 |
@@ -215,6 +215,24 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 `test_scene_sensors.py` / `derive_extrinsics.py --check` 对拍），不是运行时可调参数 ——
 α 填错是**静默的水平尺度错误**（+73% 或 +30.7%），所以它必须是代码级常量并被测试钉住。
 
+### laser_sim 节点参数（水下衰减模型）
+
+`laser_sim` 把 `/auv/laser_scan` 换成条纹三维点，**可选**地叠一层水下衰减模型
+（Beer-Lambert 往返衰减 → 距离相关的探测概率，远端点随机丢失而非硬截断）。
+`attenuation_c <= 0` 关闭模型，节点退化为纯几何适配（不丢点）。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `attenuation_c` | double | `0.0` | 水体衰减系数 [1/m]：0.05 清澈海水、0.2 沿岸、0.5 浑水港口、1.0+ 泥水。**≤0 关闭衰减** |
+| `ref_snr` | double | `10.0` | 参考距离 `ref_distance` 处的信噪比 |
+| `snr_threshold` | double | `3.0` | 探测阈值：SNR 低于此值该点丢失 |
+| `snr_spread` | double | `1.0` | 探测概率过渡带宽度（越大过渡越平缓）|
+| `ref_distance` | double | `1.0` | SNR 参考距离 [m] |
+| `seed` | int | `-1` | 随机种子；`-1` = 不固定（每次运行不同）。测试用固定种子 |
+
+> 衰减是**随机**的：同一距离的点有的活有的丢，条纹在极限附近变稀疏而不是突然断掉 ——
+> 这才是真实水下激光的特性。有效距离由**水质**决定，不是固定值。
+
 ### nav_sim 节点参数
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -350,11 +368,13 @@ ros2 launch uv_sim_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn
 |---|---|---|
 | `hil_mode` | `false` | `true`: 真 MCU 负责 PID/混控与 `/zit6/state/*`（只起 5 个节点：两路转发 + `nav_sim` + 推力转发 + 相机转发）；`false`: 起全部 7 个节点（仿真 MCU） |
 | `pid_config_file` | 空 | 空 = 用包内 `config/sim_pid.yaml`（仅 `mcu_sim` 使用） |
+| `laser_attenuation_c` | `0.0` | `laser_sim` 的水体衰减系数 [1/m]：`0` 关闭模型，`0.05` 清澈海水、`0.2` 沿岸、`0.5` 浑水港口、`≥1` 泥水。**越大有效距离越短**（远端条纹变稀疏而非硬截断）|
 
 **用法：**
 ```bash
-ros2 launch uv_sim bridge_launch.py                     # SIL：7 个节点
-ros2 launch uv_sim bridge_launch.py hil_mode:=true      # HIL：5 个节点（⏸ 未运行时验收）
+ros2 launch uv_sim bridge_launch.py                     # SIL：8 个节点
+ros2 launch uv_sim bridge_launch.py hil_mode:=true      # HIL：6 个节点（⏸ 未运行时验收）
+ros2 launch uv_sim bridge_launch.py laser_attenuation_c:=0.2   # 浑水线激光
 ```
 
 ### sim_bringup.py（包 `uv_sim_bringup`，SIL）
@@ -372,6 +392,7 @@ ros2 launch uv_sim bridge_launch.py hil_mode:=true      # HIL：5 个节点（�
 | `enable_ai` | `true` | 启用 vision + position（`sim_mode:=true`） |
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
+| `laser_attenuation_c` | `0.0` | 线激光水体衰减系数 [1/m]，透传给 `laser_sim`（见 §laser_sim）：`0` 关闭，`0.2` 沿岸 ≈4 m 有效距离，`0.5` 浑水 ≈2.2 m |
 
 **用法：**
 ```bash
@@ -380,6 +401,8 @@ ros2 launch uv_sim_bringup sim_bringup.py enable_ai:=true
 ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false
 # 无图形环境（console 物理仿真）：
 ros2 launch uv_sim_bringup sim_bringup.py headless:=true simulation_rate:=100.0
+# 水下浑水（沿岸）：线激光有效距离降到 ≈4 m
+ros2 launch uv_sim_bringup sim_bringup.py headless:=true laser_attenuation_c:=0.2
 ```
 
 ### hil_bringup.py（包 `uv_sim_bringup`）⏸

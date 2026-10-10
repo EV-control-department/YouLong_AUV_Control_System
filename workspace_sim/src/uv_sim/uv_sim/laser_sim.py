@@ -37,11 +37,26 @@ down instead of left to the code:
   a gap in ``docs/interfaces/topic_contract.md`` section 9, like
   ``/sim/sensor/pressure``.
 
+* **Water attenuation is applied here, not by the engine.**  A real underwater
+  line laser loses signal with distance (Beer-Lambert: received power
+  ``P_r ~ exp(-2*c*z)`` for the round trip, ``c`` = attenuation coefficient),
+  so far points are lost *stochastically* -- the stripe thins out and vanishes
+  rather than stopping at a hard cutoff.  The engine's ``distance_max`` is a
+  hard geometric cutoff, which is neither physical nor realistic.  This node
+  adds the physical layer: a beam at distance ``z`` survives with probability
+  ``detection(z) = 0.5*(1 + erf((snr(z) - threshold) / spread))`` where
+  ``snr(z) = ref_snr * exp(-2*c*(z - ref_distance))``.  ``c`` is the water
+  attenuation coefficient [1/m]: ~0.05 clear ocean, ~0.2 coastal, ~0.5 turbid
+  harbour, 1.0+ muddy.  With ``attenuation_c = 0`` the model is disabled and
+  the node is a pure geometric adapter (the pre-existing behaviour).
+
 The sensor is mounted looking straight down with the line along the body
 ``y`` axis (FRD), so the profile this publishes is what the vehicle flies over.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 from rclpy.node import Node
@@ -86,15 +101,16 @@ def valid_mask(scan: LaserScan) -> np.ndarray:
     return ok
 
 
-def scan_to_points(scan: LaserScan) -> np.ndarray:
+def scan_to_points(scan: LaserScan, mask: np.ndarray | None = None) -> np.ndarray:
     """Valid returns as an ``(M, 3)`` array in the sensor frame.
 
     Same convention as the engine's own ``PublishMultibeamPCL``: the fan lies in
-    the sensor ``xy`` plane, so ``z = 0`` for every point.
+    the sensor ``xy`` plane, so ``z = 0`` for every point.  ``mask`` overrides
+    the geometric validity (used to apply water attenuation downstream).
     """
     angles = scan_angles(scan)
     ranges = np.asarray(scan.ranges, dtype=float)
-    valid = valid_mask(scan)
+    valid = valid_mask(scan) if mask is None else mask
     if not valid.any():
         return np.empty((0, 3), dtype=float)
     hit_angles = angles[valid]
@@ -109,6 +125,50 @@ def scan_to_points(scan: LaserScan) -> np.ndarray:
     )
 
 
+def detection_probability(z: np.ndarray, attenuation_c: float,
+                          ref_snr: float = 10.0, threshold: float = 3.0,
+                          spread: float = 1.0,
+                          ref_distance: float = 1.0) -> np.ndarray:
+    """Probability a return at distance ``z`` [m] survives the water.
+
+    Beer-Lambert round-trip loss ``exp(-2*c*z)`` turns the reference SNR at
+    ``ref_distance`` into a distance-dependent SNR; a beam is detected when the
+    SNR clears ``threshold``.  The logistic (erf) transition is the stochastic
+    part: near the limit the stripe gets *sparser*, not sharply cut.  Returns 1
+    everywhere when ``attenuation_c <= 0`` (model disabled).
+
+    ``c`` [1/m] by water type: 0.05 clear ocean, 0.2 coastal, 0.5 turbid,
+    1.0+ muddy.
+    """
+    z = np.asarray(z, dtype=float)
+    if attenuation_c <= 0.0:
+        return np.ones_like(z)
+    snr = ref_snr * np.exp(-2.0 * attenuation_c * (z - ref_distance))
+    # Normalised logistic: 0.5 at snr == threshold, ->1 for strong, ->0 for weak.
+    x = (snr - threshold) / spread
+    return 0.5 * (1.0 + np.vectorize(math.erf)(x / math.sqrt(2.0)))
+
+
+def apply_attenuation(mask: np.ndarray, ranges: np.ndarray, attenuation_c: float,
+                      rng: np.random.Generator, **kwargs) -> np.ndarray:
+    """Drop valid beams stochastically according to water attenuation.
+
+    ``mask`` is the geometric validity (from :func:`valid_mask`); this narrows it
+    with the detection probability at each surviving beam's range.  Deterministic
+    when ``attenuation_c <= 0``.
+    """
+    out = mask.copy()
+    if attenuation_c <= 0.0:
+        return out
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
+        return out
+    prob = detection_probability(ranges[idx], attenuation_c, **kwargs)
+    survive = rng.random(idx.size) < prob
+    out[idx] = survive
+    return out
+
+
 class LaserSimNode(Node):
     def __init__(self, node_name: str = 'laser_sim', **kwargs) -> None:
         super().__init__(node_name, **kwargs)
@@ -116,15 +176,51 @@ class LaserSimNode(Node):
         self.publisher = self.create_publisher(PointCloud2, '/sim/sensor/laser_points', 10)
         self.create_subscription(LaserScan, '/auv/laser_scan', self._scan_cb, 10)
 
+        # Water attenuation model (see module docstring).  attenuation_c <= 0
+        # disables it and keeps the node a pure geometric adapter.
+        self.declare_parameter('attenuation_c', 0.0)
+        self.declare_parameter('ref_snr', 10.0)
+        self.declare_parameter('snr_threshold', 3.0)
+        self.declare_parameter('snr_spread', 1.0)
+        self.declare_parameter('ref_distance', 1.0)
+        self.declare_parameter('seed', -1)
+
         self.count = 0
-        self.missed = 0     # beams that did not come back, summed over scans
-        self.get_logger().info(
-            "line laser: /auv/laser_scan -> /sim/sensor/laser_points "
-            "(stripe points in the sensor/laser-plane frame)"
-        )
+        self.missed = 0     # beams that did not come back (geometry + attenuation)
+
+        seed = int(self.get_parameter('seed').value)
+        self._rng = np.random.default_rng(None if seed < 0 else seed)
+
+        c = float(self.get_parameter('attenuation_c').value)
+        if c > 0.0:
+            self.get_logger().info(
+                f"line laser: /auv/laser_scan -> /sim/sensor/laser_points "
+                f"(stripe in sensor/laser-plane frame) + water attenuation "
+                f"c={c:.3f} 1/m"
+            )
+        else:
+            self.get_logger().info(
+                "line laser: /auv/laser_scan -> /sim/sensor/laser_points "
+                "(stripe points in the sensor/laser-plane frame; "
+                "attenuation disabled)"
+            )
 
     def _scan_cb(self, msg: LaserScan) -> None:
-        points = scan_to_points(msg)
+        geom = valid_mask(msg)
+
+        c = float(self.get_parameter('attenuation_c').value)
+        if c > 0.0:
+            mask = apply_attenuation(
+                geom, np.asarray(msg.ranges, dtype=float), c, self._rng,
+                ref_snr=float(self.get_parameter('ref_snr').value),
+                threshold=float(self.get_parameter('snr_threshold').value),
+                spread=float(self.get_parameter('snr_spread').value),
+                ref_distance=float(self.get_parameter('ref_distance').value),
+            )
+        else:
+            mask = geom
+
+        points = scan_to_points(msg, mask)
 
         cloud = point_cloud2.create_cloud_xyz32(msg.header, points.tolist())
         # Every published point came back off the bottom, so the cloud has no
@@ -133,7 +229,7 @@ class LaserSimNode(Node):
         self.publisher.publish(cloud)
 
         self.count += 1
-        self.missed += len(msg.ranges) - len(points)
+        self.missed += int((~mask).sum())
 
 
 def main(args=None) -> int:
