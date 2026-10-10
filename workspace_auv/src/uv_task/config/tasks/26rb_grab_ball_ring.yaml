@@ -16,7 +16,7 @@ params:
   search:
     timeout: 40.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时，重新发线不清零。
     near_radius_m: 0.5 # 到预设 [x,y] 的二维水平距离，不考虑深度差。
-    near_timeout: 10.0 # 首次进入半径后累计 BLINE 运行时间；停车校准暂停，离开半径不重置。
+    near_timeout: 20.0 # 首次进入半径后累计 BLINE 运行时间；停车校准暂停，离开半径不重置。
     front_observe_seconds: 2.0
     front_align_seconds: 3.0 # 单目 yaw 对准，同时尝试标定双目对准。
     yaw_tolerance_deg: 2.0
@@ -25,7 +25,7 @@ params:
     max_yaw_rate_deg_s: 10.0
     depth_gain: 0.8
     max_vertical_speed_mps: 0.08
-    speed_mps: 0.15 # BLINE 要求 0 < speed < 0.18。
+    speed_mps: 0.17 # BLINE 要求 0 < speed < 0.28。
     detection_timeout: 0.8
     min_confidence: 0.02
     detection_stop_delay: 0.5 # 巡游时下视看到 frame 后继续半秒，再取消 BLINE。

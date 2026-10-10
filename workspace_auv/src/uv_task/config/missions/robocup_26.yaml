@@ -31,12 +31,12 @@ mission:
       config: ../tasks/26rb_grab_ball_ring.yaml
       initial:
         poses:
-          - command: BMOVE
-            axes: xyzrz
-            target: [0.0, 0.0, 0.0, 0.0]
-          # - command: SET
-          #   axes: z
-          #   target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
+          # - command: BMOVE
+          #   axes: xyzrz
+          #   target: [0.0, 0.0, 0.0, 0.0]
+          - command: SET
+            axes: z
+            target: [2.0, 1.0, 0.2, 0.0] # 下潜0.2m
           # - command: WTRAVEL
           #   axes: xyz
           #   target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
