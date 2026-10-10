@@ -1,8 +1,10 @@
 """Preset-position impact-ball workflow using front detections and BLINE.
 
 Set task depth once on entry. Later commands adjust XY/yaw only, and every
-BLINE has dz=0. Visual failures run a bounded blind approach and finish the
-whole task; motion failures and cancellation do not start another motion.
+BLINE has dz=0. Each visual yaw phase computes one world bearing and sends
+a direct yaw-only SET, preferring a valid stereo target and falling back to
+mono. Other visual failures run a bounded blind approach and finish the whole
+task; motion failures and cancellation do not start another motion.
 """
 from __future__ import annotations
 
@@ -142,65 +144,41 @@ class RB26HitBallsTask:
         self._yaw_active = False
 
     def _align(self, seconds):
-        """Zero translation, yaw-only servo; prefer geometrically valid stereo."""
+        """Compute one target bearing, then send a direct yaw-only SET.
+
+        The three visual yaw phases (initial sighting, cruise interruption and
+        near-field alignment, plus the final charge check) all use the same
+        position command.  Stereo is preferred when a valid pair is available;
+        otherwise the newest mono ray is used.  The wait budget only waits for
+        a usable observation and never runs a velocity-servo loop.
+        """
         until = self._now()+seconds
-        after = self._observer.cursor()
-        owner = self._observer.first_eye
-        stable_mode = stable_since = None
-        aligned = False
-        self._light(self._node.LIGHT_OFF, '前视单目／双目 yaw 对准运动')
-        try:
-            while self._now() < until:
-                self._check()
-                frames = self._observer.frames(after)
-                frame = next((f for f in frames if f.eye == owner), None)
-                if frame is None and frames:
-                    frame = frames[0]
-                    owner = frame.eye
-                    stable_since = None
-                pose = self._pose()
-                center = self._observer.stereo_center(after) if frame is not None else None
-                direction = center-np.asarray(pose[:3]) if center is not None else (
-                    frame.ray if frame is not None else None)
-                if direction is not None and np.linalg.norm(direction[:2]) < 1e-6:
-                    direction = None
-                error = None if direction is None else wrap_degrees(
-                    math.degrees(math.atan2(direction[1], direction[0]))-pose[5])
-                mode = 'stereo' if center is not None else owner
-                if error is not None and abs(error) <= self._params['search_yaw_tolerance_deg']:
-                    if stable_since is None or stable_mode != mode:
-                        stable_since, stable_mode = self._now(), mode
-                    if self._now()-stable_since >= self._params['search_yaw_stable_seconds']:
-                        aligned = True
-                        break
-                else:
-                    stable_since = None
-                rate = 0.0 if error is None else float(np.clip(
-                    error*self._params['search_yaw_gain'],
-                    -self._params['search_max_yaw_rate_deg_s'],
-                    self._params['search_max_yaw_rate_deg_s']))
-                self._yaw_active = True
-                ok, message = self._node._send_body_velocity(
-                    yaw_rate_deg_s=rate, lease_s=max(0.25, 4*self._params['search_period']),
-                    wait_deadline=until,
-                    light_color=self._node.LIGHT_OFF,
-                    task_context=self._node._format_motion_context(f'{self._name} 前视 yaw 伺服；无垂向修正'))
-                if not ok:
-                    if self._now() >= until:
-                        break
-                    raise MotionFailure(f'yaw 伺服失败：{message}')
-                self._sleep(min(self._params['search_period'], max(0.0, until-self._now())))
-        finally:
-            self._neutral_yaw()
-        self._hold()
-        valid = bool(self._observer.frames(after))
-        if valid and aligned:
-            self._flash(self._node.LIGHT_GREEN, 1, 'yaw 对准完成')
-        if valid and not aligned:
-            self._node.get_logger().warning(
-                f'hit_balls：{self._name} 对准预算用尽仍未稳定，保留当前实测航向')
-        # Flashing must not hide a target loss before the next motion starts.
-        return bool(self._observer.frames(after))
+        # A phase can begin immediately after the callback that triggered it,
+        # so include the newest fresh frame rather than advancing a cursor.
+        after = -1
+        last_bearing = None
+        last_mode = None
+        while self._now() < until:
+            self._check()
+            frames = self._observer.frames(after)
+            frame = frames[-1] if frames else None
+            pose = self._pose()
+            center = self._observer.stereo_center(after) if frame is not None else None
+            direction = center-np.asarray(pose[:3]) if center is not None else (
+                frame.ray if frame is not None else None)
+            if direction is not None and np.linalg.norm(direction[:2]) >= 1e-6:
+                last_bearing = wrap_degrees(
+                    math.degrees(math.atan2(direction[1], direction[0])))
+                last_mode = '双目' if center is not None else '单目'
+                break
+            self._sleep(min(self._params['search_period'], max(0.0, until-self._now())))
+
+        if last_bearing is None:
+            self._light(self._node.LIGHT_OFF, '前视 yaw 对准运动')
+            return False
+        self._turn(last_bearing, f'前视 {last_mode} yaw 对准直接 SET')
+        self._flash(self._node.LIGHT_GREEN, 1, 'yaw 对准完成')
+        return True
 
     def _cancel_line(self, handle, result_future, allow_timeout=False):
         if not result_future.done():

@@ -55,8 +55,8 @@ def validate_search_params(params, *, defaults=None, position_key='collection_fr
                 or value < 0 or (key not in nonnegative and value == 0)):
             raise ValueError(f'{key} 必须为有限的正数（深度、置信度、保持和延时可为零）')
         values[key] = float(value)
-    if not 0 < values['search_speed_mps'] < 0.18:
-        raise ValueError('search.speed_mps 必须满足 0 < speed < 0.18（BLINE 接口）')
+    if not 0 < values['search_speed_mps'] < 0.28:
+        raise ValueError('search.speed_mps 必须满足 0 < speed < 0.28（BLINE 接口）')
     if values['search_min_confidence'] > 1:
         raise ValueError('search.min_confidence 必须在 [0,1] 内')
     if values['search_yaw_stable_seconds'] > values['search_front_align_seconds']:

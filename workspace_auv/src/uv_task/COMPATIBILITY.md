@@ -30,8 +30,8 @@ When editing tasks:
   `DetectorParameters_create()`, `detectMarkers()` and `drawMarker()`.
 - Keep postponed annotations when using newer type hint notation. Tests that
   extract methods through AST must preserve the annotations compiler flag.
-- Keep BLINE speed parameters strictly between 0 and 0.18 m/s. The upper bound
-  is exclusive; the task YAML validator rejects 0.18.
+- Keep BLINE speed parameters strictly between 0 and 0.28 m/s. The upper bound
+  is exclusive; the task YAML validator rejects 0.28.
 
 These are software compatibility checks. Camera calibration, perception
 accuracy, actuator behavior and complete water trials require their own
