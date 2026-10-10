@@ -128,6 +128,7 @@ def test_scene_sensors_match_the_documented_poses() -> None:
         "front_cam_right",
         "down_cam_left",
         "down_cam_right",
+        "line_laser",
     ):
         assert name in sensors, f"{name} disappeared from {SCENE_PATH.name}"
 

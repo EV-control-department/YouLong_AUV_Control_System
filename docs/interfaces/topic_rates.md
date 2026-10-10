@@ -54,6 +54,17 @@
 `/zit6/cmd/pushrod`；HIL 专属的 `/zit6/sim/nav` 也不在 SIL 出现。
 其中 `/perception/annotated/*` 是**全局无发布者**的缺口（GUI 在等它，`topic_contract.md` §9）。
 
+### 1.1 线激光链路实测（2026-10-10，`canyon_vision_dvl_headless.scn`，只起引擎 + `laser_sim`）
+
+> 这两行是**单独**测的（`stonefish_simulator_nogpu` + `ros2 run uv_sim laser_sim`），
+> 不与上表其他行同一次运行，因此不能横向比对。艇在水面附近（z≈0.04），
+> 向下看到 6~15 m 外的峡谷底；引擎日志确认场景含 `line_laser` 传感器。
+
+| 话题 | 类型 | 实测 Hz | 设计/场景 | 归属 | 备注 |
+|---|---|---|---|---|---|
+| `/auv/laser_scan` | `sensor_msgs/LaserScan` | **30.045** | 场景 `rate="30.0"` | 引擎 | 960 条射线；`angle_min/max = ±43.595°`、`angle_increment = 0.001586812`（端点含，`laser_sim` 用 `linspace` 复算） |
+| `/sim/sensor/laser_points` | `sensor_msgs/PointCloud2` | **29.962** | 同源 | `laser_sim` | 913 点（47 条超过 `distance_max=15` 被丢弃）；`z≡0`（激光平面系）；`height=1`、`point_step=12`、约 11 KB/帧 |
+
 ## 2. 与设计值不一致的一条：`/basic_motion/pose_info`（B20）
 
 `basic_motion._publish_pose_info` 由 `create_timer(1.0/30.0, ...)` 驱动（`basic_motion.py:159`），

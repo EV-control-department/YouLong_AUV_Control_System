@@ -54,13 +54,16 @@ def _names(elements, kind: str | None = None) -> set[str]:
 
 
 def test_scene_inventory_is_as_expected(tool) -> None:
-    """The fixture itself: 4 cameras + the physics sensors."""
+    """The fixture itself: 4 cameras + the physics sensors + the line laser."""
     text = SCENE.read_text(encoding="utf-8")
     sensors = _sensors(text)
     assert _names(sensors, "camera") == {
         "front_cam_left", "front_cam_right", "down_cam_left", "down_cam_right"
     }
-    assert len(sensors) == 8
+    # 8 before the line laser; `line_laser` is a `multibeam`, not a camera, so
+    # stripping must keep it (the console simulator only rejects cameras).
+    assert len(sensors) == 9
+    assert "multibeam" in {element.get("type") for element in sensors}
 
 
 def test_strip_all_keeps_the_other_sensors(tool) -> None:

@@ -39,6 +39,7 @@
 | `nav_sim` | `uv_sim` | workspace_sim | 导航解组装：`/sim/sensor/*` → `/zit6/state/{pos,vel}`（SIL）或 `/zit6/sim/nav`（HIL） | ✅ |
 | `mcu_sim` | `uv_sim` | workspace_sim | 仿真 MCU：setpoint→PID→混控→推力 + 状态 + 参数服务；HIL 只做推力转发 | ✅ |
 | `camera_relay` | `uv_sim` | workspace_sim | 相机转发 + 左右目拼接 | ✅ |
+| `laser_sim` | `uv_sim` | workspace_sim | 线激光适配：`/auv/laser_scan` → `/sim/sensor/laser_points`（条纹三维点） | ✅（无消费者） |
 | `basic_motion` | `uv_control` | workspace_auv | 运动动作服务端（START/SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL） | ✅ |
 | `vision` | `uv_perception` | workspace_auv | YOLO 检测（`sim_mode` 订阅仿真图像） | 可选（`enable_ai`） |
 | `position` | `uv_perception` | workspace_auv | 多射线交会 3D 定位（位姿源 = `PoseInfo`） | 可选（`enable_ai`） |

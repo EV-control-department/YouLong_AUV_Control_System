@@ -333,6 +333,40 @@
 			<ros_publisher topic="/sim/down_cam/right"/>
 		</sensor>
 
+		<!-- ====== 线激光器 (line laser / 单线结构光) ======
+		     Stonefish 没有"激光"这类传感器。这里用 type="multibeam" 精确表示**一个光平面**：
+		     引擎源码的注释就是 "raycasting, single plane of beams"，它在传感器 xy 平面内打
+		     steps+1 条射线（Multibeam.cpp:45），打到海床上就是**一根线**。与相机的区别是它
+		     直接给出射线的三维距离（真值），不经过渲染，所以 console(无头) 模式也能跑。
+
+		     安装（FRD 机体系：x 前 / y 右舷 / z 下）：
+		       * 垂直向下：扇形中心射线 = 机体 +z
+		       * 线沿机体 y 轴（横跨航向；随 AUV 前进扫出海床剖面）：扇形平面 = 机体 y-z 平面
+		         故传感器 x 轴 = 机体 +z、y 轴 = 机体 +y、z 轴 = 机体 -x
+		         => <origin rpy="0 -1.5708 0">（纯俯仰 -90°），R_b_s = [[0,0,-1],[0,1,0],[1,0,0]]
+		       * x=+0.05：在下视双目（x=-0.13）前方 0.18 m。垂直向下的光平面与下视相机光轴
+		         **平行**，单目三角化因此是退化的（见 docs/frames/extrinsics_reference.md）；
+		         前移 0.18 m 是给将来"相机看条纹"留一条基线，本传感器的三维点不依赖相机。
+		       * z=+0.19：机体中心线最低面在 z≈0.18（InsBasePlate），两侧板底到 z=0.21
+		         （y=±0.18 的薄壁）。fov/2=43.6° 的射线在 y=±0.18 处已降到 z≈0.37，
+		         从侧板下方通过 —— 对全部 5726 个机体三角面离线求交验证过无自遮挡。
+		         <range distance_min="0.3"> 再加一道保护：射线从 0.3 m 外才起算。
+		     fov=87.19 与下视相机水平 FOV 相同；steps=959 => 960 条射线，在 3 m 站高上
+		     采样间隔约 4.8 mm（下视 1920 px 在同一高度约 2.5 mm/px）。
+		     <noise distance="0.002"> 是 2 mm 测距白噪声（真实线激光条纹提取+标定的量级）；
+		     要无噪声真值就改成 0.0。引擎在 historyLength<0 时仍保留最后一条样本
+		     （ScalarSensor::AddSampleToHistory），所以这里不需要 <history>。
+		-->
+		<sensor name="line_laser" type="multibeam" rate="30.0">
+			<link name="Vehicle"/>
+			<origin rpy="0 -1.5708 0" xyz="0.05 0 0.19"/>
+			<specs fov="87.19" steps="959"/>
+			<range distance_min="0.3" distance_max="15.0"/>
+			<noise distance="0.002"/>
+			<!-- 引擎发 LaserScan；三维点由 uv_sim 的 laser_sim 节点换算成 PointCloud2 -->
+			<ros_publisher topic="/auv/laser_scan"/>
+		</sensor>
+
 		<!-- ====== 执行机构 / 推进器 (Actuators/Thrusters) ====== -->
 
 		<actuator name="Thruster0" type="thruster">

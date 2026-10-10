@@ -44,6 +44,7 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 | `nav_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/nav_sim.py` | 导航解组装：`/sim/sensor/*` → `/zit6/state/{pos,vel}`（SIL）或 `/zit6/sim/nav`（HIL） |
 | `mcu_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/mcu_sim.py` | 仿真 MCU：setpoint→PID→混控；HIL 只做推力转发 |
 | `camera_relay` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/camera_relay.py` | 相机转发 + 拼接 |
+| `laser_sim` | **`uv_sim`** | **workspace_sim** | `src/uv_sim/uv_sim/laser_sim.py` | 线激光适配：`/auv/laser_scan` → `/sim/sensor/laser_points`（条纹三维点，传感器/激光平面系）；**无 ROS 参数** |
 | `hw_manager` | `uv_hm` | workspace_auv | `uv_hm/hw_manager.py` | 实车硬件管理（心跳 + 状态监控） |
 | `basic_motion` | `uv_control` | workspace_auv | `uv_control/basic_motion.py` | 运动控制 Action Server |
 | `vision` | `uv_perception` | workspace_auv | `uv_perception/vision.py` | YOLO 目标检测 |

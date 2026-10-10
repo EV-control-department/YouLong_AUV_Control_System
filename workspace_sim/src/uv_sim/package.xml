@@ -21,6 +21,9 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>uv_msgs</exec_depend>
+  <!-- laser_sim builds the laser stripe PointCloud2 with
+       sensor_msgs_py.point_cloud2 (a separate package from sensor_msgs). -->
+  <exec_depend>sensor_msgs_py</exec_depend>
 
   <test_depend>pytest</test_depend>
 

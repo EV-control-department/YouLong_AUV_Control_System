@@ -1,6 +1,7 @@
 """uv_sim entry point: the simulation-side nodes that stand in for hardware.
 
-Seven nodes, one responsibility each (T5):
+Eight nodes, one responsibility each (T5's seven, plus ``laser_sim`` for the
+line laser in the vehicle scene):
 
 =====================================  ==========================================
 ``odom_sim`` / ``imu_sim``             ``/auv/*`` -> ``/sim/sensor/*`` relays
@@ -10,16 +11,20 @@ Seven nodes, one responsibility each (T5):
 ``mcu_sim``                            setpoints -> PID -> mixing -> thrusters,
                                        plus ``/zit6/state/{status,thr,zithbt}``
 ``camera_relay``                       images -> ``/auv/*_cam/*`` (+ stitching)
+``laser_sim``                          line-laser ``LaserScan`` -> stripe points
 =====================================  ==========================================
 
 ``hil_mode`` is the **single** knob for the SIL/HIL switch (there used to be one
 ``sim_bridge`` with an internal branch; now the mode is composed from the nodes):
 
-* ``hil_mode:=false`` (default, the acceptance path) starts all seven.
-* ``hil_mode:=true`` starts five: ``dvl_sim``/``pressure_sim`` are skipped because
+* ``hil_mode:=false`` (default, the acceptance path) starts all eight.
+* ``hil_mode:=true`` starts six: ``dvl_sim``/``pressure_sim`` are skipped because
   the real MCU subscribes ``/auv/*`` directly, and ``nav_sim`` is started with
   ``publish_sim_nav:=true, publish_state:=false`` so the MCU keeps ownership of
   ``/zit6/state/*`` (invariant I2).  ``mcu_sim`` becomes a thrust relay.
+  ``laser_sim`` runs in both modes -- like ``camera_relay`` it adapts a
+  *simulated* sensor, not part of the MCU contract, and nothing on the real
+  vehicle owns it.
 
 ``nav_sim``'s two roles are derived from ``hil_mode`` here rather than exposed as
 extra launch arguments: two knobs that must agree is exactly the failure mode I2
@@ -109,6 +114,12 @@ def generate_launch_description():
             package='uv_sim',
             executable='camera_relay',
             name='camera_relay',
+            output='screen',
+        ),
+        Node(
+            package='uv_sim',
+            executable='laser_sim',
+            name='laser_sim',
             output='screen',
         ),
     ])

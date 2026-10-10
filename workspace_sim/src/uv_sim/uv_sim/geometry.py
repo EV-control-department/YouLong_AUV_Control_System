@@ -59,6 +59,13 @@ SCENE_SENSOR_NAMES: tuple[str, ...] = (
     "front_cam_right",
     "down_cam_left",
     "down_cam_right",
+    # Line laser (Stonefish ``multibeam`` = one plane of rays = one line on the
+    # seabed).  Listed here so its mount reaches the authoritative table
+    # (docs/frames/extrinsics_reference.md) and config/extrinsics/xunyun.yaml
+    # instead of living only inside the scene: consumers of
+    # /sim/sensor/laser_points get the points in that frame and need the mount
+    # to lift them into the body/world frame (the simulation has no TF).
+    "line_laser",
 )
 
 #: Default scene used by the tools (DVL/IMU/camera extrinsics baseline).

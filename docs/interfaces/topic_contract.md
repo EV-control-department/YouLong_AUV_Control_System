@@ -56,6 +56,17 @@
 | `/auv/pressure` | `sensor_msgs/FluidPressure` | 订阅 | — | `pressure_sim` | SIL | `workspace_sim/src/uv_sim/uv_sim/pressure_sim.py:create_subscription` | |
 | `/sim/sensor/pressure` | `sensor_msgs/FluidPressure` | 发布 | `pressure_sim` | — | SIL | `workspace_sim/src/uv_sim/uv_sim/pressure_sim.py:create_publisher` | 当前无订阅者（见 §9） |
 
+### 1.1 SIL：线激光链路（Stonefish → laser_sim → 栈）
+
+场景把线激光声明为 Stonefish 的 `type="multibeam"`（传感器名 `line_laser`）：**一个平面上的射线扇形 = 海床上的一根线**。
+它是纯 CPU 射线求交，所以 console(无头) 模式也能跑（相机不能）。外参见 `docs/frames/extrinsics_reference.md`。
+
+| 话题 | 消息类型 | 方向 | 发布者 | 订阅者 | 模式 | 证据 | 说明 |
+|---|---|---|---|---|---|---|---|
+| `/auv/laser_scan` | `sensor_msgs/LaserScan` | 发布 | `stonefish_simulator` | — | 两者 | `workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn:ros_publisher` | 30 Hz，960 条射线（`fov=87.19°`，`steps=959`）；`ranges[i]=inf` + `intensities[i]=0` 表示该射线没打到（引擎的 `rangeMax` 约定），`frame_id` 是**传感器名** `line_laser` |
+| `/auv/laser_scan` | `sensor_msgs/LaserScan` | 订阅 | — | `laser_sim` | 两者 | `workspace_sim/src/uv_sim/uv_sim/laser_sim.py:create_subscription` | |
+| `/sim/sensor/laser_points` | `sensor_msgs/PointCloud2` | 发布 | `laser_sim` | — | 两者 | `workspace_sim/src/uv_sim/uv_sim/laser_sim.py:create_publisher` | 激光条纹的**三维点**，传感器（激光平面）系、`z≡0`：结构化光测量本身就是"二维剖面 + 已知平面"。丢弃未命中的射线。**当前无订阅者**（见 §9） |
+
 ## 2. SIL：相机链路（Stonefish → camera_relay → 栈）
 
 | 话题 | 消息类型 | 方向 | 发布者 | 订阅者 | 模式 | 证据 | 说明 |
@@ -207,6 +218,7 @@
 | `/auv/thrusters_state` | 有发布者、**无订阅者**（可用于混控校验，目前没人用） | 待定 |
 | `/sim/sensor/dvl` | 有发布者（`dvl_sim`）、**当前无订阅者** | 有意为之：T6 的 AQUA-SLAM 是它的消费者 |
 | `/sim/sensor/pressure` | 有发布者（`pressure_sim`）、**当前无订阅者** | 有意为之：补全 `/sim/sensor/*` 面，T6 可能用（深度先验） |
+| `/sim/sensor/laser_points` | 有发布者（`laser_sim`）、**当前无订阅者** | 有意为之：线激光海床重建的输入，重建/建图节点由使用者自己写（场景侧 `line_laser` 见 §1.1） |
 | `/tf` | **有发布者（引擎 `stonefish_simulator*`），但实测 0 条消息**：场景未声明 `<ros_base_link_transform publish="true"/>`，广播被那个 `if` 守卫关着（2026-10-10 快照实测） | B18，已文档化 |
 | `/tf_static` | **话题根本不存在**（不是"存在但没消息"；上述快照里没有它） | B18 的措辞更正 |
 | `/basic_motion/pose_info` 的频率 | 设计 30 Hz（`create_timer(1.0/30.0)`），**完整栈里实测 ≈15.6 Hz**（单独跑 `basic_motion` 则 29.9 Hz）⇒ 完整栈下定时器丢一半节拍。影响 `position`/`navigator`/`task_runner` 的位姿新鲜度 | **B20**，见 `topic_rates.md` §2 与 `roadmap.md` |

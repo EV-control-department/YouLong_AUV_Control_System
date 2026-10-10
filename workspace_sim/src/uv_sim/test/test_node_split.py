@@ -3,7 +3,8 @@
 Three things this file protects, none of which a "does it import?" check would
 catch:
 
-* **A5-1 the node set**: exactly the seven node executables, no ``sim_bridge``
+* **A5-1 the node set**: exactly the expected node executables (T5's seven plus
+  ``laser_sim``, added with the line laser), no ``sim_bridge``
   monolith, and no hand-written ``libexec`` wrapper shadowing a console script
   (``data_files`` copies win, so such a wrapper silently *becomes* the entry
   point -- that is how the package ended up with two entry points for one node).
@@ -34,10 +35,11 @@ LAUNCH_FILE = PACKAGE_ROOT / "launch" / "bridge_launch.py"
 BEFORE_SPLIT = Path(__file__).resolve().parent / "data" / "topics_before_split.json"
 CHECKER = REPO_ROOT / "scripts" / "check_docs_contract.py"
 
-#: A5-1: the seven nodes, and nothing else.
+#: A5-1: the node set.  T5's seven, plus ``laser_sim`` (the line laser's
+#: ``LaserScan`` -> stripe-points adapter, added after T5).
 EXPECTED_NODES = {
     "odom_sim", "imu_sim", "dvl_sim", "pressure_sim",
-    "nav_sim", "mcu_sim", "camera_relay",
+    "nav_sim", "mcu_sim", "camera_relay", "laser_sim",
 }
 
 #: A5-2: the only endpoints the split may add -- the owned sensor namespace.
@@ -48,6 +50,9 @@ EXPECTED_ADDED_ENDPOINTS = {
     ("/sim/sensor/imu", "订阅", "sensor_msgs.msg.Imu"),
     ("/sim/sensor/dvl", "发布", "uv_msgs.msg.Dvl"),
     ("/sim/sensor/pressure", "发布", "sensor_msgs.msg.FluidPressure"),
+    # The line laser (added after T5): one engine topic in, one owned topic out.
+    ("/auv/laser_scan", "订阅", "sensor_msgs.msg.LaserScan"),
+    ("/sim/sensor/laser_points", "发布", "sensor_msgs.msg.PointCloud2"),
 }
 
 #: I2: which node owns which state topic, per mode.
@@ -101,7 +106,7 @@ def _setup_entry_points() -> dict[str, str]:
     return entries
 
 
-def test_setup_declares_exactly_the_seven_nodes() -> None:
+def test_setup_declares_exactly_the_expected_nodes() -> None:
     names = set(_setup_entry_points())
     assert names == EXPECTED_NODES, (
         f"uv_sim must expose exactly {sorted(EXPECTED_NODES)}; got {sorted(names)}"

@@ -74,6 +74,7 @@
 | 8 | `navigator`（`enable_nav`） | `/basic_motion/pose_info` | `navigate_to` 在收到第一个位姿前**拒绝**并提示 `no pose yet on /basic_motion/pose_info` |
 | 9 | `task_runner`（`enable_task`） | BasicMotion action server | `main()` 里等 action server 最多 15 s；随后按 `debug_mode` 决定是否自动跑 `config/tasks.json`（**非 debug 模式启动即跑**） |
 | — | `camera_relay` | Stonefish 的 `/sim/*_cam/*` | 无输入也能起（100 Hz 定时器空转），有图才开始拼接 |
+| — | `laser_sim` | Stonefish 的 `/auv/laser_scan` | 无输入也能起；收到扫描就发一帧 `/sim/sensor/laser_points`（未命中的射线直接丢弃） |
 | — | `hw_manager` ⏸ | 真实 MCU（`/zit6/state/zithbt`） | SIL 不启动（`sim_bringup` 不含它）；HIL/REAL 经 `uv_hm/hm_launch.py` 启动，心跳超时进 `DEGRADED` |
 
 **`basic_motion` 是单点**：它是唯一动作入口，也是唯一的 `PoseInfo` 发布者。
@@ -92,6 +93,7 @@
 | `nav_sim` | 无 `/zit6/state/{pos,vel}`，`basic_motion` 拿不到位姿；HIL 下无 `sim/nav` 注入 | `dvl_sim` 转发、相机链路、静态检查 |
 | `mcu_sim` | 无 `/auv/thrusters_cmd`、无 `/zit6/state/{status,thr,zithbt}`、无参数服务 | `nav_sim` 的状态话题仍可观测（但没人被驱动） |
 | `camera_relay` | 无 `/auv/*_cam/*` ⇒ `vision`（`sim_mode`）采不到图 | 控制闭环、导航（无目标时） |
+| `laser_sim` | 无 `/sim/sensor/laser_points`（当前无消费者；控制/感知链路完全不受影响） | 其余全部 |
 | `basic_motion` | `position`/`navigator`/`task_runner` 全部失能；`/zit6/cmd/setpoint` 无发布者 | `vision` 仍能发检测（`/perception/detection/*` 照常） |
 | `vision` | 无检测 ⇒ `position` 无输入 ⇒ 无 `/perception/objects` | 控制闭环、导航（无目标时） |
 | `position` | 无 `/perception/objects` ⇒ `navigator`/`task_runner` 的物体相关任务失能 | 控制闭环、巡线（`line_follower` 直接订阅检测） |

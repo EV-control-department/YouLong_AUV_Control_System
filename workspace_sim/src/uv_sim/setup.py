@@ -36,6 +36,7 @@ setup(
             'nav_sim = uv_sim.nav_sim:main',
             'mcu_sim = uv_sim.mcu_sim:main',
             'camera_relay = uv_sim.camera_relay:main',
+            'laser_sim = uv_sim.laser_sim:main',
         ],
     },
 )

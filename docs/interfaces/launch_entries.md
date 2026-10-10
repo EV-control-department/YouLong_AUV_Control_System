@@ -23,7 +23,7 @@
 | `uv_perception/launch/perception_launch.py` | workspace_auv | 全部 | `vision` + `position` | `sim_mode`、`model_path`、`enable_gortc` |
 | `uv_nav/launch/nav_launch.py` | workspace_auv | 全部 | `navigator` | — |
 | `uv_task/launch/task_launch.py` | workspace_auv | 全部 | `task_runner` | — |
-| `uv_sim/launch/bridge_launch.py` | workspace_sim | SIL / HIL | SIL：`odom_sim`+`imu_sim`+`dvl_sim`+`pressure_sim`+`nav_sim`+`mcu_sim`+`camera_relay`（7 个）<br>HIL：去掉 `dvl_sim`/`pressure_sim`，`nav_sim`/`mcu_sim` 换角色（5 个） | `hil_mode`、`pid_config_file` |
+| `uv_sim/launch/bridge_launch.py` | workspace_sim | SIL / HIL | SIL：`odom_sim`+`imu_sim`+`dvl_sim`+`pressure_sim`+`nav_sim`+`mcu_sim`+`camera_relay`+`laser_sim`（8 个）<br>HIL：去掉 `dvl_sim`/`pressure_sim`，`nav_sim`/`mcu_sim` 换角色（6 个） | `hil_mode`、`pid_config_file` |
 | `stonefish_ros2/launch/stonefish_simulator{,_nogpu}.launch.py` | workspace_sim | SIL / HIL | Stonefish 引擎（**引擎自带的 launch，被 include**） | 6 个 / 3 个引擎参数（见 `workspace_sim/stonefish_notes.md`） |
 
 ## 2. 新旧入口映射（T4）
@@ -47,6 +47,9 @@
 | `uv_sim sim_bridge`（可执行） | `uv_sim {odom_sim,imu_sim,dvl_sim,pressure_sim,nav_sim,mcu_sim,camera_relay}` | 旧的 `ros2 run uv_sim sim_bridge` 不再存在；调参用 `mcu_sim`，看状态用 `nav_sim` |
 | `libexec/uv_sim/sim_bridge`（手写包装脚本） | **删除** | 它被装到 `lib/uv_sim/`，覆盖了 `console_scripts` 生成的同名脚本：一个入口两个作者。`test_node_split.py` 断言它不会回来 |
 | `hil_mode` 是**节点参数**（节点内部分支） | `hil_mode` 是**launch 参数**（组合 5/7 个节点） | 节点级参数变成 `nav_sim.publish_state/publish_sim_nav` 与 `mcu_sim.hil_mode`；`bridge_launch.py` 用**一个** `hil_mode` 推导它们，避免两个开关互相矛盾（I2） |
+
+> 上表是 T5 当时的迁移记录。**之后**又加了第 8 个节点 `laser_sim`（线激光 `LaserScan` → 条纹三维点，
+> 场景侧传感器 `line_laser`；SIL/HIL 都启动），所以现在 `bridge_launch.py` 是 8/6 个 `Node(...)`。
 
 **命令级映射**
 

@@ -26,11 +26,27 @@
 | `front_cam_right` | camera | `(+0.23, +0.05, +0.076)` | `(1.5708, 0, 1.5708)` | 20 Hz | `/sim/front_cam/right` |
 | `down_cam_left` | camera | `(-0.13, -0.05, +0.0645)` | `(0, 0, 1.5708)` | 30 Hz | `/sim/down_cam/left` |
 | `down_cam_right` | camera | `(-0.13, +0.05, +0.0645)` | `(0, 0, 1.5708)` | 30 Hz | `/sim/down_cam/right` |
+| `line_laser` | multibeam | `(+0.05, 0, +0.19)` | `(0, -1.5708, 0)` | 30 Hz | `/auv/laser_scan` |
 
 **本表就是「如果开了 TF，本该由 `/tf_static` 提供的那些固定变换」**。当前仿真没有 TF（见 `frame_convention.md` §3），所以外参靠本文件 + `config/extrinsics/<platform>.yaml` 传递。
 
 DVL 波束：`beam_angle=30°`（**离竖直** θ）⇒ AQUA-SLAM 的 **α=60°**（离水平），
 方位 **β=45/135/225/315°**，`beam_positive_z=true`（波束沿传感器 +z，NED 下即向下）。
+
+线激光：`rpy=(0, -π/2, 0)` 是**纯俯仰 -90°**，于是
+
+| 传感器轴 | 指向（机体系） | 含义 |
+|---|---|---|
+| x | `+z`（向下） | 扇形中心射线；`θ=0` |
+| y | `+y`（右舷） | **线的方向**（横跨航向）：射线在传感器 xy 平面内，`dir=cosθ·x+sinθ·y` |
+| z | `-x`（艉） | 扇形平面法线，即光平面法线 = 机体 `-x` |
+
+即 `R_b_laser = [[0,0,-1],[0,1,0],[1,0,0]]`（忽略 `1.5708` 当 π/2 的 3.7e-6 残差）。
+`<specs fov="87.19" steps="959">`：扇形 ±43.59°（与下视相机水平 FOV 相同），
+引擎实际打 `steps+1 = 960` 条射线（`Multibeam.cpp:45`）。
+**注意**：光平面法线是机体 `±x`，而下视相机光轴是机体 `+z` ⇒ 两者**平行**，
+所以「用下视相机看这条线再三角化」是退化的（沿条纹方向没有视差）；
+`/sim/sensor/laser_points` 的三维点来自引擎自己的射线求交，不经过相机。
 
 <!-- extrinsics-table: begin -->
 ```yaml
@@ -126,6 +142,17 @@ sensors:
       resolution_x: '1920'
       resolution_y: '1080'
       horizontal_fov: '87.19'
+  line_laser:
+    type: multibeam
+    link: Vehicle
+    xyz: [0.05, 0.0, 0.19]
+    rpy_rad: [0.0, -1.5708, 0.0]
+    rate_hz: 30.0
+    ros_publisher:
+      topic: /auv/laser_scan
+    specs:
+      fov: '87.19'
+      steps: '959'
 transforms:
   T_b_dynamics:
     matrix:
@@ -174,6 +201,12 @@ transforms:
     - [-3.673e-06, -1.0, 0.0, -0.13]
     - [1.0, -3.673e-06, 0.0, 0.05]
     - [0.0, 0.0, 1.0, 0.0645]
+    - [0.0, 0.0, 0.0, 1.0]
+  T_b_line_laser:
+    matrix:
+    - [-3.673e-06, 0.0, -1.0, 0.05]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [1.0, 0.0, -3.673e-06, 0.19]
     - [0.0, 0.0, 0.0, 1.0]
   T_gyro_c:
     matrix:
