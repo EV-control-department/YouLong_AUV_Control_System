@@ -315,7 +315,7 @@ def test_press_switches_velocity_to_force_once():
     assert packets[-1] == ('force', 0.)
 
 
-def test_collection_align_before_release_and_no_release_on_failure():
+def test_collection_align_before_release_and_fallback_on_failure():
     task = _sea_flow_fake()
     task._collection_align = True
     task._drop_pose, task._drop_timeout = (0,0,.5,0), 1
@@ -324,8 +324,8 @@ def test_collection_align_before_release_and_no_release_on_failure():
     task._travel = lambda *a: events.append('travel') or True
     task._align_collection = lambda deadline: events.append('align') or False
     task._node.set_servo = lambda *a: events.append('release')
-    assert not task._deliver(task._search_pose, time.monotonic()+2, False)
-    assert events == ['travel', 'align']
+    assert task._deliver(task._search_pose, time.monotonic()+2, False)
+    assert events == ['travel', 'align', 'travel', 'release']
     events.clear()
     task._align_collection = lambda deadline: events.append('align') or True
     assert task._deliver(task._search_pose, time.monotonic()+2, False)
@@ -334,14 +334,43 @@ def test_collection_align_before_release_and_no_release_on_failure():
 
 def test_collection_class_is_restored_after_alignment_failure():
     task = _sea_flow_fake()
+    task._pixel_tolerance, task._hold_seconds = .04, .5
     task._class_id, task._color, task._projection_depth = 2, '海参', .8
     task._collection_class, task._collection_depth = 4, .5
     def servo():
         assert task._class_id == 4 and task._projection_depth == .5
+        assert task._pixel_tolerance == .08 and task._hold_seconds == 0.
         return None
     task._servo_horizontally = servo
     assert not task._align_collection(time.monotonic()+1)
+    assert (task._pixel_tolerance, task._hold_seconds) == (.04, .5)
     assert (task._class_id, task._color, task._projection_depth) == (2, '海参', .8)
+
+
+def test_duplicate_empty_frame_is_not_repeated_target_loss():
+    task = _locked_detection_task()
+    _set_detection_frame(task, [(260., .9)])
+    assert task._best_left_detection() is not None
+    _set_detection_frame(task, [], 11)
+    assert task._best_left_detection() is None
+    assert task._detection_reject_reason == '新帧无匹配目标'
+    assert task._best_left_detection() is None
+    assert task._detection_reject_reason == '重复采集帧'
+
+
+def test_collection_accepts_fresh_centered_frame_without_extra_hold(monkeypatch):
+    clock = [0.]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._logger, task._color = _Logger(), '收集框'
+    task._node = SimpleNamespace(stopped=False)
+    task._pixel_tolerance, task._hold_seconds, task._log_period = .08, 0., .5
+    task._best_left_detection = lambda: SimpleNamespace(stamp_ns=1, pixel_x=316.5, pixel_y=212.)
+    task._horizontal_step = lambda d: ((0.,0.,.4,0.,0.,0.), -.03,.016,-.03,.016,-.0398,-.0749)
+    task._measured_pose = lambda: (0.,0.,.4,0.,0.,0.)
+    assert task._locked_visual_loop(.01) == [0.,0.,.4,0.]
+    assert clock[0] == 0.
 
 
 def test_open_loop_requires_calibration_not_velocity_as_force():
@@ -816,6 +845,52 @@ def test_sea_delivery_return_failure_is_not_scan_success():
     task._release_angle, task._release_wait = 1.57, 0.
     task._travel = lambda pose, *args: pose == task._drop_pose
     assert not task._deliver(task._search_pose, time.monotonic() + 2., True)
+
+
+@pytest.mark.parametrize('fallback_success', [True, False])
+def test_collection_alignment_failure_travels_back_before_release(fallback_success):
+    task = _sea_flow_fake()
+    task._drop_pose, task._drop_timeout = (9., 8., .2, 90.), 7.
+    task._release_angle, task._release_wait = 1.57, 0.
+    task._collection_align = True
+    events = []
+    deadline = time.monotonic()+20.
+    def align(budget):
+        assert budget < deadline  # 为兜底留出预算。
+        events.append('align failed')
+        return False
+    task._align_collection = align
+    def travel(pose, label, *args):
+        events.append(('travel', pose))
+        return fallback_success if '兜底' in label else True
+    task._travel = travel
+    task._command_gripper = lambda *args: events.append('release')
+    assert task._deliver(task._search_pose, deadline, True) is fallback_success
+    assert events[:3] == [('travel', task._drop_pose), 'align failed', ('travel', task._drop_pose)]
+    if fallback_success:
+        assert events[3:] == ['release', ('travel', task._search_pose)]
+        assert task.delivery_commands == 1
+    else:
+        assert 'release' not in events and task.delivery_commands == 0
+
+
+@pytest.mark.parametrize('stopped', [True, False])
+def test_collection_fallback_does_not_release_on_stop_or_total_timeout(monkeypatch, stopped):
+    clock = [0.]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    task = _sea_flow_fake()
+    task._drop_pose, task._drop_timeout = (9., 8., .2, 90.), 7.
+    task._release_angle, task._release_wait, task._collection_align = 1.57, 0., True
+    events = []
+    task._travel = lambda *args: events.append('travel') or True
+    task._command_gripper = lambda *args: events.append('release')
+    def align(budget):
+        task._node.stopped = stopped
+        clock[0] = 0. if stopped else 11.
+        return False
+    task._align_collection = align
+    assert not task._deliver(task._search_pose, 10., True)
+    assert events == ['travel']
 
 
 def test_sea_travel_does_not_trust_success_when_measured_pose_is_wrong():

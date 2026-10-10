@@ -51,8 +51,8 @@ params:
 
   servo:
     target_match_radius_px: 70.0       # 预测像素位置附近匹配同一目标，不按每帧最高置信度换目标。
-    target_lost_wait_seconds: 2.0      # 锁定目标丢失后等待；超时结束本轮，不能立即改抓另一个。
-    position_tolerance_m: 0.01         # 视觉微调独立XY到位容差；小步还要求至少走完一半。
+    target_lost_wait_seconds: 4.0      # 锁定目标丢失后等待；超时结束本轮，不能立即改抓另一个。
+    position_tolerance_m: 0.03         # 视觉微调独立XY到位容差；小步还要求至少走完一半。
     motion_settle_seconds: 0.3         # 实测XYZ/yaw在容差内持续此时间，才允许采集下一步图像。
     timeout: 30.0                      # 单轮视觉居中超时，单位秒；这里servo指视觉伺服，不是舵机。
     period: 0.5                       # 水平对准循环的等待时间，单位秒。
@@ -61,7 +61,7 @@ params:
     # 离开容差或目标检测不可用时重新计时，完成后记录抓前观察位姿。
     projection_depth_m: 0.8            # 图像换算参考距离；不是实际运动目标深度。
     # 是相机到目标的近似距离，不是AUV水深；距离估计过大会放大横向步长。
-    gain: 0.6                          # 图像偏差对应的水平修正增益。
+    gain: 0.5                          # 图像偏差对应的水平修正增益。
     max_step_m: 0.08                   # 单次水平修正最大长度，单位米。
     # 限制修正目标的水平向量长度，不是速度或推力上限。
     position_command_timeout: 30.0      # 单次 SET/BMOVE 超时，单位秒。
@@ -73,7 +73,7 @@ params:
     close_wait_seconds: 0.5             # 舵机2下压完成闭合后等待，再上浮；舵机1不使用。
     # 舵机1专用：从相机对准位置移到夹爪对准位置所需的艇体补偿位移。
     offset_x_m: 0.30 # 当前前移补偿0.30m；单位米，正向前、负向后，需实测。
-    offset_y_m: -0.1 # [我填的占位值] 暂不补偿；单位米，正向右、负向左，需实测。
+    offset_y_m: 0.1 # [我填的占位值] 暂不补偿；单位米，正向右、负向左，需实测。
     # 是艇体需要移动的补偿量，不一定等于夹爪安装坐标；摄像头yaw补偿不改变此值。
     # 配置和ZitServo线协议均使用度；任务内部弧度在发送出口转回度。
     pickup_angle_deg: 0.0              # 舵机1抓取/准备位置，单位度；当前固定为0。
@@ -97,8 +97,8 @@ params:
 
   descent:
     # 下压方式：直接发送机体正z速度，不经过BasicMotion的位置步进。
-    speed_mps: 0.40 # 现场值保留；正值向下，连续速度下压，不再使用旧速度限幅。
-    duration_seconds: 4.8 # 现场值保留；一次连续执行，实际行程需现场核对。
+    speed_mps: 0.50 # 现场值保留；正值向下，连续速度下压，不再使用旧速度限幅。
+    duration_seconds: 5.3 # 现场值保留；一次连续执行，实际行程需现场核对。
     max_press_distance_m: 2.0 # 兼容旧配置；当前不作限幅，也不是触底保护。
     # 无实时触底停止；speed×duration只是预计行程，不能保证实际压到目标。
     # 旧速度模式预计行程speed×duration；开环模式不可用速度×时间推算行程。
@@ -119,14 +119,14 @@ params:
     frames: 3                          # 每次计数收集的新消息数，至少 2。
     # 抓前取这些帧中的最小数量，抓后取最大数量，减少漏检造成的虚假抓取成功。
     # 超时但已收到至少2个新鲜计数帧时，允许使用这2帧；不足2帧则本轮重试。
-    timeout_seconds: 12.0              # 单次计数超时，单位秒。
+    timeout_seconds: 20.0              # 单次计数超时，单位秒。
     # 抓前计数缺失/为0：重试，不下压；抓后计数未知：先投放可能携带的海参再复查。
 
   delivery:
     # 必填：释放时 AUV 的目标位姿，格式为 [x, y, z, yaw_deg]。
     # x/y/z 单位米，使用本次 START 后的 odom 坐标，z 向下为正。
     # 第三个值 z 就是投放深度；必须考虑夹爪位置和释放高度。
-    pose: [0.3, 0.0, 0., 0.0] # [我填的占位值] 示例投放位姿 [x, y, z, yaw_deg]，需现场确认。
+    pose: [0.3, 0.0, 0.2, 0.0] # [我填的占位值] 示例投放位姿 [x, y, z, yaw_deg]，需现场确认。
     timeout_seconds: 90.0              # 每次运输超时，单位秒。
     # 单次运输预算包括必要的低速上浮；1cm/s上浮1m至少约100秒，90秒可能不足。
     release_wait_seconds: 2.0          # 发送释放角度后等待多久，单位秒。
@@ -139,7 +139,7 @@ params:
   bottom_reference_offset_z_m: 0.1    # 机体原点到离地参考点(DVL/夹爪)的向下偏置m。
   open_loop_clearance_m: 0.20         # 参考点离底≤20cm后锁定开环下压；不会因DVL跳变回切。
   press_thrust: 0.2                   # 待填：(0,1]归一化z推力，正为下压；不是PWM/牛顿/速度。
-  lift_thrust: -0.20                    # 待填：[-1,0)小负推力，近底慢慢离底；需实测速度。
+  lift_thrust: -0.3                    # 待填：[-1,0)小负推力，近底慢慢离底；需实测速度。
   press_thrust_seconds: 1.0           # 进入20cm后推力持续秒数；仍受descent.duration_seconds总预算限制。
   # 离底后默认按真实位移回到原观察点。只有确认无真实水平漂移时才允许以旧XY修正坐标。
   restore_pre_press_odom_xy: true     # 开启即假设下压前后XY差全是DVL漂移；有水流时不要开。
@@ -148,7 +148,7 @@ params:
   collection_class_id: 4              # YOLO-seg收集框/platform类别。
   collection_projection_depth_m: 0.8  # 待校准：左相机到收集框平面的距离m，非水深。
   collection_correct_odom_xy: true   # 独立开关：框心地标修正BasicMotion任务odom；不改MCU原始DVL。
-  collection_center_odom_xy: [ 0.3, 0]        # 开启前填写已测定的固定框心[x,y]，本次START坐标系。
+  collection_center_odom_xy: [ 0.0, 0.0]        # 开启前填写已测定的固定框心[x,y]，本次START坐标系。
   collection_camera_body_xy: [-0.130, 0.030] # Cd中心+倒装左目半基线，单位m，与上面的左光心一致。
   odom_correction_max_m: 1.0           # 超过此平移拒绝校正，不把误识别直接写入坐标系。
 

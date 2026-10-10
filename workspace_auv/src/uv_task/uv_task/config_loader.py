@@ -193,6 +193,8 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "restore_pre_press_odom_xy": bool,
         "collection_visual_align": bool,
         "collection_class_id": int,
+        "collection_pixel_tolerance_fraction": float,
+        "collection_hold_seconds": float,
         "collection_projection_depth_m": float,
         "collection_correct_odom_xy": bool,
         "collection_center_odom_xy": (list, float),
