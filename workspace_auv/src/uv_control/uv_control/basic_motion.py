@@ -81,6 +81,7 @@ from zit6_interfaces.msg import ZitSetpoint, ZitStatus, ZitOdom
 from zit6_interfaces.srv import SetOrigin
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import PoseInfo
+from uv_msgs.srv import CorrectOdomXY
 from uv_control.coordinate import Coordinate, wrap_deg, wrap_rad
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -190,6 +191,8 @@ class BasicMotionNode(Node):
         self._action_goal_handle = None
         self._action_target = None       # 绝对目标 {x, y, z, yaw}，用于反馈
         self._action_axes = None         # 当前 action 的生效轴，用于反馈
+        self.create_service(CorrectOdomXY, '/basic_motion/correct_odom_xy',
+                            self._correct_odom_xy_cb)
         self.create_timer(0.5, self._action_feedback_cb)
 
         # ── PoseInfo Publisher ─────────────────────────────────
@@ -254,6 +257,36 @@ class BasicMotionNode(Node):
         if self._use_mcu_odom:
             return  # 新固件使用带原点代数的odom，避免重置前排队的旧pos污染位姿。
         self._update_position(msg)
+
+    def _correct_odom_xy_cb(self, request, response):
+        """地标校正：同时改变反馈及目标转换，保持已下发MCU目标不跳变。"""
+        values = (request.expected_x, request.expected_y,
+                  request.corrected_x, request.corrected_y)
+        with self._state_lock:
+            if (not all(math.isfinite(v) for v in values)
+                    or self._origin is None or self._action_goal_handle is not None):
+                response.message = '坐标无效、未START或运动动作仍在执行'
+                return response
+            age = (self.get_clock().now().nanoseconds -
+                   (self._pose_stamp.sec * 1000000000 + self._pose_stamp.nanosec)) / 1e9
+            if not 0 <= age <= 0.5 or math.hypot(
+                    self.pose.x - request.expected_x,
+                    self.pose.y - request.expected_y) > 0.05:
+                response.message = '地标校正位姿过期或校正期间机器人已移动'
+                return response
+            old_target = self._odom_to_map(self._target)
+            dx = request.corrected_x - request.expected_x
+            dy = request.corrected_y - request.expected_y
+            yaw = math.radians(self._origin.rz)
+            self._origin.x -= math.cos(yaw) * dx - math.sin(yaw) * dy
+            self._origin.y -= math.sin(yaw) * dx + math.cos(yaw) * dy
+            self.pose = self._map_to_odom(self._map_pose)
+            self._target = self._map_to_odom(old_target)
+        response.success = True
+        response.message = f'任务odom平移修正=({dx:+.3f},{dy:+.3f})m；MCU原始DVL未改写'
+        self.get_logger().warning(response.message)
+        self._publish_pose_info()
+        return response
 
     def _odom_cb(self, msg: ZitOdom):
         values = list(msg.pose_odom)

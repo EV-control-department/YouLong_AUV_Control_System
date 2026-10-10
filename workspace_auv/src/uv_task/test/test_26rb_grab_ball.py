@@ -57,6 +57,7 @@ def test_sea_degree_config_preserves_internal_radians_without_old_descent_cap():
     from uv_task.config_loader import load_task
     params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
     params.update(descent_speed_mps=.5, descent_duration_seconds=3.,
+                  ascent_speed_mps=.01,
                   max_press_distance_m=1.3, pickup_servo_angle_deg=0., release_servo_angle_deg=90.)
     node = SimpleNamespace(get_logger=lambda: _Logger())
     task = GrabSeaCucumberTask(node, params)
@@ -79,6 +80,120 @@ def test_sea_descent_exception_still_sends_zero_velocity():
     with pytest.raises(RuntimeError, match='publish failed'):
         task._descend()
     assert packets == [.5,0.]
+
+
+def test_near_floor_press_is_latched_force_and_neutral_on_exception():
+    task = _sea_flow_fake()
+    del task._descend
+    task._near_floor_enabled = True
+    task._floor_z, task._bottom_offset, task._force_clearance = 1., 0., .2
+    task._press_thrust, task._press_seconds = .15, .02
+    task._descent_duration, task._descent_period = .2, .001
+    task._measured_pose = lambda: (1,2,.81,0,0,0)
+    packets = []
+    def force(value):
+        packets.append(value)
+        if value:
+            raise RuntimeError('test force failure')
+    task._node._publish_body_thrust = force
+    task._node._publish_body_velocity = lambda **kw: pytest.fail('near floor used velocity')
+    with pytest.raises(RuntimeError, match='test force failure'):
+        task._descend()
+    assert packets == [.15, 0.]
+    assert task._pre_press_pose[:2] == (1,2)
+
+
+def test_press_switches_velocity_to_force_once():
+    task = _sea_flow_fake()
+    del task._descend
+    task._near_floor_enabled = True
+    task._floor_z, task._bottom_offset, task._force_clearance = 1., 0., .2
+    task._press_thrust, task._press_seconds = .15, .005
+    task._descent_speed, task._descent_duration, task._descent_period = .1, .1, .001
+    poses = iter([(0,0,.5,0,0,0), (0,0,.6,0,0,0), (0,0,.81,0,0,0)])
+    task._measured_pose = lambda: next(poses)
+    packets = []
+    task._node._publish_body_velocity = lambda **kw: packets.append(('velocity', kw))
+    task._node._publish_body_thrust = lambda value: packets.append(('force', value))
+    assert task._descend()
+    assert packets[0][0] == 'velocity'
+    assert all(p[0] == 'force' for p in packets[1:])
+    assert packets[-1] == ('force', 0.)
+
+
+def test_collection_align_before_release_and_no_release_on_failure():
+    task = _sea_flow_fake()
+    task._collection_align = True
+    task._drop_pose, task._drop_timeout = (0,0,.5,0), 1
+    task._release_angle, task._release_wait = math.pi/2, 0
+    events = []
+    task._travel = lambda *a: events.append('travel') or True
+    task._align_collection = lambda deadline: events.append('align') or False
+    task._node.set_servo = lambda *a: events.append('release')
+    assert not task._deliver(task._search_pose, time.monotonic()+2, False)
+    assert events == ['travel', 'align']
+    events.clear()
+    task._align_collection = lambda deadline: events.append('align') or True
+    assert task._deliver(task._search_pose, time.monotonic()+2, False)
+    assert events == ['travel', 'align', 'release']
+
+
+def test_collection_class_is_restored_after_alignment_failure():
+    task = _sea_flow_fake()
+    task._class_id, task._color, task._projection_depth = 2, '海参', .8
+    task._collection_class, task._collection_depth = 4, .5
+    def servo():
+        assert task._class_id == 4 and task._projection_depth == .5
+        return None
+    task._servo_horizontally = servo
+    assert not task._align_collection(time.monotonic()+1)
+    assert (task._class_id, task._color, task._projection_depth) == (2, '海参', .8)
+
+
+def test_open_loop_requires_calibration_not_velocity_as_force():
+    from uv_task.config_loader import load_task
+    params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
+    params['near_floor_open_loop'] = True
+    with pytest.raises(ValueError, match='先标定'):
+        GrabSeaCucumberTask(SimpleNamespace(get_logger=lambda: _Logger()), params)
+    params.update(floor_z_m=1.4, press_thrust=.1, lift_thrust=-.03)
+    task = GrabSeaCucumberTask(SimpleNamespace(get_logger=lambda: _Logger()), params)
+    assert task._near_floor_enabled and not task._collection_correct
+
+
+def test_near_floor_ascent_clears_force_before_velocity():
+    task = _sea_flow_fake()
+    task._near_floor_enabled = True
+    task._floor_z, task._bottom_offset, task._force_clearance = 1., 0., .2
+    task._lift_thrust = -.03
+    task._ascent_speed, task._ascent_period, task._ascent_tolerance = .01, .001, .01
+    poses = iter([(0,0,.9,0,0,0), (0,0,.88,0,0,0),
+                  (0,0,.70,0,0,0), (0,0,.5,0,0,0)])
+    task._measured_pose = lambda: next(poses)
+    packets = []
+    task._node._publish_body_thrust = lambda value: packets.append(('force',value))
+    task._node._publish_body_velocity = lambda vertical_mps=0: packets.append(('velocity', vertical_mps))
+    assert task._ascend_to_depth(.5, time.monotonic()+1)
+    assert packets[:2] == [('force',-.03), ('force',0.)]
+    assert packets[2][0] == 'velocity' and packets[2][1] < 0
+    assert packets[-1] == ('velocity',0.)
+
+
+def test_force_wire_uses_absolute_body_actuator_and_clears_other_axes():
+    from zit6_interfaces.msg import ZitSetpoint
+    source = Path(__file__).parents[1] / 'uv_task' / 'task_runner.py'
+    cls = next(n for n in ast.parse(source.read_text()).body
+               if isinstance(n, ast.ClassDef) and n.name == 'TaskRunnerNode')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
+                  and n.name == '_publish_body_thrust')
+    scope = {'math': math, 'ZitSetpoint': ZitSetpoint}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'), scope)
+    packets = []
+    scope['_publish_body_thrust'](SimpleNamespace(pub_setpoint=SimpleNamespace(publish=packets.append)), .1)
+    msg = packets[0]
+    assert msg.control_key == 0x12 and msg.type_mask == 0
+    assert msg.z == pytest.approx(.1)
+    assert (msg.x,msg.y,msg.roll,msg.pitch,msg.yaw) == (0.,)*5
 
 
 def test_sea_rejects_stale_pose_before_direct_velocity_control():
@@ -235,7 +350,7 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
                            get_logger=lambda: _Logger(), ANGLE_INIT=0,
                            light_off=lambda: events.append('light'),
                            _send_action_goal=lambda *args, **kw: (events.append('start') or True, 'ok'))
-    fake.set_servo = lambda angle, label: namespace['set_servo'](fake, angle, label)
+    fake.set_servo = lambda angle, label, **kw: namespace['set_servo'](fake, angle, label, **kw)
     fake.set_servo(math.pi/2, '放')
     assert messages[-1].servo_id == 1
     assert messages[-1].angle == pytest.approx(90.)
@@ -247,6 +362,63 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
     assert events == ['light', 'start']
     with pytest.raises(ValueError):
         fake.set_servo(90, '错误度数')
+    fake.set_servo(math.radians(270), '新爪张开', servo_id=2)
+    assert messages[-1].servo_id == 2 and messages[-1].angle == pytest.approx(270.)
+    with pytest.raises(ValueError):
+        fake.set_servo(math.radians(270), '旧舵机不能270度')
+    fake.tasks = [{'name': 'start'}, {'name': 'grab_sea_cucumber', 'params': {'gripper_servo_id': 2}}]
+    fake.current_index = 0
+    assert namespace['_do_start'](fake)
+    assert messages[-1].servo_id == 2 and messages[-1].angle == pytest.approx(150.)
+
+
+def test_servo2_selection_uses_mount_geometry_and_does_not_change_servo1_profile():
+    from uv_task.config_loader import load_task
+    params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
+    node = SimpleNamespace(get_logger=lambda: _Logger())
+    original = GrabSeaCucumberTask(node, params)
+    assert original._gripper_servo_id == 1
+    assert original._gripper_offset_x == params['gripper_offset_x_m']
+    params['gripper_servo_id'] = 2
+    params.pop('gripper_offset_x_m')
+    params.pop('gripper_offset_y_m')
+    task = GrabSeaCucumberTask(node, params)
+    assert task._pickup_angle == pytest.approx(math.radians(150))
+    assert task._release_angle == pytest.approx(math.radians(270))
+    assert (task._gripper_offset_x, task._gripper_offset_y) == pytest.approx((-.36,.030))
+    assert task._bottom_offset == pytest.approx(.176)
+    params.update(servo2_front_camera_body_xyz=[.4,.03,.09],
+                  servo2_gripper_from_front_xyz=[.02,-.01,.1])
+    task = GrabSeaCucumberTask(node, params)
+    assert (task._gripper_offset_x, task._gripper_offset_y, task._bottom_offset) == pytest.approx((-.55,.010,.19))
+
+
+def test_servo2_closes_after_press_before_ascent_then_releases_at_delivery():
+    task = _sea_flow_fake()
+    task._gripper_servo_id = 2
+    task._pickup_angle, task._release_angle = math.radians(150), math.radians(270)
+    task._close_wait = 0.
+    task._drop_pose, task._drop_timeout, task._release_wait = (0,0,.5,0), 1, 0
+    task._collection_align = False
+    events = []
+    task._node.set_servo = lambda angle, label, servo_id: events.append(('servo', servo_id, round(math.degrees(angle))))
+    task._count_visible = lambda *a: 5 if a[-1] == 'before' else 0
+    task._descend = lambda: events.append('press') or True
+    task._return_to_recorded_pose = lambda p: events.append('ascent') or True
+    assert task.execute()
+    assert events == [('servo',2,270), 'press', ('servo',2,150), 'ascent', ('servo',2,270)]
+
+
+def test_servo2_failed_descent_does_not_close_or_ascend():
+    task = _sea_flow_fake()
+    task._gripper_servo_id = 2
+    task._release_angle = math.radians(270)
+    task._node.set_servo = lambda *a, **kw: None
+    task._count_visible = lambda *a: 3
+    task._descend = lambda: False
+    task._close_after_press = lambda deadline: pytest.fail('failed press must not close')
+    task._return_to_recorded_pose = lambda p: pytest.fail('failed press must not ascend')
+    assert not task.execute()
 
 
 def test_execute_retries_when_ball_remains_after_return():

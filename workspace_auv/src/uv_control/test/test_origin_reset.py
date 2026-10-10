@@ -4,7 +4,43 @@ import math
 from pathlib import Path
 import threading
 import time
+import pytest
 from types import SimpleNamespace
+
+
+@pytest.mark.parametrize('yaw', [0., 90., -90., 173.])
+def test_landmark_xy_reframes_feedback_and_inverse_commands(yaw):
+    from uv_control.coordinate import Coordinate
+    source = Path(__file__).parents[1] / 'uv_control' / 'basic_motion.py'
+    cls = next(n for n in ast.parse(source.read_text()).body
+               if isinstance(n, ast.ClassDef) and n.name == 'BasicMotionNode')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
+                  and n.name == '_correct_odom_xy_cb')
+    scope = {'math': math}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'), scope)
+    origin = Coordinate(x=10, y=20, rz=yaw)
+    node = SimpleNamespace(_state_lock=threading.Lock(), _origin=origin,
+        _action_goal_handle=None, pose=Coordinate(x=1,y=2,z=.5,rz=30),
+        _target=Coordinate(x=3,y=4,z=.6,rz=40),
+        _pose_stamp=SimpleNamespace(sec=10,nanosec=0),
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=10_100_000_000)),
+        get_logger=lambda: SimpleNamespace(warning=lambda msg: None),
+        _publish_pose_info=lambda: None)
+    node._map_pose = origin.to_world_frame(node.pose)
+    node._odom_to_map = lambda p: node._origin.to_world_frame(p)
+    node._map_to_odom = lambda p: node._origin.to_local_frame(p)
+    raw_target = node._odom_to_map(node._target)
+    request = SimpleNamespace(expected_x=1.,expected_y=2.,corrected_x=1.3,corrected_y=1.6)
+    result = scope['_correct_odom_xy_cb'](node, request, SimpleNamespace(success=False))
+    assert result.success
+    assert (node.pose.x,node.pose.y,node.pose.z,node.pose.rz) == pytest.approx((1.3,1.6,.5,30))
+    preserved = node._odom_to_map(node._target)
+    assert (preserved.x,preserved.y,preserved.z,preserved.rz) == pytest.approx(
+        (raw_target.x,raw_target.y,raw_target.z,raw_target.rz))
+    for bad_request in (
+            SimpleNamespace(expected_x=50.,expected_y=2.,corrected_x=1.,corrected_y=1.),
+            SimpleNamespace(expected_x=1.,expected_y=2.,corrected_x=float('nan'),corrected_y=1.)):
+        assert not scope['_correct_odom_xy_cb'](node, bad_request, SimpleNamespace(success=False)).success
 
 
 def reset_method():

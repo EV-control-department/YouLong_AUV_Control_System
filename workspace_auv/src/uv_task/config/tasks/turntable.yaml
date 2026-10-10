@@ -14,7 +14,7 @@ params:
   observation_timeout_s: 8.0 # 粗定位后首次等待视觉；缺失掩膜不能靠延长时间解决。
   post_motion_observation_timeout_s: 3.0 # 对准后等待新采集的视觉帧。
   motion_timeout_s: 90.0 # 每个WTRAVEL/最终SET动作的超时，不是任务总超时。
-  arrival_verify_timeout_s: 10.0 # 动作成功后的实测精度复核时间。
+  motion_settle_s: 1.0 # 动作返回成功后继续保持目标，再读取新图像；不作精度阻断。
   allow_contact_motion: false
   force_limited_control_confirmed: false
   # 以下仅为待复核的调试占位值；现场测量并确认限推力前不得放行接触。

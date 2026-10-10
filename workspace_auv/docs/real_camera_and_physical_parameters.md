@@ -101,9 +101,97 @@ cd /home/nvidia/YouLong_AUV_Control_System/workspace_auv
 source /opt/ros/foxy/setup.bash
 colcon build --packages-select zit6_interfaces uv_task --symlink-install
 source install/setup.bash
-# 需已启动相机AI、新版BasicMotion和唯一uv_hm心跳，保持MCU未解锁。
+# 需已启动相机AI、新版BasicMotion；不要同时启动多个解锁心跳发布器。
 # 新版START会调用MCU setorigin，不必提前手动设置；导航必须有效。
 # 以下命令会自动执行START、移动和抓放，不是只读测试。
 ros2 run uv_task task_runner --ros-args \
   -p mission_file:="$PWD/src/uv_task/config/missions/grab_sea_cucumber.yaml"
 ```
+
+### 近底开环抓取与收集框视觉投放（2026-10-10）
+
+参数仍在 `src/uv_task/config/tasks/grab_sea_cucumber.yaml`，未改任务链。
+流程：扫描海参 → 居中/计数/夹爪补偿 → 记录下压前XY → 下压 → 离底上浮
+→ 水平回到原观察点 → 复检 → 前往投放区 → 类别4收集框视觉居中
+→ 可选坐标校正 → 夹爪偏置补偿 → 90°释放 → 返回扫描点。
+
+- `near_floor_open_loop` 默认 **false**，待标定后开启。关闭时仍为旧速度下压。
+  必填 `floor_z_m`（START后池底z）、`press_thrust`（正向下压）、`lift_thrust`（小负值离底）。
+  推力单位按本仓库固件为归一化 `[-1,1]`，不是 m/s；开环不保证恒速，需现场观察。
+- 离地高度 = `floor_z_m - 实测机器人z - bottom_reference_offset_z_m`。
+  最后一项是机体原点到DVL探头/夹爪参考点的向下偏置；0表示以机体原点计算。
+  依赖位姿z正确且新鲜，不是独立测高传感器；若z也跳变，先修深度来源，不能靠XY校正解决。
+- 高度≤`open_loop_clearance_m: 0.20`后锁定ACTUATOR绝对机体系指令 `control_key=0x12`，
+  六轴全部写入，只有z非零，绕开位置/速度PID，不因DVL跳回而恢复闭环。
+  持续 `press_thrust_seconds`，受下压总时间和任务总时间约束；退出发ACTUATOR零推力。
+  近底上浮也使用 `lift_thrust`，高于20cm+3cm后清零推力再恢复原慢速速度上浮。
+  纯开环期间不保持XY、yaw、roll、pitch；保持原心跳/固件解锁保护，不绕过固件失联保护。
+- 默认离底后执行原水平回位，并打印前后XY差。无法仅据差值区分水流漂移和DVL跳变。
+  `restore_pre_press_odom_xy: true` 才把离底后XY校正为下压前XY：
+  **它假设压抓期间没有真实水平位移，不是测量结果**，有水流不要打开。
+- `collection_visual_align: true` 默认启用；`collection_class_id: 4`。
+  先到 `delivery.pose`（现在是粗定位点），再复用下视伺服及安装yaw180°补偿。
+  `collection_projection_depth_m` 填相机到框平面的距离；对准失败不盲放。
+  框须进入视野；当前不新增大范围搜索。沿用经验证的 `gripper.offset_*` 补偿后才释放。
+- `collection_correct_odom_xy` 默认 **false**。开启需填固定框心的
+  `collection_center_odom_xy: [x,y]` 和实际左相机光心的 `collection_camera_body_xy: [x,y]`。
+  坐标校正在视觉居中后、夹爪偏置前执行，取3张独立新帧，要求单一类别4目标、艇体近水平且稳定。
+  用相机平移、安装yaw、机器人yaw及残余像素反投影计算机器人XY。
+  这是已知固定地标的平面近似；框会移动、相机距离/安装位置不准时不要启用。
+  误差超过 `odom_correction_max_m` 拒绝校正，并停止本次投放，不隐藏失败。
+
+新接口 `/basic_motion/correct_odom_xy`（`uv_msgs/srv/CorrectOdomXY`）只校正上位机任务odom
+XY平移，反馈和目标反向变换一起更新，已发MCU目标不跳变，不调用MCU setorigin，也不改原始DVL。
+任务的搜索点/投放点仍保留原START坐标定义；再次START会重置这项修正。
+不要在运动动作进行中调用此接口；校正响应超时代表结果未知，任务停止后续移动。
+
+因新增接口，不能只重编uv_task；停止任务后在真机工作区重新构建并重启相关节点：
+
+```bash
+source /opt/ros/foxy/setup.bash
+colcon build --packages-up-to uv_control uv_task --symlink-install
+source install/setup.bash
+```
+
+首轮建议只启用收集框视觉对准，坐标修正保持关闭；测好推力/池底后再开启近底开环。
+以上未作真机推力标定，原现场速度和位置配置未替换。
+
+### 海参夹爪切换：舵机1与舵机2
+
+在 `config/tasks/grab_sea_cucumber.yaml` 的 `gripper.servo_id` 选择 `1` 或 `2`。
+默认仍是1。任务链加载同一份配置，START紧接海参任务时也跟随这个选择。
+
+| 选择 | 抓前准备 | 下压后 | 投放 | 对准补偿 |
+|---|---|---|---|---|
+| 1：原圆盘爪 | 舵机1、0° | 保持0° | 舵机1、90° | 原`gripper.offset_x_m/y_m` |
+| 2：前下方夹爪 | 舵机2、270°张开 | 舵机2、150°闭合，等待后上浮 | 舵机2、270°张开 | 根据相机与新夹爪安装坐标计算 |
+
+选择2后，START初始闭合150°；到扫描阶段再张开270°。
+实际发送仍是 `/zit6/cmd/servo` 的 `zit6_interfaces/msg/ZitServo`，角度单位度。
+不增加新的图像接口；下视海参segment、抓前/抓后计数、重试、下压、慢速上浮、
+收集框类别4对准和返回扫描点沿用当前流程，新增闭合发生在下压结束与上浮之间。
+
+`gripper.servo2` 中的三个位置均使用物理安装后的艇体系，x前、y右、z下，单位米：
+
+- `front_camera_body_xyz`：前视双目中点的位置，名义 `[0.230,0,0.076]`。
+- `down_camera_body_xyz`：当前用于下视伺服的左光心位置 `[-0.130,0.030,0.0645]`。
+  按本次提供的Cd中心 `[-0.130,0,0.0645]` 与6cm双目距离，沿机体y轴对称展开；
+  下视物理yaw倒装180°，原始左目位于机体+y、右目位于-y。
+  收集框校正的 `collection_camera_body_xy` 同时填为 `[-0.130,0.030]`。
+- `gripper_from_front_xyz`：实际抓取点相对前视中点的位置，按本次说明填 `[0,0,0.10]`。
+  如果10cm描述的是机构根部，应把这里改成真正的接触/夹持点位置。
+
+视觉居中后，海参在下视左光心下方。为了让海参处于新夹爪前下方抓取位置，
+艇体的水平移动为 `下视光心XY - 新夹爪XY`；名义值为后退0.36m、向右0.030m。
+这一正负号不能直接照搬旧爪子的前移补偿。抓取朝向沿用 `search.pose[3]`，
+不会额外转向或识别海参长轴；实际有特定夹口方向时在搜索航向与安装坐标中调整。
+投放时也使用新夹爪位置补偿，让夹爪位于视觉对准的框心上方。
+近底开环启用时，新夹爪方案以实际抓取点的z为离底参考，而不是原圆盘爪的参考偏置。
+
+调试选择：把 `gripper.servo_id: 1` 改为 `2`，按装配校准上述三个位置。
+闭合等待可改 `gripper.close_wait_seconds`；角度可改 `servo2.open_angle_deg/close_angle_deg`。
+源码绝对路径加载配置时，修改参数后重启task_runner即可；本次代码更新需先重编uv_task。
+
+这些安装数据不能确定池底的任务odom深度、归一化下压/离底推力、收集框的已知世界位置
+或相机到收集框的距离；相关待测参数继续保留，不用相机安装z代替池底深度。
+本次6cm用于海参任务的物理安装偏置，未修改SGBM标定JSON中实测的R/T和基线。

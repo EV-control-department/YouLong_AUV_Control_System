@@ -233,6 +233,8 @@ def test_single_insert_ascent_yaw_descent_does_not_require_yellow_progress():
     assert contexts == ['视觉正视对准', '左下孔盘外对准'] + \
         ['单次插入'] * 3 + ['插杆后上浮'] * 2 + \
         ['上浮后yaw推盘'] * 2 + ['yaw后下沉'] * 3 + ['单次退出'] * 3
+    from uv_msgs.action import BasicMotion
+    assert all(command == BasicMotion.Goal.SET for command, _, _, _ in commands[:2])
     assert sum(target[2] for _, target, axes, _ in commands if axes == 'z') == pytest.approx(.01)
     assert sum(target[3] for _, target, axes, _ in commands if axes == 'rz') == pytest.approx(4.)
 
@@ -242,3 +244,28 @@ def test_hole_selection_prefers_lower_left_real_opening():
     assert TurntableTask._hole_angle({'phase_valid': True, 'angle_deg': 10.}) == pytest.approx(235.)
     with pytest.raises(RuntimeError, match='黄色条幅'):
         TurntableTask._hole_angle({'phase_valid': False})
+
+
+def test_motion_success_does_not_fail_task_side_precision_check():
+    from uv_msgs.action import BasicMotion
+    task = object.__new__(TurntableTask)
+    task.params = {'motion_settle_s': 0.}
+    task.log = SimpleNamespace(info=lambda *_args: None)
+    task._measured_pose = lambda: (0., 0., 0., 0.)
+    calls = []
+    task.node = SimpleNamespace(stopped=False, _send_action_goal=lambda *a, **k:
+                                (calls.append(a) or True, 'ok'))
+    task._motion(BasicMotion.Goal.SET, [1., 2., .5, 90.], 'xyzrz', '微调', 2.)
+    assert len(calls) == 1
+
+
+def test_motion_timeout_still_stops_turntable():
+    from uv_msgs.action import BasicMotion
+    task = object.__new__(TurntableTask)
+    task.params = {'motion_settle_s': 0.}
+    task.log = SimpleNamespace(info=lambda *_args: None)
+    task._measured_pose = lambda: (0., 0., 0., 0.)
+    task.node = SimpleNamespace(stopped=False, _send_action_goal=lambda *a, **k:
+                                (False, 'motion timeout'))
+    with pytest.raises(RuntimeError, match='motion timeout'):
+        task._motion(BasicMotion.Goal.SET, [1., 2., .5, 90.], 'xyzrz', '微调', 2.)

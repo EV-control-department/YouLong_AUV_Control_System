@@ -257,13 +257,14 @@ class Coordinate:
                 aug[i * 8 + j + 4] = 1.0 if i == j else 0.0
 
         for i in range(4):
-            if aug[i * 8 + i] == 0.0:
-                row = i + 1
-                while row < 4 and aug[row * 8 + i] == 0.0:
-                    row += 1
-                if row < 4:
-                    for j in range(8):
-                        aug[i * 8 + j], aug[row * 8 + j] = aug[row * 8 + j], aug[i * 8 + j]
+            # 部分选主元：cos(±90°)并非精确0，直接除以约6e-17会
+            # 造成严重消减误差，地标平移修正时甚至产生米级坐标跳变。
+            row = max(range(i, 4), key=lambda r: abs(aug[r * 8 + i]))
+            if abs(aug[row * 8 + i]) < 1e-15:
+                raise ValueError('不可逆的坐标变换矩阵')
+            if row != i:
+                for j in range(8):
+                    aug[i * 8 + j], aug[row * 8 + j] = aug[row * 8 + j], aug[i * 8 + j]
             scale = aug[i * 8 + i]
             for j in range(8):
                 aug[i * 8 + j] /= scale

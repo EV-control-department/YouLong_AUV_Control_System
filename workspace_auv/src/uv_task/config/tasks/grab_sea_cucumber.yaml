@@ -65,16 +65,31 @@ params:
     # 如日志出现“夹爪偏置motion timeout”，需按实际运动时间增加此值，例如10秒。
 
   gripper:
-    # 必填：从相机对准位置移到夹爪对准位置所需的艇体补偿位移。
+    servo_id: 1                        # 1=原圆盘爪；2=前视相机下方新夹爪。只改这里切换方案。
+    close_wait_seconds: 0.5             # 舵机2下压完成闭合后等待，再上浮；舵机1不使用。
+    # 舵机1专用：从相机对准位置移到夹爪对准位置所需的艇体补偿位移。
     offset_x_m: 0.25 # 当前前移补偿0.30m；单位米，正向前、负向后，需实测。
     offset_y_m: 0.0 # [我填的占位值] 暂不补偿；单位米，正向右、负向左，需实测。
     # 是艇体需要移动的补偿量，不一定等于夹爪安装坐标；摄像头yaw补偿不改变此值。
-    # 配置使用角度；任务发送时转成现有ZitServo固件所需弧度。
+    # 配置和ZitServo线协议均使用度；任务内部弧度在发送出口转回度。
     pickup_angle_deg: 0.0              # 舵机1抓取/准备位置，单位度；当前固定为0。
     release_angle_deg: 90.0            # 舵机1释放位置，单位度；当前固定为90。
-    # 内部转换为0和π/2 rad发送，不能把此处90直接发布到弧度制servo话题。
+    # 最终话题angle发布0或90，不是π/2。
     # 发布命令不等于机械已到位，目前没有舵机实测位置闭环。
     settle_seconds: 5.0              # 补偿位移后等待稳定，单位秒。
+    servo2:
+      open_angle_deg: 270.0             # 抓前张开、投放释放，话题servo_id=2、angle=270。
+      close_angle_deg: 150.0            # START初始闭合、下压后夹住，再上浮运输。
+      # 以下均是物理安装后的body坐标：x向前、y向右、z向下，单位米。
+      # 下视中心Cd=(-0.130,0,0.0645)m，双目距离0.060m，各目距中心0.030m。
+      # 当前下视物理绕yaw倒装180°：原始左目在body +y，右目在body -y。
+      front_camera_body_xyz: [0.230, 0.0, 0.076]
+      down_camera_body_xyz: [-0.130, 0.030, 0.0645] # 使用下视左目光心，不是双目中点。
+      gripper_from_front_xyz: [0.0, 0.0, 0.10] # 新夹爪实际抓取点在前视中点正下10cm。
+      # 舵机2仍使用下视海参掩膜对准，再自动补偿camera_xy-gripper_xy。
+      # 名义值给出BMOVE(-0.360,+0.030)m；目标位于艇体前下方抓取点。
+      # 不使用上面的舵机1 offset/pickup/release参数，安装yaw补偿不会重复作用于安装坐标。
+      # 近底开环高度计算以新夹爪抓取点为参考，z偏置自动取front.z+相对z=0.176m。
 
   descent:
     # 下压方式：直接发送机体正z速度，不经过BasicMotion的位置步进。
@@ -82,14 +97,14 @@ params:
     duration_seconds: 4.8 # 现场值保留；一次连续执行，实际行程需现场核对。
     max_press_distance_m: 2.0 # 兼容旧配置；当前不作限幅，也不是触底保护。
     # 无实时触底停止；speed×duration只是预计行程，不能保证实际压到目标。
-    # 当前预计行程0.5×3=1.5m；1.30字段不再截断行程，必须核对池底与机构接触高度。
+    # 旧速度模式预计行程speed×duration；开环模式不可用速度×时间推算行程。
     # “连续下压”并不保证实际速度/推力；仍由MCU速度环执行，需现场观测。
     publish_period: 0.05               # 下压速度指令发布间隔，单位秒。
     # 0.05秒对应20Hz；结束、外部停止或异常时发零速度，随后开始极慢上浮。
 
   ascent:
-    speed_mps: 0.05                    # 连续速度上浮上限1cm/s，靠近目标进一步减速。
-    # 填正数，程序发送负z速度；当前允许(0,0.03]m/s，不要填负数或0。
+    speed_mps: 0.05                    # 现场值保留：速度环上浮上限5cm/s，近目标减速。
+    # 填正数，程序发送负z速度；近底开环启用时先使用lift_thrust离底。
     publish_period: 0.05               # 20Hz直接发送/zit6/cmd/setpoint，绕过位置步进。
     tolerance_m: 0.05                 # 到位后发送零速度，不发向下位置纠偏。
     # 单位米；实测深度≤目标深度+此值即可结束上浮，不因上浮过头再向下压。
@@ -112,6 +127,26 @@ params:
     # 单次运输预算包括必要的低速上浮；1cm/s上浮1m至少约100秒，90秒可能不足。
     release_wait_seconds: 2.0          # 发送释放角度后等待多久，单位秒。
     # 只等待，不验证是否真正脱离夹爪；投放次数不是实际成功投放数量。
+
+  # 近底改为ACTUATOR纯推力，全部水平/姿态轴推力为0，不维持XY或姿态。
+  # 先填下面三个实测值，再改为true；未标定时保留原速度下压，不能拿m/s填推力。
+  near_floor_open_loop: false
+  floor_z_m: -1.0                     # 待填：START后odom系池底z；必须与机器人深度同基准。
+  bottom_reference_offset_z_m: 0.0    # 机体原点到离地参考点(DVL/夹爪)的向下偏置m。
+  open_loop_clearance_m: 0.20         # 参考点离底≤20cm后锁定开环下压；不会因DVL跳变回切。
+  press_thrust: 0.0                   # 待填：(0,1]归一化z推力，正为下压；不是PWM/牛顿/速度。
+  lift_thrust: 0.0                    # 待填：[-1,0)小负推力，近底慢慢离底；需实测速度。
+  press_thrust_seconds: 1.0           # 进入20cm后推力持续秒数；仍受descent.duration_seconds总预算限制。
+  # 离底后默认按真实位移回到原观察点。只有确认无真实水平漂移时才允许以旧XY修正坐标。
+  restore_pre_press_odom_xy: false     # 开启即假设下压前后XY差全是DVL漂移；有水流时不要开。
+
+  collection_visual_align: true       # 到delivery.pose后先用下视收集框伺服，再夹爪偏置、释放。
+  collection_class_id: 4              # YOLO-seg收集框/platform类别。
+  collection_projection_depth_m: 0.8  # 待校准：左相机到收集框平面的距离m，非水深。
+  collection_correct_odom_xy: false   # 独立开关：框心地标修正BasicMotion任务odom；不改MCU原始DVL。
+  collection_center_odom_xy: []        # 开启前填写已测定的固定框心[x,y]，本次START坐标系。
+  collection_camera_body_xy: [-0.130, 0.030] # Cd中心+倒装左目半基线，单位m，与上面的左光心一致。
+  odom_correction_max_m: 1.0           # 超过此平移拒绝校正，不把误识别直接写入坐标系。
 
   return_timeout: 300.0                 # 慢速上浮及水平回位预算；仍受任务总超时约束。
   # 抓后恢复观察位的预算，不是运输预算；上浮1m以1cm/s计算至少约100秒。

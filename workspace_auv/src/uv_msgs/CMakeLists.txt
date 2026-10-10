@@ -33,6 +33,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/RunTask.srv"
   "srv/GetState.srv"
   "srv/ExecTask.srv"
+  "srv/CorrectOdomXY.srv"
   "action/BasicMotion.action"
   DEPENDENCIES std_msgs sensor_msgs action_msgs builtin_interfaces
 )

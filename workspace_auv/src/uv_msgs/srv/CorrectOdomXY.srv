@@ -1,0 +1,9 @@
+# 仅修正上位机任务odom的XY平移，不重置MCU，不改变yaw/z。
+# expected为调用时位姿，防止机器人移动后应用过期地标。
+float64 expected_x
+float64 expected_y
+float64 corrected_x
+float64 corrected_y
+---
+bool success
+string message

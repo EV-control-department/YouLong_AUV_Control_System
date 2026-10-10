@@ -33,7 +33,7 @@ from uv_msgs.msg import (
     TargetPositionArray,
     TaskStatus,
 )
-from uv_msgs.srv import ExecTask, RunTask
+from uv_msgs.srv import ExecTask, RunTask, CorrectOdomXY
 from uv_task.config_loader import (
     ConfigError,
     default_mission_path,
@@ -264,6 +264,8 @@ class TaskRunnerNode(Node):
             ZitSetpoint, '/zit6/cmd/setpoint', 10)
 
         # Services
+        self._odom_xy_client = self.create_client(
+            CorrectOdomXY, '/basic_motion/correct_odom_xy')
         self.create_service(RunTask, '/task/run', self._run_task_cb)
         self.create_service(Trigger, '/task/stop', self._stop_task_cb)
         self.create_service(ExecTask, '/task/exec', self._exec_task_cb)
@@ -308,16 +310,19 @@ class TaskRunnerNode(Node):
         self.pub_light.publish(msg)
         self.get_logger().info('💡 灯光已关闭')
 
-    def set_servo(self, angle_rad: float, label: str):
+    def set_servo(self, angle_rad: float, label: str, servo_id: int = 1):
         """内部接口保留弧度兼容旧任务；真机ZitServo.angle发送角度值。"""
         angle_rad = float(angle_rad)
-        if not math.isfinite(angle_rad) or not 0.0 <= angle_rad <= math.pi:
-            raise ValueError('舵机角度必须为0~π的有限弧度值；90°请使用π/2，不要填90')
+        if servo_id not in (1, 2):
+            raise ValueError('servo_id必须为1或2')
+        max_angle = math.pi if servo_id == 1 else 1.5 * math.pi
+        if not math.isfinite(angle_rad) or not 0.0 <= angle_rad <= max_angle:
+            raise ValueError(f'舵机{servo_id}角度必须为0~{math.degrees(max_angle):g}°对应的有限弧度值')
         angle_deg = math.degrees(angle_rad)
-        msg = ZitServo(servo_id=1, angle=angle_deg)
+        msg = ZitServo(servo_id=servo_id, angle=angle_deg)
         self.pub_servo.publish(msg)
         self.get_logger().info(
-            f'⚙️  舵机1：{label}（发布angle={angle_deg:.1f}°；内部={angle_rad:.4f} rad，已发指令）')
+            f'⚙️  舵机{servo_id}：{label}（发布angle={angle_deg:.1f}°；内部={angle_rad:.4f} rad，已发指令）')
 
     # ── 下视对齐工具 ───────────────────────────────────────────────
 
@@ -913,7 +918,18 @@ class TaskRunnerNode(Node):
         self.light_off()
         # 所有START入口（跳过准备、按回车、正常倒计时）均在此置零。
         # 这里只确认指令发布；没有舵机反馈确认，不宣称已机械到位。
-        self.set_servo(self.ANGLE_INIT, 'START置零（抓取位置）')
+        # START紧接海参任务时，读取同一份夹爪选择；切换为2后不再误操作舵机1。
+        tasks = getattr(self, 'tasks', ())
+        next_index = getattr(self, 'current_index', 0) + 1
+        if next_index < len(tasks) and tasks[next_index].get('name') == 'grab_sea_cucumber':
+            params = tasks[next_index].get('params', {})
+            if int(params.get('gripper_servo_id', 1)) == 2:
+                self.set_servo(math.radians(float(params.get('servo2_close_angle_deg', 150.0))),
+                               'START海参夹爪初始闭合', servo_id=2)
+            else:
+                self.set_servo(self.ANGLE_INIT, 'START置零（抓取位置）')
+        else:
+            self.set_servo(self.ANGLE_INIT, 'START置零（抓取位置）')
         success, msg = self._send_action_goal(
             BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], timeout=0)
         if success:
@@ -1332,6 +1348,18 @@ class TaskRunnerNode(Node):
             float(self._cmd_x), float(self._cmd_y), float(self._cmd_z),
             0.0, 0.0, float(self._cmd_yaw),
         )
+
+    def _publish_body_thrust(self, vertical_thrust: float = 0.0):
+        """绝对机体系ACTUATOR指令；不是速度、PWM或增量推力。"""
+        if not math.isfinite(vertical_thrust):
+            raise ValueError('开环推力必须为有限值')
+        msg = ZitSetpoint()
+        msg.control_key = 0x12
+        msg.type_mask = 0  # 写入全部六轴，清除旧水平/姿态推力。
+        msg.x = msg.y = msg.roll = msg.pitch = msg.yaw = 0.0
+        msg.z = float(vertical_thrust)
+        msg.seq = 0
+        self.pub_setpoint.publish(msg)
 
     def _publish_body_velocity(self, forward_mps: float = 0.0,
                                lateral_mps: float = 0.0,
