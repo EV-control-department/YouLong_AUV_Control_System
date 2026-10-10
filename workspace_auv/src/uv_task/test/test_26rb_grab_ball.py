@@ -35,10 +35,11 @@ def test_sea_horizontal_hold_activates_position_even_when_already_centered(monke
     task._node = SimpleNamespace(stopped=False,
         _send_action_goal=lambda *args, **kwargs: calls.append(args) or (True, ''),
         _format_motion_context=lambda s: s)
-    def servo(self, hold_z_yaw=None):
-        assert hold_z_yaw == (.4, -90.)
+    task._wait_visual_motion = lambda target, deadline: True
+    def servo(deadline):
+        assert task._horizontal_hold_z_yaw == (.4, -90.)
         return [1., 2., .4, -90.]
-    monkeypatch.setattr(GrabBallTask, '_servo_horizontally', servo)
+    task._locked_visual_loop = servo
     assert task._servo_horizontally() == [1., 2., .4, -90.]
     assert calls[0][1:] == ([1., 2., .4, -90.], 'xyzrz')
     assert (task._node._cmd_z, task._node._cmd_yaw) == (.4, -90.)
@@ -123,6 +124,127 @@ def test_negative_sea_descent_rejected_before_initialization():
                   max_press_distance_m=1.3, drop_pose=[0,0,.3,0], search_pose=[1,1,.3,0])
     with pytest.raises(ValueError, match='有限正数'):
         GrabSeaCucumberTask(None, params)
+
+
+def _locked_detection_task():
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._class_id, task._min_confidence, task._detection_timeout = 2, .35, 1.
+    task._association_active, task._locked_pixel, task._locked_pose = True, None, None
+    task._target_match_px = 70.
+    task._measured_pose = lambda: (0., 0., .4, 0., 0., 0.)
+    task._CX, task._CY, task._FX, task._FY = 320., 240., 500., 500.
+    task._projection_depth, task._camera_mount_yaw = .8, 180.
+    task._node = SimpleNamespace(_perception_lock=threading.Lock(), _down_detections={})
+    return task
+
+
+def _set_detection_frame(task, candidates, stamp=10):
+    task._node._down_detections['down_left'] = (time.monotonic(), SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=0, nanosec=stamp)),
+        detections=[SimpleNamespace(class_id=2, confidence=confidence,
+            mask_x=[x-1, x, x+1], mask_y=[239., 240., 241.])
+                    for x, confidence in candidates]))
+
+
+def test_sea_lock_does_not_follow_alternating_confidence_and_waits_if_missing():
+    task = _locked_detection_task()
+    _set_detection_frame(task, [(260., .9), (400., .8)])
+    assert task._best_left_detection().pixel_x == 260.
+    _set_detection_frame(task, [(265., .7), (400., .99)], 11)
+    assert task._best_left_detection().pixel_x == 265.
+    _set_detection_frame(task, [(400., .99)], 12)
+    assert task._best_left_detection() is None
+    assert task._locked_pixel == (265., 240.)
+    _set_detection_frame(task, [(270., .8), (400., .99)], 13)
+    assert task._best_left_detection().pixel_x == 270.
+
+
+def test_sea_lock_predicts_pixel_from_actual_body_motion():
+    task = _locked_detection_task()
+    _set_detection_frame(task, [(260., .9), (400., .8)])
+    assert task._best_left_detection().pixel_x == 260.
+    # 倒装相机：艇体+y移动0.16m，同一目标像素右移100；超过旧像素70px门限。
+    task._measured_pose = lambda: (0., .16, .4, 0., 0., 0.)
+    _set_detection_frame(task, [(360., .7), (260., .99)], 11)
+    assert task._best_left_detection().pixel_x == pytest.approx(360.)
+
+
+def test_sea_rejects_frame_captured_before_motion_settled():
+    task = _locked_detection_task()
+    task._scan_capture_after_ns = 20
+    _set_detection_frame(task, [(260., .9)], 19)
+    assert task._best_left_detection() is None
+    _set_detection_frame(task, [(260., .9)], 21)
+    assert task._best_left_detection() is not None
+
+
+@pytest.mark.parametrize('actually_moved', [False, True])
+def test_visual_arrival_is_independent_of_basic_motion_tolerance(monkeypatch, actually_moved):
+    clock = [0.]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._logger = _Logger()
+    task._servo_xy_tolerance, task._servo_settle_seconds = .01, .3
+    task._command_timeout, task._log_period = 1., .5
+    task._node = SimpleNamespace(stopped=False,
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=int(clock[0]*1e9))))
+    task._measured_pose = lambda: (.03 if actually_moved else 0., 0., .4, 0., 0., 0.)
+    assert task._wait_visual_motion([.03, 0., .4, 0.], 2.) is actually_moved
+    if actually_moved:
+        assert task._scan_capture_after_ns >= 300_000_000
+    else:
+        assert not hasattr(task, '_scan_capture_after_ns')
+
+
+def test_locked_loop_does_not_command_twice_from_same_frame(monkeypatch):
+    clock, calls = [0.], []
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._logger, task._color = _Logger(), '海参'
+    task._locked_pixel = (400., 240.)
+    task._servo_period, task._hold_seconds, task._log_period = .1, .1, .5
+    task._pixel_tolerance, task._servo_xy_tolerance = .04, .01
+    task._command_timeout, task._horizontal_hold_z_yaw = 1., (.4, 0.)
+    task._node = SimpleNamespace(stopped=False,
+        _send_action_goal=lambda *args, **kwargs: calls.append(args) or (True, ''),
+        _format_motion_context=lambda s: s)
+    frames = iter([1, 1, 2, 3, 4])
+    task._best_left_detection = lambda: SimpleNamespace(stamp_ns=next(frames, 5), pixel_x=400., pixel_y=240.)
+    pose = (0., 0., .4, 0., 0., 0.)
+    task._horizontal_step = lambda d: (pose, .03, 0., .03, 0., .1 if d.stamp_ns == 1 else 0., 0.)
+    task._measured_pose = lambda: pose
+    task._wait_visual_motion = lambda *args: True
+    assert task._locked_visual_loop(2.) is not None
+    assert len(calls) == 1
+
+
+def test_locked_target_loss_waits_without_switching_or_commanding(monkeypatch):
+    clock = [0.]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._logger, task._locked_pixel = _Logger(), (260., 240.)
+    task._target_lost_seconds, task._servo_period, task._log_period = 2., .1, .5
+    task._node = SimpleNamespace(stopped=False)
+    task._best_left_detection = lambda: None
+    assert task._locked_visual_loop(10.) is None
+    assert 2. <= clock[0] < 2.2
+    assert task._locked_pixel == (260., 240.)
+
+
+def test_visual_tracking_parameters_load_from_nested_servo_config():
+    import yaml
+    from uv_task.config_loader import load_task
+    path = Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml'
+    servo = yaml.safe_load(path.read_text())['params']['servo']
+    params = load_task(path)[0]['params']
+    for nested, flat in [('target_match_radius_px', 'target_match_radius_px'),
+                         ('target_lost_wait_seconds', 'target_lost_wait_seconds'),
+                         ('position_tolerance_m', 'visual_position_tolerance_m'),
+                         ('motion_settle_seconds', 'visual_motion_settle_seconds')]:
+        assert params[flat] == servo[nested]
 
 
 def test_sea_degree_config_preserves_internal_radians_without_old_descent_cap():
@@ -226,6 +348,8 @@ def test_open_loop_requires_calibration_not_velocity_as_force():
     from uv_task.config_loader import load_task
     params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
     params['near_floor_open_loop'] = True
+    params['collection_correct_odom_xy'] = False
+    params['press_thrust'] = 0.0  # 显式未标定，不依赖现场YAML当前值。
     with pytest.raises(ValueError, match='先标定'):
         GrabSeaCucumberTask(SimpleNamespace(get_logger=lambda: _Logger()), params)
     params.update(floor_z_m=1.4, press_thrust=.1, lift_thrust=-.03)
@@ -449,6 +573,8 @@ def test_servo2_selection_uses_mount_geometry_and_does_not_change_servo1_profile
     params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
     # 固定测试标定值，不随现场修改的YAML安装尺寸改变预期。
     params['servo2_down_camera_body_xyz'] = [-.130, .030, .0645]
+    params['servo2_front_camera_body_xyz'] = [.230, 0., .076]
+    params['servo2_gripper_from_front_xyz'] = [0., 0., .1]
     node = SimpleNamespace(get_logger=lambda: _Logger())
     original = GrabSeaCucumberTask(node, params)
     assert original._gripper_servo_id == 1

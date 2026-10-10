@@ -114,6 +114,14 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._ascent_tolerance = float(params.get('ascent_tolerance_m', 0.01))
         self._max_failed_attempts = int(params.get('max_failed_attempts', 3))
         self._pixel_tolerance = float(params.get('pixel_tolerance_fraction', 0.035))
+        self._target_match_px = float(params.get('target_match_radius_px', 70.0))
+        self._target_lost_seconds = float(params.get('target_lost_wait_seconds', 2.0))
+        self._servo_xy_tolerance = float(params.get('visual_position_tolerance_m', 0.01))
+        self._servo_settle_seconds = float(params.get('visual_motion_settle_seconds', 0.3))
+        if (not all(math.isfinite(v) and v > 0 for v in (
+                self._target_match_px, self._target_lost_seconds,
+                self._servo_xy_tolerance, self._servo_settle_seconds))):
+            raise ValueError('视觉匹配、丢失等待、微调容差和稳定时间必须为有限正数')
         width = float(params.get('image_width', 640.0))
         height = float(params.get('image_height', 480.0))
         if (width <= 0 or height <= 0 or self._target_count <= 0
@@ -192,6 +200,11 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             self._logger.error('抓海参：水平对准缺少新鲜位姿')
             return None
         self._horizontal_hold_z_yaw = (pose[2], pose[5])
+        # 每轮抓取/收集框对准重新锁定；轮内丢失不能跳选另一个目标。
+        self._locked_pixel = None
+        self._locked_pose = None
+        self._association_stamp_ns = -1
+        self._association_active = True
         self._logger.info(
             f'抓海参：{self._color}水平对准固定z={pose[2]:.3f}m、'
             f'yaw={pose[5]:.1f}°，SET axes=xyzrz；'
@@ -200,6 +213,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         started = time.monotonic()
         timeout = min(self._command_timeout, self._servo_timeout)
         if timeout <= 0 or self._node.stopped:
+            self._association_active = False
             return None
         success, message = self._node._send_action_goal(
             BasicMotion.Goal.SET, [pose[0], pose[1], pose[2], pose[5]], 'xyzrz',
@@ -207,14 +221,102 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             task_context=self._node._format_motion_context(f'{self._color}对准启用深度航向闭环'))
         if not success:
             self._logger.warning(f'抓海参：启用位置保持失败：{message}')
+            self._association_active = False
             return None
         self._node._cmd_z, self._node._cmd_yaw = self._horizontal_hold_z_yaw
-        original_timeout = self._servo_timeout
         try:
-            self._servo_timeout = max(0., original_timeout - (time.monotonic() - started))
-            return super()._servo_horizontally(hold_z_yaw=self._horizontal_hold_z_yaw)
+            deadline = started + self._servo_timeout
+            if not self._wait_visual_motion(
+                    [pose[0], pose[1], pose[2], pose[5]], deadline):
+                return None
+            return self._locked_visual_loop(deadline)
         finally:
-            self._servo_timeout = original_timeout
+            self._association_active = False
+
+    def _wait_visual_motion(self, target, deadline, xy_tolerance=None):
+        """独立检查实测反馈，不把BasicMotion的10cm到位当作微调完成。"""
+        tolerance = self._servo_xy_tolerance if xy_tolerance is None else xy_tolerance
+        end = min(deadline, time.monotonic() + self._command_timeout)
+        stable_since, last_log = None, float('-inf')
+        while not self._node.stopped and time.monotonic() < end:
+            pose = self._measured_pose()
+            now = time.monotonic()
+            if pose is not None:
+                xy_error = math.hypot(pose[0]-target[0], pose[1]-target[1])
+                yaw_error = abs((pose[5]-target[3]+180.) % 360.-180.)
+                reached = (xy_error <= tolerance and abs(pose[2]-target[2]) <= .05
+                           and yaw_error <= 5.)
+                if reached:
+                    stable_since = now if stable_since is None else stable_since
+                    if now-stable_since >= self._servo_settle_seconds:
+                        # 动作响应后才设采集截止，下一步只用稳定后的新图像。
+                        self._scan_capture_after_ns = self._node.get_clock().now().nanoseconds
+                        self._scan_received_after = now
+                        return True
+                else:
+                    stable_since = None
+                if now-last_log >= self._log_period:
+                    self._logger.info(f'抓海参：等待视觉微调实测到位，XY误差={xy_error:.3f}m/'
+                                      f'{tolerance:.3f}m，z误差={pose[2]-target[2]:+.3f}m，'
+                                      f'yaw误差={yaw_error:.1f}°')
+                    last_log = now
+            else:
+                stable_since = None
+            time.sleep(min(.05, max(0., end-time.monotonic())))
+        self._logger.warning('抓海参：视觉微调未实测到位，超时；不连续追加修正')
+        return False
+
+    def _locked_visual_loop(self, deadline):
+        """一帧一决策：锁定同一目标→微移→实际到位→新采集帧。"""
+        last_stamp, hold_since, lost_since = -1, None, None
+        last_log = float('-inf')
+        while not self._node.stopped and time.monotonic() < deadline:
+            now = time.monotonic()
+            detection = self._best_left_detection()
+            if detection is None:
+                hold_since = None
+                lost_since = now if lost_since is None else lost_since
+                if now-last_log >= self._log_period:
+                    self._logger.info('抓海参：等待锁定目标的新采集帧，不切换其他海参')
+                    last_log = now
+                if (self._locked_pixel is not None
+                        and now-lost_since >= self._target_lost_seconds):
+                    self._logger.warning('抓海参：锁定目标丢失等待超时，结束本轮对准')
+                    return None
+            elif detection.stamp_ns > last_stamp:
+                last_stamp, lost_since = detection.stamp_ns, None
+                pose, dx, dy, wx, wy, du, dv = self._horizontal_step(detection)
+                if now-last_log >= self._log_period:
+                    self._logger.info(
+                        f'抓海参：锁定目标像素=({detection.pixel_x:.1f},{detection.pixel_y:.1f})，'
+                        f'误差=({du:+.4f},{dv:+.4f})，机体步长=({dx:+.3f},{dy:+.3f})m，'
+                        f'世界步长=({wx:+.3f},{wy:+.3f})m')
+                    last_log = now
+                if abs(du) <= self._pixel_tolerance and abs(dv) <= self._pixel_tolerance:
+                    hold_since = now if hold_since is None else hold_since
+                    if now-hold_since >= self._hold_seconds:
+                        measured = self._measured_pose()
+                        if measured is not None:
+                            return [measured[0], measured[1], measured[2], measured[5]]
+                else:
+                    hold_since = None
+                    target = [pose[0]+wx, pose[1]+wy, *self._horizontal_hold_z_yaw]
+                    success, message = self._node._send_action_goal(
+                        BasicMotion.Goal.SET, target, 'xyzrz',
+                        timeout=min(self._command_timeout, max(.01, deadline-time.monotonic())),
+                        quiet=True, task_context=self._node._format_motion_context(
+                            f'{self._color}锁定目标视觉微调'))
+                    if not success:
+                        self._logger.warning(f'抓海参：视觉微调动作失败：{message}')
+                        return None
+                    self._node._cmd_x, self._node._cmd_y, self._node._cmd_z, self._node._cmd_yaw = target
+                    # 小于1cm的微移也不能直接成功：至少走完一半该步距离。
+                    tolerance = min(self._servo_xy_tolerance, math.hypot(wx, wy)*.5)
+                    if not self._wait_visual_motion(target, deadline, max(1e-5, tolerance)):
+                        return None
+            time.sleep(min(self._servo_period, max(0., deadline-time.monotonic())))
+        self._logger.warning('抓海参：锁定目标水平视觉伺服超时')
+        return None
 
     def _apply_gripper_offset(self):
         """按实测XY计算绝对偏置目标，并继续保持本次视觉对准的z/yaw。"""
@@ -264,14 +366,42 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         candidates = self._segmented_detections(entry[1])
         if not candidates:
             return None
-        target = max(candidates, key=lambda d: (
-            float(d.confidence), len(d.mask_x)))
+        stamp_ns = (int(entry[1].header.stamp.sec)*1_000_000_000
+                    + int(entry[1].header.stamp.nanosec))
+        if (getattr(self, '_association_active', False)
+                and stamp_ns <= getattr(self, '_association_stamp_ns', -1)):
+            return None
+        locked = getattr(self, '_locked_pixel', None)
+        if getattr(self, '_association_active', False) and locked is not None:
+            # 用实际艇体位移预测目标的新像素，避免较大微移后仍围绕旧像素匹配。
+            previous_pose = getattr(self, '_locked_pose', None)
+            current_pose = self._measured_pose()
+            if previous_pose is not None and current_pose is not None:
+                du, dv = (locked[0]-self._CX)/self._FX, (locked[1]-self._CY)/self._FY
+                bx, by = self._body_to_world(-dv*self._projection_depth,
+                                            du*self._projection_depth, self._camera_mount_yaw)
+                wx, wy = self._body_to_world(bx, by, previous_pose[5])
+                bx, by = self._body_to_world(previous_pose[0]+wx-current_pose[0],
+                                            previous_pose[1]+wy-current_pose[1], -current_pose[5])
+                bx, by = self._body_to_world(bx, by, -self._camera_mount_yaw)
+                locked = (self._CX+by/self._projection_depth*self._FX,
+                          self._CY-bx/self._projection_depth*self._FY)
+            target = min(candidates, key=lambda d: math.hypot(
+                statistics.median(d.mask_x)-locked[0], statistics.median(d.mask_y)-locked[1]))
+            if math.hypot(statistics.median(target.mask_x)-locked[0],
+                          statistics.median(target.mask_y)-locked[1]) > self._target_match_px:
+                return None
+        else:
+            target = max(candidates, key=lambda d: (float(d.confidence), len(d.mask_x)))
+        if getattr(self, '_association_active', False):
+            self._locked_pixel = (statistics.median(target.mask_x), statistics.median(target.mask_y))
+            self._locked_pose = self._measured_pose()
+            self._association_stamp_ns = stamp_ns
         return SimpleNamespace(
             pixel_x=statistics.median(target.mask_x),
             pixel_y=statistics.median(target.mask_y),
             confidence=target.confidence,
-            stamp_ns=(int(entry[1].header.stamp.sec)*1_000_000_000
-                      + int(entry[1].header.stamp.nanosec)),
+            stamp_ns=stamp_ns,
         )
 
     def _count_visible(self, since: float, capture_after_ns: int,

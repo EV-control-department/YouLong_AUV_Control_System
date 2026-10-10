@@ -50,6 +50,10 @@ params:
     # 实际判断：abs((u-cx)/fx)和abs((v-cy)/fy)均≤此值；不是图像宽高的百分比。
 
   servo:
+    target_match_radius_px: 70.0       # 预测像素位置附近匹配同一目标，不按每帧最高置信度换目标。
+    target_lost_wait_seconds: 2.0      # 锁定目标丢失后等待；超时结束本轮，不能立即改抓另一个。
+    position_tolerance_m: 0.01         # 视觉微调独立XY到位容差；小步还要求至少走完一半。
+    motion_settle_seconds: 0.3         # 实测XYZ/yaw在容差内持续此时间，才允许采集下一步图像。
     timeout: 30.0                      # 单轮视觉居中超时，单位秒；这里servo指视觉伺服，不是舵机。
     period: 0.5                       # 水平对准循环的等待时间，单位秒。
     log_period: 0.5                    # 对准日志打印间隔，单位秒。

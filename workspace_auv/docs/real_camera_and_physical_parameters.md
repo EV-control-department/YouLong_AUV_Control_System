@@ -62,6 +62,21 @@ export UV_MODEL_MAPPING_FILE="$PWD/src/uv_camera/weights/real_last.yaml"
 图像竖向偏移不是机体深度z偏移，`collection_projection_depth_m`也只是投影距离。
 日志同时给出像素误差、机体/世界步长，以及固定的z/yaw目标，便于区别方向问题与保持问题。
 
+海参/收集框伺服每轮只在首次选择时按置信度选目标；随后按照最近匹配锁定同一目标，
+并用实际XY位移及yaw预测新像素位置。丢失时保持当前位置目标，短暂等待原目标，
+超过等待时间结束本轮对准；下一轮才重新选择，不在本轮立即跳抓别的海参。
+这属于几何邻近匹配，不是永久身份跟踪；目标互相重叠或DVL漂移时仍可能关联错误。
+
+每次微调顺序：`SET xyzrz` → 独立检查实测位姿 → 连续稳定 → 等待稳定后采集的新帧。
+BasicMotion原10cm容差及WTRAVEL均不修改。任务侧默认XY容差1cm，
+小步同时要求至少移动半个步长；z容差5cm、yaw容差5°，连续稳定0.3秒。
+同一采集时间戳只处理一次，不以动作返回成功代替实际位移确认。
+调试参数在`config/tasks/grab_sea_cucumber.yaml`的`servo`段：
+`target_match_radius_px`（70px）、`target_lost_wait_seconds`（2秒）、
+`position_tolerance_m`（1cm）、`motion_settle_seconds`（0.3秒）。
+到位等待受单次`position_command_timeout`和本轮`timeout`共同约束；
+参数不是硬件精度保证，实测无法稳定到1cm时应据反馈调整，不应仅增大步长。
+
 真机 `real_default.yaml` 启用 `down_rotate_180: true`；也可在启动命令中显式传入
 `-p down_rotate_180:=true`，关闭则设为 `false`。仿真忽略该开关。
 
