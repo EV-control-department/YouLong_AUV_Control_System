@@ -2,7 +2,8 @@
 """
 AUV 可视化监控面板 — PySide6 + ROS 2
 
-显示运行节点、当前位置、2D 地图（物体、射线、标签）、任务状态。
+显示运行节点、当前位置、2D 地图（物体、射线、标签、**线激光条纹**）、任务状态、
+线激光海床剖面。
 
 用法:
   source ~/YouLong_AUV_Control_System/workspace_sim/install/setup.bash
@@ -60,6 +61,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSPresetProfiles
 from sensor_msgs.msg import Image as RosImage
+from sensor_msgs.msg import PointCloud2
 from uv_msgs.msg import ObjectPositionArray, PoseInfo, TaskStatus
 from zit6_interfaces.msg import ZitSetpoint
 
@@ -122,6 +124,83 @@ class NodeInfo:
     namespace: str = ""
 
 
+@dataclass
+class LaserSnapshot:
+    """线激光条纹快照：点已在**机体系**（x 前/y 右舷/z 下，单位 m）。
+
+    原始 `/sim/sensor/laser_points` 是传感器（激光平面）系、`z≡0`；这里已用
+    安装外参转到机体系，方便地图/剖面直接用。``missed`` 是没打到海床被丢弃的
+    条数（点数 = raw_count - missed）—— 未命中的射线 `laser_sim` 已经丢掉，
+    所以这里只能拿到命中的点，``raw_count`` 由点数给出。
+    """
+    points: Optional[np.ndarray] = None   # (N,3) 机体系
+    depth: Optional[np.ndarray] = None    # (N,)  海床深度（= 机体系 z，NED 下为正）
+    across: Optional[np.ndarray] = None   # (N,)  横向坐标（= 机体系 y，右舷为正）
+    raw_count: int = 0
+    missed: int = 0
+    stamp: float = 0.0
+
+    @classmethod
+    def from_body_points(cls, points: Optional[np.ndarray], stamp: float) -> "LaserSnapshot":
+        """由机体系点云构造，并抽出剖面用的两列。"""
+        if points is None or len(points) == 0:
+            return cls(points=np.zeros((0, 3), dtype=float),
+                       depth=np.zeros(0, dtype=float),
+                       across=np.zeros(0, dtype=float), raw_count=0, stamp=stamp)
+        return cls(
+            points=points,
+            depth=points[:, 2].copy(),      # 机体系 z = 向下为正 = 海床深度
+            across=points[:, 1].copy(),     # 机体系 y = 右舷 = 横向
+            raw_count=int(len(points)),
+            stamp=stamp,
+        )
+
+
+# ── 线激光安装外参（与 docs/frames/extrinsics_reference.md 的 line_laser 一致）──
+# 传感器（激光平面）系 -> 机体系：x_s=机体系 +z（向下）、y_s=机体系 +y（右舷）、
+# z_s=机体系 -x（艉）。点在激光平面内 z_s≡0，所以 body = [0, y_s, x_s]。
+# 这个常量必须与场景 <origin rpy="0 -1.5708 0"> 对齐；改场景要同步改这里。
+_LASER_R_BS = np.array([
+    [0.0, 0.0, -1.0],
+    [0.0, 1.0,  0.0],
+    [1.0, 0.0,  0.0],
+], dtype=float)
+
+
+def _decode_laser_points(msg: PointCloud2) -> Optional[np.ndarray]:
+    """PointCloud2 (x,y,z float32) -> (N,3) 机体系 numpy。
+
+    手工解析而非 ``sensor_msgs_py``：本 GUI 是独立 ``python3`` 脚本，少一个依赖。
+    用 ``np.frombuffer`` 的结构化 dtype 一次取 3 个 float32 字段（按 ``point_step``
+    跨步，容忍相邻 padding）；末尾用 ``_LASER_R_BS`` 转到机体系。
+    """
+    fields = {f.name: f.offset for f in msg.fields}
+    if not {"x", "y", "z"} <= fields.keys():
+        return None
+    n = msg.width * msg.height
+    if n == 0:
+        return np.zeros((0, 3), dtype=float)
+
+    step = msg.point_step
+    ox, oy, oz = fields["x"], fields["y"], fields["z"]
+    need = (n - 1) * step + max(ox, oy, oz) + 4
+    if len(msg.data) < need:
+        return None
+
+    dtype = np.dtype({
+        "names": ["x", "y", "z"],
+        "formats": ["<f4", "<f4", "<f4"],
+        "offsets": [ox, oy, oz],
+        "itemsize": step,
+    })
+    rec = np.frombuffer(bytes(msg.data)[:n * step], dtype=dtype, count=n)
+    pts = np.stack([rec["x"].astype(float), rec["y"].astype(float),
+                    rec["z"].astype(float)], axis=1)
+
+    # 传感器系 -> 机体系
+    return pts @ _LASER_R_BS.T
+
+
 # ── 颜色方案 ──────────────────────────────────────────────────
 OBJECT_COLORS: Dict[int, QColor] = {
     0: QColor("#F1C40F"),  # yellow_sector
@@ -144,6 +223,8 @@ DEFAULT_OBJECT_COLOR = QColor("#95A5A6")  # gray
 AUV_COLOR = QColor("#00DDFF")
 TARGET_COLOR = QColor("#F1C40F")
 RAY_COLOR = QColor(255, 255, 255, 60)
+LASER_COLOR = QColor("#FF2D55")           # 线激光条纹（当前帧）
+LASER_TRAIL_COLOR = QColor("#FF2D55")     # 历史条纹（渐隐）
 GRID_COLOR = QColor(255, 255, 255, 20)
 GRID_TEXT_COLOR = QColor(255, 255, 255, 100)
 BG_COLOR = QColor("#1A1A2E")
@@ -194,6 +275,11 @@ class ROS2Node(Node):
         )
         self._sub_task = self.create_subscription(
             TaskStatus, "/task/status", self._task_cb, 10
+        )
+        # 线激光条纹（laser_sim：/auv/laser_scan -> 三维点）。SIL 下 30 Hz，
+        # 用 sensor-data QoS 匹配对端 best-effort 的发布者。
+        self._sub_laser = self.create_subscription(
+            PointCloud2, "/sim/sensor/laser_points", self._laser_cb, qos_sensor
         )
 
         # 遥控发布
@@ -259,6 +345,21 @@ class ROS2Node(Node):
             "total": msg.total_tasks,
             "name": msg.current_task_name,
             "error": msg.error_message,
+        }))
+
+    def _laser_cb(self, msg: PointCloud2):
+        """线激光条纹回调 — 解析点云并转到机体系，塞进队列。
+
+        ``raw_count``/``missed`` 由点数反推不了（丢弃的点不在云里），所以只
+        记录实际点数；``missed`` 留 0（观测值缺失，不猜）。原始扫描条数见
+        ``LaserSnapshot`` 注释。
+        """
+        pts = _decode_laser_points(msg)
+        if pts is None:
+            return
+        self._q.put(("laser", {
+            "points": pts,
+            "stamp": time.time(),
         }))
 
     def _annotated_cb(self, cam: str, msg: RosImage):
@@ -413,6 +514,118 @@ class TargetGraphicsItem(QGraphicsItem):
         painter.drawLine(-d, d, d, -d)
 
 
+class LaserProfileWidget(QWidget):
+    """线激光横截面剖面图：横坐标 = 机体系 y（右舷，跨航向），纵坐标 = 海床深度。
+
+    这是"一条线在海床上的样子"的正视图——海床重建的核心观测量。深度轴向下为正，
+    与 NED 一致；左右两侧标注 y（m）与 z（m）。
+    """
+
+    MARGIN_L = 44
+    MARGIN_R = 8
+    MARGIN_T = 18
+    MARGIN_B = 26
+
+    def __init__(self):
+        super().__init__()
+        self._laser: Optional[LaserSnapshot] = None
+        self._min_h = 160
+        self.setMinimumHeight(self._min_h)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_laser(self, laser: Optional[LaserSnapshot]):
+        self._laser = laser
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        painter.fillRect(0, 0, w, h, QColor(BG_COLOR.name()))
+
+        # 边框
+        painter.setPen(QPen(GRID_TEXT_COLOR, 1))
+        painter.drawRect(0, 0, w - 1, h - 1)
+
+        laser = self._laser
+        pts_across = None if laser is None else laser.across
+        pts_depth = None if laser is None else laser.depth
+        if pts_across is None or len(pts_across) == 0:
+            painter.setPen(QPen(QColor("#666")))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                             "等待 /sim/sensor/laser_points …")
+            return
+
+        plot_l = self.MARGIN_L
+        plot_r = w - self.MARGIN_R
+        plot_t = self.MARGIN_T
+        plot_b = h - self.MARGIN_B
+        if plot_r <= plot_l or plot_b <= plot_t:
+            return
+
+        # 数据范围（x=横向 y，y=深度 z）
+        y_min, y_max = float(pts_across.min()), float(pts_across.max())
+        z_min, z_max = float(pts_depth.min()), float(pts_depth.max())
+        if y_max - y_min < 1e-6:
+            y_min, y_max = y_min - 0.5, y_max + 0.5
+        if z_max - z_min < 1e-6:
+            z_min, z_max = z_min - 0.25, z_max + 0.25
+        y_pad = (y_max - y_min) * 0.05
+        z_pad = (z_max - z_min) * 0.15
+        y_min, y_max = y_min - y_pad, y_max + y_pad
+        z_min, z_max = z_min - z_pad, z_max + z_pad
+
+        def to_px(yv: float, zv: float) -> QPointF:
+            px = plot_l + (yv - y_min) / (y_max - y_min) * (plot_r - plot_l)
+            py = plot_t + (zv - z_min) / (z_max - z_min) * (plot_b - plot_t)
+            return QPointF(px, py)
+
+        # 网格线
+        painter.setPen(QPen(GRID_COLOR, 1))
+        for k in range(5):
+            frac = k / 4.0
+            yv = y_min + frac * (y_max - y_min)
+            zv = z_min + frac * (z_max - z_min)
+            p1 = to_px(yv, z_min)
+            p2 = to_px(yv, z_max)
+            painter.drawLine(p1, p2)
+            p3 = to_px(y_min, zv)
+            p4 = to_px(y_max, zv)
+            painter.drawLine(p3, p4)
+            painter.setPen(QPen(GRID_TEXT_COLOR))
+            painter.setFont(QFont("Monospace", 7))
+            painter.drawText(int(p3.x()) + 3, int(p3.y()) + 10, f"{zv:.1f}")
+            painter.drawText(int(p1.x()) - 12, int(plot_b) + 12, f"{yv:.1f}")
+            painter.setPen(QPen(GRID_COLOR, 1))
+
+        # 剖面折线（按 y 排序，避免连线来回跳）
+        order = np.argsort(pts_across)
+        pts = [to_px(float(pts_across[i]), float(pts_depth[i])) for i in order]
+        pen = QPen(LASER_COLOR, 2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        for a, b in zip(pts, pts[1:]):
+            painter.drawLine(a, b)
+        # 点
+        painter.setBrush(QBrush(LASER_COLOR))
+        for p in pts:
+            painter.drawEllipse(p, 2.0, 2.0)
+
+        # 标题与轴标
+        painter.setPen(QPen(TEXT_COLOR))
+        painter.setFont(QFont("Monospace", 8))
+        painter.drawText(6, 13, "线激光海床剖面 (跨航向)")
+        painter.drawText(int(plot_l) - 2, h - 8, "y(右舷, m) →")
+        painter.save()
+        painter.translate(12, (plot_t + plot_b) / 2)
+        painter.rotate(-90)
+        painter.drawText(0, 0, "深度 z (m) ↓")
+        painter.restore()
+
+        painter.end()
+
+
 class MapView(QGraphicsView):
     """2D 俯视地图（NED → Qt 坐标：Y 轴向上=北，X 轴向右=东）。"""
 
@@ -455,14 +668,16 @@ class MapView(QGraphicsView):
         self._object_items: Dict[Tuple[int, int], ObjectGraphicsItem] = {}
         self._ray_lines: List[QGraphicsItem] = []
         self._grid_items: List[QGraphicsItem] = []
+        self._laser_trail: List[QGraphicsItem] = []   # 历史条纹（海床扫描留痕）
 
         # 初始变换
         self._update_transform()
 
     # ── 公共方法 ───────────────────────────────────────────────
 
-    def update_state(self, pose: PoseSnapshot, objects: List[ObjectSnapshot]):
-        """每帧更新：重定位 AUV → 重绘网格 → 重绘物体/射线/目标。"""
+    def update_state(self, pose: PoseSnapshot, objects: List[ObjectSnapshot],
+                     laser: Optional[LaserSnapshot] = None):
+        """每帧更新：重定位 AUV → 重绘网格 → 重绘物体/射线/目标/激光条纹。"""
         # 1. 更新 AUV 场景坐标
         sx, sy = self._world_to_scene(pose.x, pose.y)
         self._auv_item.setPos(sx, sy)
@@ -519,6 +734,73 @@ class MapView(QGraphicsView):
         for fid in list(self._object_items):
             if fid not in current_ids:
                 self._scene.removeItem(self._object_items.pop(fid))
+
+        # 7. 线激光条纹：把机体系点投到世界系（当前帧高亮 + 历史留痕）
+        self._draw_laser(pose, laser)
+
+    def _draw_laser(self, pose: PoseSnapshot, laser: Optional[LaserSnapshot]):
+        """当前条纹画成一条高亮折线，历史条纹留痕（展示海床扫描逐渐铺开）。
+
+        留痕只在**条纹位置变了**时追加一段淡色折线（否则 AUV 悬停时会不停堆叠
+        同一条）；当前条纹每帧用亮色重画，随 `_ray_lines` 一起清理。
+        """
+        if laser is None or laser.points is None or len(laser.points) == 0:
+            return
+
+        world = self._body_to_world(laser.points, pose)
+        scene_pts = [self._world_to_scene(wx, wy) for wx, wy in world]  # [(x,y), ...]
+        if len(scene_pts) < 2:
+            return
+
+        # 留痕：条纹位置变了才追加（用条纹两端的场景坐标做指纹）
+        key = (round(scene_pts[0][0], 1), round(scene_pts[0][1], 1),
+               round(scene_pts[-1][0], 1), round(scene_pts[-1][1], 1))
+        if key != getattr(self, "_laser_last_key", None):
+            self._laser_last_key = key
+            trail_pen = QPen(QColor(LASER_TRAIL_COLOR.red(),
+                                    LASER_TRAIL_COLOR.green(),
+                                    LASER_TRAIL_COLOR.blue(), 70), 1.2)
+            for a, b in zip(scene_pts, scene_pts[1:]):
+                seg = self._scene.addLine(a[0], a[1], b[0], b[1], trail_pen)
+                seg.setZValue(1)
+                self._laser_trail.append(seg)
+            MAX_TRAIL = 4000   # 限制场景元素，避免无限增长
+            while len(self._laser_trail) > MAX_TRAIL:
+                self._scene.removeItem(self._laser_trail.pop(0))
+
+        # 当前条纹：亮色，随 _ray_lines 按帧清理
+        bright = QPen(LASER_COLOR, 2.2)
+        for a, b in zip(scene_pts, scene_pts[1:]):
+            seg = self._scene.addLine(a[0], a[1], b[0], b[1], bright)
+            seg.setZValue(3)
+            self._ray_lines.append(seg)
+        for p in (scene_pts[0], scene_pts[-1]):
+            dot = self._scene.addEllipse(p[0] - 2, p[1] - 2, 4, 4,
+                                         QPen(LASER_COLOR, 1), QBrush(LASER_COLOR))
+            dot.setZValue(3)
+            self._ray_lines.append(dot)
+
+    @staticmethod
+    def _body_to_world(points: np.ndarray, pose: PoseSnapshot) -> np.ndarray:
+        """机体系点 (N,3) -> 世界/odom 系 (N,2)（俯视投影用 x,y）。
+
+        ``R_w_b = Rz(yaw)·Ry(pitch)·Rx(roll)``，角度是度（与 PoseInfo 一致，
+        见 uv_sim.geometry.euler_rpy_to_matrix 的同一约定）。
+        """
+        if points is None or len(points) == 0:
+            return np.zeros((0, 2), dtype=float)
+        r, p, y = (math.radians(pose.roll), math.radians(pose.pitch),
+                   math.radians(pose.yaw))
+        cr, sr = math.cos(r), math.sin(r)
+        cp, sp = math.cos(p), math.sin(p)
+        cy, sy = math.cos(y), math.sin(y)
+        R = np.array([
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp,     cp * sr,                cp * cr],
+        ], dtype=float)
+        world = points @ R.T + np.array([pose.x, pose.y, pose.z], dtype=float)
+        return world[:, :2]
 
     def set_auto_follow(self, enabled: bool):
         self._auto_follow = enabled
@@ -757,15 +1039,18 @@ class VisualizerGUI(QMainWindow):
         self._task = TaskSnapshot()
         self._nodes: List[NodeInfo] = []
         self._annotated: Dict[str, QPixmap] = {}  # cam_name → pixmap
+        self._laser: Optional[LaserSnapshot] = None
 
         # 频率计数
         self._pose_count = 0
         self._obj_count = 0
         self._task_count = 0
+        self._laser_count = 0
         self._last_rate_time = time.time()
         self._pose_rate = 0.0
         self._obj_rate = 0.0
         self._task_rate = 0.0
+        self._laser_rate = 0.0
 
         # UI
         self._setup_ui()
@@ -971,6 +1256,22 @@ class VisualizerGUI(QMainWindow):
         obj_layout.addWidget(self._obj_table)
         layout.addWidget(grp_obj)
 
+        # 线激光海床剖面
+        grp_laser = QGroupBox("线激光 (海床剖面)")
+        laser_layout = QVBoxLayout(grp_laser)
+        self._laser_profile = LaserProfileWidget()
+        laser_layout.addWidget(self._laser_profile)
+
+        self._laser_stat_label = QLabel("点数: --  跨度: --  深度: --")
+        self._laser_stat_label.setStyleSheet(
+            f"color: {LASER_COLOR.name()}; font-size: 11px;"
+        )
+        laser_layout.addWidget(self._laser_stat_label)
+        self._laser_status_label = QLabel("等待 /sim/sensor/laser_points …")
+        self._laser_status_label.setStyleSheet("color: #666; font-size: 10px;")
+        laser_layout.addWidget(self._laser_status_label)
+        layout.addWidget(grp_laser)
+
         # 任务状态
         grp_task = QGroupBox("任务状态")
         task_layout = QVBoxLayout(grp_task)
@@ -1043,6 +1344,11 @@ class VisualizerGUI(QMainWindow):
                 pix = _ros_image_to_qpixmap(data)
                 if not pix.isNull():
                     self._annotated[data["cam"]] = pix
+            elif msg_type == "laser":
+                self._laser = LaserSnapshot.from_body_points(
+                    data["points"], data["stamp"]
+                )
+                self._laser_count += 1
             elif msg_type == "nodes":
                 self._nodes = [NodeInfo(**n) for n in data]
 
@@ -1053,16 +1359,18 @@ class VisualizerGUI(QMainWindow):
             self._pose_rate = self._pose_count / dt
             self._obj_rate = self._obj_count / dt
             self._task_rate = self._task_count / dt
+            self._laser_rate = self._laser_count / dt
             self._pose_count = 0
             self._obj_count = 0
             self._task_count = 0
+            self._laser_count = 0
             self._last_rate_time = now
 
         # 更新 UI
         self._update_left_panel()
         self._update_right_panel()
         self._update_camera_panel()
-        self._map.update_state(self._pose, self._objects)
+        self._map.update_state(self._pose, self._objects, self._laser)
         self._update_status_bar()
 
     def _update_left_panel(self):
@@ -1140,6 +1448,23 @@ class VisualizerGUI(QMainWindow):
         )
         self._task_error_label.setText(self._task.error or "")
 
+        # 线激光剖面 + 统计
+        self._laser_profile.set_laser(self._laser)
+        if self._laser is not None and self._laser.raw_count > 0:
+            d, ac = self._laser.depth, self._laser.across
+            self._laser_stat_label.setText(
+                f"点数: {self._laser.raw_count}  "
+                f"跨度: {ac.max() - ac.min():.2f} m  "
+                f"深度: {d.min():.2f}~{d.max():.2f} m  "
+                f"起伏: {d.max() - d.min():.2f} m"
+            )
+            self._laser_status_label.setText(
+                "机体系 y(右舷) ↔ 深度 z；点来自 /sim/sensor/laser_points"
+            )
+        else:
+            self._laser_stat_label.setText("点数: 0  跨度: --  深度: --")
+            self._laser_status_label.setText("未收到激光条纹（laser_sim 未启动？）")
+
     def _update_camera_panel(self):
         """刷新四个通道的标注图像。"""
         for cam, lbl in self._cam_labels.items():
@@ -1150,6 +1475,7 @@ class VisualizerGUI(QMainWindow):
     def _update_status_bar(self):
         self._status_label.setText(
             f"Pose: {self._pose_rate:.1f}Hz | Objects: {self._obj_rate:.1f}Hz | "
+            f"Laser: {self._laser_rate:.1f}Hz | "
             f"Task: {self._task_rate:.1f}Hz | Nodes: {len(self._nodes)} | "
             f"Scale: {self._map._scale:.0f} px/m"
         )

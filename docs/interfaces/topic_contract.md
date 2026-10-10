@@ -192,6 +192,7 @@
 |---|---|---|---|---|---|---|---|
 | `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | 订阅 | — | GUI | 两者 | `visualization/auv_visualizer.py:create_subscription` | 2D 地图位姿 |
 | `/perception/objects` | `uv_msgs/ObjectPositionArray` | 订阅 | — | GUI | 两者 | `visualization/auv_visualizer.py:create_subscription` | 物体与射线 |
+| `/sim/sensor/laser_points` | `sensor_msgs/PointCloud2` | 订阅 | — | GUI | 两者 | `visualization/auv_visualizer.py:create_subscription` | 线激光条纹：2D 地图上画跨航向条纹（含历史留痕）+ 右侧海床剖面（机体系 y ↔ 深度 z） |
 | `/task/status` | `uv_msgs/TaskStatus` | 订阅 | — | GUI | 两者 | `visualization/auv_visualizer.py:create_subscription` | 任务进度 |
 | `/perception/annotated/front_left` | `sensor_msgs/Image` | 订阅 | **无（缺口）** | GUI | 两者 | `visualization/auv_visualizer.py:create_subscription` | 4 通道；**当前无发布者**，见 §9 |
 | `/perception/annotated/front_right` | `sensor_msgs/Image` | 订阅 | **无（缺口）** | GUI | 两者 | `visualization/auv_visualizer.py:create_subscription` | 同上 |
@@ -218,7 +219,7 @@
 | `/auv/thrusters_state` | 有发布者、**无订阅者**（可用于混控校验，目前没人用） | 待定 |
 | `/sim/sensor/dvl` | 有发布者（`dvl_sim`）、**当前无订阅者** | 有意为之：T6 的 AQUA-SLAM 是它的消费者 |
 | `/sim/sensor/pressure` | 有发布者（`pressure_sim`）、**当前无订阅者** | 有意为之：补全 `/sim/sensor/*` 面，T6 可能用（深度先验） |
-| `/sim/sensor/laser_points` | 有发布者（`laser_sim`）、**当前无订阅者** | 有意为之：线激光海床重建的输入，重建/建图节点由使用者自己写（场景侧 `line_laser` 见 §1.1） |
+| `/sim/sensor/laser_points` | 有发布者（`laser_sim`）、有订阅者（GUI `visualization/auv_visualizer.py` 做可视化）；**栈内仍无消费者** | 有意为之：线激光海床重建的输入，重建/建图节点由使用者自己写（场景侧 `line_laser` 见 §1.1） |
 | `/tf` | **有发布者（引擎 `stonefish_simulator*`），但实测 0 条消息**：场景未声明 `<ros_base_link_transform publish="true"/>`，广播被那个 `if` 守卫关着（2026-10-10 快照实测） | B18，已文档化 |
 | `/tf_static` | **话题根本不存在**（不是"存在但没消息"；上述快照里没有它） | B18 的措辞更正 |
 | `/basic_motion/pose_info` 的频率 | 设计 30 Hz（`create_timer(1.0/30.0)`），**完整栈里实测 ≈15.6 Hz**（单独跑 `basic_motion` 则 29.9 Hz）⇒ 完整栈下定时器丢一半节拍。影响 `position`/`navigator`/`task_runner` 的位姿新鲜度 | **B20**，见 `topic_rates.md` §2 与 `roadmap.md` |
