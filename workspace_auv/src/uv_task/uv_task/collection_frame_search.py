@@ -259,7 +259,7 @@ class FrontDownSearch:
                 self._search_clock.enter_near()
                 # Near-radius indication is asynchronous.  It must never
                 # delay or gate the BLINE that just brought us into range.
-                self._flash(self.node.LIGHT_YELLOW,
+                self._flash(self.node.LIGHT_YELLOW, 1,
                             f'进入{self.target_label}近场半径')
                 self.node.get_logger().info(
                     f'{self.task_name}：进入预设 {self.target_label} XY 二维半径；'

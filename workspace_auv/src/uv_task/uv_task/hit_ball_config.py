@@ -7,7 +7,7 @@ DEFAULTS = {
     'targets_blue_position': [2.0, 0.0, 0.2],
     'targets_red_position': [2.0, 0.0, 0.2],
     'depth_task_depth_m': 0.2,
-    'depth_timeout': 10.0,
+    'depth_timeout': 15.0,
     'search_initial_observe_seconds': 2.0,
     'search_align_seconds': 3.0,
     'search_detection_timeout': 5.0,

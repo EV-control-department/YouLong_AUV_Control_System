@@ -502,7 +502,14 @@ class RB26GrabBallRingTask:
         if not controller._wait_pre_descent_settle():
             raise PickupFailure('下潜前等待被取消')
         if not self._descend_to_depth(kind, controller):
-            raise PickupFailure(kind+'下潜或停车失败')
+            # A vertical velocity timeout is a failed attempt, not a task
+            # abort.  First return to the work depth with a position SET so
+            # the next check/retry (and the following target) starts safely.
+            self.log.warning(
+                f'组合抓取：{kind} 下潜或停车失败，使用SET上浮到作业深度后继续任务')
+            self._restore_work_depth(
+                f'组合抓取：{kind} 下潜超时后SET上浮到作业深度')
+            return False
         if kind == 'ring':
             self._ring_servo(self.p.get('ring_close_angle_deg', 90.0), '合爪')
         return True
