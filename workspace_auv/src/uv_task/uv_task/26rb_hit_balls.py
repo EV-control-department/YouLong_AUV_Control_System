@@ -71,12 +71,16 @@ class RB26HitBallsTask:
             self._sleep(min(self._params['search_period'], deadline-self._now()))
 
     def _flash(self, color, count, label):
-        for index in range(count):
-            self._light(color, f'{label} ({index+1}/{count})')
-            self._wait_until(self._now()+self._params['light_pulse_seconds'])
-            self._light(self._node.LIGHT_OFF, '闪灯间隔')
-            if index+1 < count:
-                self._wait_until(self._now()+self._params['light_gap_seconds'])
+        # Signal pulses always return to the motion-safe phase.  This publish
+        # is fire-and-forget; starting or continuing motion never waits on it.
+        self._light(self._node.LIGHT_OFF, f'{label} 闪灯前灭灯')
+        flash_async = getattr(self._node, '_flash_task_light', None)
+        if callable(flash_async):
+            flash_async(
+                color, count, f'26rb_hit_balls：{self._name} {label}',
+                pulse_seconds=self._params['light_pulse_seconds'],
+                gap_seconds=self._params['light_gap_seconds'],
+                restore=True)
 
     def _set(self, target, axes, timeout, label):
         self._check()
@@ -85,6 +89,7 @@ class RB26HitBallsTask:
         ok, message = self._node._send_action_goal(
             BasicMotion.Goal.SET, list(map(float, target)), axes,
             timeout=timeout, wait_deadline=self._now()+timeout,
+            light_color=self._node.LIGHT_OFF,
             task_context=self._node._format_motion_context(f'{self._name} {label}'))
         if not ok:
             raise MotionFailure(f'{label}失败：{message}')
@@ -96,10 +101,12 @@ class RB26HitBallsTask:
         self._set([*pose[:3], pose[5]], 'xyrz',
                   self._params['search_rotate_timeout'], '停车保持当前水平位置和航向')
 
-    def _turn(self, yaw, label):
+    def _turn(self, yaw, label, timeout=None):
         pose = self._pose()
+        if timeout is None:
+            timeout = self._params['search_rotate_timeout']
         self._set([*pose[:3], wrap_degrees(yaw)], 'rz',
-                  self._params['search_rotate_timeout'], label)
+                  timeout, label)
 
     def _look_at_preset(self):
         pose = self._pose()
@@ -108,6 +115,8 @@ class RB26HitBallsTask:
         self._turn(yaw, '朝向当前颜色球的预设 XY')
 
     def _observe(self, seconds, full_window=False):
+        # Observation dwell is the only steady task phase shown in yellow.
+        self._light(self._node.LIGHT_YELLOW, '前视观察等待')
         # Each observation phase requires a callback after phase entry.
         after = self._observer.cursor()
         deadline = self._now()+seconds
@@ -126,19 +135,20 @@ class RB26HitBallsTask:
             return
         ok, message = self._node._send_body_velocity(
             task_context=self._node._format_motion_context(f'{self._name} 结束 yaw 伺服'),
-            wait_deadline=self._now()+self._params['motion_cancel_timeout'])
+            wait_deadline=self._now()+self._params['motion_cancel_timeout'],
+            light_color=self._node.LIGHT_OFF)
         if not ok:
             raise MotionFailure(f'停止 yaw 伺服失败：{message}')
         self._yaw_active = False
 
-    def _align(self, seconds, deadline=math.inf):
+    def _align(self, seconds):
         """Zero translation, yaw-only servo; prefer geometrically valid stereo."""
-        until = min(deadline, self._now()+seconds)
+        until = self._now()+seconds
         after = self._observer.cursor()
         owner = self._observer.first_eye
         stable_mode = stable_since = None
-        mono = stereo = False
-        self._light(self._node.LIGHT_YELLOW, '前视单目／双目 yaw 对准')
+        aligned = False
+        self._light(self._node.LIGHT_OFF, '前视单目／双目 yaw 对准运动')
         try:
             while self._now() < until:
                 self._check()
@@ -161,10 +171,8 @@ class RB26HitBallsTask:
                     if stable_since is None or stable_mode != mode:
                         stable_since, stable_mode = self._now(), mode
                     if self._now()-stable_since >= self._params['search_yaw_stable_seconds']:
-                        if center is not None:
-                            stereo = True
-                        else:
-                            mono = True
+                        aligned = True
+                        break
                 else:
                     stable_since = None
                 rate = 0.0 if error is None else float(np.clip(
@@ -175,6 +183,7 @@ class RB26HitBallsTask:
                 ok, message = self._node._send_body_velocity(
                     yaw_rate_deg_s=rate, lease_s=max(0.25, 4*self._params['search_period']),
                     wait_deadline=until,
+                    light_color=self._node.LIGHT_OFF,
                     task_context=self._node._format_motion_context(f'{self._name} 前视 yaw 伺服；无垂向修正'))
                 if not ok:
                     if self._now() >= until:
@@ -185,11 +194,9 @@ class RB26HitBallsTask:
             self._neutral_yaw()
         self._hold()
         valid = bool(self._observer.frames(after))
-        if valid and mono:
-            self._flash(self._node.LIGHT_GREEN, 1, '单目对准完成')
-        if valid and stereo:
-            self._flash(self._node.LIGHT_GREEN, 2, '双目对准完成')
-        if valid and not mono and not stereo:
+        if valid and aligned:
+            self._flash(self._node.LIGHT_GREEN, 1, 'yaw 对准完成')
+        if valid and not aligned:
             self._node.get_logger().warning(
                 f'hit_balls：{self._name} 对准预算用尽仍未稳定，保留当前实测航向')
         # Flashing must not hide a target loss before the next motion starts.
@@ -232,7 +239,7 @@ class RB26HitBallsTask:
                     and math.isfinite(f.along_speed_mps) and f.along_speed_mps > 0):
                 drive['started'] = self._now()
 
-        self._light(self._node.LIGHT_YELLOW, label)
+        self._light(self._node.LIGHT_OFF, f'{label} 运动阶段')
         self._node._last_motion_final_target = None
         future = client.send_goal_async(goal, feedback_callback=feedback)
         accept_until = min(deadline, self._now()+self._params['motion_accept_timeout'])
@@ -299,15 +306,30 @@ class RB26HitBallsTask:
     def _cruise_to_radius(self, front_seen):
         p = self._params
         deadline = self._now()+p['cruise_timeout']
+        alignment_pause_started = None
 
         def monitor():
+            nonlocal alignment_pause_started
             if np.linalg.norm(np.asarray(self._pose()[:2])-self._position[:2]) <= p['cruise_radius_m']:
                 return 'radius'
             if self._now() >= deadline:
                 return 'timeout'
             if not front_seen and self._observer.frames():
+                alignment_pause_started = self._now()
                 return 'front'
             return None
+
+        def align_while_paused():
+            nonlocal deadline, alignment_pause_started
+            paused_at = (alignment_pause_started if alignment_pause_started is not None
+                         else self._now())
+            alignment_pause_started = None
+            try:
+                return self._align(p['search_align_seconds'])
+            finally:
+                # Freeze the cruise budget from detection through alignment,
+                # including stopping the previous BLINE and holding position.
+                deadline += max(0.0, self._now()-paused_at)
 
         while True:
             self._check()
@@ -319,7 +341,7 @@ class RB26HitBallsTask:
                 raise ObservationFailure('靠近预设位置的 BLINE 总超时')
             if state == 'front':
                 front_seen = True
-                if not self._align(p['search_align_seconds'], deadline):
+                if not align_while_paused():
                     raise ObservationFailure('途中首次发现目标，但修正阶段结束时目标丢失')
                 continue
             remaining = max(0.001, deadline-self._now())
@@ -333,7 +355,7 @@ class RB26HitBallsTask:
                 raise ObservationFailure('靠近预设位置的 BLINE 总超时')
             if result.reason == 'front':
                 front_seen = True
-                if not self._align(p['search_align_seconds'], deadline):
+                if not align_while_paused():
                     raise ObservationFailure('途中首次发现目标，但修正阶段结束时目标丢失')
 
     def _near_observation(self):
@@ -344,7 +366,8 @@ class RB26HitBallsTask:
         # Body/world yaw follows NED: negative is left, positive is right.
         for sign, label in ((-1, '左'), (1, '右')):
             self._turn(base_yaw+sign*p['observe_yaw_step_deg'],
-                       f'近场向{label} {p["observe_yaw_step_deg"]:.1f}° 扫视')
+                       f'近场向{label} {p["observe_yaw_step_deg"]:.1f}° 扫视',
+                       timeout=p['observe_rotate_timeout'])
             if self._observe(p['observe_direction_dwell_seconds']):
                 return
         raise ObservationFailure('近场正前方及左右扫视均未发现当前颜色球')
@@ -395,7 +418,9 @@ class RB26HitBallsTask:
             raise MotionFailure('前进 0.5m 的 BLINE 超时')
         self._hold()
         if not self._align(p['charge_alignment_seconds']):
-            raise ObservationFailure('撞击前两秒对准结束时没有有效目标')
+            self._node.get_logger().warning(
+                f'hit_balls：{self._name} 撞击前未看到球；不做视觉修正，'
+                '按当前航向直接执行撞击 BLINE')
         distance = p['charge_speed_mps']*p['charge_duration']+1.0
         result = self._run_bline([distance, 0.0], p['charge_speed_mps'],
                                  p['charge_timeout'], 'BLINE 前向定时撞击',
@@ -403,7 +428,7 @@ class RB26HitBallsTask:
         if result.reason != 'duration':
             raise MotionFailure('定时撞击未完成指定前进时长')
         self._hold()
-        self._light(self._node.LIGHT_GREEN, '定时撞击完成；不返回原位置')
+        self._flash(self._node.LIGHT_GREEN, 1, '定时撞击完成；不返回原位置')
         return TaskOutcome.ok()
 
     def execute(self):
@@ -411,7 +436,7 @@ class RB26HitBallsTask:
         node = self._node
         try:
             self._check()
-            self._light(node.LIGHT_YELLOW, '进入撞球任务')
+            self._light(node.LIGHT_OFF, '进入撞球任务')
             for name in p['order']:
                 key = 'targets_blue_position' if name == 'impact_ball_blue' else 'targets_red_position'
                 if len(p[key]) != 3:

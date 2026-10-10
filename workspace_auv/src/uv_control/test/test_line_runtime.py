@@ -80,8 +80,8 @@ def test_success_keeps_position_mode_and_waits_in_hold(node):
     clock = prepare(node, goal)
     result = node._execute_body_line(goal)
     assert result.success and goal.terminal == 'succeeded'
-    assert result.final_target == pytest.approx([0, 1, .2, 90])
-    assert clock.hold_at is not None and clock.now - clock.hold_at >= .95
+    assert result.final_target == pytest.approx([0, 1, .2, 0])
+    assert clock.hold_at is not None and clock.now - clock.hold_at >= node._line_config.stable_seconds - .051
     assert node.pub_setpoint.messages[-1].control_key == 0
     assert not node._velocity_active
 
@@ -120,3 +120,112 @@ def test_reserved_line_rejects_nonzero_and_accepts_zero_velocity(node):
         node._execute_motion(Goal(7, [.1, 0, 0, 0]))
     assert node._execute_motion(Goal(7)).success
     assert node._line_stop_requested.is_set()
+
+
+@pytest.mark.parametrize('speed', [.28, .32, 1.0])
+def test_overspeed_action_is_accepted_and_completes(node, speed):
+    goal = Goal(8, [0, 1, .2, 0])
+    goal.request.cruise_speed = speed
+    prepare(node, goal)
+    result = node._execute_body_line(goal)
+    assert result.success and goal.terminal == 'succeeded'
+
+
+@pytest.mark.parametrize('length,speed,requested,expected', [
+    (.5, .15, 0., 15.),
+    (3., .15, 0., 30.),
+    (.5, .15, 7., 7.),
+])
+def test_timeout_uses_new_auto_formula_or_explicit_override(node, length, speed, requested, expected):
+    goal = Goal(8, [length, 0, 0, 0], timeout=requested)
+    goal.request.cruise_speed = speed
+    clock = prepare(node, goal)
+    advance = clock.sleep
+    def frozen_vehicle(dt):
+        pose = node.pose
+        advance(dt)
+        node.pose = pose
+        node.vel_body = {'x': 0., 'y': 0., 'z': 0.}
+    clock.sleep = frozen_vehicle
+    result = node._execute_body_line(goal)
+    assert not result.success and goal.terminal == 'aborted'
+    assert result.message == 'LINE total timeout'
+    assert clock.now == pytest.approx(expected, abs=.1)
+    assert not node._velocity_active
+
+
+@pytest.mark.parametrize('command,target,expected', [
+    (8, [1,0,0,90], [1,0,0,90]),
+    (8, [0,1,.2,-90], [0,1,.2,-90]),
+    (9, [1,0,.2,135], [1,0,.2,135]),
+    (9, [0,0,0,90], [0,0,0,90]),
+    (8, [0,0,0,90], [0,0,0,90]),
+])
+def test_both_line_commands_turn_only_after_arriving(node, command, target, expected):
+    goal = Goal(command, target, timeout=60.)
+    clock = prepare(node, goal)
+    sent = []
+    publish = node._send_setpoint
+    def record(*args, **kwargs):
+        sent.append((clock.now, node.pose, args))
+        return publish(*args, **kwargs)
+    node._send_setpoint = record
+    result = node._execute_motion(goal)
+    assert result.success and goal.terminal == 'succeeded'
+    assert result.final_target == pytest.approx(expected)
+    assert abs((node.pose.rz-expected[3]+180)%360-180) <= 5
+    # First command holds the start facing travel direction; the later
+    # position command contains final heading and is sent only at the endpoint.
+    final_commands = [(pose,args) for _,pose,args in sent
+                      if args[0] == 0 and abs(args[2]-expected[0]) < 1e-6
+                      and abs(args[3]-expected[1]) < 1e-6
+                      and abs(args[4]-expected[2]) < 1e-6
+                      and abs(__import__('math').degrees(args[5])-expected[3]) < 1e-6]
+    assert final_commands
+    for pose, _ in final_commands:
+        assert max(abs(p-t) for p,t in zip((pose.x,pose.y,pose.z),expected[:3])) <= .1
+    assert clock.hold_at is not None
+    assert not node._velocity_active
+
+
+def test_body_line_final_yaw_is_relative_and_world_line_is_absolute(node):
+    node.pose = Coordinate(x=2., y=-3., z=.5, rz=90.)
+    goal = Goal(8, [1,0,0,45], timeout=60.)
+    prepare(node, goal)
+    result = node._execute_motion(goal)
+    assert result.success
+    assert result.final_target == pytest.approx([2.,-2.,.5,135.])
+
+
+def test_world_line_can_return_to_world_origin_from_nonzero_start(node):
+    node.pose = Coordinate(x=.5, y=.3, z=.2, rz=35.)
+    goal = Goal(9, [0,0,0,-45], timeout=60.)
+    prepare(node, goal)
+    result = node._execute_motion(goal)
+    assert result.success
+    assert result.final_target == pytest.approx([0,0,0,-45])
+
+
+def test_final_turn_cannot_succeed_before_heading_is_reached(node):
+    goal = Goal(9, [.5,0,0,90], timeout=18.)
+    clock = prepare(node, goal)
+    advance = clock.sleep
+    def jam_final_turn(dt):
+        advance(dt)
+        if node.pub_setpoint.messages and clock.now > 1:
+            msg = node.pub_setpoint.messages[-1]
+            if msg.control_key == 0 and abs(msg.x-.5) < 1e-6:
+                node.pose = Coordinate(x=node.pose.x, y=node.pose.y, z=node.pose.z, rz=0.)
+    clock.sleep = jam_final_turn
+    result = node._execute_motion(goal)
+    assert not result.success and result.message == 'LINE total timeout'
+    assert not node._velocity_active
+
+
+@pytest.mark.parametrize('fault', ['cancel', 'zero', 'twist', 'odom', 'origin', 'lease'])
+def test_world_line_retains_fault_stop_guards(node, fault):
+    goal = Goal(9, [1.,.5,.2,90.], timeout=60.)
+    prepare(node, goal, fault)
+    result = node._execute_motion(goal)
+    assert not result.success
+    assert not node._velocity_active

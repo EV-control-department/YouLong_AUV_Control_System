@@ -39,14 +39,6 @@ params:
     velocity_period: 0.05
     light_pulse_seconds: 0.3
     light_gap_seconds: 0.3
-  # 沿横移起点机体 y，按实测位移完成，切目不重置进度。
-  lateral:
-    front: [0.0, 0.0, 0.0, 0.0]
-    speed_mps: 0.05
-    tolerance_m: 0.02
-    timeout: 40.0
-    path_kp: 0.5
-    max_path_speed_mps: 0.03
   # 高度容限为百分点，目标 70±1%；保持本门巡游深度。
   fore_aft:
     target_height_percent: 70.0
@@ -58,8 +50,8 @@ params:
     line_kp: 0.5
     max_cross_speed_mps: 0.03
     line_tolerance_m: 0.03
-    max_travel_m: 4.0
-    timeout: 90.0
+    max_travel_m: 1.2
+    timeout: 10.0
     observe_seconds: 1.0
   # 双目配对时间秒、射线距离米；最终 yaw 超时未稳定则失败。
   pass:
@@ -74,6 +66,6 @@ params:
     stereo_min_angle_deg: 0.1
     stereo_max_distance_m: 30.0
     distance_m: 1.6
-    speed_mps: 0.15
-    timeout: 60.0
+    speed_mps: 0.2
+    timeout: 20.0
     pause_seconds: 0.5

@@ -55,7 +55,7 @@ def node():
         'Node': object, 'Coordinate': Coordinate, 'threading': threading,
         'time': time, 'math': __import__('math'),
         'wrap_deg': lambda value: (value + 180.0) % 360.0 - 180.0,
-        'BasicMotion': NS(Goal=NS(START=6, BODY_VELOCITY=7, BLINE=8), Result=NS),
+        'BasicMotion': NS(Goal=NS(START=6, BODY_VELOCITY=7, BLINE=8, WLINE=9), Result=NS),
         'GoalResponse': NS(ACCEPT='accept', REJECT='reject'),
         'CancelResponse': NS(ACCEPT='accept'),
         'LineConfig': LineConfig, 'LineGuidance': LineGuidance, 'norm': norm,

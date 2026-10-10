@@ -20,8 +20,8 @@ from auv_protocol.topics import BASIC_MOTION, STATE_ODOM, STATE_TWIST, ZIT6_SETP
 from uv_control.basic_motion import BasicMotionNode
 from uv_control.line_guidance import rotate_body_to_world, rotate_world_to_body
 
-if not hasattr(BasicMotion.Goal, 'BLINE'):
-    pytest.skip('rebuilt BLINE action required', allow_module_level=True)
+if not hasattr(BasicMotion.Goal, 'WLINE'):
+    pytest.skip('rebuilt WLINE action required', allow_module_level=True)
 
 
 def wait(predicate, seconds=15.0):
@@ -33,7 +33,8 @@ def wait(predicate, seconds=15.0):
     assert predicate(), 'ROS action/backend did not finish before test timeout'
 
 
-def test_real_action_success_and_zero_speed_preemption(tmp_path):
+@pytest.mark.parametrize('command', [BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE])
+def test_real_action_success_and_zero_speed_preemption(tmp_path, command):
     # Never connect a synthetic control test to the vehicle's default domain.
     rclpy.init(domain_id=184)
     motion = BasicMotionNode()
@@ -97,9 +98,9 @@ def test_real_action_success_and_zero_speed_preemption(tmp_path):
         assert client.wait_for_server(timeout_sec=5)
         wait(motion._motion_ready)
         goal = BasicMotion.Goal()
-        goal.cmd_type = BasicMotion.Goal.BLINE
+        goal.cmd_type = command
         goal.axes = 'xyz'
-        goal.target = [0.0, .25, .1, 0.0]
+        goal.target = [0.0, .25, .1, -45.0]
         goal.cruise_speed = .17
         goal.timeout = 15.0
         feedback = []
@@ -111,8 +112,10 @@ def test_real_action_success_and_zero_speed_preemption(tmp_path):
         wait(result.done)
         assert result.result().result.success
         target = result.result().result.final_target
-        assert target[0] == pytest.approx(-.25 * math.sin(math.radians(35)), abs=1e-4)
-        assert target[1] == pytest.approx(.25 * math.cos(math.radians(35)), abs=1e-4)
+        expected = ([-.25 * math.sin(math.radians(35)), .25 * math.cos(math.radians(35)), .1, -10.]
+                    if command == BasicMotion.Goal.BLINE else [0., .25, .1, -45.])
+        assert target == pytest.approx(expected, abs=1e-4)
+        assert abs((pose[3]-expected[3]+180)%360-180) <= 5.
         assert messages[-1].control_key == 0
         assert any(item.phase == 'HOLD' for item in feedback)
         assert not motion._velocity_active

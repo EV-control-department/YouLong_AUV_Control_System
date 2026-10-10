@@ -24,7 +24,7 @@ GROUPS = {
                      height_kp=0.4, target_area_percent=80.0, area_tolerance_percent=1.0,
                      stable_seconds=0.5, speed_mps=0.10, reverse_speed_mps=0.08,
                      area_kp=0.4, line_kp=0.5, max_cross_speed_mps=0.03,
-                     line_tolerance_m=0.03, max_travel_m=4.0, timeout=90.0,
+                     line_tolerance_m=0.03, max_travel_m=1.2, timeout=10.0,
                      observe_seconds=1.0),
     'pass': dict(yaw_servo_min_seconds=1.0, yaw_servo_max_seconds=3.0,
                  yaw_tolerance_deg=2.0, yaw_stable_seconds=0.3, yaw_kp=1.2,
@@ -119,8 +119,8 @@ def validate_gate_params(params, complete=False):
         raise ValueError('面积容限必须小于目标面积百分比')
     if values['pass_yaw_servo_min_seconds'] > values['pass_yaw_servo_max_seconds']:
         raise ValueError('最终 yaw 最短时限不能大于最长时限')
-    if not 0 < values['pass_speed_mps'] < 0.18:
-        raise ValueError('pass.speed_mps 必须在 (0,0.18) 内，与 BLINE 接口一致')
+    if not 0 < values['pass_speed_mps'] < 0.28:
+        raise ValueError('pass.speed_mps 必须在 (0,0.28) 内，与 BLINE 接口一致')
     if not 0 < values['search_lock_center_delta_fraction'] <= 1:
         raise ValueError('search.lock_center_delta_fraction 必须在 (0,1] 内')
     return values

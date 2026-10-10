@@ -1043,7 +1043,8 @@ class BasicMotionNode(Node):
 
     def _step_move_world(self, target_x: float, target_y: float,
                          target_z: float, target_yaw_degree: float,
-                         timeout: float = 60.0) -> bool:
+                         timeout: float = 60.0,
+                         step_timeout_limit: float | None = None) -> bool:
         """步进移动：odom 系目标，拆成小段逐段发送。"""
         step_no = 0
         start = time.monotonic()
@@ -1110,8 +1111,11 @@ class BasicMotionNode(Node):
             self.set_step(dx=vector_body.x, dy=vector_body.y, dz=vector_body.z, dyaw_deg=vector_body.rz)
 
             # 每一步只能使用当前动作剩余的时间，不能把已经超出的时间再借回来。
-            # 保留一个很小的下限，避免剩余时间过小时进入无意义的等待。
-            step_timeout = max(0.1, remaining)
+            step_timeout = timeout - (time.monotonic() - start)
+            if step_timeout <= 0.0:
+                return False
+            if step_timeout_limit is not None:
+                step_timeout = min(step_timeout, step_timeout_limit)
             if not self._wait_step_convergence(move_angle, timeout=step_timeout):
                 if self._action_abort_reason is not None:
                     self.get_logger().warning(
@@ -1119,6 +1123,8 @@ class BasicMotionNode(Node):
                         f'{self._action_abort_reason}')
                     return False
                 self.get_logger().warning(f'步进第{step_no}步收敛超时')
+                if step_timeout_limit is not None:
+                    return False
 
         # 最终目标
         remaining = timeout - (time.monotonic() - start)
@@ -1290,7 +1296,7 @@ class BasicMotionNode(Node):
                 f'当前朝向{p.rz:.1f}°')
             rotate_timeout = deadline - time.monotonic()
             if rotate_timeout <= 0 or not self._step_move_world(
-                    p.x, p.y, p.z, target_yaw, timeout=rotate_timeout):
+                    p.x, p.y, p.z, target_yaw, timeout=rotate_timeout, step_timeout_limit=8.0):
                 self.get_logger().warning('直线移动第一阶段失败，不进入前进阶段')
                 return False
             self.get_logger().info(
@@ -1302,7 +1308,7 @@ class BasicMotionNode(Node):
                 return False
             return self._step_move_world(
                 target_x, target_y, target_z, target_yaw,
-                timeout=move_timeout)
+                timeout=move_timeout, step_timeout_limit=8.0)
         else:
             self.get_logger().info(
                 f'直线移动: 距离过短({dist_xy:.3f}m), 直发深度/偏航')
@@ -1310,7 +1316,7 @@ class BasicMotionNode(Node):
             f'开始最终定位: 目标=({target_x:.2f}, {target_y:.2f}, {target_z:.2f}, {rz:.1f}°)')
         return self._step_move_world(
             target_x, target_y, target_z, rz,
-            timeout=timeout)
+            timeout=timeout, step_timeout_limit=8.0)
 
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -1319,17 +1325,17 @@ class BasicMotionNode(Node):
 
     def _line_state(self, goal_handle, generation=None):
         if goal_handle.is_cancel_requested or self._line_stop_requested.is_set():
-            raise RuntimeError('BLINE interrupted by cancellation or zero-speed stop')
+            raise RuntimeError('LINE interrupted by cancellation or zero-speed stop')
         with self._state_lock:
             blockers = self._motion_block_reasons_locked()
             if blockers:
-                raise RuntimeError('BLINE state invalid: ' + '; '.join(blockers))
+                raise RuntimeError('LINE state invalid: ' + '; '.join(blockers))
             if (generation is not None
                     and self._origin_generation != generation):
-                raise RuntimeError('BLINE origin changed')
+                raise RuntimeError('LINE origin changed')
             age = time.monotonic() - self._twist_received_at
             if age > self._state_timeout:
-                raise RuntimeError(f'BLINE velocity feedback stale ({age:.2f}s)')
+                raise RuntimeError(f'LINE velocity feedback stale ({age:.2f}s)')
             pose = self.pose
             position = (pose.x, pose.y, pose.z)
             attitude = (pose.rx, pose.ry, pose.rz)
@@ -1344,7 +1350,7 @@ class BasicMotionNode(Node):
         self._line_feedback = (phase, sample.measured_speed, sample.cross_error)
         if phase != previous_phase or now - previous_at >= 1.0:
             self.get_logger().info(
-                f'BLINE {phase}: progress={sample.progress:.3f}/{guide.length:.3f}m, '
+                f'LINE {phase}: progress={sample.progress:.3f}/{guide.length:.3f}m, '
                 f'remaining={sample.remaining:.3f}m, cross={sample.cross_error:.3f}m, '
                 f'target={guide.end}, yaw={guide.yaw:.1f}deg, '
                 f'along command={command:.3f}, measured={sample.measured_speed:.3f}m/s')
@@ -1372,13 +1378,17 @@ class BasicMotionNode(Node):
         try:
             started = time.monotonic()
             speed = validate_goal(req.target, req.axes, req.cruise_speed,
-                                  req.timeout, self._line_config)
+                                  req.timeout, self._line_config,
+                                  world=req.cmd_type == BasicMotion.Goal.WLINE)
             position, attitude, world_velocity, generation = self._line_state(goal_handle)
+            world = req.cmd_type == BasicMotion.Goal.WLINE
+            final_yaw = float(req.target[3]) if world else attitude[2] + float(req.target[3])
             guide = LineGuidance(position, attitude[2], req.target[:3], speed,
-                                 self._line_config)
-            result.final_target = [float(v) for v in (*guide.end, guide.yaw)]
+                                 self._line_config, world=world, final_yaw=final_yaw)
+            result.final_target = [float(v) for v in (*guide.end, guide.final_yaw)]
+            final_turn_budget = abs(wrap_deg(guide.final_yaw - guide.yaw)) / self._line_config.yaw_rate_limit
             timeout = (float(req.timeout) if req.timeout > 0.0
-                       else max(60.0, guide.length / speed + 50.0))
+                       else max(15.0, guide.length / speed + 10.0 + final_turn_budget))
             deadline = started + timeout
             align_deadline = min(deadline, started + self._line_config.align_timeout)
             self._action_target = dict(zip(('x', 'y', 'z', 'yaw'), result.final_target))
@@ -1392,10 +1402,10 @@ class BasicMotionNode(Node):
             while True:
                 tick = time.monotonic()
                 if tick >= deadline:
-                    raise RuntimeError('BLINE total timeout')
+                    raise RuntimeError('LINE total timeout')
                 dt = tick - last_tick
                 if dt > DEFAULT_VELOCITY_LEASE:
-                    raise RuntimeError('BLINE control loop stalled; velocity lease ended')
+                    raise RuntimeError('LINE control loop stalled; velocity lease ended')
                 last_tick = tick
                 with self._line_output_lock:
                     position, attitude, world_velocity, _ = self._line_state(
@@ -1414,9 +1424,10 @@ class BasicMotionNode(Node):
                         if aligned:
                             phase = 'CRUISE'
                         elif tick >= align_deadline:
-                            raise RuntimeError('BLINE alignment timeout')
-                    elif phase == 'HOLD':
-                        if guide.reached(position, world_velocity, attitude[2]):
+                            raise RuntimeError('LINE alignment timeout')
+                    elif phase in ('FINAL_TURN', 'HOLD'):
+                        if guide.reached(position, world_velocity, attitude[2], final=True):
+                            phase = 'HOLD'
                             stable_since = tick if stable_since is None else stable_since
                             if tick - stable_since >= self._line_config.stable_seconds:
                                 result.success = True
@@ -1424,6 +1435,7 @@ class BasicMotionNode(Node):
                                 goal_handle.succeed()
                                 return result
                         else:
+                            phase = 'FINAL_TURN'
                             stable_since = None
                         last_report = self._line_report(
                             guide, phase, sample, 0.0, last_report)
@@ -1431,8 +1443,8 @@ class BasicMotionNode(Node):
                         if guide.reached(position, world_velocity, attitude[2]):
                             self._publish_body_velocity()
                             self._send_setpoint(CK_POS, 0, *guide.end,
-                                                math.radians(guide.yaw))
-                            phase = 'HOLD'
+                                                math.radians(guide.final_yaw))
+                            phase = 'FINAL_TURN'
                             stable_since = None
                         else:
                             velocity, phase, sample = guide.step(
@@ -1448,7 +1460,7 @@ class BasicMotionNode(Node):
         except Exception as exc:
             result.message = str(exc)
             self._line_feedback = ('ABORT', 0.0, 0.0)
-            self.get_logger().error(f'BLINE ABORT: {result.message}')
+            self.get_logger().error(f'LINE ABORT: {result.message}')
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
             else:
@@ -1459,18 +1471,19 @@ class BasicMotionNode(Node):
                 try:
                     self._line_stop_and_hold(generation)
                 except Exception as exc:
-                    self.get_logger().error(f'BLINE cleanup failed: {exc}')
+                    self.get_logger().error(f'LINE cleanup failed: {exc}')
 
     def _action_goal_cb(self, goal_request):
         if self._safe_stop_latched or self._shutdown_requested:
             return GoalResponse.REJECT
-        if goal_request.cmd_type == BasicMotion.Goal.BLINE:
+        if goal_request.cmd_type in (BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE):
             try:
                 validate_goal(goal_request.target, goal_request.axes,
                               goal_request.cruise_speed, goal_request.timeout,
-                              self._line_config)
+                              self._line_config,
+                              world=goal_request.cmd_type == BasicMotion.Goal.WLINE)
             except (ValueError, TypeError) as exc:
-                self.get_logger().warning(f'BLINE goal rejected: {exc}')
+                self.get_logger().warning(f'LINE goal rejected: {exc}')
                 return GoalResponse.REJECT
         with self._line_output_lock, self._state_lock:
             if goal_request.cmd_type == BasicMotion.Goal.START:
@@ -1483,7 +1496,7 @@ class BasicMotionNode(Node):
                 if self._motion_reserved:
                     return GoalResponse.REJECT
                 self._motion_reserved = True
-                if goal_request.cmd_type == BasicMotion.Goal.BLINE:
+                if goal_request.cmd_type in (BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE):
                     self._line_reserved = True
                     self._line_stop_requested.clear()
             elif self._line_reserved and any(
@@ -1536,13 +1549,24 @@ class BasicMotionNode(Node):
                     self._action_target = None
                 with self._state_lock:
                     self._motion_reserved = False
-                    if req.cmd_type == BasicMotion.Goal.BLINE:
+                    if req.cmd_type in (BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE):
                         self._line_reserved = False
                         self._line_feedback = None
 
+    def _position_action_timeout(self, requested, start, x, y, z):
+        """SET/TRAVEL: explicit total budget or max(10, 3D distance/0.18+5)."""
+        if requested > 0.0:
+            return requested
+        distance = math.sqrt((x - start.x)**2 + (y - start.y)**2
+                             + (z - start.z)**2)
+        timeout = max(10.0, distance / 0.18 + 5.0)
+        self.get_logger().info(
+            f'SET/TRAVEL自动总超时: L={distance:.3f}m, timeout={timeout:.2f}s')
+        return timeout
+
     def _execute_motion(self, goal_handle):
         req = goal_handle.request
-        if req.cmd_type == BasicMotion.Goal.BLINE:
+        if req.cmd_type in (BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE):
             return self._execute_body_line(goal_handle)
         # A zero-speed stop is always accepted, including after state loss.
         if (req.cmd_type == BasicMotion.Goal.BODY_VELOCITY
@@ -1584,7 +1608,7 @@ class BasicMotionNode(Node):
             vx, vy, vz, yaw_rate_deg_s = req.target[:4]
             with self._line_output_lock:
                 if self._line_reserved:
-                    raise RuntimeError('BLINE owns motion output')
+                    raise RuntimeError('LINE owns motion output')
                 self._publish_body_velocity(
                     vx, vy, vz, yaw_rate_deg_s,
                     lease_s=(req.velocity_lease
@@ -1628,7 +1652,7 @@ class BasicMotionNode(Node):
             f'Action {type_name}: axes="{req.axes}", '
             f'target=[{x:.2f}, {y:.2f}, {z:.2f}, {yaw:.1f}], '
             f'pose=[{p.x:.2f}, {p.y:.2f}, {p.z:.2f}, {p.rz:.1f}], '
-            f'timeout={timeout:.1f}s')
+            f'requested_timeout={req.timeout:.1f}s')
 
         if req.cmd_type == BasicMotion.Goal.SET:
             axes = req.axes or 'xyzrz'
@@ -1640,6 +1664,7 @@ class BasicMotionNode(Node):
             if 'z' in axes.replace('rz', ''): tz = z
             if 'rz' in axes: tyaw = yaw
             self._action_target = {'x': tx, 'y': ty, 'z': tz, 'yaw': tyaw}
+            timeout = self._position_action_timeout(req.timeout, p, tx, ty, tz)
             success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout)
 
         elif req.cmd_type == BasicMotion.Goal.WMOVE:
@@ -1672,6 +1697,7 @@ class BasicMotionNode(Node):
             self.get_logger().info(
                 f'WTRAVEL: 目标=({tx:.2f}, {ty:.2f}, {tz:.2f}), '
                 f'方向角={math.degrees(math.atan2(ty - t.y, tx - t.x)):.1f}°')
+            timeout = self._position_action_timeout(req.timeout, p, tx, ty, tz)
             success = self._travel_world(tx, ty, tz, trz, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.BTRAVEL:
             off = p.body_to_world(x, y)
@@ -1683,6 +1709,7 @@ class BasicMotionNode(Node):
             self.get_logger().info(
                 f'BTRAVEL: body偏移=({x:.2f}, {y:.2f}) '
                 f'→ world偏移=({off.x:.2f}, {off.y:.2f})')
+            timeout = self._position_action_timeout(req.timeout, p, tx_w, ty_w, tz_w)
             success = self._travel_world(tx_w, ty_w, tz_w, p.rz, timeout=timeout)
         else:
             self.get_logger().error(f'Action rejected: unknown cmd_type={req.cmd_type}')

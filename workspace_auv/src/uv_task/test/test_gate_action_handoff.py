@@ -76,7 +76,9 @@ def test_action_deadline_cancels_current_or_late_goal(late_acceptance):
 def test_task_runner_preserves_gate_failure_flash_and_resets_for_next_task():
     execute = method('_execute_task', {'TaskOutcome': TaskOutcome})
     lights = []
-    node = NS(LIGHT_RED=3, _set_task_phase_light=lambda color, *a: lights.append(color))
+    cancellations = []
+    node = NS(LIGHT_RED=3, _set_task_phase_light=lambda color, *a: lights.append(color),
+              _cancel_task_light_animation=lambda **_: cancellations.append(True))
     def gate(_):
         node._task_failure_light_handled = True
         return TaskOutcome.failed('26rb_gate_task.search', 'red double blink already sent')
@@ -85,6 +87,7 @@ def test_task_runner_preserves_gate_failure_flash_and_resets_for_next_task():
     assert lights == []
     assert not execute(node, 'next', {})
     assert lights == [3]
+    assert cancellations == [True]
 
 
 @pytest.mark.parametrize('late_acceptance', [False, True])

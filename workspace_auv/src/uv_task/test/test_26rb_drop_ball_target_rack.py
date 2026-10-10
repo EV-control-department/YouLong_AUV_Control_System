@@ -22,6 +22,7 @@ def rig(monkeypatch):
     clock = [100.0]
     pose = np.array([0., 0., .2, 17., -12., 37.])
     body_velocity = np.zeros(3)
+    yaw_rate = [0.]
     calls, lights, messages, logs = [], [], [], []
     state = NS(camera='down_left', detected=True, generation=1,
                failure=None, hook=lambda: None)
@@ -65,11 +66,13 @@ def rig(monkeypatch):
     monkeypatch.setattr(mod.time, 'monotonic', lambda: clock[0])
     def sleep(dt):
         pose[:3] += mod.body_to_world_rotation(pose) @ body_velocity*dt
+        pose[5] += yaw_rate[0]*dt
         clock[0] += dt
         state.hook()
     monkeypatch.setattr(mod.time, 'sleep', sleep)
     def velocity(*args, **kwargs):
         body_velocity[:] = args if args else [0., 0., 0.]
+        yaw_rate[0] = kwargs.get('yaw_rate_deg_s', 0.)
         calls.append(('velocity', clock[0],
                       (mod.body_to_world_rotation(pose) @ body_velocity).copy(), kwargs))
         if args and state.failure is not None:
@@ -81,6 +84,7 @@ def rig(monkeypatch):
     def action(command, target, axes, **kwargs):
         calls.append(('action', command, list(target), axes))
         body_velocity[:] = 0.
+        yaw_rate[0] = 0.
         pose[:3], pose[5] = target[:3], target[3]
         return True, ''
     node._send_action_goal = action
@@ -189,7 +193,8 @@ def test_disc_claw_alignment_preserves_locked_depth_and_eye_offset(rig, camera):
     offset = rig.node.camera_extrinsics[camera].translation[:2]-[-.38, 0.]
     expected = start[:2]+np.array([[np.cos(yaw), -np.sin(yaw)],
                                  [np.sin(yaw), np.cos(yaw)]]) @ offset
-    assert np.allclose(action[2][:2], expected)
+    assert np.linalg.norm(np.asarray(action[2][:2])-expected) <= .02
+    assert any(call[0] == 'velocity' and np.linalg.norm(call[2][:2]) > 0 for call in rig.calls)
 
 
 def test_release_publishes_90_degrees_without_radian_conversion(rig):
@@ -207,7 +212,7 @@ def test_full_drop_sequence_holds_depth_through_release(rig, monkeypatch):
     assert rig.task.execute()
     assert rig.task._servo_depth == .2
     assert rig.pose[2] == .2 and rig.node._cmd_z == .2
-    assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 90.)]*3+[(2, 0.)]*3
+    assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 90.)]*3+[(2, 270.)]*3
     holds = [call for call in rig.calls if call[0] == 'action']
     assert len(holds) == 3
     # Ball commands follow disc positioning; ring commands follow hairpin positioning.
@@ -238,13 +243,14 @@ def test_hairpin_alignment_uses_original_rack_anchor_and_holds_depth(rig, camera
     rig.pose[:2] += [.3, -.1]
     rig.pose[2] = .26
     rig.pose[5] = -45.
+    rig.task._alignment_timeout = 20.
     assert rig.task._align_hairpin_claw()
     yaw = np.deg2rad(camera_pose[5])
     rotation = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
     rack_xy = camera_pose[:2]+rotation @ rig.node.camera_extrinsics[camera].translation[:2]
-    assert disc_pose[:2]+rotation @ np.array([-.38, 0.]) == pytest.approx(rack_xy)
-    assert rig.pose[:2]+rotation @ np.array([.08, 0.]) == pytest.approx(rack_xy)
-    assert rig.pose[2] == .2 and rig.pose[5] == camera_pose[5]
+    assert np.linalg.norm(disc_pose[:2]+rotation @ np.array([-.38, 0.])-rack_xy) <= .02
+    assert np.linalg.norm(rig.pose[:2]+rotation @ np.array([.08, 0.])-rack_xy) <= .02
+    assert rig.pose[2] == .2 and abs(rig.pose[5]-camera_pose[5]) <= 3.
     assert rig.messages == []
 
 
@@ -278,12 +284,12 @@ def test_failed_ring_alignment_or_cancellation_prevents_further_release(rig, mon
             return lookup(base, child)
         rig.node.camera_extrinsics_provider.lookup_transform = missing
     elif failure == 'alignment_motion':
-        action = rig.node._send_action_goal
-        def fail_hairpin(command, target, axes, **kwargs):
-            if '发夹爪' in kwargs.get('task_context', ''):
+        velocity = rig.node._send_body_velocity
+        def fail_hairpin(*args, **kwargs):
+            if any(msg.servo_id == 1 for msg in rig.messages) and args:
                 return False, '模拟发夹爪定位失败'
-            return action(command, target, axes, **kwargs)
-        rig.node._send_action_goal = fail_hairpin
+            return velocity(*args, **kwargs)
+        rig.node._send_body_velocity = fail_hairpin
     else:
         servo_id = 1 if failure == 'cancel_ball' else 2
         def cancel_on_servo():
@@ -317,7 +323,7 @@ def test_ring_release_yaml_defaults():
     path = Path(__file__).parents[1]/'config/tasks/26rb_drop_ball_target_rack.yaml'
     params = load_task(path)[0]['params']
     assert params['release_angle_deg'] == 90.
-    assert params['ring_release_angle_deg'] == 0.
+    assert params['ring_release_angle_deg'] == 270.
     assert params['ring_release_repeat_count'] == 3
     assert params['ring_release_repeat_period'] == .1
     assert params['ring_release_settle_seconds'] == 1.

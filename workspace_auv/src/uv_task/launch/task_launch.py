@@ -3,9 +3,8 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -54,13 +53,9 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "mission_file",
-            default_value=PathJoinSubstitution([
-                FindPackageShare("uv_task"),
-                "config",
-                "missions",
-                "robocup_26.yaml",
-            ]),
-            description="YAML mission or standalone task file loaded by task_runner",
+            default_value="",
+            description=("YAML mission or task file; empty loads "
+                         "src/uv_task/config/missions/robocup_26.yaml"),
         ),
         OpaqueFunction(function=_nodes),
     ])

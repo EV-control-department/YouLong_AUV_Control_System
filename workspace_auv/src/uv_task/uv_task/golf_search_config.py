@@ -4,6 +4,7 @@ import math
 SEARCH_DEFAULTS = {
     'collection_frame_position': [5.8, -0.3, 0.5],
     'search_cruise_depth_m': 0.2,
+    'depth_timeout': 15.0,
     'search_timeout': 40.0,
     'search_near_radius_m': 0.5,
     'search_near_timeout': 10.0,
@@ -20,6 +21,9 @@ SEARCH_DEFAULTS = {
     'search_min_confidence': 0.02,
     'search_detection_stop_delay': 0.5,
     'search_fallback_observe_seconds': 2.0,
+    'search_fallback_rotate_speed_deg_s': 30.0,
+    'search_fallback_rotate_degrees': 360.0,
+    'search_fallback_rotate_timeout': 15.0,
     'search_move_timeout': 60.0,
     'search_period': 0.05,
     'search_stereo_pair_slop': 0.15,

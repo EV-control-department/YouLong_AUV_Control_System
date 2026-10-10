@@ -17,7 +17,7 @@ DROP_SEARCH_SCHEMA.update(rack_position=(list, float),
 
 def validate_drop_search_params(params):
     depth = params.get('depth_task_depth_m', 0.2)
-    timeout = params.get('depth_timeout', 30.0)
+    timeout = params.get('depth_timeout', 15.0)
     for key, value, allow_zero in (('depth.task_depth_m', depth, True),
                                     ('depth.timeout', timeout, False)):
         if (isinstance(value, bool) or not isinstance(value, (int, float))

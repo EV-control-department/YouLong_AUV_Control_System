@@ -6,7 +6,7 @@ params:
   rack_position: [5.8, -2.0, -1.0]
   depth:
     task_depth_m: 0.2 # 进入任务时定深；水平伺服、圆盘爪和发夹爪平移共用锁定深度。
-    timeout: 30.0 # 初始定深动作超时，秒。
+    timeout: 15.0 # 初始定深动作超时，秒。
 
   search:
     timeout: 20.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时。
@@ -23,6 +23,9 @@ params:
     min_confidence: 0.02
     detection_stop_delay: 0.5 # 下视发现 rack 后亮绿灯，继续半秒，再停止巡游。
     fallback_observe_seconds: 2.0 # 超时定点到预设 XY 后等待新的下视 rack 检测。
+    fallback_rotate_speed_deg_s: 30.0 # 定点观察失败后保持深度原地旋转。
+    fallback_rotate_degrees: 360.0 # 最多旋转一整圈。
+    fallback_rotate_timeout: 15.0 # 一整圈搜索安全上限。
     move_timeout: 60.0 # 朝向、停车保持和兜底定点动作的超时。
     period: 0.05
     stereo_pair_slop: 0.15 # 优先相同 ID；缺少 ID 时按时间戳配对。
@@ -34,11 +37,11 @@ params:
   # 巡游看到下视 rack 后接以下原投球流程。
   # 下视仅用 detection 做单目像素伺服，不使用 tracks、measurements 或双目定位。
   observation:
-    seconds: 2.0 # 完整观察 2 秒，窗口内看见 rack 后闪 1 次绿灯。
+    seconds: 2.0 # 完整观察 2 秒；首次下视看到rack由共享搜索统一闪1次绿灯。
 
-  # 谁先收到 rack detection 就获得单目伺服优先权；成功后闪 2 次绿灯。
+  # 谁先收到 rack detection 就获得单目伺服优先权；成功后闪 1 次绿灯。
   visual_servo:
-    timeout: 30.0 # 视觉伺服最长时间，单位：秒。
+    timeout: 20.0 # 视觉伺服最长时间，单位：秒；超时仍按最后位姿完成放球放环。
     stable_seconds: 1.0 # 像素误差连续满足容差的时间，单位：秒。
     detection_timeout: 0.8 # 下视检测消息最大允许年龄，单位：秒。
     camera_priority_seconds: 3.0 # 固定优先权时长；到期、丢目标或消息超时后重新竞争。
@@ -52,10 +55,10 @@ params:
     period: 0.2 # 视觉伺服周期，单位：秒。
     command_timeout: 10.0 # 速度伺服结束后的定点保持超时，单位：秒。
 
-  # 保存本次相机居中位姿，依次用相机到disc_claw_link/hairpin_claw_link的TF对准同一rack点。
-  # 不再观察或计算 rack 位置；按实测航向转成世界坐标，用 SET xyzrz 保持锁定深度。
+  # 保存本次相机居中位姿，依次用相机到disc_claw_link/hairpin_claw_link的TF
+  # 直接计算两个夹爪的SET位姿，不再做速度伺服。
   alignment:
-    timeout: 10.0 # 每只夹爪水平定位并定深的SET超时，单位：秒。
+    timeout: 10.0 # 每只夹爪外参SET对准的动作超时，单位：秒。
     settle_seconds: 0.5 # 定位完成后稳定等待，单位：秒。
 
   # 固定使用 servo 1。本任务 ZitServo.angle 直接发送度数，90° 对应 angle=90.0。
@@ -67,13 +70,13 @@ params:
 
   # 固定使用servo 2。放球后发夹爪对准同一rack点，重复发送松开角度。
   ring_release:
-    angle_deg: 0.0 # 与抓环任务默认松开角度一致；直接发送angle=0.0。
+    angle_deg: 270.0 # 发夹爪servo 2释放角，直接发送angle=270.0。
     repeat_count: 3
     repeat_period: 0.1
-    settle_seconds: 1.0 # 放环后等待机械动作，再闪3次绿灯完成提示。
+    settle_seconds: 1.0 # 放环后等待机械动作，再闪1次绿灯完成提示。
 
-  # 前视单目/双目对准分别绿灯 1/2 次；寻找超时红灯 1 次，兜底失败红灯 3 次。
-  # 下视观测、伺服、释放分别绿灯 1、2、3 次；运动和搜索阶段为黄灯。
+  # 前视观察黄灯，看到目标后 yaw 对准完成闪1次绿灯；未看到前视目标闪1次红灯。
+  # BLINE和外参SET不亮灯；下视看到rack、伺服成功、放球、放环各闪1次绿灯。
   light:
     pulse_seconds: 0.35
     gap_seconds: 0.25

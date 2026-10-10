@@ -225,9 +225,10 @@ def test_runner_stop_uses_public_goal_handle_cancellation():
     logger = NS(warning=lambda text: None)
     handle = NS(cancel_goal_async=lambda: calls.append('cancel'))
     node = NS(_motion_stop_sent=False, stopped=False, _active_goal_handle=handle,
-              get_logger=lambda: logger)
+              get_logger=lambda: logger,
+              _cancel_task_light_animation=lambda **_: calls.append('light_cancel'))
     runner_method('_stop_active_motion')(node)
-    assert calls == ['cancel'] and node.stopped
+    assert calls == ['light_cancel', 'cancel'] and node.stopped
 
 
 def test_run_service_rejects_an_overlapping_mission():

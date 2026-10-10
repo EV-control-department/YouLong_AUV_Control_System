@@ -6,19 +6,20 @@ uint8 WTRAVEL=4     # 世界系直线, target=[dx, dy, dz]
 uint8 BTRAVEL=5     # 机体系直线, target=[dx, dy, dz]
 uint8 START=6       # 上锁、MCU 重设原点、等待新 odom、解锁（忽略 axes/target）
 uint8 BODY_VELOCITY=7  # 机体速度租约, target=[vx, vy, vz, yaw_rate_deg_s]
-uint8 BLINE=8        # 固定 Body 位移直线, target=[dx,dy,dz,0], axes=""/"xyz"
+uint8 BLINE=8        # 机体系相对直线, target=[dx,dy,dz,dyaw_deg]; 到点后转相对航向
+uint8 WLINE=9        # 世界系绝对直线, target=[x,y,z,yaw_deg]; 到点后转绝对航向
 uint8 cmd_type
 string axes         # 要动的轴: "x","y","z","rz" 任意组合, 空=全部
 float32[] target    # [x, y, z, yaw]
-float32 timeout     # 总超时秒; ≤0: START 10s, BLINE max(60,L/speed+50), 其余60s
+float32 timeout     # 总超时秒; ≤0: SET/TRAVEL max(10,L/0.18+5), START 10s, BLINE/WLINE max(15,L/speed+10+终点转向预算), 其余60s
 string task_context # 任务上下文，例如：hit_balls task:5步骤-前往红球前1米
 float32 velocity_lease  # BODY_VELOCITY 的速度租约（秒）, ≤0=默认0.25s
-float32 cruise_speed  # BLINE 沿线巡航速度 m/s; 0=默认0.15, 0<speed<0.18
+float32 cruise_speed  # BLINE/WLINE 沿线巡航速度 m/s; 0=默认0.15; 有限正请求限幅至<0.28, 合速度<0.32
 ---
 # Result
 bool success
 string message
-float32[] final_target  # BLINE 固定终点 [odom_x,odom_y,odom_z,yaw_deg]
+float32[] final_target  # BLINE/WLINE 固定终点 [odom_x,odom_y,odom_z,yaw_deg]
 ---
 # Feedback
 float32 distance_remaining

@@ -44,6 +44,8 @@ mission:
           #   axes: rz
           #   target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
       on_failure:
+        "26rb_grab_ball_ring.no_frame":
+          skip_next: true
         "26rb_grab_ball_ring.both_exhausted": {}
 
     - name: 26rb_drop_ball_target_rack
@@ -56,24 +58,32 @@ mission:
       on_failure:
         "26rb_drop_ball_target_rack.timeout": {}
 
-    # - name: 26rb_gate_task
-    #   config: ../tasks/26rb_gate_task.yaml
-    #   initial:
-    #     poses:
-    #       - command: SET
-    #         axes: z
-    #         target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
-    #       # - command: WTRAVEL
-    #       #   axes: xyz
-    #       #   target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-    #       - command: WTRAVEL
-    #         axes: xyz
-    #         target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-    #       - command: SET
-    #         axes: rz
-    #         target: [0.0, 0.0, 0.0, 0.0] # 到点后设置 1.57 rad 航向。
-    #   on_failure:
-    #     "26rb_gate_task.timeout": {}
+    - name: 26rb_gate_task
+      config: ../tasks/26rb_gate_task.yaml
+      initial:
+        poses:
+          - command: SET
+            axes: z
+            target: [1.0, 0.0, 0.2, 0.0] # 下潜0.2m
+          - command: WTRAVEL
+            axes: xyz
+            target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+          - command: SET
+            axes: rz
+            target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        default:
+          # 过门任务失败后，覆盖 return_origin 的整段初始路线。
+          poses:
+            - command: WTRAVEL
+              axes: xyz
+              target: [3.0, -1.0, 0.2, 0.0]
+            - command: WTRAVEL
+              axes: xy
+              target: [0.0, 0.0, 0.2, 0.0]
+            - command: SET
+              axes: rz
+              target: [0.0, 0.0, 0.0, 0.0]
 
     - name: return_origin
       config: ../tasks/return_origin.yaml

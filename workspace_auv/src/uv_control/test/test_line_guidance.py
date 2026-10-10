@@ -27,14 +27,14 @@ def test_frozen_endpoint_and_full_velocity_rotation(yaw, delta):
         assert guide.yaw == pytest.approx(yaw)
 
 
-@pytest.mark.parametrize('speed', [-.1, .18, .25, math.nan, math.inf])
+@pytest.mark.parametrize('speed', [-.1, math.nan, math.inf, -math.inf])
 def test_invalid_cruise_speed(speed):
     with pytest.raises(ValueError):
         validate_goal([1, 0, 0, 0], '', speed, 0, LineConfig())
 
 
 @pytest.mark.parametrize('target,axes', [
-    ([0, 0, 0, 0], ''), ([1, 0, 0, 1], ''),
+    ([0, 0, 0, 0], ''), ([0, 0, 0, 0], ''),
     ([1, 0, 0], ''), ([1, 0, math.nan, 0], ''), ([1, 0, 0, 0], 'x'),
 ])
 def test_invalid_displacement(target, axes):
@@ -87,3 +87,72 @@ def test_brake_uses_measured_velocity():
     guide = LineGuidance((0, 0, 0), 0, (1, 0, 0), .15, LineConfig())
     _, phase, _ = guide.step((.5, 0, 0), (.2, 0, 0), .05)
     assert phase == 'BRAKE'
+
+
+@pytest.mark.parametrize('speed', [.18, .25, .28, .32, 1.0, 1e300])
+def test_overspeed_is_accepted_and_clamped(speed):
+    applied = validate_goal([1, 0, 0, 0], 'xyz', speed, 0, LineConfig())
+    assert 0 < applied < .28
+    assert applied == pytest.approx(min(speed, .28 - 1e-6))
+
+
+def test_overspeed_default_is_clamped_instead_of_rejected():
+    cfg = LineConfig(default_speed=.5, max_speed=1.)
+    cfg.validate()
+    assert validate_goal([1, 0, 0, 0], '', 0, 0, cfg) < .28
+
+
+@pytest.mark.parametrize('terminal', [False, True])
+def test_total_speed_is_hard_limited_even_with_large_parameters(terminal):
+    cfg = LineConfig(max_speed=1., cross_speed=1., terminal_speed=1.,
+                     capture_enter=10., capture_exit=5.)
+    cfg.validate()
+    guide = LineGuidance((0, 0, 0), 0, (100, 0, 0), 1., cfg)
+    position = (101, .5, .5) if terminal else (0, .5, .5)
+    for _ in range(500):
+        command, _, _ = guide.step(position, (0, 0, 0), .05)
+        assert norm(command) < .32
+        if not terminal:
+            assert dot(command, guide.direction) < .28
+    assert norm(command) > .3  # exercises combined along/cross limiting
+
+
+def test_lower_configured_total_limit_is_respected():
+    cfg = LineConfig(max_speed=.12)
+    cfg.validate()
+    assert validate_goal([1, 0, 0, 0], '', 1., 0, cfg) == .12
+
+
+@pytest.mark.parametrize('attitude', [(0, 0, 0), (22, -15, 47), (89, 74, -140)])
+def test_float32_body_transport_remains_below_total_limit(attitude):
+    import struct
+    cfg = LineConfig(max_speed=1., cross_speed=1., capture_enter=10., capture_exit=5.)
+    guide = LineGuidance((0, 0, 0), 0, (100, 0, 0), 1., cfg)
+    for _ in range(300):
+        command, _, _ = guide.step((0, .5, .5), (0, 0, 0), .05)
+    body = rotate_world_to_body(command, *attitude)
+    transported = struct.unpack('fff', struct.pack('fff', *body))
+    assert norm(transported) < .32
+
+
+@pytest.mark.parametrize('position,yaw,target', [
+    ((2., -3., .5), 47., (0., 0., 0.)),
+    ((2., -3., .5), -140., (4., 1., .8)),
+])
+def test_world_line_endpoint_does_not_depend_on_body_heading(position, yaw, target):
+    guide = LineGuidance(position, yaw, target, .15, LineConfig(),
+                         world=True, final_yaw=135.)
+    assert guide.end == pytest.approx(target)
+    assert guide.length == pytest.approx(norm(tuple(b-a for a,b in zip(position,target))))
+    assert guide.final_yaw == 135.
+
+
+def test_zero_length_world_line_and_rotation_only_body_line():
+    cfg = LineConfig()
+    assert validate_goal([0,0,0,90], 'xyz', .15, 0, cfg) == .15
+    assert validate_goal([0,0,0,0], 'xyz', .15, 0, cfg, world=True) == .15
+    guide = LineGuidance((0,0,0), 35, (0,0,0), .15, cfg, world=True, final_yaw=90)
+    assert guide.length == 0
+    assert guide.reached((0,0,0), (0,0,0), 35)
+    assert not guide.reached((0,0,0), (0,0,0), 35, final=True)
+    assert guide.reached((0,0,0), (0,0,0), 90, final=True)

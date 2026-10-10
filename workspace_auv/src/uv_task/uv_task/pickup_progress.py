@@ -8,6 +8,8 @@ class PickupProgress:
     start_xy: Tuple[float, float] = (0.0, 0.0)
     frame_pose: Optional[Tuple[float, float, float, float]] = None
     depth: Optional[float] = None
+    first_frame_seen_at: Optional[float] = None
+    last_servo_pose: Optional[Tuple[float, float, float, float]] = None
     golf_camera_pose: Optional[Tuple[float, float, float, float]] = None
     ring_camera_pose: Optional[Tuple[float, float, float, float]] = None
     golf_attempts: int = 0

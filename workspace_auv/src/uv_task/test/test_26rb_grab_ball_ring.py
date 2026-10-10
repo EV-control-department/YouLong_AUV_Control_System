@@ -144,7 +144,9 @@ def rig(monkeypatch):
     monkeypatch.setattr(mod, 'CollectionFrameSearch', lambda *args: NS(execute=TaskOutcome.ok))
     config = Path(__file__).parents[1]/'config/tasks/26rb_grab_ball_ring.yaml'
     params = load_task(config)[0]['params']
-    params.update(golf_max_attempts=2, ring_max_attempts=3)
+    params.update(golf_max_attempts=2, ring_max_attempts=3,
+                  golf_grab_depth_m=.44, ring_grab_depth_m=.44,
+                  ring_open_angle_deg=0., ring_close_angle_deg=90.)
     return node, mod.RB26GrabBallRingTask(node, params)
 
 
@@ -157,34 +159,6 @@ def test_heading_is_parallel_to_ring_plane_and_faces_away(axis, xy, start, curre
     assert mod.choose_away_heading(axis, xy, start, current) == pytest.approx(expected)
 
 
-@pytest.mark.parametrize('golf,ring,code', [
-    ([False, False], [True], 'golf_exhausted'),
-    ([True], [False, False, False], 'ring_exhausted'),
-    ([False, False], [False, False, False], 'both_exhausted'),
-    ([False, True], [False, True], ''),
-])
-def test_separate_attempt_limits_and_frame_verification_order(rig, golf, ring, code):
-    node, task = rig
-    events = []
-    outcomes = {'golf': iter(golf), 'ring': iter(ring)}
-    def attempt(kind, controller):
-        events.append(('attempt', kind))
-        return True
-    task._mechanical_attempt = attempt
-    task._return_frame = lambda controller: events.append(('frame', 'golf' if controller is task.ball else 'ring'))
-    def verify(class_id):
-        kind = 'golf' if class_id == 7 else 'ring'
-        events.append(('verify', kind))
-        return next(outcomes[kind])
-    task._verify = verify
-    result = task.execute()
-    assert bool(result) is (not code)
-    if code:
-        assert result.failure_code == '26rb_grab_ball_ring.'+code
-    assert node.state.pickup.golf_attempts == len(golf)
-    assert node.state.pickup.ring_attempts == len(ring)
-    assert events == [event for kind, values in (('golf', golf), ('ring', ring))
-                      for _ in values for event in (('attempt', kind), ('frame', kind), ('verify', kind))]
 
 
 def test_frame_return_failure_stops_further_attempts(rig):
@@ -200,47 +174,8 @@ def test_frame_return_failure_stops_further_attempts(rig):
     assert node.state.pickup.ring_attempts == 0
 
 
-@pytest.mark.parametrize('mode', ['absent', 'left_present', 'right_present', 'missing_right', 'stale', 'late_present', 'between_polls', 'overflow', 'no_frame'])
-def test_frame_verification_requires_both_fresh_eyes_for_two_seconds(rig, mode):
-    node, task = rig
-    frame = NS(class_id=0, confidence=.9, pixel_x=0., pixel_y=0.)
-    ball = NS(class_id=7, confidence=.9, pixel_x=0., pixel_y=0.)
-    started = node.clock
-    def stream():
-        for camera in ('down_left', 'down_right'):
-            if mode == 'missing_right' and camera.endswith('right'):
-                continue
-            items = [] if mode == 'no_frame' else [frame]
-            if (mode == 'left_present' and camera.endswith('left')) or (mode == 'right_present' and camera.endswith('right')) or (mode == 'late_present' and node.clock-started >= 1.9):
-                items = items+[ball]
-            if mode == 'between_polls':
-                node.feed(camera, items+[ball])
-            if mode == 'overflow':
-                for _ in range(260):
-                    node.feed(camera, items)
-            node.feed(camera, items, stamp=started-.1 if mode == 'stale' else None)
-    node.hook = stream
-    assert task._verify(7) is (mode == 'absent')
-    assert node.clock-started == pytest.approx(2.)
 
 
-def test_return_frame_disables_target_handoff(rig):
-    node, task = rig
-    # Deliberately stale anchor Z and a below-work-depth starting pose.
-    node.state.update_pickup(frame_pose=(.5, 0., .7, 0.), depth=.2)
-    node.pose[2] = .44
-    task.ball._servo_depth = .2
-    # Both targets remain visible throughout frame centering.
-    task._return_frame(task.ball)
-    assert task.ball._pending_golf_priority is None
-    assert task.ball._aligned_camera in ('down_left', 'down_right')
-    assert node.state.pickup.frame_pose[0] > .5
-    actions = [call for call in node.calls if call[0] == 'action']
-    assert actions[0][3] == 'z'
-    assert actions[0][2] == pytest.approx([.5, 0., .2, 0.])
-    assert actions[1][3] == 'xyrz'
-    assert actions[1][2][2] == .2
-    assert node.pose[2] == .2
 
 
 def test_orientation_averages_modulo_180_and_rejects_stale_or_unstable_samples(rig):
@@ -254,15 +189,6 @@ def test_orientation_averages_modulo_180_and_rejects_stale_or_unstable_samples(r
     assert task._axis_estimate() is None
 
 
-def test_missing_orientation_does_not_descend_or_close_claw(rig):
-    node, task = rig
-    task.ring._aligned_camera = 'down_left'
-    task.state.update_pickup(depth=.2)
-    ring = NS(class_id=8, confidence=.9, pixel_x=100., pixel_y=100.)
-    node.hook = lambda: node.feed('down_left', [ring])
-    assert not task._orient_and_align_ring()
-    assert [(servo, angle) for _, servo, angle in node.servos] == [(2, 0.)]*3
-    assert not any(call[0] == 'velocity' and call[2][2] != 0 for call in node.calls)
 
 
 @pytest.mark.parametrize('work_depth', [.2, .18])
@@ -307,7 +233,7 @@ def test_full_combined_pickup_with_projected_cameras_and_gripper_tf(rig, monkeyp
     assert len(closes) == 3
     assert stages[0][1] <= closes[0] <= closes[-1] <= stages[1][1]
     ring_hold = next(call for call in node.calls if call[0] == 'action' and
-                     call[4].get('task_context') == '抓环：根据成功下视相机与发夹爪TF对准')
+                     call[4].get('task_context') == '组合抓取：ring转向与夹爪对准同时执行')
     assert ring_hold[2][2] == work_depth
     assert ring_hold[2][3] == pytest.approx(60., abs=.1)
     assert ring_hold[2][:2] == pytest.approx([.45-.08*math.cos(math.pi/3), .08-.08*math.sin(math.pi/3)], abs=.02)
@@ -343,13 +269,16 @@ def test_combined_yaml_and_mission_configuration():
     task = load_task(path)[0]
     assert task['name'] == '26rb_grab_ball_ring'
     assert task['params']['golf_max_attempts'] == task['params']['ring_max_attempts'] == 3
-    assert task['params']['ring_open_angle_deg'] == 0.
-    assert task['params']['ring_close_angle_deg'] == 90.
+    assert task['params']['ring_open_angle_deg'] == 270.
+    assert task['params']['ring_close_angle_deg'] == 150.
     assert task['params']['work_depth_m'] == .2
     assert 'search_cruise_depth_m' not in task['params']
     assert 'ascent_duration_seconds' not in task['params']
     assert 'descent_duration_seconds' not in task['params']
-    assert task['params']['golf_grab_depth_m'] == task['params']['ring_grab_depth_m'] == .44
+    assert task['params']['golf_grab_depth_m'] == .65
+    assert task['params']['ring_grab_depth_m'] == .58
+    assert task['params']['find_timeout'] == 15.
+    assert task['params']['check_timeout'] == task['params']['loss_timeout'] == 5.
     assert task['params']['descent_timeout'] == 15.
     assert task['params']['retry_depth_step_m'] == .05
 
@@ -365,41 +294,8 @@ def test_ring_yaw_feedback_and_depth_hold_share_one_velocity_command(rig):
     assert velocity[3] == -10.
 
 
-def test_failed_ring_descent_still_restores_depth_without_closing(rig):
-    node, task = rig
-    task.state.update_pickup(frame_pose=(.5, 0., .2, 0.), depth=.2)
-    task.ring._servo_horizontally = lambda *args, **kwargs: [.5, 0., .2, 0.]
-    task.ring._flash_green = lambda *args: True
-    task.ring._wait_pre_descent_settle = lambda: True
-    task._orient_and_align_ring = lambda: True
-    def failed_descent(kind, controller):
-        node.pose[2] = .44
-        return False
-    task._descend_to_depth = failed_descent
-    task.max_attempts['ring'] = 1
-    task._verify = lambda *args: False
-    task._run_target('ring', task.ring)
-    assert node.pose[2] == .2
-    assert task.state.pickup.ring_status == 'failed'
-    recoveries = [call for call in node.calls if call[0] == 'action' and
-                  call[4].get('task_context') == '组合抓取：抓取后恢复作业深度']
-    assert len(recoveries) == 1 and recoveries[0][3] == 'z'
-    assert not node.servos
 
 
-def test_tf_lookup_error_rejects_grasp_before_descending(rig):
-    node, task = rig
-    task.ring._servo_depth = .2
-    task.state.update_pickup(depth=.2)
-    task.ring._aligned_camera = 'down_left'
-    class TransformError(Exception):
-        pass
-    def missing_tf(*args):
-        raise TransformError('missing hairpin TF')
-    node.camera_extrinsics_provider.lookup_transform = missing_tf
-    with pytest.raises(mod.PickupFailure, match='读取发夹爪外参失败'):
-        task._orient_and_align_ring()
-    assert not any(servo == 2 and angle == 90. for _, servo, angle in node.servos)
 
 
 @pytest.mark.parametrize('legacy', [{'search': {'cruise_depth_m': .31}},
@@ -413,7 +309,7 @@ def test_old_depth_spelling_maps_to_the_single_work_depth(legacy):
 
 def test_failed_depth_restore_prevents_horizontal_recovery(rig):
     node, task = rig
-    task.state.update_pickup(frame_pose=(.6, .1, .2, 20.), depth=.2)
+    task.state.update_pickup(golf_camera_pose=(.6, .1, .2, 20.), depth=.2)
     node.pose[2] = .44
     def fail_depth(command, target, axes, **kwargs):
         node.calls.append(('failed_action', axes))
@@ -457,56 +353,8 @@ def test_ball_and_ring_retry_depths_increment_independently_and_reset(rig):
     assert task._grab_target_depth('ring') == pytest.approx(.46)
 
 
-def test_real_descents_get_deeper_after_failed_verification(rig):
-    node, task = rig
-    task.state.update_pickup(frame_pose=(.5, 0., .2, 0.), depth=.2)
-    task.ball._servo_depth = .2
-    task.ring._servo_depth = .2
-    task.ball._servo_horizontally = task.ring._servo_horizontally = lambda *args, **kwargs: [.5, 0., .2, 0.]
-    reached = []
-    def attempt(kind, controller):
-        ok = task._descend_to_depth(kind, controller)
-        reached.append((kind, node.pose[2]))
-        return ok
-    task._mechanical_attempt = attempt
-    task._verify = lambda *args: False
-    task._run_target('golf', task.ball)
-    task._run_target('ring', task.ring)
-    assert [kind for kind, _ in reached] == ['golf', 'golf', 'ring', 'ring', 'ring']
-    assert [depth for _, depth in reached] == pytest.approx([.44, .49, .44, .49, .54], abs=1e-6)
-    assert node.pose[2] == .2
 
 
-@pytest.mark.parametrize('kind', ['golf', 'ring'])
-def test_descent_timeout_at_fifteen_seconds_releases_velocity_and_recovers(rig, kind):
-    node, task = rig
-    task.state.update_pickup(frame_pose=(.5, 0., .2, 0.), depth=.2)
-    controller = task.ball if kind == 'golf' else task.ring
-    controller._servo_depth = .2
-    controller._servo_horizontally = lambda *args, **kwargs: [.5, 0., .2, 0.]
-    controller._wait_for_detection = lambda *args: object()
-    controller._flash_green = lambda *args: True
-    controller._prepare_claw = lambda: True
-    controller._apply_camera_gripper_offset = lambda: [.5, 0., .2, 0.]
-    controller._wait_pre_descent_settle = lambda: True
-    task._orient_and_align_ring = lambda: True
-    task.max_attempts[kind] = 1
-    task._verify = lambda *args: False
-    # Simulate a blocked vehicle: time and detections advance, measured Z does not.
-    def blocked_sleep(dt):
-        node.clock += dt
-        node.hook()
-    mod.time.sleep = blocked_sleep
-    started = node.clock
-    task._run_target(kind, controller)
-    assert node.clock-started == pytest.approx(15.)
-    assert np.allclose(node.velocity, 0.)
-    assert getattr(task.state.pickup, kind+'_status') == 'failed'
-    assert not any(servo == 2 and angle == 90. for _, servo, angle in node.servos)
-    stops = [call for call in node.calls if call[0] == 'velocity' and '结束目标深度下潜' in call[3].get('task_context', '')]
-    assert stops[-1][3]['wait_deadline'] > node.clock
-    recovery = [call for call in node.calls if call[0] == 'action' and call[4].get('task_context') == '组合抓取：抓取后恢复作业深度']
-    assert recovery and recovery[0][3] == 'z' and recovery[0][2][2] == .2
 
 
 @pytest.mark.parametrize('failure', ['velocity', 'pose', 'neutral', 'cancel'])

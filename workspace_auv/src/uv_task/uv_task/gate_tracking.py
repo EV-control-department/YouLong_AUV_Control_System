@@ -56,6 +56,7 @@ class GateTrack:
     streak: int = 1
     heights: deque = field(default_factory=lambda: deque(maxlen=3))
     peak_height: float = 0.0
+    peak_frame: object = None
     confirmed: bool = False
 
 
@@ -131,7 +132,10 @@ class DetectionTracks:
             track.heights.append(frame.height_percent)
             track.confirmed = track.confirmed or track.streak >= self.p['tracking_confirm_frames']
             if track.streak >= self.p['tracking_confirm_frames']:
-                track.peak_height = max(track.peak_height, float(np.median(track.heights)))
+                median_height = float(np.median(track.heights))
+                if median_height >= track.peak_height:
+                    track.peak_height = median_height
+                    track.peak_frame = frame
             matched[track.id] = frame
             used.add(j)
         for track in tracks:
@@ -149,6 +153,7 @@ class DetectionTracks:
             if self.p['tracking_confirm_frames'] == 1:
                 track.confirmed = True
                 track.peak_height = frame.height_percent
+                track.peak_frame = frame
             self.tracks[track.id] = track
             matched[track.id] = frame
             self.next_id += 1

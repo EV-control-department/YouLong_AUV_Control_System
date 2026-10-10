@@ -4,6 +4,8 @@ params:
   # 全任务作业深度：搜索、frame/球/环水平伺服、抓取前后恢复共用。
   # NED向下为正，单位米；仅抓取下沉阶段暂时离开此深度。
   work_depth_m: 0.2
+  depth:
+    timeout: 15.0 # 进入作业深度的SET动作超时，单位：秒。
   # 使用 robotcup20260901.yaml 中的 canonical detector class name。
   golf_color: pink_golf # 可选 pink_golf / yellow_golf。
   collection_frame_class: collection_frame_down
@@ -28,7 +30,10 @@ params:
     min_confidence: 0.02
     detection_stop_delay: 0.5 # 巡游时下视看到 frame 后继续半秒，再取消 BLINE。
     fallback_observe_seconds: 2.0 # 定点到预设 XY/巡游深度后等待新的下视检测。
-    move_timeout: 60.0 # 到巡游深度、朝向、停车保持和兜底定点的动作超时。
+    fallback_rotate_speed_deg_s: 30.0 # 定点观察失败后，保持深度缓慢旋转搜索 frame。
+    fallback_rotate_degrees: 360.0 # 最多旋转一整圈；期间发现 frame 会立即停止。
+    fallback_rotate_timeout: 15.0 # 旋转搜索安全上限；未转满则按搜索故障处理。
+    move_timeout: 10.0 # 定深、朝向、停车保持和兜底定点的 SET 动作超时。
     period: 0.05
     stereo_pair_slop: 0.15 # 同 ID 配对，缺失 ID 时按时间戳配对。
     stereo_min_angle_deg: 0.1
@@ -36,18 +41,20 @@ params:
     stereo_max_distance_m: 20.0
     cancel_timeout: 2.0 # 取消 BLINE 后必须确认动作结束，才能继续伺服。
 
-  # 球与环顺序抓取；frame伺服中见当前目标即可提前切换。
-  collection_frame_observe_seconds: 2.0
-  golf_observe_seconds: 2.0 # frame完成居中后，对当前球/环的伺服前观察窗口。
+  # find/check与servo从同一时刻计时；目标一旦出现就继续对齐。
+  find:
+    timeout: 15.0 # 首次BLINE见frame或开始抓环时启动；未见当前目标则跳过。
+  check:
+    timeout: 5.0 # 抓后回到本次目标下视对齐位姿时启动；新鲜双目确认目标消失。
+  loss:
+    timeout: 5.0 # 目标丢失回frame；frame丢失闭环回历史位姿或预设位置。
 
-  # frame、球、环均用 XY 速度伺服；水平修正全程定深到work_depth_m。
-  # 左右下视均可观测；frame途中见当前目标直接交接，复检回frame时禁用提前切换。
+  # frame/目标/回位连续速度修正，所有切换共用servo截止时间。
   vision:
     detection_timeout: 0.8 # 检测结果最大允许年龄，单位：秒。
     pixel_tolerance_fraction: 0.02 # 目标中心归一化误差容差。
   servo:
-    camera_priority_seconds: 3.0 # 谁先观测谁获得固定时长优先权，丢目标或超时提前释放。
-    timeout: 30.0 # 单次水平视觉伺服最长时间，单位：秒。
+    timeout: 20.0 # 与find/check同起点；到期且曾看到目标时仍按最后观测完成抓取。
     period: 0.15 # 水平伺服周期，单位：秒。
     log_period: 0.5 # 水平伺服日志周期，单位：秒。
     hold_seconds: 0.5 # 高尔夫球心进入容差后的保持时间，单位：秒。
@@ -57,7 +64,7 @@ params:
     depth_gain: 0.8 # 实测深度偏差到世界垂直速度的增益，单位：1/秒。
     max_vertical_speed_mps: 0.08 # 定深修正最大垂直速度，单位：米/秒。
     depth_tolerance_m: 0.03 # 进入居中保持需同时满足的深度误差，单位：米。
-    position_command_timeout: 10.0 # 伺服结束定点保持/夹爪外参 BMOVE 超时，单位：秒。
+    position_command_timeout: 10.0 # 停车保持和最终夹爪对准的动作执行超时，单位：秒。
 
   # 夹爪舵机 1 先重复发送到 0 rad，降低单次消息丢失的影响。
   claw:
@@ -67,7 +74,8 @@ params:
   light:
     pulse_seconds: 0.35
     gap_seconds: 0.25
-  # 外参平移读取TF：使用本次伺服成功的下视相机与对应夹爪，不硬编码偏移。
+  # 外参平移读取TF：使用本次伺服成功的下视相机与对应夹爪，不硬编码偏移；
+  # 目标对准直接发送SET位姿，不再另起速度伺服。
   settle_seconds: 1.0 # 外参平移后，等待艇体和夹爪稳定。
 
   # 按实测Z下潜到当前目标深度；球到深度直接恢复，环到深度先合爪再恢复。
@@ -79,13 +87,7 @@ params:
   # 恢复使用Z轴SET到work_depth_m，不再按固定时间上浮。
   # 定深动作超时沿用servo.position_command_timeout（默认10秒）。
   vertical_publish_period: 0.05 # 速度指令周期，单位：秒。
-  return_timeout: 60.0 # 恢复深度后，水平回frame位置的最长时间，单位：秒。
-
-  # 每次球/环尝试后强制frame居中，左右下视完整观察2秒。
-  verification:
-    timeout: 2.0 # frame居中后完整观察2秒；任一目见目标都判未抓住。
-    absence_hold_seconds: 0.8 # 连续看不到目标多久才确认已抓走，单位：秒。
-
+  return_timeout: 60.0 # 抓后返回该目标原本下视对齐位姿的运动超时。
 
   # 最多尝试次数包含首次，球失败用尽后仍继续抓环。
   golf:
@@ -95,9 +97,7 @@ params:
     class: red_ring
     max_attempts: 3
     grab_depth_m: 0.58 # 机器人目标Z，可与球分别设置；不是环自身深度。
-    observe_seconds: 3.0
-    # 使用detection二维长轴推算方向，假定环竖直放置、法向水平。
-    orientation_timeout: 5.0 # 完整观察和松爪后最多再等有效方向5秒。
+    # 伺服途中采集方向；方向无效时保持航向，转向和对爪同时执行。
     orientation_min_quality: 0.8
     orientation_min_samples: 3
     orientation_spread_deg: 5.0

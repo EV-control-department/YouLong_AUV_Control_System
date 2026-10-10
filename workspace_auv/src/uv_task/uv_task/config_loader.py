@@ -128,7 +128,9 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "ascent_timeout": float,
     },
     "btravelx": {"dx": float},
-    "bline": {"dx": float, "dy": float, "dz": float,
+    "bline": {"dx": float, "dy": float, "dz": float, "drz": float,
+              "speed_mps": float, "timeout": float},
+    "wline": {"x": float, "y": float, "z": float, "rz": float,
               "speed_mps": float, "timeout": float},
     "setz": {"z": float},
     "26rb_hit_balls": HIT_SCHEMA,
@@ -255,6 +257,7 @@ TASK_SCHEMAS["26rb_grab_ball_ring"] = {
        if key not in {"max_grab_retries", "search_cruise_depth_m",
                       "ascent_speed_mps", "ascent_duration_seconds", "descent_duration_seconds"}},
     "work_depth_m": float,
+    "find_timeout": float, "check_timeout": float, "loss_timeout": float,
     "golf_grab_depth_m": float, "ring_grab_depth_m": float,
     "retry_depth_step_m": float, "descent_timeout": float,
     "golf_max_attempts": int, "ring_max_attempts": int, "ring_class": str,
@@ -348,7 +351,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as stream:
             data = yaml.load(stream, Loader=_UniqueKeyLoader)
-    except (OSError, yaml.YAMLError, ConfigError) as exc:
+    except (OSError, UnicodeError, yaml.YAMLError, ConfigError) as exc:
         raise ConfigError(f"YAML 文件解析失败：{path}：{exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError(f"{path}：根节点必须是 YAML 映射")
@@ -356,6 +359,8 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 
 PARAMETER_ALIASES["26rb_grab_ball_ring"] = {
+    "find.timeout": "find_timeout", "check.timeout": "check_timeout",
+    "loss.timeout": "loss_timeout",
     **{key: value for key, value in PARAMETER_ALIASES["26rb_grab_golf"].items()
        if value not in {"max_grab_retries", "ascent_speed_mps", "ascent_duration_seconds"}},
     # Legacy YAML spelling maps to the same work-depth key; specifying both
@@ -537,10 +542,7 @@ def _resolve_task_config(mission_path: Path, config: str | None, task_name: str)
         if not candidate.is_absolute():
             candidate = mission_path.parent / candidate
         return candidate.resolve()
-    from ament_index_python.packages import get_package_share_directory
-
-    package_config = Path(get_package_share_directory("uv_task")) / "config"
-    return (package_config / "tasks" / f"{task_name}.yaml").resolve()
+    return source_config_root() / "tasks" / f"{task_name}.yaml"
 
 
 def _load_task_defaults(path: Path, task_name: str) -> dict[str, Any]:
@@ -674,11 +676,20 @@ def load_mission(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
                 raise ConfigError(
                     f"{mission_path}：第 {index} 个任务的 on_failure"
                     f".{failure_code} 必须是映射")
-            unknown = set(profile) - {"params", "pose"}
+            if "pose" in profile and "poses" in profile:
+                raise ConfigError(
+                    f"{mission_path}：第 {index} 个任务的 on_failure"
+                    f".{failure_code} 的 pose 与 poses 不能同时配置")
+            unknown = set(profile) - {"params", "pose", "poses", "skip_next"}
             if unknown:
                 raise ConfigError(
                     f"{mission_path}：第 {index} 个任务的 on_failure"
                     f".{failure_code} 存在未知键：{sorted(unknown)}")
+            skip_next = profile.get("skip_next", False)
+            if not isinstance(skip_next, bool):
+                raise ConfigError(
+                    f"{mission_path}：第 {index} 个任务的 on_failure"
+                    f".{failure_code}.skip_next 必须是布尔值")
             failure_params = profile.get("params", {})
             if not isinstance(failure_params, dict):
                 raise ConfigError(
@@ -692,9 +703,25 @@ def load_mission(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
                         f"{mission_path}：第 {index} 个任务的 on_failure"
                         f".{failure_code}.pose"),
                 )
+            elif "poses" in profile:
+                failure_poses = profile["poses"]
+                if not isinstance(failure_poses, list) or not failure_poses:
+                    raise ConfigError(
+                        f"{mission_path}：第 {index} 个任务的 on_failure"
+                        f".{failure_code}.poses 必须是非空列表")
+                failure_pose = [
+                    _validate_pose(
+                        pose,
+                        context=(
+                            f"{mission_path}：第 {index} 个任务的 on_failure"
+                            f".{failure_code}.poses[{pose_index}]"),
+                    )
+                    for pose_index, pose in enumerate(failure_poses)
+                ]
             failure_profiles[failure_code.strip()] = {
                 "params": failure_params,
                 "pose": failure_pose,
+                "skip_next": skip_next,
             }
 
         task_path = _resolve_task_config(mission_path, config, task_name)
@@ -749,6 +776,8 @@ def load_mission(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
                     normalized["params"] = {}
                 if profile["pose"] is not None:
                     normalized["pose"] = profile["pose"]
+                if profile["skip_next"]:
+                    normalized["skip_next"] = True
                 normalized_profiles[failure_code] = normalized
             task["on_failure"] = normalized_profiles
 
@@ -772,9 +801,27 @@ def load_mission_or_task(path: str | Path,
     return load_mission(config_path, class_registry)
 
 
-def default_mission_path() -> Path:
-    """Return the installed default mission path."""
-    from ament_index_python.packages import get_package_share_directory
+def source_config_root() -> Path:
+    """Locate editable source YAML from source, build, or installed Python code.
 
-    return (Path(get_package_share_directory("uv_task"))
-            / "config" / "missions" / "robocup_26.yaml")
+    Both isolated and merged colcon installs live below the workspace, so
+    walking the module's ancestors also works without --symlink-install.
+    Installed config copies are intentionally never used.
+    """
+    module_path = Path(__file__).resolve()
+    for parent in module_path.parents:
+        if parent.name == "uv_task" and parent.parent.name == "src":
+            candidate = parent
+        else:
+            candidate = parent / "src" / "uv_task"
+        config = candidate / "config"
+        if (candidate / "package.xml").is_file() and config.is_dir():
+            return config.resolve()
+    raise ConfigError(
+        "Cannot locate src/uv_task/config beside the active workspace; "
+        "keep the source tree or pass an explicit mission/task YAML path.")
+
+
+def default_mission_path() -> Path:
+    """Return the editable source default mission path."""
+    return source_config_root() / "missions" / "robocup_26.yaml"

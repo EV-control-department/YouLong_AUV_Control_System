@@ -10,7 +10,7 @@
     force_nav_valid: true
     # Initial BLINE values; require simulation validation and vehicle tuning.
     line.default_speed: 0.15
-    line.max_speed: 0.25
+    line.max_speed: 0.32
     line.acceleration: 0.05
     line.deceleration: 0.05
     line.vector_acceleration: 0.05
@@ -24,9 +24,9 @@
     line.terminal_speed: 0.08
     line.terminal_radius: 0.20
     line.position_tolerance: 0.10
-    line.stop_speed: 0.03
+    line.stop_speed: 0.06
     line.yaw_tolerance: 5.0
-    line.stable_seconds: 1.0
+    line.stable_seconds: 0.5
     line.align_timeout: 30.0
     line.yaw_gain: 0.8
     line.yaw_rate_limit: 15.0

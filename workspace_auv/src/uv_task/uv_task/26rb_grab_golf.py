@@ -57,7 +57,7 @@ class RB26GrabGolfTask:
         self._golf_observe_seconds = max(
             0.0, float(params.get('golf_observe_seconds', 2.0)))
         self._servo_timeout = max(
-            1.0, float(params.get('horizontal_servo_timeout', 30.0)))
+            1.0, float(params.get('horizontal_servo_timeout', 20.0)))
         self._servo_period = max(
             0.05, float(params.get('horizontal_servo_period', 0.15)))
         self._log_period = max(
@@ -166,31 +166,17 @@ class RB26GrabGolfTask:
         return None
 
     def _flash_green(self, count: int, label: str) -> bool:
-        """Flash green the requested number of times, then resume yellow."""
         count = max(1, int(count))
         self._logger.info(
-            f'{self._task_name}：{label}，绿灯闪烁 {count} 次')
-        for index in range(count):
-            if self._node.stopped:
-                return False
-            self._node.set_light(
-                self._node.LIGHT_GREEN, f'{label} ({index + 1}/{count})')
-            deadline = time.monotonic() + self._light_pulse_seconds
-            while not self._node.stopped and time.monotonic() < deadline:
-                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
-            if self._node.stopped:
-                return False
-            self._node.set_light(self._node.LIGHT_OFF, f'{label} 灯间隔')
-            if index + 1 < count:
-                deadline = time.monotonic() + self._light_gap_seconds
-                while not self._node.stopped and time.monotonic() < deadline:
-                    time.sleep(min(
-                        0.05, max(0.0, deadline - time.monotonic())))
-        if not self._node.stopped:
-            self._node._set_task_phase_light(
-                self._node.LIGHT_YELLOW, f'{label}提示结束，恢复抓取阶段灯')
-            return True
-        return False
+            f'{self._task_name}：{label}，绿灯闪烁 {count} 次（异步）')
+        flash_async = getattr(self._node, '_flash_task_light', None)
+        if callable(flash_async):
+            return flash_async(
+                self._node.LIGHT_GREEN, count, label,
+                pulse_seconds=self._light_pulse_seconds,
+                gap_seconds=self._light_gap_seconds,
+                restore=True, restore_color=None)
+        return not self._node.stopped
 
     @staticmethod
     def _body_to_world(dx: float, dy: float, yaw_deg: float):
@@ -215,7 +201,7 @@ class RB26GrabGolfTask:
             raise ValueError('水平伺服实测位姿无效')
         return pose
 
-    def _send_horizontal_velocity(self, horizontal, deadline):
+    def _send_horizontal_velocity(self, horizontal, deadline, *, light_color=None):
         pose = self._servo_pose()
         vz = _clamp((self._servo_depth-pose[2])*self._depth_hold_gain,
                     -self._depth_hold_max_speed, self._depth_hold_max_speed)
@@ -229,15 +215,16 @@ class RB26GrabGolfTask:
             lease_s=max(0.25, 4*self._servo_period),
             wait_deadline=min(deadline, time.monotonic()+2.0),
             task_context=f'{self._task_name} 定深水平速度伺服',
-            light_color=self._node.LIGHT_YELLOW)
+            light_color=light_color)
         if not success:
             raise RuntimeError(f'水平速度指令失败：{message}')
 
-    def _stop_horizontal_velocity(self):
+    def _stop_horizontal_velocity(self, *, light_color=None):
         """Stop the lease and hand measured XY / locked depth to position hold."""
         success, message = self._node._send_body_velocity(
             wait_deadline=time.monotonic()+2.0,
-            task_context=f'{self._task_name} 结束水平速度伺服')
+            task_context=f'{self._task_name} 结束水平速度伺服',
+            light_color=light_color)
         if not success:
             self._logger.error(f'{self._task_name}：停止水平速度失败：{message}')
             return None
@@ -250,6 +237,7 @@ class RB26GrabGolfTask:
             BasicMotion.Goal.SET, recorded, 'xyzrz',
             timeout=self._command_timeout,
             wait_deadline=time.monotonic()+self._command_timeout, quiet=True,
+            light_color=light_color,
             task_context=f'{self._task_name} 水平伺服后保持位置和深度')
         if not success:
             self._logger.error(f'{self._task_name}：水平伺服后定深保持失败：{message}')
@@ -607,7 +595,7 @@ class RB26GrabGolfTask:
             self._golf_class_id, self._golf_color)
         if camera_pose is None:
             return False, '水平视觉对准高尔夫球失败'
-        if not self._flash_green(3, f'{self._golf_color} 已对准'):
+        if not self._flash_green(1, f'{self._golf_color} 伺服成功'):
             return False, '高尔夫球居中提示灯中断'
 
         gripper_pose = self._apply_camera_gripper_offset()
@@ -680,7 +668,7 @@ class RB26GrabGolfTask:
                     '26rb_grab_golf.golf',
                     f'伺服到 collection_frame 后，'
                     f'{self._golf_observe_seconds:.1f}s 内没有看到 {self._golf_color}')
-            if not self._flash_green(2, f'已观察到 {self._golf_color}'):
+            if not self._flash_green(1, f'已观察到 {self._golf_color}'):
                 return TaskOutcome.failed(
                     '26rb_grab_golf.golf', '目标高尔夫球提示灯中断')
 

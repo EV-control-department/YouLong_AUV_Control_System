@@ -1,7 +1,7 @@
 """Fixed-depth gate sequence driven by front-eye detections and measured odom.
 
 Camera ownership is independent of the motion phase. A handover never changes
-lateral path geometry or the recorded fore/aft ray. Servo errors use the owning eye; validated stereo supports identity projection
+the recorded fore/aft ray. Servo errors use the owning eye; validated stereo supports identity projection
 and the final yaw correction.
 """
 from __future__ import annotations
@@ -110,7 +110,7 @@ class RB26GateTask:
         self._accept_frames = False
         self._capture_floor = 0.0
         self._velocity_active = False
-        self._light_color = node.LIGHT_YELLOW
+        self._light_color = node.LIGHT_OFF
         self._bline_active = False
         self._deadline = math.inf
         self._phase_deadline = math.inf
@@ -482,7 +482,7 @@ class RB26GateTask:
         world = np.array([*horizontal, vz])
         body = rotation(pose).T @ world
         self._velocity_active = True
-        self._light_color = self.node.LIGHT_YELLOW if color is None else color
+        self._light_color = self.node.LIGHT_OFF if color is None else color
         deadline = min(self._deadline, self._phase_deadline if wait_deadline is None else wait_deadline)
         ok, message = self.node._send_body_velocity(
             *body.tolist(), yaw_rate_deg_s=float(yaw_rate),
@@ -499,10 +499,11 @@ class RB26GateTask:
     def _neutral(self, wait_deadline=None):
         if self._velocity_active:
             ok, message = self.node._send_body_velocity(
-                task_context='26rb_gate_task 结束速度输出', light_color=self._light_color,
+                task_context='26rb_gate_task 结束速度输出', light_color=self.node.LIGHT_OFF,
                 wait_deadline=min(self._deadline, self._now()+2.0) if wait_deadline is None else wait_deadline,
                 cancel_wait_timeout=2.0)
             self._velocity_active = False
+            self._light_color = self.node.LIGHT_OFF
             if not getattr(self.node, '_last_motion_cleanup_confirmed', True):
                 self._cleanup_unconfirmed = True
             if not ok:
@@ -510,6 +511,7 @@ class RB26GateTask:
 
     def _action(self, command, target, axes, deadline, **kwargs):
         self._check(deadline)
+        kwargs.setdefault('light_color', self.node.LIGHT_OFF)
         ok, message = self.node._send_action_goal(
             command, [float(x) for x in target], axes=axes,
             timeout=max(0.001, deadline-self._now()), wait_deadline=deadline,
@@ -533,6 +535,17 @@ class RB26GateTask:
                 self._tick(until)
 
     def _flash(self, color, count, label="门框观察闪灯"):
+        flash_async = getattr(self.node, '_flash_task_light', None)
+        if callable(flash_async):
+            flash_async(
+                color, count, label,
+                pulse_seconds=self.p['search_light_pulse_seconds'],
+                gap_seconds=self.p['search_light_gap_seconds'],
+                restore=False,
+                initial_gap_seconds=self.p['search_light_gap_seconds'])
+            return
+
+        # Keep standalone adapters compatible when they lack the node light worker.
         self._neutral()
         self._light(self.node.LIGHT_OFF, '闪灯开始')
         self._depth_hold(self.p['search_light_gap_seconds'], self.node.LIGHT_OFF)
@@ -545,6 +558,8 @@ class RB26GateTask:
 
     def _observe(self, seconds, deadline, require=False, color=None):
         self._phase_deadline = deadline
+        if color is None:
+            color = self.node.LIGHT_YELLOW
         until = min(deadline, self._now()+seconds)
         while self._now() < until:
             self._check(deadline)
@@ -571,14 +586,15 @@ class RB26GateTask:
         self._action(BasicMotion.Goal.BTRAVEL, body, 'xyz', self._limit(self.p['observation_travel_timeout']))
         self._stage = '初始观测位姿 SET'
         self._action(BasicMotion.Goal.SET, target, 'xyzrz', self._limit(self.p['observation_set_timeout']))
-        self._light(self.node.LIGHT_GREEN, '到达初始观测位姿')
 
     def _scan(self, sign, deadline):
         previous = self._pose()[5]
         travelled = 0.0
+        self._light(self.node.LIGHT_YELLOW, '左右扫描观测')
         while travelled < self.p['search_scan_angle_deg']:
             self._check(deadline)
-            self._velocity(yaw_rate=sign*self.p['search_yaw_rate_deg_s'])
+            self._velocity(yaw_rate=sign*self.p['search_yaw_rate_deg_s'],
+                           color=self.node.LIGHT_YELLOW)
             self._tick(deadline)
             current = self._pose()[5]
             travelled += sign*wrap_degrees(current-previous)
@@ -590,13 +606,15 @@ class RB26GateTask:
             self._capture_floor = self.node.get_clock().now().nanoseconds*1e-9
             self._accept_frames = True
         self._stage = '原地观察'
-        self._observe(self.p['search_observe_seconds'], self._deadline, color=self.node.LIGHT_GREEN)
+        self._light(self.node.LIGHT_YELLOW, '初始观察')
+        self._observe(self.p['search_observe_seconds'], self._deadline,
+                      color=self.node.LIGHT_YELLOW)
         with self._lock:
             selected = self._tracks.highest(self._now(), fresh_only=True)
             if selected is not None:
                 self._select_track(selected, fresh=True)
         if selected is not None:
-            self._flash(self.node.LIGHT_GREEN, 2)
+            self._flash(self.node.LIGHT_GREEN, 1, '初始观察发现门框')
             return
         self._flash(self.node.LIGHT_RED, 1)
         deadline = self._limit(self.p['search_timeout'])
@@ -611,17 +629,18 @@ class RB26GateTask:
         with self._lock:
             selected = self._tracks.highest(self._now(), fresh_only=False)
             if selected is not None:
+                selected_frame = getattr(selected, 'peak_frame', None) or selected.frame
                 self._select_track(selected, fresh=False)
         if selected is None:
             self._flash(self.node.LIGHT_RED, 2, '完整搜索未找到门框')
             self.node._task_failure_light_handled = True
             raise GateFailure('search', '左右扫视结束仍未找到稳定门框')
-        self._flash(self.node.LIGHT_GREEN, 2)
+        self._flash(self.node.LIGHT_GREEN, 1, '完整扫描发现门框')
         self._stage = '扫描目标转向与重捕获'
         deadline = self._limit(self.p['search_reacquire_timeout'])
         self._lost_since = self._now()
         pose = self._pose()
-        self._action(BasicMotion.Goal.SET, [pose[0], pose[1], self.depth, heading(selected.frame.ray)],
+        self._action(BasicMotion.Goal.SET, [pose[0], pose[1], self.depth, heading(selected_frame.ray)],
                      'xyzrz', deadline)
         self._fresh_after(self.sequence, deadline=deadline)
 
@@ -632,7 +651,7 @@ class RB26GateTask:
         pose = self._pose()
         target_yaw = heading(frame.ray)
         self._action(BasicMotion.Goal.SET, [pose[0], pose[1], self.depth, target_yaw], 'xyzrz', deadline)
-        self._light(self.node.LIGHT_GREEN, '门框对准完成')
+        self._flash(self.node.LIGHT_GREEN, 1, '门框对准完成')
         # A pre-turn pixel must never be applied to a post-turn pose.
         with self._lock:
             floor = self.sequence
@@ -646,40 +665,7 @@ class RB26GateTask:
             frame = self._owner_frame()
             if frame is not None and frame.sequence > floor:
                 return frame
-            self._velocity()
-            self._tick(deadline)
-
-    def _lateral(self, distance):
-        if abs(distance) <= self.p['lateral_tolerance_m']:
-            self._log('横移距离为零，跳过平移')
-            return
-        deadline = self._limit(self.p['lateral_timeout'])
-        start = np.asarray(self._pose()[:2])
-        yaw = math.radians(self._pose()[5])
-        direction = np.array([-math.sin(yaw), math.cos(yaw)])
-        # These variables stay fixed through all observation/owner losses.
-        while True:
-            self._check(deadline)
-            frame = self._owner_frame()
-            delta = np.asarray(self._pose()[:2])-start
-            along = float(delta @ direction)
-            error = distance-along
-            cross = delta-along*direction
-            if abs(error) <= self.p['lateral_tolerance_m'] and np.linalg.norm(cross) <= self.p['lateral_tolerance_m']:
-                self._neutral()
-                return
-            if frame is None:
-                self._velocity()
-            else:
-                speed = float(np.clip(error, -self.p['lateral_speed_mps'], self.p['lateral_speed_mps']))
-                correction = -self.p['lateral_path_kp']*cross
-                size = np.linalg.norm(correction)
-                if size > self.p['lateral_max_path_speed_mps']:
-                    correction *= self.p['lateral_max_path_speed_mps']/size
-                yaw_error, _ = self._yaw_error(frame)
-                rate = float(np.clip(yaw_error*self.p['search_yaw_kp'],
-                                     -self.p['search_max_yaw_rate_deg_s'], self.p['search_max_yaw_rate_deg_s']))
-                self._velocity(direction*speed+correction, rate)
+            self._velocity(color=self.node.LIGHT_YELLOW)
             self._tick(deadline)
 
     def _record_ray(self, frame):
@@ -696,6 +682,7 @@ class RB26GateTask:
 
     def _fore_aft(self):
         deadline = self._limit(self.p['fore_aft_timeout'])
+        self._light(self.node.LIGHT_YELLOW, '前后高度对正观测')
         ray = self._recorded_ray
         start = self._fore_aft_start
         stable_since = None
@@ -716,7 +703,7 @@ class RB26GateTask:
                 generation = self.generation
             if frame is None:
                 stable_since = None
-                self._velocity()
+                self._velocity(color=self.node.LIGHT_YELLOW)
             else:
                 error = self.p['fore_aft_target_height_percent']-frame.height_percent
                 if self._now() >= next_log:
@@ -742,7 +729,8 @@ class RB26GateTask:
                     correction *= self.p['fore_aft_max_cross_speed_mps']/size
                 rate = float(np.clip(wrap_degrees(heading(direction)-pose[5])*self.p['search_yaw_kp'],
                                      -self.p['search_max_yaw_rate_deg_s'], self.p['search_max_yaw_rate_deg_s']))
-                self._velocity(direction*speed+correction, rate)
+                self._velocity(direction*speed+correction, rate,
+                               color=self.node.LIGHT_YELLOW)
             self._tick(deadline)
 
     def _final_yaw(self):
@@ -780,7 +768,7 @@ class RB26GateTask:
                 if not aligned:
                     raise GateFailure('timeout', '最终 yaw 在时限内未稳定对准，不发送 BLINE')
                 if aligned:
-                    self._light(self.node.LIGHT_GREEN, '最终 yaw 稳定达标')
+                    self._flash(self.node.LIGHT_GREEN, 1, '最终 yaw 稳定达标')
                 self._log(f'最终 yaw {source}: 耗时 {now-start:.2f}s，剩余误差 {error:.2f}°，'
                           '稳定达标')
                 return
@@ -799,7 +787,7 @@ class RB26GateTask:
             return False
         pose = self._pose()
         deadline = self._limit(self.p['pass_timeout'])
-        self._light(self.node.LIGHT_YELLOW, 'BLINE 过门')
+        self._light(self.node.LIGHT_OFF, 'BLINE 过门')
         self._bline_active = True
         try:
             self._action(BasicMotion.Goal.BLINE,
@@ -847,7 +835,7 @@ class RB26GateTask:
                     BasicMotion.Goal.SET, [pose[0], pose[1], pose[2], pose[5]], 'xyzrz',
                     timeout=max(.001, until-self._now()), wait_deadline=until,
                     quiet=True, task_context='26rb_gate_task 失败停车',
-                    light_color=self._light_color, cancel_wait_timeout=2.0)
+                    light_color=self.node.LIGHT_OFF, cancel_wait_timeout=2.0)
                 confirmed = ok and getattr(self.node, '_last_motion_cleanup_confirmed', True)
         except Exception as exc:
             self._log(f'停车指令未确认: {exc}', True)
@@ -859,9 +847,6 @@ class RB26GateTask:
         self._search()
         self._stage = '门框航向对准'
         self._align(self.p['search_align_observe_seconds'])
-        self._stage = '左右对正'
-        self._lateral(self.p['lateral_front'][self._gate_index])
-        self._flash(self.node.LIGHT_GREEN, 1, '左右对正完成')
         self._stage = '前后高度对正'
         floor = self._align(self.p['fore_aft_observe_seconds'])
         self._record_ray(self._fresh_after(floor))

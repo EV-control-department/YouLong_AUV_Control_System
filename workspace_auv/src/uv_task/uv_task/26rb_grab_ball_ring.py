@@ -1,4 +1,4 @@
-"""Sequential ball/ring pickup, with mandatory frame-centred verification."""
+"""Sequential pickup with shared acquisition, check, servo and loss windows."""
 from __future__ import annotations
 
 from collections import deque
@@ -14,6 +14,7 @@ from uv_task.collection_frame_search import CollectionFrameSearch
 from uv_task.down_camera_servo import best_detection, normalized_image_error, body_to_world_rotation
 from uv_task.task_outcome import TaskOutcome
 from uv_task.task_state import TaskState
+from uv_task.pickup_alignment import PickupWindow, target_world_xy, bounded_velocity
 
 PickupController = import_module('uv_task.26rb_grab_golf').RB26GrabGolfTask
 
@@ -46,7 +47,8 @@ def validate_combined_params(params, *, complete=True):
         value = params.get(key, 3)
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f'{key} 必须是至少1的整数')
-    for key, default in (('ring_observe_seconds', 3.0), ('ring_orientation_timeout', 5.0),
+    for key, default in (('find_timeout', 15.0), ('check_timeout', 5.0),
+                         ('horizontal_servo_timeout', 20.0), ('loss_timeout', 5.0),
                          ('ring_yaw_tolerance_deg', 3.0), ('ring_yaw_gain', 1.2),
                          ('ring_max_yaw_rate_deg_s', 10.0),
                          ('ring_orientation_spread_deg', 5.0), ('verification_timeout', 2.0),
@@ -63,6 +65,10 @@ def validate_combined_params(params, *, complete=True):
         value = params.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 270:
             raise ValueError(f'{key} 必须是[0,270]范围内的度数')
+    if 'ring_orientation_timeout' in params:
+        value = params['ring_orientation_timeout']
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError('旧ring_orientation_timeout必须是有限正数；组合任务现使用servo.timeout')
     quality = params.get('ring_orientation_min_quality', .8)
     if isinstance(quality, bool) or not isinstance(quality, (int, float)) or not math.isfinite(quality) or not 0 <= quality <= 1:
         raise ValueError('ring_orientation_min_quality 必须在[0,1]范围内')
@@ -107,7 +113,14 @@ class RB26GrabBallRingTask:
         self.max_attempts = {kind: int(params.get(kind+'_max_attempts', 3)) for kind in ('golf', 'ring')}
         self.samples = deque(maxlen=64)
         self.sample_cursor = None
-        self.orientation_timeout = float(params.get('ring_orientation_timeout', 5.0))
+        self.find_timeout = float(params.get('find_timeout', 15.0))
+        self.check_timeout = float(params.get('check_timeout', 5.0))
+        self.servo_timeout = float(params.get('horizontal_servo_timeout', 20.0))
+        self.loss_timeout = float(params.get('loss_timeout', 5.0))
+        self._targets = {}
+        self._ring_axis_at_alignment = None
+        self._first_find_started = None
+        self._frame_light_indicated = False
         self.yaw_tolerance = float(params.get('ring_yaw_tolerance_deg', 3.0))
 
     def _check(self):
@@ -132,7 +145,8 @@ class RB26GrabBallRingTask:
         timeout = float(self.p.get('return_timeout', 60.0) if timeout is None else timeout)
         ok, message = self.node._send_action_goal(
             BasicMotion.Goal.SET, list(target), axes, timeout=timeout,
-            wait_deadline=time.monotonic()+timeout, task_context=label)
+            wait_deadline=time.monotonic()+timeout,
+            light_color=self.node.LIGHT_OFF, task_context=label)
         if not ok:
             raise PickupFailure(f'{label}失败：{message}')
         self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = target
@@ -144,71 +158,194 @@ class RB26GrabBallRingTask:
                        axes='z', timeout=self.ball._command_timeout)
 
     def _return_frame(self, controller):
-        anchor = self.state.pickup.frame_pose
+        """Return to this target's camera pose, without any visual servo."""
+        kind = 'golf' if controller is self.ball else 'ring'
+        anchor = getattr(self.state.pickup, kind+'_camera_pose')
         if anchor is None:
-            raise PickupFailure('缺少frame回位记录')
+            raise PickupFailure('缺少本次目标下视对齐位姿')
         controller._servo_yaw_target = None
-        controller._pending_golf_priority = None
         self._restore_work_depth('组合抓取：抓取后恢复作业深度')
-        anchor = (anchor[0], anchor[1], self.work_depth, anchor[3])
-        self._set_pose(anchor, '组合抓取：回到frame上方', axes='xyrz')
-        centred = controller._servo_horizontally(
-            controller._collection_class_id, 'collection_frame', allow_target_handoff=False)
-        if centred is None:
-            raise PickupFailure('回位后frame居中失败，不能复检或继续抓取')
-        self.state.update_pickup(frame_pose=tuple(centred))
+        self._set_pose(anchor, '组合抓取：返回'+kind+'下视对齐位姿', axes='xyrz')
 
-    def _verify(self, class_id):
-        """Observe both eyes for a full window; any target sighting rejects pickup."""
-        started = time.monotonic()
-        until = started+float(self.p.get('verification_timeout', 2.0))
-        timeout = self.ball._detection_timeout
-        cameras = ('down_left', 'down_right')
-        last = {camera: None for camera in cameras}
-        absent_since = {camera: None for camera in cameras}
-        seen_target = False
-        frame_visible = False
-        lost_events = False
+    def _fresh_detection(self, class_id, controller):
         with self.node._perception_lock:
-            cursor = self.node._down_detection_sequence
-        while not self.node.stopped:
-            now = time.monotonic()
-            with self.node._perception_lock:
-                entries = {camera: self.node._down_detections.get(camera) for camera in cameras}
-                events = tuple(event for event in self.node._down_detection_events if event[0] > cursor)
-            # Consume every callback: a brief sighting must survive a later
-            # empty detection in the same servo period.
-            if events and events[0][0] != cursor+1:
-                lost_events = True
-            for sequence, received, camera, message in events:
-                cursor = sequence
-                if camera not in last or not started <= received <= until:
-                    continue
-                present = best_detection(message, class_id) is not None
-                seen_target |= present
-                if last[camera] is not None and received-last[camera] > timeout:
-                    absent_since[camera] = None
-                last[camera] = received
-                if present or now-received > timeout:
-                    absent_since[camera] = None
-                elif absent_since[camera] is None:
-                    absent_since[camera] = received
-            frame_visible = False
-            for camera, entry in entries.items():
-                if entry is None or not started <= entry[0] <= until or now-entry[0] > timeout:
-                    absent_since[camera] = None
-                    continue
-                frame_visible |= best_detection(entry[1], self.ball._collection_class_id) is not None
-            if now >= until:
-                break
-            time.sleep(min(self.ball._servo_period, max(0.0, until-now)))
-        stable = self.ball._verification_absence_hold_seconds
-        confirmed = not self.node.stopped and not seen_target and not lost_events and frame_visible and all(
-            absent_since[camera] is not None and last[camera] is not None
-            and time.monotonic()-last[camera] <= timeout
-            and last[camera]-absent_since[camera] >= stable for camera in cameras)
-        self.log.info(f'组合抓取：frame中心双目复检结束，class_id={class_id}，确认抓取={confirmed}')
-        return confirmed
+            entries = dict(self.node._down_detections)
+        candidates = []
+        now = time.monotonic()
+        for camera in ('down_left', 'down_right'):
+            entry = entries.get(camera)
+            if entry is not None and 0 <= now-entry[0] <= controller._detection_timeout:
+                detection = best_detection(entry[1], class_id)
+                if detection is not None:
+                    candidates.append((entry[0], camera, detection))
+        if not candidates:
+            return None, None
+        # Keep one eye while it still has a valid observation, then switch to
+        # the freshest other eye. Both eyes count as visibility for loss timing.
+        active = getattr(controller, '_aligned_camera', None)
+        selected = next((item for item in candidates if item[1] == active), max(candidates, key=lambda x: x[0]))
+        return selected[1], selected[2]
+
+    def _fallback_pose(self):
+        recorded = self.state.pickup.last_servo_pose
+        if recorded is not None:
+            return recorded
+        position = self.p['collection_frame_position']
+        return (float(position[0]), float(position[1]), self.work_depth, self._pose()[5])
+
+    def _record_target(self, kind, controller, camera, detection, *, timed_out):
+        pose = self._pose()
+        anchor = (*pose[:2], self.work_depth, pose[5])
+        target = target_world_xy(self.node, camera, detection, pose, controller._projection_depth)
+        self._targets[kind] = (target, pose, camera)
+        if kind == 'ring':
+            self._ring_axis_at_alignment = self._axis_estimate()
+        controller._aligned_camera = camera
+        self.state.update_pickup(**{kind+'_camera_pose': anchor, 'last_servo_pose': anchor})
+        self.log.info(f'组合抓取：{kind} '+('servo超时，目标仍可见，采用当前观测抓取' if timed_out else '目标对齐完成'))
+        if not timed_out:
+            controller._flash_green(1, f'{kind}伺服成功')
+        return 'ready'
+
+    def _align_target(self, kind, controller, started, *, checking=False, exhausted=False):
+        """One deadline survives frame/target/closed-loop-return transitions."""
+        window = PickupWindow(started, self.check_timeout if checking else self.find_timeout,
+                              self.servo_timeout, self.loss_timeout, checking=checking)
+        controller._servo_depth = self.work_depth
+        controller._servo_yaw_target = None
+        controller._aligned_camera = None
+        stable_since = None
+        stable_camera = None
+        frame_stable_since = None
+        announced = None
+        last_log = float('-inf')
+        with self.node._perception_lock:
+            earlier = [event[0] for event in self.node._down_detection_events if event[1] >= started]
+            cursor = min(earlier)-1 if earlier and not checking else self.node._down_detection_sequence
+        self.samples.clear()
+        self.sample_cursor = None
+        last_target_camera = None
+        last_target_detection = None
+        result = None
+        try:
+            while True:
+                self._check()
+                now = time.monotonic()
+                with self.node._perception_lock:
+                    events = tuple(event for event in self.node._down_detection_events if event[0] > cursor)
+                if events and events[0][0] != cursor+1:
+                    window.observations_valid = False
+                for sequence, received, camera, message in events:
+                    cursor = sequence
+                    window.observe(received, camera, message, controller._golf_class_id,
+                                   controller._detection_timeout)
+                camera, detection = self._fresh_detection(controller._golf_class_id, controller)
+                if detection is not None:
+                    last_target_camera, last_target_detection = camera, detection
+                # A fresh cached sighting may predate entry into a new ring stage.
+                if not checking and detection is not None and now <= window.search_deadline:
+                    window.seen = True
+                result = window.absent_result(now, controller._detection_timeout)
+                if result is not None:
+                    self.log.info(f'组合抓取：{kind} '+('check' if checking else 'find')+'窗口结束，未看到目标：'+result)
+                    break
+                if exhausted and window.seen:
+                    result = 'exhausted'
+                    break
+                frame_camera, frame = self._fresh_detection(controller._collection_class_id, controller)
+                if window.transition(now, detection is not None, frame is not None):
+                    stable_since = frame_stable_since = None
+                if announced != window.mode:
+                    announced = window.mode
+                    self.log.info(f'组合抓取：{kind} 进入{window.mode}，servo剩余={max(0., window.deadline-now):.1f}s')
+                if frame is not None and not self._frame_light_indicated:
+                    self._frame_light_indicated = True
+                    controller._flash_green(1, '首次看到frame')
+                phase_color = (
+                    self.node.LIGHT_YELLOW if window.mode == 'target'
+                    or (window.mode == 'frame' and frame is None)
+                    else self.node.LIGHT_OFF)
+                self.node._set_task_phase_light(
+                    phase_color, f'组合抓取：{window.mode}阶段')
+                if now >= window.deadline:
+                    if window.seen and last_target_detection is not None:
+                        # Keep the last valid target sample for the mechanical
+                        # attempt.  A timeout may coincide with the current
+                        # frame aging out, but it must not skip the two-object
+                        # pickup sequence after a real sighting.
+                        result = self._record_target(
+                            kind, controller, last_target_camera,
+                            last_target_detection, timed_out=True)
+                    else:
+                        pose = self._pose()
+                        self.state.update_pickup(last_servo_pose=(*pose[:2], self.work_depth, pose[5]))
+                        result = 'unobserved'
+                    break
+                horizontal = np.zeros(2)
+                controller._servo_yaw_target = None
+                if window.mode == 'target' and detection is not None:
+                    controller._aligned_camera = camera
+                    pose, horizontal, du, dv = controller._horizontal_velocity(camera, detection)
+                    if kind == 'ring':
+                        self._sample_axis()
+                    centred = abs(du) <= controller._pixel_tolerance and abs(dv) <= controller._pixel_tolerance
+                    at_depth = abs(pose[2]-self.work_depth) <= controller._depth_hold_tolerance
+                    if stable_camera != camera:
+                        stable_since = None
+                        stable_camera = camera
+                    stable_since = (now if stable_since is None else stable_since) if centred and at_depth else None
+                    if centred:
+                        horizontal[:] = 0.
+                    if stable_since is not None and now-stable_since >= controller._hold_seconds:
+                        result = self._record_target(kind, controller, camera, detection, timed_out=False)
+                        break
+                elif window.mode == 'frame' and frame is not None:
+                    controller._aligned_camera = frame_camera
+                    pose, horizontal, du, dv = controller._horizontal_velocity(frame_camera, frame)
+                    centred = abs(du) <= controller._pixel_tolerance and abs(dv) <= controller._pixel_tolerance
+                    if centred:
+                        horizontal[:] = 0.
+                        frame_stable_since = now if frame_stable_since is None else frame_stable_since
+                        if now-frame_stable_since >= controller._hold_seconds:
+                            self.state.update_pickup(last_servo_pose=(*pose[:2], self.work_depth, pose[5]))
+                    else:
+                        frame_stable_since = None
+                elif window.mode == 'return':
+                    anchor = self._fallback_pose()
+                    pose = self._pose()
+                    horizontal = bounded_velocity(np.asarray(anchor[:2])-pose[:2], controller._servo_gain, controller._max_xy_speed)
+                    controller._servo_yaw_target = anchor[3]
+                else:
+                    stable_since = frame_stable_since = None
+                # Correction time is motion time, not an observation budget:
+                # suspend both the confirmation and servo deadlines while a
+                # non-zero visual correction is being sent.  Resume as soon
+                # as the correction settles or the target is lost.
+                if np.linalg.norm(horizontal) > 1e-6:
+                    window.pause(now)
+                else:
+                    window.resume(now)
+                if now-last_log >= controller._log_period:
+                    self.log.info(f'组合抓取：{kind} {window.mode}速度伺服，世界XY速度=({horizontal[0]:+.3f},{horizontal[1]:+.3f})m/s')
+                    last_log = now
+                servo_light = (
+                    self.node.LIGHT_YELLOW if window.mode == 'target'
+                    or (window.mode == 'frame' and frame is None)
+                    else self.node.LIGHT_OFF)
+                controller._send_horizontal_velocity(
+                    horizontal, window.deadline, light_color=servo_light)
+                next_deadline = window.deadline
+                if not window.seen:
+                    next_deadline = min(next_deadline, window.search_deadline)
+                self._wait(min(controller._servo_period, max(0., next_deadline-time.monotonic())))
+        finally:
+            # Cleanup holds the measured heading; it must not finish an old
+            # fallback yaw move after the shared visual deadline has expired.
+            controller._servo_yaw_target = None
+            if controller._stop_horizontal_velocity(
+                    light_color=self.node.LIGHT_OFF) is None:
+                raise PickupFailure('组合抓取：视觉修正结束停车保持失败')
+        return result
 
     def _sample_axis(self):
         camera = self.ring._aligned_camera
@@ -267,64 +404,34 @@ class RB26GrabBallRingTask:
                 self._wait(float(self.p.get('ring_servo_repeat_period', .1)))
         self._wait(float(self.p.get('ring_servo_settle_seconds', 1.0)))
 
-    def _orient_and_align_ring(self):
-        self.samples.clear()
-        self.sample_cursor = time.monotonic()
-        until = time.monotonic()+float(self.p.get('ring_observe_seconds', 3.0))
-        while time.monotonic() < until:
-            self._check()
-            self._sample_axis()
-            self._wait(min(self.ring._servo_period, max(0.0, until-time.monotonic())))
-        self._ring_servo(self.p.get('ring_open_angle_deg', 0.0), '松开')
-        until = time.monotonic()+self.orientation_timeout
-        axis = None
-        while time.monotonic() < until:
-            self._check()
-            self._sample_axis()
-            axis = self._axis_estimate()
-            if axis is not None:
-                break
-            self._wait(min(self.ring._servo_period, max(0.0, until-time.monotonic())))
-        if axis is None:
-            self.log.warning('抓环：观察后未收到新鲜、稳定的有效方向，本次不下沉')
-            return False
-        pose = self._pose()
-        yaw = choose_away_heading(axis, pose[:2], self.state.pickup.start_xy, pose[5])
-        self.log.info(f'抓环：环平面轴向={axis:.1f}°，背离出发点的目标航向={yaw:.1f}°')
-        self._set_pose([pose[0], pose[1], self.state.pickup.depth, yaw], '抓环：选择背离出发点的环平面航向')
-        self.ring._servo_yaw_target = yaw
-        # Turning moves the offset camera. Re-centre after changing heading.
-        camera_pose = self.ring._servo_horizontally(self.ring._golf_class_id, 'red_ring')
-        if camera_pose is None:
-            return False
-        self.state.update_pickup(ring_camera_pose=tuple(camera_pose))
-        self.samples.clear()
-        self.sample_cursor = time.monotonic()
-        until = time.monotonic()+self.orientation_timeout
-        final_axis = None
-        while time.monotonic() < until:
-            self._sample_axis()
-            final_axis = self._axis_estimate()
-            if final_axis is not None:
-                break
-            self._wait(min(self.ring._servo_period, max(0.0, until-time.monotonic())))
-        if final_axis is None or abs((yaw-final_axis+90.0) % 180.0-90.0) > self.yaw_tolerance:
-            self.log.warning('抓环：转向后方向复核失败，本次不下沉')
-            return False
+    def _align_claw(self, kind, controller, yaw):
+        target_xy, observed_pose, camera = self._targets[kind]
         provider = self.node.camera_extrinsics_provider
         try:
-            tf = provider.lookup_transform(provider.base_frame, 'hairpin_claw_link')
+            tf = provider.lookup_transform(provider.base_frame, controller._gripper_frame)
+            tf = tf.transform if hasattr(tf, 'transform') else tf
+            claw = np.array([tf.translation.x, tf.translation.y, tf.translation.z], dtype=float)
         except Exception as error:
-            raise PickupFailure(f'读取发夹爪外参失败：{error}') from error
-        tf = tf.transform if hasattr(tf, 'transform') else tf
-        claw = np.array([tf.translation.x, tf.translation.y, tf.translation.z], dtype=float)
-        camera = self.node.camera_extrinsics[self.ring._aligned_camera]
-        pose = self._pose()
-        offset = body_to_world_rotation(pose) @ (np.asarray(camera.translation)-claw)
+            raise PickupFailure('读取夹爪外参失败：'+str(error)) from error
+        final_pose = list(self._pose())
+        final_pose[5] = yaw
+        offset = body_to_world_rotation(final_pose) @ claw
         if not np.all(np.isfinite(offset)):
-            raise PickupFailure('发夹爪外参无效')
-        self._set_pose([pose[0]+offset[0], pose[1]+offset[1], self.state.pickup.depth, yaw],
-                       '抓环：根据成功下视相机与发夹爪TF对准')
+            raise PickupFailure('夹爪外参无效')
+        self._set_pose([target_xy[0]-offset[0], target_xy[1]-offset[1], self.work_depth, yaw],
+                       '组合抓取：'+kind+'转向与夹爪对准同时执行', timeout=controller._command_timeout)
+
+    def _orient_and_align_ring(self):
+        # Samples were collected while servoing, without a second observation
+        # timeout or a second camera-centering pass after turning.
+        axis = self._ring_axis_at_alignment
+        pose = self._pose()
+        yaw = pose[5]
+        if axis is not None:
+            yaw = choose_away_heading(axis, pose[:2], self.state.pickup.start_xy, pose[5])
+        else:
+            self.log.warning('抓环：有效方向不足，保持当前航向对爪抓取')
+        self._align_claw('ring', self.ring, yaw)
         return True
 
     def _grab_target_depth(self, kind):
@@ -365,6 +472,7 @@ class RB26GrabBallRingTask:
                 ok, message = self.node._send_body_velocity(
                     *body.tolist(), yaw_rate_deg_s=0.0, lease_s=lease,
                     wait_deadline=min(deadline, now+2.0),
+                    light_color=self.node.LIGHT_OFF,
                     task_context=f'组合抓取：{kind} 下潜到{target:.3f}m')
                 if not ok:
                     self.log.warning(f'组合抓取：{kind} 下潜速度指令失败：{message}')
@@ -374,6 +482,7 @@ class RB26GrabBallRingTask:
             # Cleanup gets its own deadline even after the 15-second budget.
             neutral_ok, message = self.node._send_body_velocity(
                 lease_s=lease, wait_deadline=time.monotonic()+2.0,
+                light_color=self.node.LIGHT_OFF,
                 task_context=f'组合抓取：{kind} 结束目标深度下潜')
             if not neutral_ok:
                 self.log.warning(f'组合抓取：{kind} 下潜停车失败：{message}')
@@ -383,67 +492,50 @@ class RB26GrabBallRingTask:
         return False
 
     def _mechanical_attempt(self, kind, controller):
-        self._restore_work_depth('组合抓取：抓取前恢复作业深度')
-        controller._servo_yaw_target = None
-        if controller._wait_for_detection(controller._collection_class_id, 'collection_frame',
-                                          controller._observe_seconds) is None:
-            return False
-        if not controller._flash_green(1, '已观察到collection_frame'):
-            return False
-        if kind == 'golf' and not controller._prepare_claw():
-            return False
-        frame = controller._servo_horizontally(controller._collection_class_id, 'collection_frame')
-        if frame is None:
-            return False
-        if controller._pending_golf_priority is None:
-            self.state.update_pickup(frame_pose=tuple(frame))
-            if controller._wait_for_detection(controller._golf_class_id, controller._golf_color,
-                                              controller._golf_observe_seconds) is None:
-                return False
-            if not controller._flash_green(2, '已观察到'+controller._golf_color):
-                return False
-        camera_pose = controller._servo_horizontally(controller._golf_class_id, controller._golf_color)
-        if camera_pose is None:
-            return False
-        self.state.update_pickup(**{kind+'_camera_pose': tuple(camera_pose)})
-        if not controller._flash_green(3, controller._golf_color+' 已居中'):
-            return False
-        if kind == 'ring':
-            if not self._orient_and_align_ring():
-                return False
-        elif controller._apply_camera_gripper_offset() is None:
-            return False
-        self._restore_work_depth('组合抓取：下沉前恢复作业深度')
+        if kind == 'golf':
+            if not controller._prepare_claw():
+                raise PickupFailure('准备圆盘爪失败')
+            self._align_claw(kind, controller, self._pose()[5])
+        else:
+            self._ring_servo(self.p.get('ring_open_angle_deg', 0.0), '松开')
+            self._orient_and_align_ring()
         if not controller._wait_pre_descent_settle():
-            return False
-        descent_ok = self._descend_to_depth(kind, controller)
-        if descent_ok and kind == 'ring':
+            raise PickupFailure('下潜前等待被取消')
+        if not self._descend_to_depth(kind, controller):
+            raise PickupFailure(kind+'下潜或停车失败')
+        if kind == 'ring':
             self._ring_servo(self.p.get('ring_close_angle_deg', 90.0), '合爪')
-        # _run_target always enters _return_frame after success or a failed
-        # attempt. Its depth-only action replaces a blind timed ascent.
-        return descent_ok
+        return True
 
     def _run_target(self, kind, controller):
         if controller._golf_class_id is None:
             self.state.update_pickup(**{kind+'_status': 'failed'})
             return
-        for attempt in range(1, self.max_attempts[kind]+1):
+        started = self._first_find_started if kind == 'golf' else time.monotonic()
+        if started is None:
+            started = time.monotonic()
+        checking = False
+        performed = False
+        attempt = 0
+        while True:
             self._check()
-            self.state.update_pickup(**{kind+'_attempts': attempt})
-            self.log.info(f'组合抓取：{kind} 第{attempt}/{self.max_attempts[kind]}次尝试')
-            try:
-                performed = self._mechanical_attempt(kind, controller)
-            except (ValueError, KeyError, RuntimeError) as error:
-                self._check()
-                self.log.warning(f'组合抓取：{kind} 本次尝试失败：{error}')
-                performed = False
-            self._check()
-            self._return_frame(controller)
-            verified = self._verify(controller._golf_class_id)
-            if performed and verified:
+            exhausted = attempt >= self.max_attempts[kind]
+            result = self._align_target(kind, controller, started, checking=checking, exhausted=exhausted)
+            if result == 'absent' and checking and performed:
                 self.state.update_pickup(**{kind+'_status': 'success'})
+                if kind == 'golf':
+                    controller._flash_green(1, '球抓取确认完成，开始搜环')
                 return
-        self.state.update_pickup(**{kind+'_status': 'failed'})
+            if result != 'ready' or exhausted:
+                self.state.update_pickup(**{kind+'_status': 'failed'})
+                return
+            attempt += 1
+            self.state.update_pickup(**{kind+'_attempts': attempt})
+            self.log.info(f'组合抓取：{kind} 第{attempt}/{self.max_attempts[kind]}次抓取')
+            performed = self._mechanical_attempt(kind, controller)
+            self._return_frame(controller)
+            started = time.monotonic()
+            checking = True
 
     def execute(self):
         self.state.reset_pickup()
@@ -453,7 +545,16 @@ class RB26GrabBallRingTask:
             # The shared search helper retains its legacy key for other tasks;
             # this task supplies its single work-depth target to that helper.
             search_params = {**self.p, 'search_cruise_depth_m': self.work_depth}
-            approach = CollectionFrameSearch(self.node, search_params).execute()
+            search = CollectionFrameSearch(self.node, search_params)
+            search.task_name = '26rb_grab_ball_ring'
+            search.target_label = '收集盘'
+            approach = search.execute()
+            self._frame_light_indicated = bool(
+                getattr(search, 'first_down_indicated', False))
+            self._first_find_started = getattr(search, 'first_down_seen_at', None)
+            if self._first_find_started is None:
+                self._first_find_started = time.monotonic()
+            self.state.update_pickup(first_frame_seen_at=self._first_find_started)
             if not approach:
                 return approach
             self._restore_work_depth('组合抓取：搜索结束恢复作业深度')

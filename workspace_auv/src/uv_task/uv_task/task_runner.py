@@ -169,6 +169,13 @@ class TaskRunnerNode(Node):
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
         self._light_state = None
+        self._light_phase_color = self.LIGHT_OFF
+        self._light_lock = threading.RLock()
+        self._light_animation_condition = threading.Condition(self._light_lock)
+        self._light_animation_queue = deque()
+        self._light_animation_thread = None
+        self._light_animation_cancel = None
+        self._light_phase_generation = 0
         self._target_light_indications = set()
         self._last_failure_code = ''
         self._last_failure_message = ''
@@ -259,6 +266,7 @@ class TaskRunnerNode(Node):
             'btravelxy': self._task_btravelxy,
             'btravelxyz': self._task_btravelxyz,
             'bline': self._task_bline,
+            'wline': self._task_wline,
             'navigate': self._task_navigate,
             'wait': self._task_wait,
             'follow_line': self._task_follow_line,
@@ -403,6 +411,7 @@ class TaskRunnerNode(Node):
             return
         self._motion_stop_sent = True
         self.stopped = True
+        self._cancel_task_light_animation(restore=False)
         goal_handle = self._active_goal_handle
         self._active_goal_handle = None
         if goal_handle is not None:
@@ -418,38 +427,184 @@ class TaskRunnerNode(Node):
 
     # ── 灯光 / 舵机控制 ────────────────────────────────────────────
 
-    def set_light(self, color: int, label: str, *, log: bool = True):
+    def _publish_light_locked(self, color: int, label: str, *, log: bool = True):
+        """Publish one light state while the caller holds ``_light_lock``."""
         color = int(color)
-        msg = UInt8(data=color)
-        self.pub_light.publish(msg)
+        self.pub_light.publish(UInt8(data=color))
         self._light_state = color
         if log:
             self.get_logger().info(f'💡 灯光已打开：{label}（数值={color}）')
 
+    def _cancel_light_animation_locked(self, *, restore: bool):
+        cancel = self._light_animation_cancel
+        self._light_animation_cancel = None
+        if cancel is not None:
+            cancel.set()
+        self._light_animation_queue.clear()
+        self._light_animation_condition.notify_all()
+        if restore and self._light_state != self._light_phase_color:
+            self._publish_light_locked(
+                self._light_phase_color, '灯效结束，恢复阶段灯', log=False)
+
+    def _cancel_task_light_animation(self, *, restore: bool = True):
+        """Stop a queued flash when a task boundary or shutdown takes over."""
+        with self._light_lock:
+            self._cancel_light_animation_locked(restore=restore)
+
+    def set_light(self, color: int, label: str, *, log: bool = True):
+        color = int(color)
+        with self._light_lock:
+            self._cancel_light_animation_locked(restore=False)
+            self._light_phase_color = color
+            self._light_phase_generation += 1
+            self._publish_light_locked(color, label, log=log)
+
     def light_off(self):
-        msg = UInt8(data=0)
-        self.pub_light.publish(msg)
-        self._light_state = self.LIGHT_OFF
-        self.get_logger().info('💡 灯光已关闭')
+        with self._light_lock:
+            self._cancel_light_animation_locked(restore=False)
+            self._light_phase_color = self.LIGHT_OFF
+            self._light_phase_generation += 1
+            self._publish_light_locked(self.LIGHT_OFF, '灯光已关闭', log=False)
+            self.get_logger().info('💡 灯光已关闭')
 
     def _set_task_phase_light(self, color: int, label: str, *, log: bool = True):
-        """Publish a task phase color only when it changes."""
+        """Publish a phase color only when the requested phase changes."""
         color = int(color)
-        if self._light_state != color:
-            self.set_light(color, label, log=log)
+        with self._light_lock:
+            if self._light_phase_color != color:
+                self._light_phase_color = color
+                self._light_phase_generation += 1
+            if (self._light_animation_cancel is None
+                    and not self._light_animation_queue
+                    and self._light_state != color):
+                self._publish_light_locked(color, label, log=log)
+
+    def _run_task_light_queue(self):
+        """Play queued indications serially on one daemon thread."""
+        while True:
+            with self._light_animation_condition:
+                while not self._light_animation_queue and not self.stopped:
+                    self._light_animation_condition.wait()
+                if not self._light_animation_queue:
+                    self._light_animation_thread = None
+                    return
+                item = self._light_animation_queue.popleft()
+                cancel = threading.Event()
+                self._light_animation_cancel = cancel
+                color, count, label = item['color'], item['count'], item['label']
+                initial_gap = item['initial_gap_seconds']
+                if initial_gap > 0.0:
+                    self._publish_light_locked(
+                        self.LIGHT_OFF, f'{label} 闪灯开始', log=False)
+                else:
+                    self._publish_light_locked(
+                        color, f'{label} (1/{count})', log=False)
+
+            completed = False
+            try:
+                if initial_gap > 0.0:
+                    if not cancel.wait(initial_gap):
+                        with self._light_lock:
+                            if self._light_animation_cancel is cancel:
+                                self._publish_light_locked(
+                                    color, f'{label} (1/{count})', log=False)
+                for index in range(count):
+                    if cancel.is_set():
+                        break
+                    if cancel.wait(item['pulse_seconds']):
+                        break
+                    with self._light_lock:
+                        if self._light_animation_cancel is not cancel:
+                            break
+                        self._publish_light_locked(
+                            self.LIGHT_OFF, f'{label} 闪烁间隔', log=False)
+                    if index+1 < count:
+                        if cancel.wait(item['gap_seconds']):
+                            break
+                        with self._light_lock:
+                            if self._light_animation_cancel is not cancel:
+                                break
+                            self._publish_light_locked(
+                                color, f'{label} ({index+2}/{count})', log=False)
+                else:
+                    completed = not cancel.is_set()
+                if completed:
+                    with self._light_lock:
+                        has_pending = bool(self._light_animation_queue)
+                    if has_pending and cancel.wait(max(0.15, item['gap_seconds'])):
+                        completed = False
+            except Exception as error:
+                self.get_logger().warning(f'{label} 后台灯效失败：{error}')
+            finally:
+                with self._light_animation_condition:
+                    if self._light_animation_cancel is cancel:
+                        self._light_animation_cancel = None
+                        if item['restore']:
+                            target = self._light_phase_color
+                            if (item['restore_color'] is not None
+                                    and item['phase_generation']
+                                    == self._light_phase_generation):
+                                target = int(item['restore_color'])
+                                self._light_phase_color = target
+                            if (completed and not self._light_animation_queue
+                                    and self._light_state != target):
+                                self._publish_light_locked(
+                                    target, f'{label}提示结束，恢复阶段灯',
+                                    log=False)
+                        elif (completed and not self._light_animation_queue
+                              and item['phase_generation']
+                              != self._light_phase_generation
+                              and self._light_state != self._light_phase_color):
+                            self._publish_light_locked(
+                                self._light_phase_color,
+                                f'{label}提示结束，恢复最新阶段灯', log=False)
+                    self._light_animation_condition.notify_all()
+
+    def _flash_task_light(self, color: int, count: int, label: str, *,
+                          pulse_seconds: float = 0.35,
+                          gap_seconds: float = 0.25,
+                          restore: bool = True,
+                          restore_color=None,
+                          initial_gap_seconds: float = 0.0) -> bool:
+        """Run a light pattern in the background without pausing task motion."""
+        if self.stopped or not rclpy.ok():
+            return False
+        color = int(color)
+        count = max(1, int(count))
+        pulse_seconds = max(0.0, float(pulse_seconds))
+        gap_seconds = max(0.0, float(gap_seconds))
+        initial_gap_seconds = max(0.0, float(initial_gap_seconds))
+        with self._light_animation_condition:
+            self._light_animation_queue.append({
+                'color': color,
+                'count': count,
+                'label': str(label),
+                'pulse_seconds': pulse_seconds,
+                'gap_seconds': gap_seconds,
+                'initial_gap_seconds': initial_gap_seconds,
+                'restore': bool(restore),
+                'restore_color': restore_color,
+                'phase_generation': self._light_phase_generation,
+            })
+            self._light_animation_condition.notify()
+            if (self._light_animation_thread is None
+                    or not self._light_animation_thread.is_alive()):
+                self._light_animation_thread = threading.Thread(
+                    target=self._run_task_light_queue,
+                    name='task-light-queue', daemon=True)
+                self._light_animation_thread.start()
+
+        self.get_logger().info(
+            f'💡 {label}：已加入后台闪灯队列 {count} 次，不等待灯效完成')
+        return True
 
     def _pulse_task_light(self, color: int, label: str, *,
                           duration: float = 1.0,
                           restore_color: int = LIGHT_YELLOW):
-        """Show a timed search result and restore the active phase color."""
-        self.set_light(color, label)
-        deadline = time.monotonic() + max(0.0, float(duration))
-        while (rclpy.ok() and not self.stopped
-               and time.monotonic() < deadline):
-            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
-        if rclpy.ok() and not self.stopped:
-            self._set_task_phase_light(
-                restore_color, f'{label}提示结束，恢复阶段灯')
+        """Show a timed light hint without waiting in the motion task."""
+        return self._flash_task_light(
+            color, 1, label, pulse_seconds=duration, gap_seconds=0.0,
+            restore=True, restore_color=restore_color)
 
     def set_servo(self, angle_rad: float, label: str,
                   servo_id: int = SERVO_ID_GOLF):
@@ -608,15 +763,35 @@ class TaskRunnerNode(Node):
     # ========================================================================
 
     def load_tasks(self, path: str) -> list:
-        """Load a mission YAML or standalone task YAML."""
-        tasks = load_mission_or_task(
-            path, class_registry=self._model_mapping)
-        self.get_logger().info(f'已从 {path} 加载 {len(tasks)} 个任务')
+        """Preflight the whole configuration before any competition action."""
+        resolved = str(Path(path).expanduser().resolve())
+        self.get_logger().info(f'比赛配置预检开始：{resolved}')
+        try:
+            # The loader reads every referenced task YAML and validates all
+            # parameters, initial poses and failure overrides before returning.
+            tasks = load_mission_or_task(
+                resolved, class_registry=self._model_mapping)
+            if not tasks:
+                raise ConfigError(f'{resolved}：比赛任务列表为空')
+            for index, task in enumerate(tasks, start=1):
+                if not callable(self.task_map.get(task['name'])):
+                    raise ConfigError(
+                        f'{resolved}：第 {index} 个任务 {task["name"]!r} '
+                        '没有可执行的任务处理器')
+        except ConfigError as exc:
+            self.get_logger().error(f'比赛配置预检失败，不进入比赛：{exc}')
+            raise
+        for index, task in enumerate(tasks, start=1):
+            self.get_logger().info(
+                f'配置预检通过 [{index}/{len(tasks)}] {task["name"]}')
+        self.get_logger().info(
+            f'比赛配置预检全部通过：{resolved}，共 {len(tasks)} 个任务；'
+            '执行时使用本次已校验的配置')
         return tasks
 
     @staticmethod
     def _resolve_mission_path(value: str) -> str:
-        """Resolve a mission/task path or an installed config filename."""
+        """Resolve a mission/task path or an editable source config filename."""
         text = str(value or '').strip()
         if not text:
             return str(default_mission_path())
@@ -747,6 +922,14 @@ class TaskRunnerNode(Node):
         self.get_logger().info(f'=== 任务列表开始执行（共 {total} 个任务）===')
 
         while self.current_index < total and not self.stopped:
+            if (pending_failure_override is not None
+                    and pending_failure_override.get('skip_next', False)):
+                skipped = self.tasks[self.current_index].get('name', 'unknown')
+                self.get_logger().warn(
+                    f'失败策略：跳过下一任务 {skipped}')
+                pending_failure_override = None
+                self.current_index += 1
+                continue
             task = self.tasks[self.current_index]
             name = task.get('name', 'unknown')
             params, initial_pose = apply_failure_override(
@@ -835,6 +1018,7 @@ class TaskRunnerNode(Node):
             for pose in initial_poses:
                 outcome = self._execute_initial_pose(name, pose)
                 if not outcome:
+                    self._cancel_task_light_animation(restore=False)
                     self._set_task_phase_light(
                         self.LIGHT_RED, f'{name} 初始动作失败')
                     return outcome
@@ -844,6 +1028,7 @@ class TaskRunnerNode(Node):
         if handler is None:
             self.get_logger().warn(f'未知任务：{name}')
             outcome = TaskOutcome.failed(f'{name}.motion', '未知任务')
+            self._cancel_task_light_animation(restore=False)
             self._set_task_phase_light(self.LIGHT_RED, f'{name} 执行失败')
             return outcome
 
@@ -863,6 +1048,7 @@ class TaskRunnerNode(Node):
                 outcome = self._fallback_failure_outcome(name)
 
         if not outcome and not self._task_failure_light_handled:
+            self._cancel_task_light_animation(restore=False)
             self._set_task_phase_light(self.LIGHT_RED, f'{name} 执行失败')
         return outcome
 
@@ -919,7 +1105,7 @@ class TaskRunnerNode(Node):
         """
         type_names = {
             1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
-            5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY', 8: 'BLINE',
+            5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY', 8: 'BLINE', 9: 'WLINE',
         }
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
         if cmd_type != BasicMotion.Goal.START and not light_pattern:
@@ -1598,7 +1784,7 @@ class TaskRunnerNode(Node):
         success, message = self._send_action_goal(
             BasicMotion.Goal.BLINE,
             [float(p.get('dx', 1.0)), float(p.get('dy', 0.0)),
-             float(p.get('dz', 0.0)), 0.0], 'xyz',
+             float(p.get('dz', 0.0)), float(p.get('drz', 0.0))], 'xyz',
             timeout=float(p.get('timeout', 0.0)),
             cruise_speed=float(p.get('speed_mps', 0.15)))
         if success:
@@ -1611,6 +1797,25 @@ class TaskRunnerNode(Node):
                 return False
             self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = target
         self.get_logger().info(f'bline 执行结果：{message}')
+        return success
+
+    def _task_wline(self, p: dict) -> bool:
+        success, message = self._send_action_goal(
+            BasicMotion.Goal.WLINE,
+            [float(p.get('x', 0.0)), float(p.get('y', 0.0)),
+             float(p.get('z', 0.0)), float(p.get('rz', 0.0))], 'xyz',
+            timeout=float(p.get('timeout', 0.0)),
+            cruise_speed=float(p.get('speed_mps', 0.15)))
+        if success:
+            target = self._last_motion_final_target
+            if (target is None or len(target) != 4
+                    or not all(math.isfinite(value) for value in target)):
+                self._last_motion_failure_kind = 'motion'
+                self._last_motion_failure_message = 'WLINE 返回的 final_target 无效'
+                self.get_logger().error(self._last_motion_failure_message)
+                return False
+            self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = target
+        self.get_logger().info(f'wline 执行结果：{message}')
         return success
 
     def _move_to_nearest_object_xy(self, class_id: int) -> bool:
@@ -2037,10 +2242,10 @@ class TaskRunnerNode(Node):
                 response.success = False
                 response.message = '已有任务正在执行；请等待结束或先停止'
                 return response
-            path = self._resolve_mission_path(request.task_name)
-
-            self.get_logger().info(f'服务 /auv/mission/run：从 {path} 开始执行任务')
             try:
+                path = self._resolve_mission_path(request.task_name)
+                self.get_logger().info(
+                    f'服务 /auv/mission/run：请求预检并执行 {path}')
                 self.tasks = self.load_tasks(path)
             except ConfigError as exc:
                 response.success = False
@@ -2223,11 +2428,9 @@ def main(args=None):
         raise SystemExit(2)
 
     if not node._debug_mode:
-        # Load and validate the selected mission before exposing its services.
-        # The real bringup supervisor leaves auto_start disabled and releases
-        # the mission only after all upstream readiness gates pass.
-        default_path = node.mission_file or str(default_mission_path())
+        # Validate the entire mission before creating its execution thread.
         try:
+            default_path = node._resolve_mission_path(node.mission_file)
             node.tasks = node.load_tasks(default_path)
         except ConfigError as exc:
             node.get_logger().fatal(f'无法启动任务执行器：{exc}')
