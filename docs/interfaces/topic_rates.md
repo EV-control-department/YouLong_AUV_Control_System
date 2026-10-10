@@ -41,7 +41,7 @@
 | `/zit6/state/status` | `zit6_interfaces/ZitStatus` | **9.981** | 10 | `mcu_sim` | |
 | `/zit6/state/thr` | `std_msgs/Float32MultiArray` | **29.943** | 30 | `mcu_sim` | |
 | `/zit6/state/zithbt` | `std_msgs/UInt32` | **10.000** | 10 | `mcu_sim` | |
-| `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | **15.58** | 30（`create_timer(1.0/30.0)`） | `basic_motion` | **与设计值差一半 ⇒ B20**，见 §2 |
+| `/basic_motion/pose_info` | `uv_msgs/PoseInfo` | **15.58** | 30（`create_timer(1.0/30.0)`） | `basic_motion` | **与设计值差一半 ⇒ B20（未修）**，见 §2 |
 
 **该模式下端点存在但无数据**（`-`，不是缺失）：`/auv/{front,down}_cam/{left,right,stitched}`
 与 `/sim/*_cam/*/image_color`（console 引擎不出图）、`/auv/thrusters_cmd`/`/zit6/cmd/setpoint`
@@ -66,12 +66,20 @@
 | 同窗口对照 `/zit6/state/pos` | 29.949 | **29.77 Hz** | 测量方法与机器都能跑 30 Hz |
 
 所以这不是测量误差，而是**在完整栈里 `basic_motion` 的 30 Hz 定时器丢了一半节拍**
-（单独跑就正常）。怀疑方向：`basic_motion` 用 `MultiThreadedExecutor`，而 30 Hz 的
-`_pose_cb`（订阅 `/zit6/state/pos`）与 30 Hz 的 `_publish_pose_info` 定时器**同一个默认回调组**
-（互斥），互相串行 + 负载下的 GIL 抖动 ⇒ rclpy 定时器不排队，丢掉的就是丢掉了。
-影响面：`position` / `navigator` / `task_runner` 都把它当 30 Hz 位姿源（新鲜度减半）。
-登记为 **B20**（见 `roadmap.md`），修复建议：让定时器用自己的回调组，或干脆在 `_pose_cb`
-里发（去掉第二个 30 Hz 源）。**在修之前，任何"30 Hz 位姿"的说法都应带这个实测限定。**
+（单独跑就正常）。影响面：`position` / `navigator` / `task_runner` 都把它当 30 Hz 位姿源
+（新鲜度减半）。登记为 **B20**（见 `roadmap.md`）。
+
+**第一次修复尝试：无效，已如实记录。** 假设是"`_pose_cb`（30 Hz 状态订阅）与
+`_publish_pose_info`（30 Hz 定时器）共用默认互斥回调组、互相串行"，于是给定时器单独开了
+`MutuallyExclusiveCallbackGroup`。复测（同口径、完整栈）：**13.6 Hz**（改动前 15.6），
+同窗口 `/zit6/state/pos` **26.8 Hz**（此前 29.8）⇒ 差异落在系统噪声内，**没有改善**。
+机器有 **28 核、load ≈1.7**，`MultiThreadedExecutor` 也确实按 CPU 亲和数开了线程，
+所以既不是"回调组互斥"也不是 CPU 饥饿；更像是**该进程内回调的延迟/GIL**：
+`_vel_cb`(60 Hz) + `_pos_cb`(30 Hz) + 定时器(30 Hz) 挤在一个 Python 进程里，而 rclpy 定时器
+**不补拍**，错过就丢。改动本身保留了（周期性发布与高频订阅分开是常规结构、代价为零），
+但**它没有修好 B20**。下一步候选：① 在 `_pose_cb` 里直接发（去掉第二个 30 Hz 源）；
+② 先给定时器加计数日志，判定"定时器没触发"还是"消息没送达"。
+**在修好之前，任何"30 Hz 位姿"的说法都应带这个实测限定。**
 
 ## 3. QoS（实测）
 

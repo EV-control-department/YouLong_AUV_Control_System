@@ -70,6 +70,7 @@ import time
 
 import rclpy
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
@@ -156,7 +157,23 @@ class BasicMotionNode(Node):
 
         # ── PoseInfo Publisher ─────────────────────────────────
         self.pub_pose = self.create_publisher(PoseInfo, '/basic_motion/pose_info', 10)
-        self.create_timer(1.0 / 30.0, self._publish_pose_info)
+        # 这个定时器用自己的回调组（B20 调查的一部分）。默认回调组是互斥的，
+        # 30 Hz 的 `_publish_pose_info` 与同样 30 Hz 的 `/zit6/state/pos` 订阅
+        # (`_pos_cb`) 原本在同一组里串行；把周期性发布从高频订阅回调里分出来是
+        # 常规结构，代价为零。
+        #
+        # ⚠️ **但它并没有把频率修回来**：2026-10-10 实测（完整 SIL console 栈，
+        # 独立 depth-1 订阅者、10 s 窗口）pose_info **13.6 Hz**（改动前 15.6 Hz，
+        # 同窗口 `/zit6/state/pos` 26.8 / 29.8 Hz ⇒ 差异在系统噪声内）。
+        # 机器有 28 核、load ~1.7，`MultiThreadedExecutor` 也确实开了多线程，
+        # 所以原因不是"回调组互斥"也不是 CPU 饥饿，而是**该进程内回调的延迟/GIL**：
+        # 这里同时有 `_vel_cb`(60 Hz) + `_pos_cb`(30 Hz) + 本定时器(30 Hz)，
+        # 而 rclpy 的定时器**不补拍**，错过就丢。
+        # 下一步（未做）应在 `_pose_cb` 里直接发（去掉第二个 30 Hz 源），
+        # 或先给定时器加计数日志，确认"定时器没触发"还是"消息没送达"。
+        self._pose_pub_group = MutuallyExclusiveCallbackGroup()
+        self.create_timer(1.0 / 30.0, self._publish_pose_info,
+                          callback_group=self._pose_pub_group)
 
         self.get_logger().info('BasicMotion node started')
 
