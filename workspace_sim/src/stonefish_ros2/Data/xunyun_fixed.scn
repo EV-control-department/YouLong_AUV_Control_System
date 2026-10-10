@@ -20,6 +20,12 @@
       * 质量分配(kg)：BuoyancyBlock 0.250 / RightSidePlate 1.536 / LeftSidePlate 1.536
         / ForwardBracket 1.916 / AftBracket 0.211 / CoreEnclosure 3.076
         / InsBasePlate 0.755 / BatteryPod 2.674 / 6x duct 0.464(按体积自动)。
+      * **左右对称（2026-10-10 修正）**：原先电池舱 battery_pod.obj 网格左右不对称
+        （y 跨度 −103.5..+130 mm，质心偏 13.25 mm），2.674 kg 偏心把 CG_y 拖到 −0.003 m，
+        侧倾力臂 CB_y−CG_y = +0.0015 m ⇒ 稳态横滚 ≈ 4.16°（仿真实测 −3.994°）。
+        现给 BatteryPod 的 compound_transform y=+0.01325 把质心/浮心一起拉回 y=0，
+        修后实测 roll = −0.0005°（横滚归零）。其余部件本来就是左右成对对称的。
+        注：只归零了质心，battery_pod.obj 网格**形状**仍是不对称的；要形状也对称得改 mesh 顶点。
       ==========================================================================
     -->
     <!-- 定义机器人实体: 名字通过宏传入, 不固定在世界坐标带物理属性, 忽略自碰撞 -->
@@ -171,8 +177,15 @@
 				<mass value="2.674"/>
                 <!-- 外观效果：定义颜色与光泽等渲染属性 -->
 				<look name="white"/>
-                <!-- 该部件在整体机器人重心/几何中心 (Base LinkOrigin) 坐标系下的安装位置与姿态 (xyz, rpy) -->
-				<compound_transform rpy="0 0 3.14159" xyz="0 0 0"/>
+                <!-- 该部件在整体机器人重心/几何中心 (Base LinkOrigin) 坐标系下的安装位置与姿态 (xyz, rpy)
+                     y=+0.01325：battery_pod.obj 网格本身**左右不对称**（y 跨度 −103.5..+130 mm，
+                     质心偏 +13.25 mm；经 rpy 翻转后机体系质心在 y=−0.01325 m）。2.674 kg 的偏心把
+                     整机 CG_y 拖到 −0.003 m、CB_y 到 −0.0015 m，侧倾力臂 CB_y−CG_y = +0.0015 m ⇒
+                     稳态横滚 atan(0.0015/0.0207) ≈ 4.16°（仿真实测 −3.994°，符号是 roll 正负约定）。
+                     这里补 +0.01325 把质心/浮心一起拉回 y=0，横滚归零。
+                     注意：网格**形状**仍是不对称的（本行只归零质心，未改 mesh 本身）；要形状也对称，
+                     得改 battery_pod.obj 顶点。 -->
+				<compound_transform rpy="0 0 3.14159" xyz="0 0.01325 0"/>
 			</external_part>
 
 			<external_part name="Port0" type="model" physics="submerged" buoyant="true">
