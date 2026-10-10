@@ -25,11 +25,13 @@
 | 文档 | 内容 | 状态 |
 |---|---|---|
 | `interfaces/topic_contract.md` | **话题 / 消息类型 / 发布者 / 订阅者 / 缺口登记** | ✅ 权威 |
+| `interfaces/topic_rates.md` | **话题频率与 QoS**（实测 + 快照口径与陷阱） | ✅ 权威（T3b 建，sil-console 一份快照） |
 | `interfaces/snapshots/code_inventory.json` | `--update` 生成的代码库存（评审用，非权威） | 🔄 生成物 |
+| `interfaces/snapshots/<日期>_<模式>/` | `scripts/dump_interfaces.sh` 的实时快照（topics/services/actions/qos/rates/meta） | 🔄 生成物（入库作证据） |
 | `node_parameters.md` | 各节点 ROS 参数与 launch 参数（含默认值、「已知缺口」清单） | ✅ 已逐条核对 |
 | `frames/frame_convention.md` | 坐标系、单位、rpy 顺序、TF 现状、θ/α/ψ 术语 | ✅ 权威 |
 | `frames/extrinsics_reference.md` | 外参数值（仿真表 / 实机表 / 推导 / T6 必改清单） | ✅ 权威 |
-| `interfaces/service_action_contract.md` | 服务与动作的字段语义 | ⏳ 待建（T3b） |
+| `interfaces/service_action_contract.md` | **服务与动作的字段语义**（含引擎自带服务与死定义登记） | ✅ T3b 建立 |
 | `interfaces/launch_entries.md` | **启动入口清单与新旧映射**（T4 起，含编排规则） | ✅ 权威 |
 
 ### 架构
@@ -101,9 +103,9 @@
 
 | # | 缺口 | 何时 |
 |---|---|---|
-| 1 | `interfaces/service_action_contract.md`（服务/动作字段语义） | T3b |
+| 1 | ~~`interfaces/service_action_contract.md`（服务/动作字段语义）~~ | ✅ T3b（含引擎自带服务与死定义登记） |
 | 2 | ~~`interfaces/launch_entries.md` 与 launch 参数表（T4 重排 `uv_bringup` 后）~~ | ✅ T4 |
-| 3 | 话题频率 / QoS 列（需实时快照；本沙箱仅 console 模式可用） | T3b |
+| 3 | ~~话题频率 / QoS 列（需实时快照）~~ | ✅ T3b（`interfaces/topic_rates.md` + 入库快照；**sil-gpu / HIL 的快照仍欠**） |
 | 4 | ~~`sim_bridge` 参数与话题归属按 T5 的新结构改写~~ | ✅ T5（拆成 7 节点，见 `node_parameters.md` §仿真节点与 `topic_contract.md` §1） |
 | 5 | 实机外参的实测复测（`frames/extrinsics_reference.md` §2 中「未验证」的行） | ⏸ 待硬件 |
 | 6 | `node_dependency.md` §2 的 D2/D4 依赖缺口（D1/D3 已修） | 随包补齐 |

@@ -97,11 +97,11 @@ ros2 launch uv_bringup     real_bringup.py     --show-args
 ros2 launch uv_sim_bringup sim_bringup.py      --show-args
 ```
 
-## 5. 仍欠（T3b）
+## 5. T3b 交付情况（2026-10-10）
 
-| 欠账 | 说明 |
+| 欠账 | 状态 |
 |---|---|
-| 实时快照入库 | `scripts/dump_interfaces.sh` + `interfaces/snapshots/` 的 `ros2 topic/service/action list -t` 快照 |
-| 话题频率 / QoS 列 | 见 `interfaces/topic_contract.md` 的待补说明 |
-| 服务与动作契约 | `interfaces/service_action_contract.md` |
-| 引擎自带 launch 的 6/3 个参数 | 目前只在 `workspace_sim/stonefish_notes.md` 记录，未进 `node_parameters.md` 的校验面 |
+| 实时快照入库 | ✅ `scripts/dump_interfaces.sh` + `interfaces/snapshots/2026-10-10_sil-console/`（topics/services/actions/qos/rates/meta）。**sil-gpu 与 HIL 的快照仍欠**（沙箱无 GPU、无 STM32） |
+| 话题频率 / QoS 列 | ✅ 独立成 `interfaces/topic_rates.md`。**没有塞进契约表格**：那张表已由 checker 按列名解析，再并 2 列会既难读又容易漂；频率/QoS 与"名称/类型"是不同生命周期的事实 |
+| 服务与动作契约 | ✅ `interfaces/service_action_contract.md`：7 个服务 + 1 个动作的字段语义、失败条件、引擎自带服务登记、死定义登记 |
+| 引擎自带 launch 的 6/3 个参数 | ⏳ 仍只在 `workspace_sim/stonefish_notes.md`。进校验面＝把两个引擎 launch 从 `check_docs_contract.py` 的 `UNCHECKED_LAUNCH_FILES` 拿掉并补 9 行参数表；属"引擎文档"范围，本轮未做 |

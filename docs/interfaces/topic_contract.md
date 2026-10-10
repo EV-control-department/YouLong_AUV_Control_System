@@ -4,8 +4,14 @@
 > `docs/architecture/*`）**不得**再复制话题表，只能链接到这里。
 >
 > 校验：`python3 scripts/check_docs_contract.py --check`（不需要 ROS，纯源码/场景比对）
+> ＋ `test_scene_publisher_types.py`（场景声明发布者的**类型**对 C++ 证据，T3b 加）
 >
 > 当前阶段：**只做软件在环（SIL）**。HIL/实机行保留在册但标 ⏸，不参与 SIL 验收。
+>
+> **相邻事实源**（别在本文件里复制）：
+> - 频率与 QoS → `docs/interfaces/topic_rates.md`（实测，带快照模式）
+> - 服务/动作的**字段语义** → `docs/interfaces/service_action_contract.md`
+> - "哪个入口起哪些节点" → `docs/interfaces/launch_entries.md`
 
 ## 表格格式（脚本按此解析，勿改列名/顺序）
 
@@ -158,9 +164,13 @@
 | `/nav/navigate_to` | `uv_msgs/srv/RunTask` | 服务 | `navigator` | — | 两者 | `workspace_auv/src/uv_nav/uv_nav/navigator.py:create_service` | 请求执行导航任务 |
 | `/task/run` | `uv_msgs/srv/RunTask` | 服务 | `task_runner` | — | 两者 | `workspace_auv/src/uv_task/uv_task/task_runner.py:create_service` | 启动任务/任务列表 |
 | `/task/stop` | `std_srvs/srv/Trigger` | 服务 | `task_runner` | — | 两者 | `workspace_auv/src/uv_task/uv_task/task_runner.py:create_service` | 中断当前任务 |
-| `/task/exec` | `uv_msgs/srv/ExecTask` | 服务 | `task_runner` | — | 两者 | `workspace_auv/src/uv_task/uv_task/task_runner.py:create_service` | 单条任务执行 |
+| `/task/exec` | `uv_msgs/srv/ExecTask` | 服务 | `task_runner` | — | 两者 | `workspace_auv/src/uv_task/uv_task/task_runner.py:create_service` | 单条任务执行（**仅 `debug_mode:=true`**） |
 
-> 服务/动作的**请求-响应字段语义**属于 `service_action_contract.md`（T3b），本表只固定名称与类型。
+> **字段语义**（请求/响应每个字段是什么意思、什么条件下失败）不在本表，见
+> `docs/interfaces/service_action_contract.md`（T3b 建立，含引擎自带服务的登记与
+> 定义了但无人使用的接口清单）。
+
+> 服务/动作的**请求-响应字段语义**属于 `service_action_contract.md`（T3b 已建立），本表只固定名称与类型。
 
 ## 7.5 栈外消费者：可视化 GUI（`visualization/auv_visualizer.py`）
 
@@ -197,6 +207,10 @@
 | `/auv/thrusters_state` | 有发布者、**无订阅者**（可用于混控校验，目前没人用） | 待定 |
 | `/sim/sensor/dvl` | 有发布者（`dvl_sim`）、**当前无订阅者** | 有意为之：T6 的 AQUA-SLAM 是它的消费者 |
 | `/sim/sensor/pressure` | 有发布者（`pressure_sim`）、**当前无订阅者** | 有意为之：补全 `/sim/sensor/*` 面，T6 可能用（深度先验） |
-| `/tf`、`/tf_static` | 话题存在但**无任何消息**：场景未声明 `<ros_base_link_transform publish="true"/>` | B18，已文档化 |
+| `/tf` | **有发布者（引擎 `stonefish_simulator*`），但实测 0 条消息**：场景未声明 `<ros_base_link_transform publish="true"/>`，广播被那个 `if` 守卫关着（2026-10-10 快照实测） | B18，已文档化 |
+| `/tf_static` | **话题根本不存在**（不是"存在但没消息"；上述快照里没有它） | B18 的措辞更正 |
+| `/basic_motion/pose_info` 的频率 | 设计 30 Hz（`create_timer(1.0/30.0)`），**完整栈里实测 ≈15.6 Hz**（单独跑 `basic_motion` 则 29.9 Hz）⇒ 完整栈下定时器丢一半节拍。影响 `position`/`navigator`/`task_runner` 的位姿新鲜度 | **B20**，见 `topic_rates.md` §2 与 `roadmap.md` |
+| 引擎自带服务 `/stonefish_ros2/{enable_currents,disable_currents,respawn_robot}` | 有服务端（引擎），**本表未列**（本表的服务行要求 `create_service` 证据）；登记在 `service_action_contract.md` §9 | 引擎范围 |
+| 定义了但无人使用的接口 | `uv_msgs/{AuvState,DeviceCommand,MotionCommand,PidGains,PidState}` 与 `srv/GetState`（0 处引用，2026-10-10 全量 grep 审计）；清单在 `service_action_contract.md` §10 | 清理待定 |
 | `/perception/line/{front,down}_left` | 有发布者、有订阅者（`line_follower.py`，仅 `follow_line` 任务运行期间建立）；`front_right`/`down_right` 两路**无订阅者** | 待定 |
 | `/zit6/state/vel` 的**物理定义与实机不同**（保真差距，不是 bug） | SIL 下它是 `nav_sim` 从 odometry 取的**机体原点**速度；实机 MCU 的同一话题来自惯导（含 DVL/杆臂与滤波），会漂移也会更平滑 | 有意为之：SIL 控制环不引入 DVL；T6 的 SLAM 走 `/sim/sensor/*` |

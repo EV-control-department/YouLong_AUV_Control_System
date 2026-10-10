@@ -320,6 +320,10 @@ task_runner 通过同样的 ActionClient 接口调用 basic_motion。JSON 任务
 1. **必须先 START**：任何 SET/WMOVE/BMOVE/TRAVEL 之前必须发送 START。server 拒绝并返回 `"odom origin not set, call start() first"`
 2. **target 必须 4 元素**：即使 WTRAVEL/BTRAVEL 忽略 yaw，也必须传 4 个值
 3. **timeout ≤ 0** 自动使用 60s
-4. **axes 字段**当前仅用于日志记录，server 内部未实现（始终全轴生效）
+4. **`axes` 会真正生效**（2026-10-10 实测更正；此前本文与 `CLAUDE.md` 都写"仅用于日志"）：
+   对 **SET / WMOVE / WTRAVEL**，只有出现在 `axes` 里的轴会用 goal 的新值更新，
+   其余轴**沿用上一目标**（代码里 `axes = req.axes or 'xyzrz'`，逐个 `if 'x' in axes: …`）；
+   对 **BMOVE / BTRAVEL / START**，`axes` 完全不参与（始终全轴）。`axes` 空 = `'xyzrz'` = 全轴。
+   注意这与 `zit6_interfaces/ZitSetpoint.type_mask` **极性相反**（那里 1=忽略该轴）。
 5. **yaw 单位**：始终是**度**，不是弧度
 6. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行

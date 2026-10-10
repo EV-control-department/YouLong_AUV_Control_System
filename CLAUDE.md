@@ -240,7 +240,11 @@ print('SET:', result.success, result.message)
 1. **必须先 START**：任何 SET/WMOVE/BMOVE/TRAVEL 之前必须发送 START。如果 odom 原点未设置，server 会 reject goal 并返回 `"odom origin not set, call start() first"`
 2. **target 必须 4 元素**：就算 WTRAVEL/BTRAVEL 忽略 yaw，也必须传 4 个值。否则 server abort
 3. **timeout ≤ 0** 自动用 60s
-4. **axes 字段**当前仅用于日志记录，server 内部未使用（始终全轴生效）
+4. **`axes` 会真正生效**（2026-10-10 实测更正：此前写"仅用于日志"是错的）。
+   对 **SET / WMOVE / WTRAVEL**，只有列在 `axes` 里的轴更新为目标里的新值，其余轴**沿用上一目标**
+   （`axes = req.axes or 'xyzrz'`，逐个 `if 'x' in axes: …`；空 = 全轴）；
+   对 **BMOVE / BTRAVEL / START** 完全不参与。极性与 `ZitSetpoint.type_mask` **相反**（那里 1=忽略）。
+   详见 `workspace_auv/docs/basic_motion_action.md` 与 `docs/interfaces/service_action_contract.md`
 5. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行，不阻塞主循环
 
 ### task_runner (`uv_task`)

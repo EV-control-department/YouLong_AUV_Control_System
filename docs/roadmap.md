@@ -96,6 +96,7 @@
 | B17 | **`alpha` 一词两义（N3）** | `check_dvl_frame.py` 曾用 `alpha` 表示艇的**航向**，而 AQUA-SLAM 与 `docs/frames/` 用 α 表示**波束离水平仰角**——这正是 B16 那类错误的高危来源。**已修**：统一 ψ=航向、θ=离竖直、α=离水平；脚本变量与日志改名，行为不变 |
 | B18 | **TF 从未开启，而文档曾断言它存在** | `ROS2SimulationManager.cpp` 的 TF 广播套着 `if (publishBaseLinkTransform_)`，该标志由 `ROS2ScenarioParser.cpp` 从 `<robot>` 子元素 `<ros_base_link_transform publish=...>` 读取，默认 `false`（`ROS2SimulationManager.h`）；本仓库 15 个 `.scn` **一个都没写** → 仿真**完全没有 TF**（`/tf` 实测为空，`dump_tf_tree.py` exit 1）。**T2 文档初稿误称"唯一 TF `world_ned → Vehicle/base_link`"**，并把 `ROS2SimulationManager.cpp:395` 当证据（忽略了 `if` 守卫）。**已修**：`frame_convention.md` §3 改写为"当前无 TF"+开启方式+守卫坑；`extrinsics_reference.md` 删"并广播 TF"；`dump_tf_tree.py` 改为读场景 `<robot name>` 且区分"没开 TF"与"开了没数据"；新增 2 例测试钉住（无场景声明 TF、工具从场景读名字）。**附带发现**：Canyon 场景把艇命名为 `XUNYUN`（非 `Vehicle`），工具原先硬编码 `Vehicle`，一开 TF 即误报 |
 | B19 | ~~**`/zit6/state/vel` 有两个写者，且两者物理含义不同（T1 验收卡在这一条上）**~~ **已修（T5，由"分开"而不是"改公式"）** | 原状：`sim_bridge._odom_cb` 写的是**机体系原点处**的 odometry twist（30 Hz），`_dvl_cb` 写的是**DVL 位置处**的速度（20 Hz，= 原点速度 + `ω×r_dvl`，`r_dvl=(-0.375,0,0.1)`）——两者在**有角速度时相差 `0.375·\|ω_z\|`**。实测：原地 90° 回转时 `dvl.y − odom.y = +0.037` 而 `ω_z=−0.099`，`−0.375·ω_z = +0.037`（三位小数吻合）；按 `MAX_YAW_RATE=0.35` 折算最大可差 **0.13 m/s**，正是 `check_dvl_frame.py` 里 `stv err` 报的 0.033~0.150。**T5 修复**：`/zit6/state/vel` 只剩 `nav_sim` 一个写者、线性部分 = **原点** twist；DVL 处的值走 `/sim/sensor/dvl.velocity`（`dvl_sim`，含杆臂），并另带 4 路合成波束。同轮还修掉该脚本的 `along ratio` 度量 bug：它把 DVL 速度投影到**未做杆臂修正**的 `linear` 上，于是转得越快的腿比值越偏（psi=90° 实测 1.117），改为投影到 `expected` |
+| B20 | **`/basic_motion/pose_info` 的频率只有设计值的一半**（2026-10-10 T3b 发现，**未修**） | 设计：`basic_motion.py:159` `create_timer(1.0/30.0, self._publish_pose_info)`，`PoseInfo` 被 `position`/`navigator`/`task_runner` 当作 30 Hz 位姿源。实测：完整 SIL console 栈里 **15.58 Hz**（独立 depth-1 计数器，10 s 窗口），同窗口对照 `/zit6/state/pos` **29.77 Hz**（`ros2 topic hz` 给 29.949）⇒ 不是测量方法问题；**只跑 `basic_motion`（无引擎/无 uv_sim）时 29.93 Hz** ⇒ 代码路径本身能跑满，是**在完整栈里丢了一半节拍**。怀疑方向：`MultiThreadedExecutor` 下 30 Hz 的 `_pose_cb`（订阅 `/zit6/state/pos`）与 30 Hz 的 `_publish_pose_info` 定时器**共用默认互斥回调组**，互相串行 + 负载下 GIL 抖动，而 rclpy 定时器不排队 ⇒ 丢的就是丢了。影响：三个下游节点的位姿新鲜度减半。修复方向：让定时器用自己的回调组，或直接在 `_pose_cb` 里发（去掉第二个 30 Hz 源），改完必须在**完整栈**里复测而非单节点 |
 
 ---
 
@@ -216,19 +217,36 @@
 
 ---
 
-### T3 ◐ 文档体系（接口即契约）— **T3a 已完成；T3b 待 T5（launch 入口表已随 T4 交付）**
+### T3 ☑ 文档体系（接口即契约）— **T3a + T3b 均已交付（2026-09-16 / 2026-10-10）**
 
 > **拆分（2026-09-16）**：T3 的接口契约里，一部分不随 T4/T5 变化、现在就能冻结并机检，
 > 另一部分必须等 launch 与 `sim_bridge` 结构定下来。故拆成：
 >
-> - **T3a（进行中）**：`node_parameters.md` 逐条核对（✅ 已完成）、`docs/README.md` 索引、
->   `tools/check_docs_contract.py`（**源码级**对拍：`declare_parameter` / `console_scripts` /
->   `package.xml` 依赖，无需跑栈，绕开 B13 的 GPU 限制）、`docs/architecture/` 三篇、
->   话题表去重
-> - **T3b（待 T5 后）**：话题频率/QoS 列、实时快照入库、服务/动作字段语义；
+> - **T3a**：`node_parameters.md` 逐条核对（✅）、`docs/README.md` 索引、
+>   `tools/check_docs_contract.py`（**源码级**对拍，无需跑栈，绕开 B13 的 GPU 限制）、
+>   `docs/architecture/` 三篇、话题表去重
+> - **T3b**：话题频率/QoS、实时快照入库、服务/动作字段语义（✅ 2026-10-10）；
 >   ~~launch 入口表~~ 与 ~~`node_parameters.md` 按新结构改写~~ 已随 **T4** 一起交付
 >
-> **T3a 已完成（2026-09-16）**：
+> **T3b 交付（2026-10-10）**：
+>
+> | 交付物 | 状态 |
+> |---|---|
+> | `scripts/dump_interfaces.sh` + `interfaces/snapshots/2026-10-10_sil-console/` | ✅ 快照带日期+模式（sil-console / sil-gpu / hil 端点集不同）；sil-gpu / HIL 快照仍欠 |
+> | `docs/interfaces/topic_rates.md`（频率 + QoS，含测量陷阱与口径） | ✅ （没塞进契约表格：那张表已被 checker 按列解析） |
+> | `docs/interfaces/service_action_contract.md`（7 服务 + 1 动作字段语义、失败条件、引擎自带服务、死定义登记） | ✅ |
+> | `test_scene_publisher_types.py`（9 例：场景声明发布者的类型对 C++ 证据） | ✅ 补上了 checker 的结构性盲区 |
+>
+> **T3b 顺带查出的问题**（详见 `devlog/2026-10-10_status.md`）：
+> ① `/auv/dvl_altitude` 与 `/auv/thrusters_state` 两条契约行的**消息类型写错**了
+> （分别是 `sensor_msgs/Range`、`stonefish_ros2/ThrusterState`）——场景声明发布者的类型
+> 一直是"自由声明"，现在被证据钉住；
+> ② **B20（新登记）**：`/basic_motion/pose_info` 设计 30 Hz，**完整栈里实测 ≈15.6 Hz**；
+> ③ `axes` 字段**会真正生效**（文档此前写"仅用于日志"是错的）；
+> ④ `/tf` 其实**有发布者**（0 消息）、`/tf_static` **不存在**；`GetState`/`MotionCommand`/
+> `DeviceCommand`/`PidGains`/`PidState` 是**无人使用的死定义**（已登记）。
+>
+> **T3a 交付（2026-09-16）**：
 >
 > | 交付物 | 状态 |
 > |---|---|
@@ -491,7 +509,7 @@ T1 传感器对齐 ──┬─→ T2 坐标系/外参 ──┐
 | A3-2 | `scripts/check_docs_contract.py --check` 退出 0（参数/节点/话题/依赖/README 五类） | T3a（已绿） |
 | A3-3 | 故意改错必须失败——6 类漂移 + 端到端注入各验证一次 | T3a（已绿） |
 | A3-4 | 话题表无重复事实源（`hil_architecture.md`/`node_parameters.md` 已改为链接） | T3a（已绿） |
-| A3-5 | 服务/动作字段语义、~~launch 入口表~~（T4 已交付）、频率/QoS 列 | T3b（待 T5） |
+| A3-5 | 服务/动作字段语义 ✅、~~launch 入口表~~（T4 已交付）、频率/QoS 列 ✅（sil-console 一份快照；sil-gpu/HIL 欠） | T3b（✅ 2026-10-10） |
 | A4-1..4 | 分层干净；入口契约测试通过 | T4（✅ 已绿，见 T4 节） |
 | A5-1..5 | 7 节点可执行 ✅；话题零变化 ✅；数值回归 ✅；端到端动作 ⏳（console 记录见 devlog §9.4） | T5（已交付） |
 | S1..S5 | AQUA-SLAM 构建/稳定性/精度/DVL 消融/一键评估 | T6 |

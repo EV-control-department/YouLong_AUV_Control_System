@@ -22,7 +22,7 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 |---|---|---|
 | 1 | ~~**launch 入口表 / 分层**：`sim_*`/`hil_*` 位于 `workspace_auv` 却引用仿真包（B1）；包级 launch 引用不存在的入口（B2）~~ | ✅ **T4 已完成**：仿真预设迁到 `workspace_sim/uv_sim_bringup`，`workspace_auv` 只留 `real_bringup.py`；入口清单与新旧映射见 `interfaces/launch_entries.md` |
 | 2 | ~~**`sim_bridge` 参数与话题归属**：T5 将把它拆成 7 个节点~~ | ✅ **T5 已完成**：拆成 `odom_sim`/`imu_sim`/`dvl_sim`/`pressure_sim`/`nav_sim`/`mcu_sim`/`camera_relay`，参数与话题归属见本文件 §仿真节点与 `interfaces/topic_contract.md` |
-| 3 | **话题频率 / QoS 列**：需实时快照（`ros2 topic info -v` / `hz`）；本沙箱仅 console 模式可用且无相机（B13） | T3b |
+| 3 | ~~**话题频率 / QoS 列**：需实时快照~~ | ✅ **T3b 已完成**：`interfaces/topic_rates.md` + 入库快照 `interfaces/snapshots/2026-10-10_sil-console/`；sil-gpu 与 HIL 的快照仍欠 |
 | 4 | ~~话题表去重~~ | ✅ T3a 已完成：话题行收敛到 `docs/interfaces/topic_contract.md`，本文件与 `hil_architecture.md` 改为链接 |
 | 5 | 本文件里仍是 **C++ 仿真器与 HIL 相关**的条目（`hil_bringup` 段）——当前阶段 SIL 优先，按其原文保留但**不参与验收** | 待 HIL 重新纳入（T7） |
 | 7 | **引擎自带 launch 参数未收录**：`stonefish_simulator.launch.py` 有 6 个（`simulation_data`、`scenario_desc`、`simulation_rate`、`window_res_x`、`window_res_y`、`rendering_quality`），`stonefish_simulator_nogpu.launch.py` 有 3 个（前三个）。校验工具已显式跳过这两个文件（`UNCHECKED_LAUNCH_FILES`） | 待补（引擎文档，非 SIL 栈） |
