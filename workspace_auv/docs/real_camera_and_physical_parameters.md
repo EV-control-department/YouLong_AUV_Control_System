@@ -50,6 +50,18 @@ export UV_MODEL_MAPPING_FILE="$PWD/src/uv_camera/weights/real_last.yaml"
 `last.pt` 当前被仓库 `*.pt` 忽略规则排除；部署到其他机器时，必须另行把权重放到 `workspace_auv/src/uv_camera/resource/last.pt` 再构建，不能以源码分支已有该文件为前提。
 # 下视倒装的方向修正
 
+海参与收集框水平伺服现在在每次进入对准时锁定实测深度z和航向yaw，
+先发送一次`SET axes=xyzrz`进入位置保持，随后所有XY修正和夹爪偏置沿用同一z/yaw。
+旧`axes=xy`会在每次调用时把当时的z/yaw漂移当成新目标；现在不再重新锁存。
+这里保持的是进入对准时的实测深度，不是将艇体强拉回配置中的扫描/投放深度。
+近底下压/离底仍按开环推力或速度模式执行，并不因水平伺服修改而增加近底位置闭环。
+
+方向核对必须使用camera还原后的标定左目像素，不要按已旋转的监控画面再次反号。
+下视安装yaw=180°、机器人yaw=0°时：原始像素向右偏移对应机体-y修正，
+原始像素向下偏移对应机体+x修正；机器人yaw改变后再旋转到odom系。
+图像竖向偏移不是机体深度z偏移，`collection_projection_depth_m`也只是投影距离。
+日志同时给出像素误差、机体/世界步长，以及固定的z/yaw目标，便于区别方向问题与保持问题。
+
 真机 `real_default.yaml` 启用 `down_rotate_180: true`；也可在启动命令中显式传入
 `-p down_rotate_180:=true`，关闭则设为 `false`。仿真忽略该开关。
 

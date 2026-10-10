@@ -26,6 +26,78 @@ class _Logger:
         pass
 
 
+def test_sea_horizontal_hold_activates_position_even_when_already_centered(monkeypatch):
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    calls = []
+    task._logger, task._color = _Logger(), '收集框'
+    task._servo_timeout, task._command_timeout = 30., 2.
+    task._measured_pose = lambda: (1., 2., .4, 0., 0., -90.)
+    task._node = SimpleNamespace(stopped=False,
+        _send_action_goal=lambda *args, **kwargs: calls.append(args) or (True, ''),
+        _format_motion_context=lambda s: s)
+    def servo(self, hold_z_yaw=None):
+        assert hold_z_yaw == (.4, -90.)
+        return [1., 2., .4, -90.]
+    monkeypatch.setattr(GrabBallTask, '_servo_horizontally', servo)
+    assert task._servo_horizontally() == [1., 2., .4, -90.]
+    assert calls[0][1:] == ([1., 2., .4, -90.], 'xyzrz')
+    assert (task._node._cmd_z, task._node._cmd_yaw) == (.4, -90.)
+    assert task._servo_timeout == 30.
+
+
+def test_sea_gripper_offset_uses_fresh_xy_but_preserves_hold_z_yaw():
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    calls = []
+    task._logger, task._color = _Logger(), '收集框'
+    task._command_timeout = 2.
+    task._horizontal_hold_z_yaw = (.4, -90.)
+    task._gripper_offset_x, task._gripper_offset_y = .25, 0.
+    task._measured_pose = lambda: (3., 4., .48, 0., 0., -90.)
+    task._node = SimpleNamespace(
+        _send_action_goal=lambda *args, **kwargs: calls.append(args) or (True, ''),
+        _format_motion_context=lambda s: s)
+    assert task._apply_gripper_offset()
+    assert calls[0][2] == 'xyzrz'
+    assert calls[0][1] == pytest.approx([3., 3.75, .4, -90.])
+
+
+def test_down_camera_vertical_pixel_error_is_horizontal_not_depth():
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._node = SimpleNamespace(_latest_robot_pose=lambda: (0, 0, .4, 0, 0, 0))
+    task._CX, task._CY, task._FX, task._FY = 320., 240., 500., 500.
+    task._projection_depth, task._servo_gain, task._max_xy_step = .8, .5, .08
+    task._camera_mount_yaw = 180.
+    step = task._horizontal_step(SimpleNamespace(pixel_x=320., pixel_y=340.))
+    assert step[1:5] == pytest.approx((.08, 0., .08, 0.))
+    assert step[0][2] == .4
+
+
+def test_horizontal_corrections_do_not_absorb_depth_heading_drift(monkeypatch):
+    task = GrabBallTask.__new__(GrabBallTask)
+    calls, clock = [], [0.]
+    monkeypatch.setattr(_grab.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(_grab.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    task._logger, task._class_id, task._color = _Logger(), 4, '收集框'
+    task._servo_timeout, task._servo_period, task._hold_seconds = 5., .1, .1
+    task._log_period, task._pixel_tolerance = .5, .04
+    task._projection_depth, task._command_timeout = .8, 1.
+    task._node = SimpleNamespace(stopped=False, _cmd_z=.6,
+        _latest_robot_pose=lambda: (1., 2., .6, 0., 0., -70.),
+        _send_action_goal=lambda *args, **kwargs: calls.append(args) or (True, ''),
+        _format_motion_context=lambda s: s)
+    task._best_left_detection = lambda: SimpleNamespace(pixel_x=350., pixel_y=260.)
+    # 两次修正反馈都有z/yaw漂移，最后居中；保持目标不得跟随漂移。
+    steps = iter([(task._node._latest_robot_pose(), .02, .02, .02, .02, .1, .1),
+                  (task._node._latest_robot_pose(), .01, .01, .01, .01, .08, .08)])
+    centered = (task._node._latest_robot_pose(), 0., 0., 0., 0., 0., 0.)
+    task._horizontal_step = lambda d: next(steps, centered)
+    assert task._servo_horizontally(hold_z_yaw=(.4, -90.)) is not None
+    assert len(calls) == 2
+    for call in calls:
+        assert call[2] == 'xyzrz'
+        assert call[1][2:] == [.4, -90.]
+
+
 def test_failed_start_prevents_grab_and_movement():
     source = Path(__file__).parents[1] / 'uv_task' / 'task_runner.py'
     cls = next(n for n in ast.parse(source.read_text()).body
@@ -375,6 +447,8 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
 def test_servo2_selection_uses_mount_geometry_and_does_not_change_servo1_profile():
     from uv_task.config_loader import load_task
     params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
+    # 固定测试标定值，不随现场修改的YAML安装尺寸改变预期。
+    params['servo2_down_camera_body_xyz'] = [-.130, .030, .0645]
     node = SimpleNamespace(get_logger=lambda: _Logger())
     original = GrabSeaCucumberTask(node, params)
     assert original._gripper_servo_id == 1

@@ -185,6 +185,58 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         world_dx, world_dy = self._body_to_world(body_dx, body_dy, pose[5])
         return pose, body_dx, body_dy, world_dx, world_dy, du, dv
 
+    def _servo_horizontally(self):
+        """水平视觉伺服期间始终闭环保持同一z/yaw；近底下压仍独立开环。"""
+        pose = self._measured_pose()
+        if pose is None:
+            self._logger.error('抓海参：水平对准缺少新鲜位姿')
+            return None
+        self._horizontal_hold_z_yaw = (pose[2], pose[5])
+        self._logger.info(
+            f'抓海参：{self._color}水平对准固定z={pose[2]:.3f}m、'
+            f'yaw={pose[5]:.1f}°，SET axes=xyzrz；'
+            '下视像素竖向误差只修正水平位置，不用于升沉；z正方向向下')
+        # 即使首帧已居中，也必须退出之前的速度/推力模式，进入位置保持。
+        started = time.monotonic()
+        timeout = min(self._command_timeout, self._servo_timeout)
+        if timeout <= 0 or self._node.stopped:
+            return None
+        success, message = self._node._send_action_goal(
+            BasicMotion.Goal.SET, [pose[0], pose[1], pose[2], pose[5]], 'xyzrz',
+            timeout=timeout, quiet=True,
+            task_context=self._node._format_motion_context(f'{self._color}对准启用深度航向闭环'))
+        if not success:
+            self._logger.warning(f'抓海参：启用位置保持失败：{message}')
+            return None
+        self._node._cmd_z, self._node._cmd_yaw = self._horizontal_hold_z_yaw
+        original_timeout = self._servo_timeout
+        try:
+            self._servo_timeout = max(0., original_timeout - (time.monotonic() - started))
+            return super()._servo_horizontally(hold_z_yaw=self._horizontal_hold_z_yaw)
+        finally:
+            self._servo_timeout = original_timeout
+
+    def _apply_gripper_offset(self):
+        """按实测XY计算绝对偏置目标，并继续保持本次视觉对准的z/yaw。"""
+        pose = self._measured_pose()
+        if pose is None:
+            self._logger.error('抓海参：夹爪偏置缺少新鲜位姿')
+            return False
+        hold = getattr(self, '_horizontal_hold_z_yaw', (pose[2], pose[5]))
+        dx, dy = self._body_to_world(self._gripper_offset_x, self._gripper_offset_y, pose[5])
+        target = [pose[0] + dx, pose[1] + dy, hold[0], hold[1]]
+        self._logger.info(
+            f'抓海参：夹爪偏置目标XY=({target[0]:.3f},{target[1]:.3f})m，'
+            f'保持z={hold[0]:.3f}m、yaw={hold[1]:.1f}°；SET axes=xyzrz')
+        success, message = self._node._send_action_goal(
+            BasicMotion.Goal.SET, target, 'xyzrz', timeout=self._command_timeout,
+            task_context=self._node._format_motion_context(f'{self._color}夹爪偏置并保持深度航向'))
+        if not success:
+            self._logger.error(f'抓海参：夹爪偏置失败：{message}')
+            return False
+        self._node._cmd_x, self._node._cmd_y, self._node._cmd_z, self._node._cmd_yaw = target
+        return True
+
     def _segmented_detections(self, message):
         return [d for d in getattr(message, 'detections', ())
                 if int(getattr(d, 'class_id', -1)) == self._class_id

@@ -174,7 +174,7 @@ class RB26GrabBallTask:
         world_dx, world_dy = self._body_to_world(body_dx, body_dy, pose[5])
         return pose, body_dx, body_dy, world_dx, world_dy, du, dv
 
-    def _servo_horizontally(self):
+    def _servo_horizontally(self, hold_z_yaw=None):
         if self._class_id is None:
             self._logger.error(
                 f'26rb_grab_ball：不支持的球颜色 {self._color!r}')
@@ -248,11 +248,16 @@ class RB26GrabBallTask:
                 target_y = pose[1] + world_dy
                 target = [target_x, target_y,
                           float(self._node._cmd_z), float(pose[5])]
+                # 海参任务固定进入伺服时的深度/航向，不能每帧重新吸收漂移。
+                axes = 'xy'
+                if hold_z_yaw is not None:
+                    target[2:] = hold_z_yaw
+                    axes = 'xyzrz'
                 if (last_command is None
                         or math.hypot(target_x - last_command[0],
                                       target_y - last_command[1]) > 1e-4):
                     success, message = self._node._send_action_goal(
-                        BasicMotion.Goal.SET, target, 'xy',
+                        BasicMotion.Goal.SET, target, axes,
                         timeout=self._command_timeout, quiet=True,
                         task_context=self._node._format_motion_context(
                             f'抓取{self._color}球水平伺服'))
@@ -265,6 +270,8 @@ class RB26GrabBallTask:
                     else:
                         self._node._cmd_x = target_x
                         self._node._cmd_y = target_y
+                        if hold_z_yaw is not None:
+                            self._node._cmd_z, self._node._cmd_yaw = hold_z_yaw
                         last_command = [target_x, target_y]
                         self._logger.info(
                             f'26rb_grab_ball：水平修正已接受；'
