@@ -23,6 +23,7 @@ setup(
             'recover = uv_record.recover:main',
             'player = uv_record.player:main',
             'export_frames = uv_record.player:export_frames',
+            'analyze = uv_record.analyze:main',
         ],
     },
 )

@@ -1,0 +1,49 @@
+{
+  "session": "/home/laurie/AUV_2026_Robocup/sessions/20260519_001406",
+  "recording_status": "RUNNING",
+  "start_ns": 1779120848513399416,
+  "end_ns": 1779121992523449848,
+  "start_local": "2026-05-19T00:14:08.513+08:00",
+  "end_local": "2026-05-19T00:33:12.523+08:00",
+  "timezone_offset_hours": 8,
+  "duration_s": 1144.010050432,
+  "pose_samples": 4839,
+  "sampled_xy_distance_m": 68.11220094913338,
+  "map_runs": 3,
+  "tasks": 6,
+  "chains": [
+    {
+      "run": 1,
+      "start_ns": 1779120855043055768,
+      "status": "completed",
+      "end_ns": 1779121145943673240
+    },
+    {
+      "run": 2,
+      "start_ns": 1779121225124815576,
+      "status": "completed",
+      "end_ns": 1779121466892313496
+    },
+    {
+      "run": 3,
+      "start_ns": 1779121543398214392,
+      "status": "completed",
+      "end_ns": 1779121758829270488
+    }
+  ],
+  "apriltag_records": 364,
+  "warnings": [
+    "trajectory.jsonl:4840 无效/截断 JSON，已跳过",
+    "rosout.jsonl:3106 无效/截断 JSON，已跳过",
+    "frame_alignment.jsonl:633 无效/截断 JSON，已跳过",
+    "down: 没有实际视频/图像文件；解码索引不能还原像素",
+    "frame_alignment.jsonl:631 无效/截断 JSON，已跳过",
+    "front: 没有实际视频/图像文件；解码索引不能还原像素"
+  ],
+  "notes": [
+    "XY 路长按位姿采样折线累加，含里程计漂移和坐标修正，不等同真实游动距离",
+    "任务成功结束通常由下一任务开始/链结束推断；末尾未结束任务标记 incomplete",
+    "fused_map 是融合结果；offline_video_redetection 是录像重新解码，不能冒充在线识别",
+    "没有像素文件时无法还原视频或 AprilTag 图像角点；源视频链接依赖原 session 位置"
+  ]
+}

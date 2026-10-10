@@ -42,9 +42,16 @@ ros2 run uv_record player /绝对路径/session
 ```
 
 比赛默认值：每路最多8FPS、拼接宽度最多960（保持比例、完整视野不裁剪）、
-H.264 `libx264` 每路目标/最高码率1200kbps、视频60秒分段、bag请求300秒分段。
+H.264 `libx264` 每路目标/最高码率1200kbps、视频5秒分段、bag请求300秒分段。
 `--video-fps` 现在实际选择源帧，不补帧；源帧不足时不会凭空达到指定帧率。
 FFmpeg使用两个编码线程，并采用Foxy常见版本支持的 `-vsync 0`。
+`competion` 拼写作为 `competition` 的兼容别名。启动必须等到两路均实际写入
+完整视频分段或 JPEG，解码日志的一帧不再视为录制成功。FFmpeg 错误保存在
+`logs/nodes/video_*.log` 和 `video/*/status.json`；异常重启采用最多30秒退避。
+H.264 编码失败时比赛模式自动退回 JPEG 分块（相同帧率和宽度），保留
+`ts_failure.json`、`fallback_reason` 和实际 `output_format`。JPEG 无法保证1200kbps，
+会话容量保护继续生效，异常情况下可能提前结束。正常停止通过 FFmpeg 专用
+命令管道发送 `q`，等待清单和尾段完整写入；异常 `.ts.tmp` 保留供检查。
 双路视频按码率估算约1.08GB/小时，四路约2.16GB/小时；另加TS封装、bag、索引及日志。
 这是预算估算，不是已完成真机60分钟实测的结论。
 
@@ -60,9 +67,14 @@ dataset默认不限制会话大小，但仍保留60分钟时限及1GB剩余磁�
 
 - `video/front/`、`video/down/`：比赛为TS/HLS视频；数据集为JPEG分块和帧索引。
 - `metadata/trajectory.jsonl`：5Hz位姿，含xyz、roll/pitch/yaw（度）、消息戳和接收时间。
-- `metadata/mapping.jsonl`：1Hz精简地图，类别、融合位置、状态、真假默认图标记及每格最近20条测量。
+- `metadata/mapping.jsonl`：通常1Hz精简地图；状态变化、最终结果立即保存，避免漏掉最终地图。
+- `metadata/mapping_observations.jsonl`：5Hz建图观测及拒绝原因，包含 AprilTag 世界坐标、深度和位姿年龄。
+- `metadata/apriltag.jsonl`：在线 AprilTag 解码/ID过滤/未解码候选/深度失败诊断。
+- `metadata/tasks.jsonl`：任务状态变化，不丢失短任务的切换事件。
 - `logs/rosout.jsonl`：从开始订阅起收到的ROS日志；不包含启动前日志或未发布到rosout的普通stdout。
-- `bag/`：ROS日志、位姿、底层状态、建图地图/事件、任务状态；排除图像和控制指令。
+- `bag/`：ROS日志、位姿、原始 odom、底层状态、建图地图/观测/事件、目标位置/观测和任务状态；
+  还保存 setpoint/servo/light 指令供故障分析。比赛默认不录全量分割 mask 话题，以控制容量；
+  图像类型仍排除；player 回放始终不发送指令。
 - `logs/nodes/`：录制子进程日志；`metadata/performance.jsonl`：性能和剩余磁盘诊断。
 
 直接MJPEG模式没有采集戳映射接口时，视频按FFmpeg PTS和本机接收时间做近似时间轴，
@@ -75,6 +87,45 @@ player默认完全离线，不发布任何DDS消息。若确实需要给另一�
 仅在隔离域运行 `ROS_DOMAIN_ID=77 ros2 run uv_record player SESSION --publish-telemetry`，
 GUI也使用域77；命令和action话题始终排除。无需启动BasicMotion或task_runner。
 播放器优先PySide6，缺失时使用rqt常见的PyQt5。
+
+### 离线 Python 解读与可视化
+
+```bash
+# 构建后使用 ROS 包入口；无需启动任何节点或连接机器人
+ros2 run uv_record analyze /绝对路径/session --output /绝对路径/新报告目录
+
+# 仓库根目录直接运行；已有 JSONL 时不需要 ROS 环境
+PYTHONPATH=uv_record python3 -m uv_record.analyze /绝对路径/session \
+  --output /绝对路径/新报告目录 --no-bag
+```
+
+打开报告目录中的 `report.html`，包含建图格子和证据来源、可拖动时间轴的 XY 路径、
+前/下视视频播放器、各轮任务开始/结束/下压/释放等阶段时间戳，以及 AprilTag
+在线诊断、世界坐标和录像离线重识别的角点标注图片。导出 `maps.json`、每轮
+`map_*.svg/csv`、`trajectory.svg/csv`、`tasks.svg/csv`、`task_events.csv`、
+`videos.json`、`videos/*.mp4`、`apriltag.json/csv` 和 `apriltag/*.jpg`。
+SVG 可独立打开和导出，HTML 不需要网络。导出目录必须为空且位于 session 外；
+脚本不会修改原录制内容。视频清单保留原文件的链接，播放副本位于报告目录。
+
+默认使用 FFmpeg 将各 HLS 清单分别无转码封装为 MP4；不同重启不拼成连续视频。
+JPEG 归档生成8FPS的实时回看副本，间隙重复前一帧，原帧索引继续作为证据。
+`--ffmpeg /路径/ffmpeg` 可指定二进制；没有 FFmpeg 时仍输出全部遥测和源视频清单。
+默认 AprilTag 字典为 `DICT_APRILTAG_16h5`，每秒采样1帧，最多保存200张识别成功图片；
+可设置 `--tag-dictionary`、`--tag-sample-fps`、`--max-tag-images`，或 `--no-detect-tags`。
+离线像素解码需要含 `cv2.aruco` 的 OpenCV；缺失会提示，在线识别报告仍可生成。
+离线识别明确标记 `offline_video_redetection`，不当作当时在线任务的识别结果。
+
+默认显示 UTC+8，`--timezone-offset` 可调整。路径按接收时钟显示，保留源消息戳；
+源戳重复、漂移修正或任务重启均不会伪装成真实游动。没有明确任务成功结束日志时，
+结束时间由下一任务开始推断并标记 `end_inferred`；录制结束时尚未结束的任务标为
+`incomplete_at_recording_end`。缺失 JSONL 可在 source 对应 ROS 环境后从 SQLite bag
+补读，先将 DB/WAL/SHM 复制到临时目录；MCAP-only 会话依赖 JSONL 索引。
+旧地图缺少最终快照但日志含“建图最终结果”时，恢复最终类别并标注
+`final_assignment_source=task_result_log`；位置和协方差仍来自最后过程快照，
+不会补造最终位置或 `verified_complete`。原始快照类别保存在 `snapshot_label`。
+
+旧 session 里只有解码索引、没有 `.ts` 或 `.mjpg` 时，图像像素未保存，无法还原
+视频或 AprilTag 角点。报告会明确显示缺失，仍展示已有地图、路径、任务和在线诊断。
 
 ## 旧架构可选接口
 

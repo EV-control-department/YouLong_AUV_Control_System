@@ -29,7 +29,7 @@ class TelemetryRecorder:
         from rclpy.qos import qos_profile_sensor_data
         from rcl_interfaces.msg import Log
         from std_msgs.msg import String
-        from uv_msgs.msg import PoseInfo
+        from uv_msgs.msg import PoseInfo, MappingObservationArray, TaskStatus
 
         self.rclpy = rclpy
         if not rclpy.ok():
@@ -37,12 +37,20 @@ class TelemetryRecorder:
             self.owns_context = True
         self.node = rclpy.create_node('uv_record_telemetry')
         for kind, relative in (('pose', 'metadata/trajectory.jsonl'),
-                               ('map', 'metadata/mapping.jsonl'), ('log', 'logs/rosout.jsonl')):
+                               ('map', 'metadata/mapping.jsonl'), ('log', 'logs/rosout.jsonl'),
+                               ('observations', 'metadata/mapping_observations.jsonl'),
+                               ('task', 'metadata/tasks.jsonl'),
+                               ('tags', 'metadata/apriltag.jsonl')):
             self.files[kind] = (self.root / relative).open('a', encoding='utf-8', buffering=1)
         for topic in ('/basic_motion/pose_info', '/auv/basic_motion/pose_info'):
             self.node.create_subscription(PoseInfo, topic, self._pose, qos_profile_sensor_data)
         self.node.create_subscription(String, '/task/mapping/map', self._map, qos_profile_sensor_data)
         self.node.create_subscription(Log, '/rosout', self._log, qos_profile_sensor_data)
+        self.node.create_subscription(MappingObservationArray,
+                                      '/perception/mapping/observations',
+                                      self._observations, qos_profile_sensor_data)
+        self.node.create_subscription(TaskStatus, '/task/status', self._task,
+                                      qos_profile_sensor_data)
         self.executor = SingleThreadedExecutor()
         self.executor.add_node(self.node)
         self.thread = threading.Thread(target=self._spin, name='uv-record-telemetry', daemon=True)
@@ -80,13 +88,35 @@ class TelemetryRecorder:
             value['cells'] = compact
             value.pop('events', None)
             value.pop('measurement_points', None)
-            self._write('map', value, rate=1)
+            signature = (value.get('state'), bool(value.get('final_assignment')),
+                         bool(value.get('verified_complete')), bool(value.get('fallback_used')))
+            # A completed map can be published for less than the 1 Hz interval.
+            # Never drop a state transition or final assignment.
+            self._write('map', value, rate=0 if signature != getattr(
+                self, '_last_map_signature', None) else 1)
+            self._last_map_signature = signature
         except (ValueError, TypeError):
             pass
 
     def _log(self, msg):
-        self._write('log', {'stamp_ns': int(msg.stamp.sec)*1_000_000_000+int(msg.stamp.nanosec),
-                            'name': msg.name, 'level': int(msg.level), 'message': msg.msg})
+        value = {'stamp_ns': int(msg.stamp.sec)*1_000_000_000+int(msg.stamp.nanosec),
+                 'name': msg.name, 'level': int(msg.level), 'message': msg.msg}
+        self._write('log', value)
+        if 'AprilTag诊断' in msg.msg:
+            self._write('tags', dict(value))
+
+    def _observations(self, msg):
+        from rosidl_runtime_py.convert import message_to_ordereddict
+        # Full evidence in bag; readable indexes retain 5 Hz including failures.
+        self._write('observations', dict(message_to_ordereddict(msg)), rate=5)
+
+    def _task(self, msg):
+        from rosidl_runtime_py.convert import message_to_ordereddict
+        value = dict(message_to_ordereddict(msg))
+        signature = tuple(value.values())
+        if signature != getattr(self, '_last_task', None):
+            self._write('task', value)
+            self._last_task = signature
 
     def _spin(self):
         try:

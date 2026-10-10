@@ -177,6 +177,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "grab_sea_cucumber": {
         "gripper_servo_id": int,
+        "gripper_contact_body_xyz": (list, float),
         "gripper_close_wait_seconds": float,
         "servo2_close_angle_deg": float,
         "servo2_open_angle_deg": float,
@@ -192,6 +193,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "press_thrust_seconds": float,
         "restore_pre_press_odom_xy": bool,
         "collection_visual_align": bool,
+        "collection_release_margin_m": float,
         "collection_class_id": int,
         "collection_pixel_tolerance_fraction": float,
         "collection_hold_seconds": float,
@@ -315,6 +317,7 @@ PARAMETER_ALIASES = {
         "servo.position_tolerance_m": "visual_position_tolerance_m",
         "servo.motion_settle_seconds": "visual_motion_settle_seconds",
         "gripper.servo_id": "gripper_servo_id",
+        "gripper.contact_body_xyz": "gripper_contact_body_xyz",
         "gripper.close_wait_seconds": "gripper_close_wait_seconds",
         "gripper.servo2.close_angle_deg": "servo2_close_angle_deg",
         "gripper.servo2.open_angle_deg": "servo2_open_angle_deg",

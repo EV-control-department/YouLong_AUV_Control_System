@@ -358,6 +358,176 @@ def test_duplicate_empty_frame_is_not_repeated_target_loss():
     assert task._detection_reject_reason == '重复采集帧'
 
 
+def _collection_region_task():
+    task = _locked_detection_task()
+    task._collection_region_mode = True
+    task._collection_margin = .05
+    task._class_id = 4
+    task._gripper_offset_x, task._gripper_offset_y = .30, .10
+    return task
+
+
+def _collection_polygon(points):
+    return SimpleNamespace(mask_x=[p[0] for p in points], mask_y=[p[1] for p in points],
+                           class_id=4, confidence=.9)
+
+
+def test_cropped_collection_accepts_gripper_inside_without_needing_frame_center():
+    task = _collection_region_task()
+    # 倒装相机，夹爪实际落点=(382.5,52.5)，而相机主点=(320,240)。
+    polygon = _collection_polygon([(0,0), (639,0), (639,200), (0,200)])
+    detection = task._collection_region_detection([polygon], 1)
+    assert detection.release_inside and not detection.complete
+    assert (detection.pixel_x, detection.pixel_y) == pytest.approx((382.5,52.5))
+    task._node._latest_robot_pose = task._measured_pose
+    task._servo_gain, task._max_xy_step = .5, .08
+    assert task._horizontal_step(detection)[1:] == pytest.approx((0.,)*6)
+
+
+def test_collection_moves_gripper_into_mask_with_edge_margin():
+    task = _collection_region_task()
+    polygon = _collection_polygon([(100,100), (500,100), (500,400), (100,400)])
+    detection = task._collection_region_detection([polygon], 1)
+    assert not detection.release_inside and detection.complete
+    assert detection.pixel_y >= 137.5  # 5cm+1cm余量 / .8m * 500px。
+    task._node._latest_robot_pose = task._measured_pose
+    task._servo_gain, task._max_xy_step = .5, .08
+    step = task._horizontal_step(detection)
+    assert step[1] > 0.  # 不是再移动一次完整的0.3m爪子偏移。
+    assert math.hypot(step[1], step[2]) <= .08
+
+
+def test_collection_concave_polygon_does_not_accept_bounding_box_interior():
+    task = _collection_region_task()
+    task._gripper_offset_x = task._gripper_offset_y = 0.
+    # 主点落在L形多边形缺口内，bbox包含它，但不能释放。
+    polygon = _collection_polygon([(40,40), (600,40), (600,140),
+                                   (200,140), (200,440), (40,440)])
+    detection = task._collection_region_detection([polygon], 1)
+    assert not detection.release_inside
+    assert detection.pixel_y < 140 or detection.pixel_x < 200
+
+
+def test_collection_rejects_region_too_narrow_for_release_margin():
+    task = _collection_region_task()
+    polygon = _collection_polygon([(0,0), (639,0), (639,30), (0,30)])
+    assert task._collection_region_detection([polygon], 1) is None
+
+
+def test_collection_loop_requires_interior_even_within_old_pixel_tolerance(monkeypatch):
+    task = _collection_region_task()
+    task._logger, task._color = _Logger(), '收集框'
+    task._pixel_tolerance, task._hold_seconds = .08, 0.
+    task._log_period, task._servo_period, task._command_timeout = .5, .1, 1.
+    task._servo_xy_tolerance, task._horizontal_hold_z_yaw = .03, (.4, 0.)
+    clock, commands, frame = [0.], [], [0]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda dt: clock.__setitem__(0, clock[0]+dt))
+    task._node.stopped = False
+    task._node._format_motion_context = lambda s: s
+    task._node._send_action_goal = lambda *args, **kwargs: (commands.append(args) or True, '')
+    def detect():
+        frame[0] += 1
+        return SimpleNamespace(stamp_ns=frame[0], pixel_x=382.5, pixel_y=62.5,
+                               release_inside=frame[0] > 1)
+    task._best_left_detection = detect
+    task._horizontal_step = lambda d: (task._measured_pose(), .008,0.,.008,0.,0.,.02)
+    task._wait_visual_motion = lambda *a: True
+    assert task._locked_visual_loop(1.) is not None
+    assert len(commands) == 1
+
+
+def test_partial_collection_skips_landmark_but_does_not_apply_offset_twice():
+    task = _sea_flow_fake()
+    task._class_id, task._color, task._projection_depth = 2, '海参', .8
+    task._collection_class, task._collection_depth, task._collection_correct = 4, .8, True
+    task._pixel_tolerance, task._hold_seconds = .04, .5
+    task._apply_gripper_offset = lambda: pytest.fail('collection offset applied twice')
+    task._correct_xy = lambda *args: pytest.fail('partial frame corrected odom')
+    def landmark(deadline):
+        task._collection_landmark_partial = True
+        return None
+    task._collection_landmark_xy = landmark
+    assert task._align_collection(time.monotonic()+1)
+    assert not task._collection_region_mode and task._class_id == 2
+
+
+@pytest.mark.parametrize('partial', [False, True])
+def test_collection_landmark_uses_full_center_instead_of_gripper_aim_point(monkeypatch, partial):
+    task = _collection_region_task()
+    task._count_timeout, task._collection_depth = 1., .8
+    task._node.stopped = False
+    task._collection_center, task._collection_camera_xy = (4.,5.), (-.13,.03)
+    task._collection_landmark_partial = False
+    clock, stamp = [0.], [1]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    def sleep(seconds):
+        clock[0] += seconds
+    monkeypatch.setattr(time, 'sleep', sleep)
+    task._node.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(
+        nanoseconds=int(clock[0]*1e9)+10))
+    task._node._down_detections['down_left'] = (0., SimpleNamespace(
+        detections=[_collection_polygon([(0,0),(639,0),(639,200),(0,200)])]))
+    def detect():
+        stamp[0] = int(clock[0]*1e9)+1
+        return SimpleNamespace(stamp_ns=stamp[0], release_inside=True, complete=not partial,
+            pixel_x=382.5, pixel_y=52.5, landmark_pixel=(400.,200.))
+    task._best_left_detection = detect
+    result = task._collection_landmark_xy(1.)
+    if partial:
+        assert result is None and task._collection_landmark_partial
+    else:
+        # 完整框心到相机的body向量=(-.064,-.128)；加相机安装位置。
+        assert result == pytest.approx((4.-(-.064-.13), 5.-(-.128+.03)))
+        assert clock[0] >= .1  # 必须是三张独立帧。
+
+
+def test_gripper_contact_and_collection_margin_load_from_config():
+    from uv_task.config_loader import load_task
+    params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
+    assert params['gripper_contact_body_xyz'] == [-.43,0.,.29]
+    assert params['collection_release_margin_m'] == .05
+
+
+def test_floor_clearance_uses_disk_contact_not_only_dvl_offset():
+    task = _collection_region_task()
+    task._floor_z, task._bottom_offset = 1.2, .1
+    task._contact_body_xyz = (-.43, 0., .29)
+    assert task._floor_clearance((0,0,.71,0,0,0)) == pytest.approx(.20)
+    assert task._floor_clearance((0,0,.90,0,0,0)) == pytest.approx(.01)
+    expected = 1.2-.71-(math.sin(math.radians(10))*.43+math.cos(math.radians(10))*.29)
+    assert task._floor_clearance((0,0,.71,0,10,0)) == pytest.approx(expected)
+    task._bottom_offset = .4  # 若DVL/艇底更低，优先保护更低参考点。
+    assert task._floor_clearance((0,0,.71,0,0,0)) == pytest.approx(.09)
+
+
+@pytest.mark.parametrize('yaw', [0., 90., -90.])
+def test_dvl_restore_uses_post_gripper_anchor_then_returns_to_camera_pose(yaw):
+    task = _sea_flow_fake()
+    del task._return_to_recorded_pose
+    task._restore_press_xy = True
+    dx, dy = task._body_to_world(.30, .10, yaw)
+    observation = (1., 2., .2, yaw)
+    anchor = (1.+dx, 2.+dy, .2, 0., 0., yaw)
+    pose = [anchor[0]+.25, anchor[1]-.15, .2, 0., 0., yaw]
+    task._pre_press_pose = anchor
+    task._measured_pose = lambda: tuple(pose)
+    task._ascend_to_depth = lambda *args: True
+    calls = []
+    def correct(xy, deadline, reason):
+        calls.append(('correct', xy))
+        pose[:2] = xy
+        return True
+    task._correct_xy = correct
+    task._node._format_motion_context = lambda s: s
+    task._node._send_action_goal = lambda command, target, axes, **kw: (
+        calls.append(('move', tuple(target), axes)) or True, '')
+    assert task._return_to_recorded_pose(observation)
+    assert calls[0] == ('correct', anchor[:2])
+    assert calls[1] == ('move', observation, 'xyrz')
+    assert calls[0][1] != observation[:2]
+
+
 def test_collection_accepts_fresh_centered_frame_without_extra_hold(monkeypatch):
     clock = [0.]
     monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
@@ -615,11 +785,13 @@ def test_servo2_selection_uses_mount_geometry_and_does_not_change_servo1_profile
     assert task._pickup_angle == pytest.approx(math.radians(150))
     assert task._release_angle == pytest.approx(math.radians(270))
     assert (task._gripper_offset_x, task._gripper_offset_y) == pytest.approx((-.36,.030))
-    assert task._bottom_offset == pytest.approx(.176)
+    assert task._contact_body_xyz == pytest.approx((.230, 0., .176))
+    assert task._floor_clearance((0, 0, .5, 0, 0, 0)) == pytest.approx(task._floor_z-.5-.176)
     params.update(servo2_front_camera_body_xyz=[.4,.03,.09],
                   servo2_gripper_from_front_xyz=[.02,-.01,.1])
     task = GrabSeaCucumberTask(node, params)
-    assert (task._gripper_offset_x, task._gripper_offset_y, task._bottom_offset) == pytest.approx((-.55,.010,.19))
+    assert (task._gripper_offset_x, task._gripper_offset_y) == pytest.approx((-.55,.010))
+    assert task._contact_body_xyz == pytest.approx((.42,.02,.19))
 
 
 def test_servo2_closes_after_press_before_ascent_then_releases_at_delivery():

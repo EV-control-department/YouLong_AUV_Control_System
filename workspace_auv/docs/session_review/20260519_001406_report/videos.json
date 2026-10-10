@@ -1,0 +1,40 @@
+[
+  {
+    "camera": "down",
+    "files": [],
+    "bytes": 0,
+    "saved_files": 0,
+    "alignment_entries": 632,
+    "status": {
+      "status": "recording",
+      "frames": 1,
+      "unaligned_frames": 1,
+      "last_frame_received_unix_ns": 1779121996954055864,
+      "alignment_status": "unknown"
+    },
+    "alignment": "degraded",
+    "playbacks": [],
+    "incomplete_tails": [],
+    "receive_start_ns": 1779120848513399416,
+    "receive_end_ns": 1779121981113034136
+  },
+  {
+    "camera": "front",
+    "files": [],
+    "bytes": 0,
+    "saved_files": 0,
+    "alignment_entries": 630,
+    "status": {
+      "status": "recording",
+      "frames": 1,
+      "unaligned_frames": 1,
+      "last_frame_received_unix_ns": 1779121997006180728,
+      "alignment_status": "unknown"
+    },
+    "alignment": "degraded",
+    "playbacks": [],
+    "incomplete_tails": [],
+    "receive_start_ns": 1779120848517830296,
+    "receive_end_ns": 1779121981167479640
+  }
+]

@@ -16,11 +16,29 @@ import time
 from pathlib import Path
 
 from .frame_mapping import FrameMappingSubscriber
-from .jpeg_archive import JpegArchiveWriter, archive_entries
+from .jpeg_archive import JpegArchiveWriter, archive_entries, next_chunk_number
 from .session import write_json_atomic
 
 PTS_RE = re.compile(rb'pts_time:(-?\d+(?:\.\d+)?|N/A)')
 SHOWINFO_N_RE = re.compile(rb'\bn:\s*(\d+)')
+
+
+class _ReceiveClockMapping:
+    """Direct MJPEG PTS cannot be matched to a separate go2rtc encoder."""
+
+    def __init__(self, camera, stream_mode):
+        self.camera, self.stream_mode = camera, stream_mode
+
+    def match(self, _pts):
+        return None
+
+    def close(self):
+        pass
+
+
+def _frame_mapping(args):
+    mapping_type = _ReceiveClockMapping if getattr(args, 'wallclock_input', False) else FrameMappingSubscriber
+    return mapping_type(args.camera, args.stream_mode)
 
 
 def _install_signals(stop_event: threading.Event) -> None:
@@ -51,7 +69,7 @@ def _input_options(args):
 def _jpeg_command(args) -> list[str]:
     return [
         args.ffmpeg,
-        '-hide_banner', '-nostdin', '-loglevel', 'info', '-copyts',
+        '-hide_banner', '-loglevel', 'info', '-copyts',
         '-rw_timeout', '15000000',
         *_input_options(args),
         '-i', args.url,
@@ -76,13 +94,16 @@ def _ts_command(args) -> list[str]:
                           '-bufsize', f'{bitrate*2}k']
     return [
         args.ffmpeg,
-        '-hide_banner', '-nostdin', '-loglevel', 'info', '-copyts',
+        '-hide_banner', '-loglevel', 'info', '-copyts',
         '-rw_timeout', '15000000',
         *_input_options(args),
         '-i', args.url,
         '-map', '0:v:0', '-an', '-vf', _video_filter(args),
         *codec_options,
         '-threads', '2', '-vsync', '0',
+        # Preserve selected PTS with a defined encoder time base. Do not combine
+        # output -r with passthrough vsync (rejected by current FFmpeg).
+        '-enc_time_base', '1:1000',
         '-pix_fmt', 'yuv420p',
         '-force_key_frames', f'expr:gte(t,n_forced*{duration})',
         '-flush_packets', '1',
@@ -115,6 +136,8 @@ def _parse_args():
         '--output-format', choices=('jpeg', 'ts'), default='jpeg',
         help='Store recoverable JPEG chunks or HLS MPEG-TS segments')
     parser.add_argument('--video-codec', default='libx264')
+    parser.add_argument('--fallback-jpeg', action='store_true',
+                        help='Preserve images as JPEG archives if H.264 recording fails')
     parser.add_argument('--ffmpeg', default='ffmpeg')
     args, _ros_args = parser.parse_known_args()
     return args
@@ -190,7 +213,7 @@ def _alignment_record(mapping: FrameMappingSubscriber, sequence: int,
     }
 
 
-def _read_alignment_lines(stream, mapping, output_dir, progress, lock):
+def _read_alignment_lines(stream, mapping, output_dir, progress, lock, playlist=None):
     """Drain FFmpeg showinfo and persist one source map entry per output frame."""
     index_path = Path(output_dir) / 'frame_alignment.jsonl'
     sequence = 0
@@ -207,10 +230,21 @@ def _read_alignment_lines(stream, mapping, output_dir, progress, lock):
         with index_path.open('a', encoding='utf-8') as index:
             for line in iter(stream.readline, b''):
                 if b'pts_time:' not in line:
+                    # showinfo metadata is noisy; keep actual encoder/HTTP errors.
+                    if b'Parsed_showinfo' not in line:
+                        sys.stderr.write(line.decode('utf-8', errors='replace'))
+                        sys.stderr.flush()
+                        with lock:
+                            progress['ffmpeg_last_message'] = line.decode(
+                                'utf-8', errors='replace').strip()[-2000:]
+                            messages = progress.setdefault('ffmpeg_diagnostics', [])
+                            messages.append(progress['ffmpeg_last_message'])
+                            del messages[:-20]
                     continue
                 decoder_frame_index, pts_ns = _parse_showinfo(line)
                 record = _alignment_record(
                     mapping, sequence, pts_ns, decoder_frame_index)
+                record['video_playlist'] = playlist
                 index.write(json.dumps(record, ensure_ascii=False) + '\n')
                 index.flush()
                 with lock:
@@ -236,34 +270,39 @@ def _run_ts(args) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     progress = {
         'status': 'waiting_for_video', 'frames': 0, 'unaligned_frames': 0,
+        'bytes': 0, 'complete_segments': 0, 'output_format': 'ts',
+        'video_playlist': Path(args.playlist).name,
         'last_frame_received_unix_ns': 0, 'alignment_status': 'unknown',
     }
     lock = threading.Lock()
-    mapping = FrameMappingSubscriber(args.camera, args.stream_mode)
+    mapping = _frame_mapping(args)
     process = None
     alignment_thread = None
+    initial_segments = {p.name for p in output_dir.glob('*.ts')}
+    write_json_atomic(output_dir / 'status.json', progress)
     try:
         process = subprocess.Popen(
-            _ts_command(args), stderr=subprocess.PIPE, start_new_session=True)
+            _ts_command(args), stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True)
         alignment_thread = threading.Thread(
             target=_read_alignment_lines,
-            args=(process.stderr, mapping, output_dir, progress, lock),
+            args=(process.stderr, mapping, output_dir, progress, lock, Path(args.playlist).name),
             name='uv-record-ts-frame-index', daemon=True)
         alignment_thread.start()
         while process.poll() is None and not stop_event.wait(0.2):
             with lock:
                 progress_copy = dict(progress)
-            progress_copy['status'] = 'recording'
+            progress_copy.update(_ts_storage_progress(output_dir, initial_segments))
+            progress_copy['status'] = ('recording' if progress_copy['complete_segments']
+                                       else 'waiting_for_segment')
             write_json_atomic(output_dir / 'status.json', progress_copy)
         if process.poll() is None:
-            process.send_signal(signal.SIGINT)
-        result = process.wait(timeout=10.0)
+            _request_ffmpeg_quit(process)
+        result = process.wait(timeout=4.0)
         if alignment_thread.is_alive():
             alignment_thread.join(timeout=3.0)
-        segments = sorted(output_dir.glob('*.ts'))
-        for path in output_dir.glob('*.ts.tmp'):
-            path.unlink(missing_ok=True)
-        segments = [path for path in segments if path.is_file() and path.stat().st_size > 0]
+        # Preserve interrupted tails for offline inspection instead of deleting
+        # the only bytes available after a failed encoder or abrupt stop.
         playlist = Path(args.playlist)
         has_entries = False
         try:
@@ -272,22 +311,35 @@ def _run_ts(args) -> int:
                 for line in playlist.read_text(encoding='utf-8').splitlines())
         except OSError:
             pass
-        if not segments or not has_entries:
-            print('uv_record HTTP TS recorder produced no complete HLS segment.',
-                  file=sys.stderr)
-            return result or 1
         with lock:
             progress_copy = dict(progress)
+        progress_copy.update(_ts_storage_progress(output_dir, initial_segments))
+        success = bool(progress_copy['complete_segments'] and has_entries)
         progress_copy.update({
-            'status': 'stopped' if stop_event.is_set() else 'failed',
+            'status': 'stopped' if stop_event.is_set() and success else 'failed',
+            'exit_code': result,
             'alignment_status': (
                 'aligned' if progress_copy['frames'] > 0
                 and progress_copy['unaligned_frames'] == 0 else 'degraded'),
         })
+        if not success:
+            diagnostics = '\n'.join(progress_copy.get('ffmpeg_diagnostics', [])[-10:])
+            progress_copy['error'] = ('FFmpeg produced no complete HLS segment; '
+                                      +(diagnostics or 'see video log'))
+            print(progress_copy['error'], file=sys.stderr)
+        elif not stop_event.is_set():
+            progress_copy['error'] = f'FFmpeg exited unexpectedly ({result}); see video log'
         write_json_atomic(output_dir / 'status.json', progress_copy)
-        return 0 if stop_event.is_set() else result
+        if stop_event.is_set():
+            return 0 if success else 130
+        return result or 1
     except (OSError, subprocess.SubprocessError) as error:
         print(f'uv_record HTTP video recorder failed: {error}', file=sys.stderr)
+        with lock:
+            progress_copy = dict(progress)
+        progress_copy.update(_ts_storage_progress(output_dir, initial_segments))
+        progress_copy.update(status='failed', error=str(error))
+        write_json_atomic(output_dir / 'status.json', progress_copy)
         if process is not None and process.poll() is None:
             process.terminate()
             try:
@@ -295,9 +347,36 @@ def _run_ts(args) -> int:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        return 1
+        return 130 if stop_event.is_set() else 1
     finally:
         mapping.close()
+
+
+def _ts_storage_progress(directory, initial_segments=()):
+    """Count durable outputs from this attempt, never previous restart files."""
+    result = {'complete_segments': 0, 'bytes': 0, 'pending_bytes': 0}
+    for path in Path(directory).glob('*.ts*'):
+        try:
+            size = path.stat().st_size
+        except OSError:  # HLS atomically renames active segments.
+            continue
+        if path.suffix == '.ts' and path.name not in initial_segments and size > 0:
+            result['complete_segments'] += 1
+            result['bytes'] += size
+        elif path.name.endswith('.ts.tmp'):
+            result['pending_bytes'] += size
+    return result
+
+
+def _request_ffmpeg_quit(process):
+    # Use a private command pipe, not the terminal. Signals can interrupt local
+    # HLS writes (empty playlist/tail) while FFmpeg's q command flushes normally.
+    try:
+        process.stdin.write(b'q\n')
+        process.stdin.flush()
+        process.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass  # Process already exiting; wait and collect its final diagnostics.
 
 
 def _run_jpeg_archive(args) -> int:
@@ -307,11 +386,14 @@ def _run_jpeg_archive(args) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     progress = {
         'status': 'waiting_for_video', 'frames': 0, 'bytes': 0,
+        'output_format': 'jpeg',
+        'fallback_reason': getattr(args, 'fallback_reason', None),
         'unaligned_frames': 0, 'last_frame_received_unix_ns': 0,
         'alignment_status': 'unknown',
     }
     progress_lock = threading.Lock()
-    mapping = FrameMappingSubscriber(args.camera, args.stream_mode)
+    mapping = _frame_mapping(args)
+    write_json_atomic(output_dir / 'status.json', progress)
     writer = JpegArchiveWriter(
         output_dir, start_number=args.start_number, fps=args.fps,
         chunk_seconds=args.segment_duration)
@@ -347,6 +429,9 @@ def _run_jpeg_archive(args) -> int:
                     pts_queue.put(_parse_showinfo(line), timeout=0.5)
                 except queue.Full:
                     pass
+            elif b'Parsed_showinfo' not in line:
+                sys.stderr.write(line.decode('utf-8', errors='replace'))
+                sys.stderr.flush()
 
     def consume_jpegs(chunk):
         nonlocal sequence, decoded_frame_index, write_error, last_index_sync
@@ -404,7 +489,7 @@ def _run_jpeg_archive(args) -> int:
     try:
         alignment_index = alignment_path.open('a', encoding='utf-8', buffering=1)
         process = subprocess.Popen(
-            _jpeg_command(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            _jpeg_command(args), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             bufsize=0, start_new_session=True)
         assert process.stdout is not None and process.stderr is not None
         alignment_thread = threading.Thread(
@@ -432,7 +517,7 @@ def _run_jpeg_archive(args) -> int:
             consume_jpegs(chunk)
 
         if process.poll() is None:
-            process.send_signal(signal.SIGINT)
+            _request_ffmpeg_quit(process)
             drain_deadline = time.monotonic() + 5.0
             while process.poll() is None and time.monotonic() < drain_deadline:
                 ready, _, _ = select.select(
@@ -495,7 +580,20 @@ def main():
     args = _parse_args()
     if args.output_format == 'jpeg':
         return _run_jpeg_archive(args)
-    return _run_ts(args)
+    result = _run_ts(args)
+    if result not in (0, 130) and args.fallback_jpeg:
+        path = Path(args.output_dir)
+        try:
+            failure = json.loads((path/'status.json').read_text())
+        except (OSError, ValueError):
+            failure = {'error': 'TS recorder failed'}
+        write_json_atomic(path/'ts_failure.json', failure)
+        args.fallback_reason = failure.get('error', 'TS recorder failed')
+        print('uv_record: H.264 failed; falling back to recoverable JPEG archives: '
+              +args.fallback_reason, file=sys.stderr, flush=True)
+        args.start_number = next_chunk_number(path)
+        return _run_jpeg_archive(args)
+    return result
 
 
 if __name__ == '__main__':

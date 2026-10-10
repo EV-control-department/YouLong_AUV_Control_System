@@ -1,0 +1,3152 @@
+[
+  {
+    "timestamp_ns": 1791626895847958368,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626898926624736,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626901980585472,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626904999436608,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626908198856000,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626911404467520,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626914474627616,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626917688806112,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626920862014784,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626923936937440,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626927074053664,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626930250744640,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626933279916224,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626936291373120,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 29,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626939393459552,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626942489259968,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626945564734976,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 0,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626948654928544,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 5,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626951844742816,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 4,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626954880499488,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626957971148928,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626960979134784,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626963992215776,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626967012514336,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626970033790848,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626973092586368,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626976232615680,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626979363474176,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626982473948608,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626985565714272,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626988679400320,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626991726573856,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626994838173760,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791626997938525536,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627001091335072,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627004191156992,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627007298309312,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627010354006976,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627013444024192,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627016522266400,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627019534693984,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627022566176064,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627025657679968,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627028751781056,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627031776137024,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627034778501728,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627037860096704,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627040973957664,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627044046581216,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 3,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627047047513312,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 4,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627050082369504,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 3,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627053346583584,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 4,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627056545120672,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 2,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627059743307680,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 4,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627062898548928,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 1,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627175578430592,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627178660148032,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627181859138464,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627185020067392,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 5,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627188162308608,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 5,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627191255347168,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 5,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627194331119264,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627197382089888,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627200562873248,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627203710976576,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627206739552960,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627209864058688,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627212886121248,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627215956076256,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627219020072192,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627222153521408,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627225361309600,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 7,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627228547219296,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 30,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627231742213984,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627234872635712,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627263868789344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627267042539104,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627270128574240,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627273154787776,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627276173447744,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627279233775776,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627282261522304,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627285381660128,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627288553896384,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627291628317792,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627294629269472,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627297726320768,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627300906415840,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627303938925920,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627307038111424,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627310189508544,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627313371972640,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627316581829344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627319863266048,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 7,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627322930813248,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 34,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627326038753184,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 25,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627329046174272,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627332225718432,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627335236283264,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627338289195040,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627341349258240,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627375291368512,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627378349671008,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627381433348416,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627384449603776,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627387581316192,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627390722335904,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627393890052960,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627397041673472,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627400078446400,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627403081004640,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627406321225664,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627409475130784,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 29,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627412513982720,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 26,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627415597637728,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627418663393472,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 26,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627421730348544,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 25,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627424748798432,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627427963673600,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 2,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627431123348800,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 7,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627434180945664,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627437312847200,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627440566316512,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627443817773888,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627446887118272,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 29,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627450048458848,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 25,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627453236678336,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627456276161344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627459413064992,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627462430041440,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627465485332416,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627468662521184,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627471794411360,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627475000866560,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627477999925344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627481017168064,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627484192222720,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627487312873376,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627490449076736,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 2,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627493463022624,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 7,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627496499861120,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 5,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627499647989984,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627502703290144,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627505756342848,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627508851445472,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627511881754208,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627514956614272,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 8,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627518116549344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627521237413728,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627524298999424,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627527297254048,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627530373505248,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627533413692992,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627536474350560,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627539525277312,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627542721715360,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 3,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627545942768416,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 2,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627548960398592,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627551972578432,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627555051994560,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627558241700512,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627561393754624,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 29,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627564523719232,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627567742717344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627570914527072,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 31,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627573931052832,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627577024358624,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627580151385088,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627583277734240,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627586278552000,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 25,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627589447488736,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627592584600256,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627595684874912,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627598732376896,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627601782273344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627604838727936,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627607913271264,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627611097487392,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627614348295936,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627617553119808,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 27,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627620570581088,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627623741581632,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627626831485600,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627629919315200,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 27,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627632997630176,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627636081605952,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627639131992896,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 4,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627642318924640,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 5,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627645320539488,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627648434319808,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627651496666464,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627654630281280,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627657697580928,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627660774305312,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627663891308768,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627667119783584,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627670123982624,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627673254155520,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627676392133952,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 2,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627679599974880,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 2,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627682754213792,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 7,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627685896518208,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627688903695040,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627691977040800,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627695016739552,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627698136843744,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627701255129184,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627704347489312,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627707495418848,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627710668762208,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627891581574528,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627894652999040,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627897743622368,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627900910216896,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627903957001344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627907010344672,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627910043880064,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627913130433792,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627916243458752,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627919418845760,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627922427209600,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 27,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627925494925728,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627928663149472,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 27,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627931818273760,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 35,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627935696113248,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627938228475424,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627941484021344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627944587007520,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627947617172544,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627950690551872,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 26,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627953839525568,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 3,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627956944124416,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 36,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627960177448160,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 25,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627963360869152,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 32,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627966487720128,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627969530209344,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627972625576896,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627975812487840,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627978819770656,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627981884185408,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627984891637888,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627988041849664,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627991103986816,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 34,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627994163821248,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 31,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791627997221149472,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 30,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628000297561184,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628003336264384,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628006359595456,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 0,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628009445428320,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 5,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628012585088064,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 7,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628015677921216,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628018797310048,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628022009195776,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 35,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628025077098848,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 26,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628028269303968,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628031320864928,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628034424832832,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 26,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628037473458272,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 34,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628040503838016,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628043595953952,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628046849583328,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 4,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628049890195424,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 2,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628052952331328,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628056009093824,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628059159064096,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628062326088000,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 25,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628065368055232,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628068443395488,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628071618916192,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628074772678432,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628077789932640,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628080971958368,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628084045325088,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628087089549216,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 21,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628090322932128,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 28,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628093377592448,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 28,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628096476414176,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628099679340000,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 48,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628102820953664,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628106004706912,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628109103525088,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 31,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628112158397472,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628115222532736,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628118252672192,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 16,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628121251960512,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 6,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628124315952384,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628127336925024,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 18,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628130392538592,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628133588026272,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628136746660928,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628139762081888,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628142856860960,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 23,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628145950607520,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628149041405920,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628152044672320,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628155167637728,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 13,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628158206907712,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 9,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628161451390400,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628164580434944,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628167764334528,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 24,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628170922783744,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628174156897312,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 22,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628177219197824,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 19,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628180370867968,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628183399687520,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628186578496512,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628189638927680,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 11,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628192786332000,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628195943269696,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 10,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628198983593760,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 14,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628202099487680,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 20,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628205126993152,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 17,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628208214476864,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 12,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628211328339968,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 15,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  },
+  {
+    "timestamp_ns": 1791628214426005440,
+    "source": "online_diagnostic",
+    "decoded_ids": [],
+    "excluded_ids": [],
+    "undecoded_candidates": 7,
+    "depth_rejected": 0,
+    "dictionary": "DICT_APRILTAG_16h5",
+    "status": "no_decode"
+  }
+]

@@ -155,8 +155,8 @@ def _bool_value(value: str | bool) -> bool:
 
 def _next_segment_number(directory: Path) -> int:
     numbers = []
-    for path in directory.glob('*.ts'):
-        match = re.search(r'(\d+)(?=\.ts$)', path.name)
+    for path in directory.glob('*.ts*'):
+        match = re.search(r'(\d+)(?=\.ts(?:\.tmp)?$)', path.name)
         if match:
             numbers.append(int(match.group(1)))
     return max(numbers, default=-1) + 1
@@ -306,7 +306,9 @@ class ChildSupervisor(threading.Thread):
         self.last_exit = None
 
     def run(self):
+        consecutive_failures = 0
         while not self.stop_event.is_set():
+            started = time.monotonic()
             command = self.command_factory()
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             with self.log_path.open('ab', buffering=0) as logfile:
@@ -352,7 +354,9 @@ class ChildSupervisor(threading.Thread):
 
             if not self.stop_event.is_set():
                 self.restarts += 1
-                self.stop_event.wait(1.0)
+                consecutive_failures = (0 if time.monotonic()-started > 30
+                                        else consecutive_failures + 1)
+                self.stop_event.wait(min(30.0, 2.0**min(consecutive_failures, 5)))
 
     @staticmethod
     def _terminate(process: subprocess.Popen, stop_signal=signal.SIGTERM):
@@ -450,13 +454,17 @@ class Recorder:
             videos[name] = {
                 'url': self._video_url(name, path),
                 'container': container,
+                'fallback_container': ('jpeg_archive' if getattr(self.args, 'profile', '')
+                                       == 'competition' and self.args.video_format == 'ts' else None),
                 'segment_seconds': self.args.segment_duration,
                 'fps': float(self.args.video_fps),
                 'directory': str(directory),
                 'frame_metadata': ('frame_alignment.jsonl + archive index'
                                    if self.args.video_format == 'jpeg'
                                    else 'frame_alignment.jsonl'),
-                'timestamp_source': 'camera_stream_frame_info_pts',
+                'timestamp_source': ('receive_anchored_pts_degraded'
+                                     if self.args.video_source == 'mjpeg'
+                                     else 'camera_stream_frame_info_pts'),
             }
             update_manifest(self.paths.root, video=videos)
 
@@ -493,6 +501,8 @@ class Recorder:
                 '--playlist', playlist,
                 '--video-codec', self.args.video_codec,
             ]
+            if getattr(self.args, 'profile', '') == 'competition':
+                command += ['--fallback-jpeg']
         if getattr(self.args, 'video_source', 'go2rtc') == 'mjpeg':
             command += ['--wallclock-input']
         return command
@@ -571,6 +581,8 @@ class Recorder:
             f'{last_error}')
 
     def _wait_for_video_frames(self, timeout: float = 20.0):
+        if self.args.video_format == 'ts':
+            timeout = max(timeout, float(self.args.segment_duration) + 20.0)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             ready = True
@@ -581,15 +593,21 @@ class Recorder:
                 except (OSError, ValueError):
                     ready = False
                     break
-                if int(status.get('frames', 0)) <= 0:
+                received = int(status.get('last_frame_received_unix_ns', 0))
+                saved = (int(status.get('complete_segments', 0)) > 0
+                         if status.get('output_format', self.args.video_format) == 'ts'
+                         else int(status.get('bytes', 0)) > 0)
+                if (status.get('status') != 'recording' or not saved
+                        or not received or (time.time_ns()-received)/1e9 > 5):
                     ready = False
                     break
             if ready and self.video_directories:
                 return
             time.sleep(0.25)
         raise RuntimeError(
-            'go2rtc mode requires a live frame from every selected stream; '
-            'check stream names, HTTP port, and uv_stream status')
+            'video startup failed: every selected stream must write a complete '
+            'video segment/JPEG and receive fresh frames; inspect '
+            'video/*/status.json and logs/nodes/video_*.log (HTTP/encoder errors)')
 
     def _start_raw_recorder(self):
         from .raw_recorder import RawFrameRecorder
@@ -648,6 +666,17 @@ class Recorder:
                         status['frame_age_seconds'] = (
                             (time.time_ns() - received) / 1e9 if received else None)
                         sample['video'][directory.name] = status
+                        if status.get('fallback_reason'):
+                            status['quality_warning'] = 'H.264失败，正在保存JPEG；码率预算不再适用，容量限制仍有效'
+                        if (status.get('status') == 'failed' or
+                                status['frame_age_seconds'] is None or
+                                status['frame_age_seconds'] > 15):
+                            self.health_errors += 1
+                            append_event(self.paths.root, {
+                                'event': 'video_unhealthy', 'camera': directory.name,
+                                'status': status.get('status'),
+                                'error': status.get('error'),
+                                'frame_age_seconds': status['frame_age_seconds']})
                     except (OSError, ValueError):
                         sample['video'][directory.name] = {'status': 'waiting_for_video'}
                 with (self.paths.metadata / 'performance.jsonl').open('a') as handle:
@@ -718,7 +747,9 @@ class Recorder:
                 'enable_video': self.record_mode == 'go2rtc',
                 'timestamp_alignment': (
                     'iceoryx2_frame_header' if self.record_mode == 'raw'
-                    else 'camera_stream_frame_info_pts'),
+                    else ('receive_anchored_pts_degraded'
+                          if self.args.video_source == 'mjpeg'
+                          else 'camera_stream_frame_info_pts')),
             },
         )
         if _bool_value(getattr(self.args, 'record_image_topics', False)):
@@ -815,7 +846,7 @@ def _parse_args():
     parser.add_argument('--use-sim-time', default='false')
     parser.add_argument('--video-codec', default='libx264')
     parser.add_argument('--ffmpeg', default='ffmpeg')
-    parser.add_argument('--profile', choices=('legacy', 'competition', 'dataset'), default='competition')
+    parser.add_argument('--profile', choices=('legacy', 'competition', 'competion', 'dataset'), default='competition')
     parser.add_argument('--video-source', choices=('go2rtc', 'mjpeg'), default=None)
     parser.add_argument('--video-width', type=int, default=None)
     parser.add_argument('--video-bitrate-kbps', type=int, default=None)
@@ -826,6 +857,8 @@ def _parse_args():
     # executable.  This recorder is a supervised process rather than an
     # rclpy Node, so those arguments are intentionally not consumed here.
     args, _ros_args = parser.parse_known_args()
+    if args.profile == 'competion':
+        args.profile = 'competition'
     explicit = set(sys.argv[1:])
     def default(option, attribute, value):
         if not any(item == option or item.startswith(option+'=') for item in explicit):
@@ -834,7 +867,7 @@ def _parse_args():
         for option, attribute, value in (
             ('--record-mode', 'record_mode', 'go2rtc'),
             ('--video-source', 'video_source', 'mjpeg'), ('--port', 'port', 8090),
-            ('--segment-duration', 'segment_duration', 60.0),
+            ('--segment-duration', 'segment_duration', 5.0 if args.profile == 'competition' else 60.0),
             ('--bag-duration', 'bag_duration', 300.0),
             ('--bag-storage', 'bag_storage', 'sqlite3'),
             ('--go2rtc-stream-mode', 'go2rtc_stream_mode', 'unannotated'),
@@ -845,7 +878,7 @@ def _parse_args():
             ('--duration-minutes', 'duration_minutes', 60.0),
             ('--max-session-gb', 'max_session_gb', 4.8 if args.profile == 'competition' else 0.0),
             ('--topic-regex', 'topic_regex',
-             r'^/(clock|rosout|diagnostics|(auv/)?basic_motion/pose_info|task/(status|mapping/(map|events))|zit6/state/(pos|vel|status))$'),
+             r'^/(clock|rosout|diagnostics|(auv/)?basic_motion/pose_info|task/(status|mapping/(map|events))|perception/(mapping/observations|aruco/ids|objects|target_positions|target_observations)|zit6/(state/(pos|vel|status|odom)|cmd/(setpoint|servo|light)))$'),
         ):
             default(option, attribute, value)
     for attribute, value in (('video_source', 'go2rtc'), ('video_width', 0),

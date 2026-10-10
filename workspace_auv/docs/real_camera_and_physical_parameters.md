@@ -62,7 +62,7 @@ export UV_MODEL_MAPPING_FILE="$PWD/src/uv_camera/weights/real_last.yaml"
 图像竖向偏移不是机体深度z偏移，`collection_projection_depth_m`也只是投影距离。
 日志同时给出像素误差、机体/世界步长，以及固定的z/yaw目标，便于区别方向问题与保持问题。
 
-海参/收集框伺服每轮只在首次选择时按置信度选目标；随后按照最近匹配锁定同一目标，
+海参伺服每轮只在首次选择时按置信度选目标；随后按照最近匹配锁定同一目标，
 并用实际XY位移及yaw预测新像素位置。丢失时保持当前位置目标，短暂等待原目标，
 超过等待时间结束本轮对准；下一轮才重新选择，不在本轮立即跳抓别的海参。
 这属于几何邻近匹配，不是永久身份跟踪；目标互相重叠或DVL漂移时仍可能关联错误。
@@ -77,11 +77,10 @@ BasicMotion原10cm容差及WTRAVEL均不修改。任务侧默认XY容差1cm，
 到位等待受单次`position_command_timeout`和本轮`timeout`共同约束；
 参数不是硬件精度保证，实测无法稳定到1cm时应据反馈调整，不应仅增大步长。
 
-收集框采用独立的`collection_pixel_tolerance_fraction: 0.08`和
-`collection_hold_seconds: 0.0`：稳定动作后的新采集帧只要满足
-`|du|、|dv|≤0.08`即可通过视觉居中，不额外等待0.5秒；海参抓取门限不变。
-例如参考投影距离0.8m时，这相当于各投影方向约6.4cm的居中范围，
-并非真实误差或投放成功的保证。通过后仍执行启用的地标校正、夹爪偏置和释放。
+收集框区域伺服要求实际爪子落点进入可见掩膜内部，并满足
+`collection_release_margin_m: 0.05`的边缘余量；旧收集框像素容差参数保留兼容，
+不再作为区域投放的放行条件。`collection_hold_seconds: 0.0`表示不额外等待0.5秒；
+海参抓取门限不变。通过后执行可用的完整框地标校正和释放，不重复追加夹爪偏置。
 重复帧/等待新帧不会清除居中保持，也不会被反复算作目标丢失；
 只有新的不匹配观测才能触发丢失判定。失败日志会区分视觉阶段与地标校正阶段。
 
@@ -153,14 +152,15 @@ ros2 run uv_task task_runner --ros-args \
 
 参数仍在 `src/uv_task/config/tasks/grab_sea_cucumber.yaml`，未改任务链。
 流程：扫描海参 → 居中/计数/夹爪补偿 → 记录下压前XY → 下压 → 离底上浮
-→ 水平回到原观察点 → 复检 → 前往投放区 → 类别4收集框视觉居中
-→ 可选坐标校正 → 夹爪偏置补偿 → 90°释放 → 返回扫描点。
+→ 水平回到原观察点 → 复检 → 前往投放区 → 类别4可见区域对准实际爪子落点
+→ 完整框可选坐标校正 → 90°释放 → 返回扫描点。
 
 - `near_floor_open_loop` 默认 **false**，待标定后开启。关闭时仍为旧速度下压。
   必填 `floor_z_m`（START后池底z）、`press_thrust`（正向下压）、`lift_thrust`（小负值离底）。
   推力单位按本仓库固件为归一化 `[-1,1]`，不是 m/s；开环不保证恒速，需现场观察。
-- 离地高度 = `floor_z_m - 实测机器人z - bottom_reference_offset_z_m`。
-  最后一项是机体原点到DVL探头/夹爪参考点的向下偏置；0表示以机体原点计算。
+- 离地高度 = `floor_z_m - 实测机器人z - max(DVL/艇底偏置, 选定爪子的向下投影)`。
+  舵机1爪子位置使用 `gripper.contact_body_xyz`，名义 `[-0.430,0,0.290]m`；
+  舵机2使用安装坐标之和。爪子向下投影考虑roll/pitch，不能只按0.10m的DVL参考点判断。
   依赖位姿z正确且新鲜，不是独立测高传感器；若z也跳变，先修深度来源，不能靠XY校正解决。
 - 高度≤`open_loop_clearance_m: 0.20`后锁定ACTUATOR绝对机体系指令 `control_key=0x12`，
   六轴全部写入，只有z非零，绕开位置/速度PID，不因DVL跳回而恢复闭环。
@@ -171,15 +171,20 @@ ros2 run uv_task task_runner --ros-args \
   `restore_pre_press_odom_xy: true` 才把离底后XY校正为下压前XY：
   **它假设压抓期间没有真实水平位移，不是测量结果**，有水流不要打开。
 - `collection_visual_align: true` 默认启用；`collection_class_id: 4`。
-  先到 `delivery.pose`（现在是粗定位点），再复用下视伺服及安装yaw180°补偿。
-  `collection_projection_depth_m` 填相机到框平面的距离；对准失败不盲放。
-  框须进入视野；当前不新增大范围搜索。沿用经验证的 `gripper.offset_*` 补偿后才释放。
+  先到 `delivery.pose`，再把实际爪子落点移入类别4可见内部区域，允许框被画面裁切。
+  `collection_release_margin_m` 默认0.05m；`collection_projection_depth_m` 填相机到框平面的距离。
+  已在视觉投影中计入夹爪偏移，成功后不再追加一次 `gripper.offset_*`。
+  当前不新增大范围搜索；超时后保留返回配置投放点的兜底。
 - `collection_correct_odom_xy` 默认 **false**。开启需填固定框心的
   `collection_center_odom_xy: [x,y]` 和实际左相机光心的 `collection_camera_body_xy: [x,y]`。
-  坐标校正在视觉居中后、夹爪偏置前执行，取3张独立新帧，要求单一类别4目标、艇体近水平且稳定。
+  坐标校正在区域对准后执行，取3张独立新帧，要求完整单一类别4目标、艇体近水平且稳定。
+  裁切框跳过框心校正，但仍允许可见区域投放；不能以局部掩膜中心代替已知框心。
   用相机平移、安装yaw、机器人yaw及残余像素反投影计算机器人XY。
   这是已知固定地标的平面近似；框会移动、相机距离/安装位置不准时不要启用。
-  误差超过 `odom_correction_max_m` 拒绝校正，并停止本次投放，不隐藏失败。
+  误差超过 `odom_correction_max_m` 拒绝校正；原配置投放点兜底仍受总时间预算约束。
+
+完整链路、爪子偏置公式和锚点法的真实位移假设见
+[抓海参DVL与大收集框投放报告](grab_sea_cucumber_dvl_and_delivery.md)。
 
 新接口 `/basic_motion/correct_odom_xy`（`uv_msgs/srv/CorrectOdomXY`）只校正上位机任务odom
 XY平移，反馈和目标反向变换一起更新，已发MCU目标不跳变，不调用MCU setorigin，也不改原始DVL。

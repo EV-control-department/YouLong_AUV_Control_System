@@ -1,0 +1,2641 @@
+{
+  "tasks": [
+    {
+      "run": 1,
+      "index": 1,
+      "total": 2,
+      "name": "start",
+      "start_ns": 1779120855045256728,
+      "start_message": "[1/2] start 参数={'skip_preparation': True} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)",
+      "end_ns": 1779120855126404504,
+      "duration_s": 0.081147776,
+      "status": "completed_inferred",
+      "end_inferred": true
+    },
+    {
+      "run": 1,
+      "index": 2,
+      "total": 2,
+      "name": "mapping_grid",
+      "start_ns": 1779120855126404504,
+      "start_message": "[2/2] mapping_grid 参数={'timeout': 1800.0, 'move_timeout': 150.0, 'traversal_clearance_m': 0.4, 'traversal_tracking_margin_m': 0.15, 'observe_seconds': 12.0, 'stable_seconds': 1.0, 'stable_position_m': 0.03, 'stable_angle_deg': 2.0, 'allow_motion_observations': True, 'motion_window_seconds': 0.5, 'motion_position_m': 0.15, 'motion_angle_deg': 5.0, 'min_observations': 3, 'class_vote_ratio': 0.67, 'expected_cones': 4, 'grid_center_x': 1.1, 'grid_center_y': -1.41, 'grid_side_m': 2.4, 'grid_yaw_deg': 0.0, 'floor_z': 1.0, 'survey_z': 0.05, 'survey_yaw_deg': 0.0, 'tag_x': 0.0, 'tag_y': 0.0, 'tag_id': -1, 'allowed_tag_ids': [16, 18], 'tag_dictionary': 'DICT_APRILTAG_16h5', 'visit_order': [8, 7, 6, 3, 5, 4, 2, 1, 0], 'measurement_sigma_m': 0.035, 'process_noise': 0.0001, 'mahalanobis_gate': 11.345, 'cell_gate_m': 0.48, 'tag_timeout': 30.0, 'fallback_tag_id': 16, 'fallback_square_cells': [3, 7], 'fallback_round_cells': [0, 5], 'enable_traversal': False} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)",
+      "end_ns": 1779121145943673240,
+      "duration_s": 290.817268736,
+      "status": "completed_inferred",
+      "end_inferred": true
+    },
+    {
+      "run": 2,
+      "index": 1,
+      "total": 2,
+      "name": "start",
+      "start_ns": 1779121225125616536,
+      "start_message": "[1/2] start 参数={'skip_preparation': True} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)",
+      "end_ns": 1779121225195343800,
+      "duration_s": 0.069727264,
+      "status": "completed_inferred",
+      "end_inferred": true
+    },
+    {
+      "run": 2,
+      "index": 2,
+      "total": 2,
+      "name": "mapping_grid",
+      "start_ns": 1779121225195343800,
+      "start_message": "[2/2] mapping_grid 参数={'timeout': 1800.0, 'move_timeout': 150.0, 'traversal_clearance_m': 0.4, 'traversal_tracking_margin_m': 0.15, 'observe_seconds': 12.0, 'stable_seconds': 1.0, 'stable_position_m': 0.03, 'stable_angle_deg': 2.0, 'allow_motion_observations': True, 'motion_window_seconds': 0.5, 'motion_position_m': 0.15, 'motion_angle_deg': 5.0, 'min_observations': 3, 'class_vote_ratio': 0.67, 'expected_cones': 4, 'grid_center_x': 1.1, 'grid_center_y': -1.41, 'grid_side_m': 2.4, 'grid_yaw_deg': 0.0, 'floor_z': 1.0, 'survey_z': 0.05, 'survey_yaw_deg': 0.0, 'tag_x': 0.0, 'tag_y': 0.0, 'tag_id': -1, 'allowed_tag_ids': [16, 18], 'tag_dictionary': 'DICT_APRILTAG_16h5', 'visit_order': [8, 7, 6, 3, 5, 4, 2, 1, 0], 'measurement_sigma_m': 0.035, 'process_noise': 0.0001, 'mahalanobis_gate': 11.345, 'cell_gate_m': 0.48, 'tag_timeout': 30.0, 'fallback_tag_id': 16, 'fallback_square_cells': [3, 7], 'fallback_round_cells': [0, 5], 'enable_traversal': False} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)",
+      "end_ns": 1779121466892313496,
+      "duration_s": 241.696969696,
+      "status": "completed_inferred",
+      "end_inferred": true
+    },
+    {
+      "run": 3,
+      "index": 1,
+      "total": 2,
+      "name": "start",
+      "start_ns": 1779121543398596248,
+      "start_message": "[1/2] start 参数={'skip_preparation': True} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)",
+      "end_ns": 1779121543547314840,
+      "duration_s": 0.148718592,
+      "status": "completed_inferred",
+      "end_inferred": true
+    },
+    {
+      "run": 3,
+      "index": 2,
+      "total": 2,
+      "name": "mapping_grid",
+      "start_ns": 1779121543547314840,
+      "start_message": "[2/2] mapping_grid 参数={'timeout': 1800.0, 'move_timeout': 150.0, 'traversal_clearance_m': 0.4, 'traversal_tracking_margin_m': 0.15, 'observe_seconds': 12.0, 'stable_seconds': 1.0, 'stable_position_m': 0.03, 'stable_angle_deg': 2.0, 'allow_motion_observations': True, 'motion_window_seconds': 0.5, 'motion_position_m': 0.15, 'motion_angle_deg': 5.0, 'min_observations': 3, 'class_vote_ratio': 0.67, 'expected_cones': 4, 'grid_center_x': 1.1, 'grid_center_y': -1.41, 'grid_side_m': 2.4, 'grid_yaw_deg': 0.0, 'floor_z': 1.0, 'survey_z': 0.05, 'survey_yaw_deg': 0.0, 'tag_x': 0.0, 'tag_y': 0.0, 'tag_id': -1, 'allowed_tag_ids': [16, 18], 'tag_dictionary': 'DICT_APRILTAG_16h5', 'visit_order': [8, 7, 6, 3, 4, 5, 2, 1, 0], 'measurement_sigma_m': 0.035, 'process_noise': 0.0001, 'mahalanobis_gate': 11.345, 'cell_gate_m': 0.48, 'tag_timeout': 30.0, 'fallback_tag_id': 16, 'fallback_square_cells': [3, 7], 'fallback_round_cells': [0, 5], 'enable_traversal': False} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)",
+      "end_ns": 1779121758829270488,
+      "duration_s": 215.281955648,
+      "status": "completed_inferred",
+      "end_inferred": true
+    }
+  ],
+  "phases": [
+    {
+      "timestamp_ns": 1779120852010349688,
+      "source_stamp_ns": 1779120852009430296,
+      "run": 0,
+      "task": "",
+      "message": "启动配置：MCU原点重置=True，心跳发布器已创建=True，频率=15Hz，arm_mode=1；等待START成功后才发送心跳"
+    },
+    {
+      "timestamp_ns": 1779120854987019896,
+      "source_stamp_ns": 1779120854985735992,
+      "run": 0,
+      "task": "",
+      "message": "比赛目标元数据：turntable"
+    },
+    {
+      "timestamp_ns": 1779120855022578392,
+      "source_stamp_ns": 1779120855021790168,
+      "run": 0,
+      "task": "",
+      "message": "TaskRunner 节点已启动"
+    },
+    {
+      "timestamp_ns": 1779120855023480792,
+      "source_stamp_ns": 1779120855022378680,
+      "run": 0,
+      "task": "",
+      "message": "调试模式：False"
+    },
+    {
+      "timestamp_ns": 1779120855040289976,
+      "source_stamp_ns": 1779120855039434552,
+      "run": 0,
+      "task": "",
+      "message": "已从 /home/nvidia/YouLong_AUV_Control_System/workspace_auv/src/uv_task/config/missions/mapping_grid.json 加载 2 个任务"
+    },
+    {
+      "timestamp_ns": 1779120855042271352,
+      "source_stamp_ns": 1779120855041801880,
+      "run": 0,
+      "task": "",
+      "message": "已自动启动任务列表（共 2 个任务）"
+    },
+    {
+      "timestamp_ns": 1779120855043055768,
+      "source_stamp_ns": 1779120855042660856,
+      "run": 1,
+      "task": "",
+      "message": "=== 任务列表开始执行（共 2 个任务）==="
+    },
+    {
+      "timestamp_ns": 1779120855045256728,
+      "source_stamp_ns": 1779120855044857560,
+      "run": 1,
+      "task": "start",
+      "message": "[1/2] start 参数={'skip_preparation': True} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)"
+    },
+    {
+      "timestamp_ns": 1779120855046041784,
+      "source_stamp_ns": 1779120855045694520,
+      "run": 1,
+      "task": "start",
+      "message": "仿真/自动任务：跳过拔缆倒计时，立即初始化里程计原点"
+    },
+    {
+      "timestamp_ns": 1779120855046922328,
+      "source_stamp_ns": 1779120855046629144,
+      "run": 1,
+      "task": "start",
+      "message": "💡 灯光已关闭"
+    },
+    {
+      "timestamp_ns": 1779120855048230456,
+      "source_stamp_ns": 1779120855047802232,
+      "run": 1,
+      "task": "start",
+      "message": "⚙️  舵机1：START置零（抓取位置）（发布angle=0.0°；内部=0.0000 rad，已发指令）"
+    },
+    {
+      "timestamp_ns": 1779120855048966232,
+      "source_stamp_ns": 1779120855048609624,
+      "run": 1,
+      "task": "start",
+      "message": "发送动作目标：START，目标=[0.00, 0.00, 0.00, 0.00]，超时=0s，任务上下文=\"start task:1步骤-初始化里程计原点(all)\""
+    },
+    {
+      "timestamp_ns": 1779120855063242200,
+      "source_stamp_ns": 1779120855060943160,
+      "run": 1,
+      "task": "start",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779120855110840952,
+      "source_stamp_ns": 1779120855109920792,
+      "run": 1,
+      "task": "start",
+      "message": "START[6/6]：PoseInfo已发布，agxhbt心跳已启用；START返回成功，不等待MCU解锁"
+    },
+    {
+      "timestamp_ns": 1779120855124884760,
+      "source_stamp_ns": 1779120855123615000,
+      "run": 1,
+      "task": "start",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779120855126404504,
+      "source_stamp_ns": 1779120855124388056,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "[2/2] mapping_grid 参数={'timeout': 1800.0, 'move_timeout': 150.0, 'traversal_clearance_m': 0.4, 'traversal_tracking_margin_m': 0.15, 'observe_seconds': 12.0, 'stable_seconds': 1.0, 'stable_position_m': 0.03, 'stable_angle_deg': 2.0, 'allow_motion_observations': True, 'motion_window_seconds': 0.5, 'motion_position_m': 0.15, 'motion_angle_deg': 5.0, 'min_observations': 3, 'class_vote_ratio': 0.67, 'expected_cones': 4, 'grid_center_x': 1.1, 'grid_center_y': -1.41, 'grid_side_m': 2.4, 'grid_yaw_deg': 0.0, 'floor_z': 1.0, 'survey_z': 0.05, 'survey_yaw_deg': 0.0, 'tag_x': 0.0, 'tag_y': 0.0, 'tag_id': -1, 'allowed_tag_ids': [16, 18], 'tag_dictionary': 'DICT_APRILTAG_16h5', 'visit_order': [8, 7, 6, 3, 5, 4, 2, 1, 0], 'measurement_sigma_m': 0.035, 'process_noise': 0.0001, 'mahalanobis_gate': 11.345, 'cell_gate_m': 0.48, 'tag_timeout': 30.0, 'fallback_tag_id': 16, 'fallback_square_cells': [3, 7], 'fallback_round_cells': [0, 5], 'enable_traversal': False} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)"
+    },
+    {
+      "timestamp_ns": 1779120855128601432,
+      "source_stamp_ns": 1779120855127642392,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "💡 灯光已打开：建图及遍历执行中（数值=3）"
+    },
+    {
+      "timestamp_ns": 1779120855342199800,
+      "source_stamp_ns": 1779120855340499064,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.00, 0.00, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_april_tag\""
+    },
+    {
+      "timestamp_ns": 1779120855353540792,
+      "source_stamp_ns": 1779120855352207896,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779120856220460824,
+      "source_stamp_ns": 1779120856220156824,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.00, 0.00, 0.05, 0.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779120856241330840,
+      "source_stamp_ns": 1779120856240368856,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=None，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779120856243211064,
+      "source_stamp_ns": 1779120856242548056,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779120856243781112,
+      "source_stamp_ns": 1779120856243426648,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "开始识别池底标记：字典=DICT_APRILTAG_16h5，期望ID=-1，输入=/perception/mapping/observations"
+    },
+    {
+      "timestamp_ns": 1779120856244317912,
+      "source_stamp_ns": 1779120856244000664,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "标记识别进度：{'frames': 1, 'markers': 1, 'wrong_id': 0, 'no_depth': 0}，最近原因=not_scanned"
+    },
+    {
+      "timestamp_ns": 1779120857104266328,
+      "source_stamp_ns": 1779120857102627896,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "标记确认成功：ID=18，有效观测=3"
+    },
+    {
+      "timestamp_ns": 1779120857153544376,
+      "source_stamp_ns": 1779120857148176536,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_8\""
+    },
+    {
+      "timestamp_ns": 1779120857162310296,
+      "source_stamp_ns": 1779120857159817016,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779120857172375992,
+      "source_stamp_ns": 1779120857171559960,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.00, 0.00, 0.01, -64.1°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779120858358989880,
+      "source_stamp_ns": 1779120858358349336,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779120859995172728,
+      "source_stamp_ns": 1779120859993957176,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -0.61, 0.05, -64.1°), 总超时=147s"
+    },
+    {
+      "timestamp_ns": 1779120860842023128,
+      "source_stamp_ns": 1779120860834581112,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=8，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779120864075208888,
+      "source_stamp_ns": 1779120864074206296,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=8，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779120867236283544,
+      "source_stamp_ns": 1779120867235518200,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779120867849196344,
+      "source_stamp_ns": 1779120867847496280,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779120870980619160,
+      "source_stamp_ns": 1779120870979436952,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779120875355531896,
+      "source_stamp_ns": 1779120875354514360,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779120879239783992,
+      "source_stamp_ns": 1779120879236937368,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点8观察完成：已处理双目帧=33，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 59, 'processed_frames': 59, 'rejected_frames': 0, 'cone_candidates': 26, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 0, 'cone_observations': 26, 'unstable_frames': 24, 'moving_frames': 1, 'old_phase_frames': 7}"
+    },
+    {
+      "timestamp_ns": 1779120879241396696,
+      "source_stamp_ns": 1779120879239131672,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_7\""
+    },
+    {
+      "timestamp_ns": 1779120879248130488,
+      "source_stamp_ns": 1779120879247819928,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -0.61, 0.06, -90.2°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779120879251204952,
+      "source_stamp_ns": 1779120879250757336,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779120880625811640,
+      "source_stamp_ns": 1779120880624273528,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779120881166757656,
+      "source_stamp_ns": 1779120881165667608,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -1.41, 0.05, -90.2°), 总超时=148s"
+    },
+    {
+      "timestamp_ns": 1779120881878732888,
+      "source_stamp_ns": 1779120881877147608,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=7，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779120883800391992,
+      "source_stamp_ns": 1779120883799102008,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779120886976019544,
+      "source_stamp_ns": 1779120886974746296,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779120891498820664,
+      "source_stamp_ns": 1779120891497942616,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779120894610453592,
+      "source_stamp_ns": 1779120894609440824,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779120903897274104,
+      "source_stamp_ns": 1779120903896251896,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779120906403261592,
+      "source_stamp_ns": 1779120906402147416,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779120907212045720,
+      "source_stamp_ns": 1779120907211196312,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779120910530846584,
+      "source_stamp_ns": 1779120910529729752,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779120918416054584,
+      "source_stamp_ns": 1779120918414030712,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点7观察完成：已处理双目帧=20，新增有效目标测量=20，累计有效目标测量=29；感知统计={'received_frames': 153, 'processed_frames': 153, 'rejected_frames': 0, 'cone_candidates': 80, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 10, 'cone_observations': 70, 'unstable_frames': 84, 'moving_frames': 1, 'old_phase_frames': 12}"
+    },
+    {
+      "timestamp_ns": 1779120918418620600,
+      "source_stamp_ns": 1779120918416969592,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_6\""
+    },
+    {
+      "timestamp_ns": 1779120918429488216,
+      "source_stamp_ns": 1779120918428535992,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779120918435232728,
+      "source_stamp_ns": 1779120918432025912,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -1.41, 0.03, -89.7°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779120918448669944,
+      "source_stamp_ns": 1779120918447261464,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -2.21, 0.05, -89.7°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779120928214795608,
+      "source_stamp_ns": 1779120928213619960,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779120929006895224,
+      "source_stamp_ns": 1779120929005941304,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=6"
+    },
+    {
+      "timestamp_ns": 1779120933686227224,
+      "source_stamp_ns": 1779120933685274456,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=6"
+    },
+    {
+      "timestamp_ns": 1779120940225561496,
+      "source_stamp_ns": 1779120940220979640,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点6观察完成：已处理双目帧=34，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 218, 'processed_frames': 218, 'rejected_frames': 0, 'cone_candidates': 145, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 20, 'cone_observations': 125, 'unstable_frames': 97, 'moving_frames': 1, 'old_phase_frames': 17}"
+    },
+    {
+      "timestamp_ns": 1779120940234013208,
+      "source_stamp_ns": 1779120940224039832,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_3\""
+    },
+    {
+      "timestamp_ns": 1779120940239960408,
+      "source_stamp_ns": 1779120940236641560,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -2.22, 0.04, 0.8°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779120940243883448,
+      "source_stamp_ns": 1779120940238186520,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779120941400682904,
+      "source_stamp_ns": 1779120941399421784,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779120943161100024,
+      "source_stamp_ns": 1779120943160545112,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -2.21, 0.05, 0.8°), 总超时=147s"
+    },
+    {
+      "timestamp_ns": 1779120948499473464,
+      "source_stamp_ns": 1779120948498555608,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779120949156696888,
+      "source_stamp_ns": 1779120949155350840,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779120952383514392,
+      "source_stamp_ns": 1779120952382476728,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779120960549637464,
+      "source_stamp_ns": 1779120960548218424,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点3观察完成：已处理双目帧=23，新增有效目标测量=23，累计有效目标测量=27；感知统计={'received_frames': 262, 'processed_frames': 262, 'rejected_frames': 0, 'cone_candidates': 187, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 32, 'cone_observations': 155, 'unstable_frames': 127, 'moving_frames': 1, 'old_phase_frames': 21}"
+    },
+    {
+      "timestamp_ns": 1779120960553441464,
+      "source_stamp_ns": 1779120960552251928,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_5\""
+    },
+    {
+      "timestamp_ns": 1779120960565026936,
+      "source_stamp_ns": 1779120960562505144,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.11, -2.21, 0.05, 90.5°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779120960565889176,
+      "source_stamp_ns": 1779120960564644216,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779120961595146392,
+      "source_stamp_ns": 1779120961592975352,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779120963485519736,
+      "source_stamp_ns": 1779120963484830712,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -0.61, 0.05, 90.5°), 总超时=147s"
+    },
+    {
+      "timestamp_ns": 1779120980275107544,
+      "source_stamp_ns": 1779120980274518328,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779120980826081144,
+      "source_stamp_ns": 1779120980825484152,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779120985381581912,
+      "source_stamp_ns": 1779120985380519000,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779120992289409528,
+      "source_stamp_ns": 1779120992287036184,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点5观察完成：已处理双目帧=33，新增有效目标测量=45，累计有效目标测量=54；感知统计={'received_frames': 362, 'processed_frames': 362, 'rejected_frames': 0, 'cone_candidates': 317, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 72, 'cone_observations': 245, 'unstable_frames': 154, 'moving_frames': 1, 'old_phase_frames': 25}"
+    },
+    {
+      "timestamp_ns": 1779120992295411736,
+      "source_stamp_ns": 1779120992293955960,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_4\""
+    },
+    {
+      "timestamp_ns": 1779120992310077432,
+      "source_stamp_ns": 1779120992308909208,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779120992325539832,
+      "source_stamp_ns": 1779120992320037016,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -0.59, 0.05, -89.8°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779120993332716440,
+      "source_stamp_ns": 1779120993331846840,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779120996374925496,
+      "source_stamp_ns": 1779120996373906424,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779120996657818296,
+      "source_stamp_ns": 1779120996656621016,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -1.41, 0.05, -89.8°), 总超时=146s"
+    },
+    {
+      "timestamp_ns": 1779120999402356472,
+      "source_stamp_ns": 1779120999401455256,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121002687798040,
+      "source_stamp_ns": 1779121002686801720,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121017849245752,
+      "source_stamp_ns": 1779121017848142936,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121023099861368,
+      "source_stamp_ns": 1779121023098776056,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121026758853528,
+      "source_stamp_ns": 1779121026757183320,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121032093765816,
+      "source_stamp_ns": 1779121032093267224,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=4，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121035012610872,
+      "source_stamp_ns": 1779121035011423576,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121037990478040,
+      "source_stamp_ns": 1779121037989400920,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121038603000088,
+      "source_stamp_ns": 1779121038601895768,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121049997882040,
+      "source_stamp_ns": 1779121049996581176,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点4观察完成：已处理双目帧=41，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 573, 'processed_frames': 573, 'rejected_frames': 0, 'cone_candidates': 333, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 78, 'cone_observations': 255, 'unstable_frames': 205, 'moving_frames': 1, 'old_phase_frames': 29}"
+    },
+    {
+      "timestamp_ns": 1779121050004164472,
+      "source_stamp_ns": 1779121050000427000,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_2\""
+    },
+    {
+      "timestamp_ns": 1779121050016752984,
+      "source_stamp_ns": 1779121050012022584,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121050020673368,
+      "source_stamp_ns": 1779121050012186168,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -1.41, 0.06, 45.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121051062418392,
+      "source_stamp_ns": 1779121051061434072,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121053539656344,
+      "source_stamp_ns": 1779121053538399576,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -0.61, 0.05, 45.0°), 总超时=146s"
+    },
+    {
+      "timestamp_ns": 1779121054215434520,
+      "source_stamp_ns": 1779121054214072440,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121063209928280,
+      "source_stamp_ns": 1779121063209046936,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121063776269336,
+      "source_stamp_ns": 1779121063775247448,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121075214617304,
+      "source_stamp_ns": 1779121075213596888,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点2观察完成：已处理双目帧=43，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 658, 'processed_frames': 658, 'rejected_frames': 0, 'cone_candidates': 405, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 132, 'cone_observations': 273, 'unstable_frames': 229, 'moving_frames': 1, 'old_phase_frames': 33}"
+    },
+    {
+      "timestamp_ns": 1779121075220103992,
+      "source_stamp_ns": 1779121075217403608,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_1\""
+    },
+    {
+      "timestamp_ns": 1779121075229506872,
+      "source_stamp_ns": 1779121075229210712,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.91, -0.60, 0.05, -90.7°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121075229848696,
+      "source_stamp_ns": 1779121075229192408,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121076320618904,
+      "source_stamp_ns": 1779121076319650552,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121079054636344,
+      "source_stamp_ns": 1779121079052346776,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -1.41, 0.05, -90.7°), 总超时=146s"
+    },
+    {
+      "timestamp_ns": 1779121079361754808,
+      "source_stamp_ns": 1779121079359963544,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121082382652632,
+      "source_stamp_ns": 1779121082381652824,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121093526254488,
+      "source_stamp_ns": 1779121093525541464,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121096877685528,
+      "source_stamp_ns": 1779121096876226232,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121100412201624,
+      "source_stamp_ns": 1779121100408147064,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121103603243288,
+      "source_stamp_ns": 1779121103602127544,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121106678580920,
+      "source_stamp_ns": 1779121106677674584,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121109713627672,
+      "source_stamp_ns": 1779121109712465112,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121112388953592,
+      "source_stamp_ns": 1779121112388397208,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121113011535576,
+      "source_stamp_ns": 1779121113009939928,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121124400179096,
+      "source_stamp_ns": 1779121124399227768,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点1观察完成：已处理双目帧=42，新增有效目标测量=19，累计有效目标测量=20；感知统计={'received_frames': 756, 'processed_frames': 756, 'rejected_frames': 0, 'cone_candidates': 473, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 149, 'cone_observations': 324, 'unstable_frames': 337, 'moving_frames': 1, 'old_phase_frames': 37}"
+    },
+    {
+      "timestamp_ns": 1779121124407237656,
+      "source_stamp_ns": 1779121124403880344,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_0\""
+    },
+    {
+      "timestamp_ns": 1779121124418108344,
+      "source_stamp_ns": 1779121124414691032,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -1.41, 0.04, -89.8°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121124419079160,
+      "source_stamp_ns": 1779121124415771832,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121124430473080,
+      "source_stamp_ns": 1779121124428240664,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -2.21, 0.05, -89.8°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121133886830392,
+      "source_stamp_ns": 1779121133885636760,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121134489892760,
+      "source_stamp_ns": 1779121134488913848,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=0"
+    },
+    {
+      "timestamp_ns": 1779121137742010616,
+      "source_stamp_ns": 1779121137740879384,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=0"
+    },
+    {
+      "timestamp_ns": 1779121140973190488,
+      "source_stamp_ns": 1779121140971513528,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=0"
+    },
+    {
+      "timestamp_ns": 1779121145907865304,
+      "source_stamp_ns": 1779121145900759960,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "格点0观察完成：已处理双目帧=17，新增有效目标测量=17，累计有效目标测量=31；感知统计={'received_frames': 812, 'processed_frames': 812, 'rejected_frames': 0, 'cone_candidates': 512, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 150, 'cone_observations': 362, 'unstable_frames': 363, 'moving_frames': 1, 'old_phase_frames': 42}"
+    },
+    {
+      "timestamp_ns": 1779121145913674904,
+      "source_stamp_ns": 1779121145906180312,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "建图最终结果（两方两圆约束）：{1: 0, 3: 0, 0: 1, 2: 1}；类别0=方形，类别1=圆形；证据票数={5: (25, 7), 1: (27, 0), 7: (16, 0), 3: (64, 4), 2: (0, 1), 0: (0, 30)}"
+    },
+    {
+      "timestamp_ns": 1779121145926909816,
+      "source_stamp_ns": 1779121145910801048,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "建图独立调试完成：不执行锥桶遍历"
+    },
+    {
+      "timestamp_ns": 1779121145942888472,
+      "source_stamp_ns": 1779121145940912728,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "💡 灯光已打开：建图及遍历完成（数值=2）"
+    },
+    {
+      "timestamp_ns": 1779121145943673240,
+      "source_stamp_ns": 1779121145941744856,
+      "run": 1,
+      "task": "mapping_grid",
+      "message": "=== 任务列表执行完成（2/2）==="
+    },
+    {
+      "timestamp_ns": 1779121218357436568,
+      "source_stamp_ns": 1779121218356122360,
+      "run": 1,
+      "task": "",
+      "message": "启动配置：MCU原点重置=True，心跳发布器已创建=True，频率=15Hz，arm_mode=1；等待START成功后才发送心跳"
+    },
+    {
+      "timestamp_ns": 1779121225103192152,
+      "source_stamp_ns": 1779121225102403480,
+      "run": 1,
+      "task": "",
+      "message": "TaskRunner 节点已启动"
+    },
+    {
+      "timestamp_ns": 1779121225103928920,
+      "source_stamp_ns": 1779121225102975352,
+      "run": 1,
+      "task": "",
+      "message": "调试模式：False"
+    },
+    {
+      "timestamp_ns": 1779121225121073848,
+      "source_stamp_ns": 1779121225120027960,
+      "run": 1,
+      "task": "",
+      "message": "已从 /home/nvidia/YouLong_AUV_Control_System/workspace_auv/src/uv_task/config/missions/mapping_grid.json 加载 2 个任务"
+    },
+    {
+      "timestamp_ns": 1779121225123091576,
+      "source_stamp_ns": 1779121225122409944,
+      "run": 1,
+      "task": "",
+      "message": "已自动启动任务列表（共 2 个任务）"
+    },
+    {
+      "timestamp_ns": 1779121225124815576,
+      "source_stamp_ns": 1779121225123983224,
+      "run": 2,
+      "task": "",
+      "message": "=== 任务列表开始执行（共 2 个任务）==="
+    },
+    {
+      "timestamp_ns": 1779121225125616536,
+      "source_stamp_ns": 1779121225124584696,
+      "run": 2,
+      "task": "start",
+      "message": "[1/2] start 参数={'skip_preparation': True} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)"
+    },
+    {
+      "timestamp_ns": 1779121225126127288,
+      "source_stamp_ns": 1779121225125105176,
+      "run": 2,
+      "task": "start",
+      "message": "仿真/自动任务：跳过拔缆倒计时，立即初始化里程计原点"
+    },
+    {
+      "timestamp_ns": 1779121225126748088,
+      "source_stamp_ns": 1779121225125701976,
+      "run": 2,
+      "task": "start",
+      "message": "💡 灯光已关闭"
+    },
+    {
+      "timestamp_ns": 1779121225127944664,
+      "source_stamp_ns": 1779121225127369816,
+      "run": 2,
+      "task": "start",
+      "message": "⚙️  舵机1：START置零（抓取位置）（发布angle=0.0°；内部=0.0000 rad，已发指令）"
+    },
+    {
+      "timestamp_ns": 1779121225128623896,
+      "source_stamp_ns": 1779121225128187544,
+      "run": 2,
+      "task": "start",
+      "message": "发送动作目标：START，目标=[0.00, 0.00, 0.00, 0.00]，超时=0s，任务上下文=\"start task:1步骤-初始化里程计原点(all)\""
+    },
+    {
+      "timestamp_ns": 1779121225141229656,
+      "source_stamp_ns": 1779121225140197528,
+      "run": 2,
+      "task": "start",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121225182751864,
+      "source_stamp_ns": 1779121225179808600,
+      "run": 2,
+      "task": "start",
+      "message": "START[6/6]：PoseInfo已发布，agxhbt心跳已启用；START返回成功，不等待MCU解锁"
+    },
+    {
+      "timestamp_ns": 1779121225193236408,
+      "source_stamp_ns": 1779121225192721080,
+      "run": 2,
+      "task": "start",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121225195343800,
+      "source_stamp_ns": 1779121225194295160,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "[2/2] mapping_grid 参数={'timeout': 1800.0, 'move_timeout': 150.0, 'traversal_clearance_m': 0.4, 'traversal_tracking_margin_m': 0.15, 'observe_seconds': 12.0, 'stable_seconds': 1.0, 'stable_position_m': 0.03, 'stable_angle_deg': 2.0, 'allow_motion_observations': True, 'motion_window_seconds': 0.5, 'motion_position_m': 0.15, 'motion_angle_deg': 5.0, 'min_observations': 3, 'class_vote_ratio': 0.67, 'expected_cones': 4, 'grid_center_x': 1.1, 'grid_center_y': -1.41, 'grid_side_m': 2.4, 'grid_yaw_deg': 0.0, 'floor_z': 1.0, 'survey_z': 0.05, 'survey_yaw_deg': 0.0, 'tag_x': 0.0, 'tag_y': 0.0, 'tag_id': -1, 'allowed_tag_ids': [16, 18], 'tag_dictionary': 'DICT_APRILTAG_16h5', 'visit_order': [8, 7, 6, 3, 5, 4, 2, 1, 0], 'measurement_sigma_m': 0.035, 'process_noise': 0.0001, 'mahalanobis_gate': 11.345, 'cell_gate_m': 0.48, 'tag_timeout': 30.0, 'fallback_tag_id': 16, 'fallback_square_cells': [3, 7], 'fallback_round_cells': [0, 5], 'enable_traversal': False} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)"
+    },
+    {
+      "timestamp_ns": 1779121225196046328,
+      "source_stamp_ns": 1779121225195378008,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "💡 灯光已打开：建图及遍历执行中（数值=3）"
+    },
+    {
+      "timestamp_ns": 1779121225506262008,
+      "source_stamp_ns": 1779121225505248408,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.00, 0.00, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_april_tag\""
+    },
+    {
+      "timestamp_ns": 1779121225518140376,
+      "source_stamp_ns": 1779121225516999384,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121226339711704,
+      "source_stamp_ns": 1779121226338348344,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=None，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121226385421432,
+      "source_stamp_ns": 1779121226384310616,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121226386800888,
+      "source_stamp_ns": 1779121226385516760,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "开始识别池底标记：字典=DICT_APRILTAG_16h5，期望ID=-1，输入=/perception/mapping/observations"
+    },
+    {
+      "timestamp_ns": 1779121226387248344,
+      "source_stamp_ns": 1779121226386202968,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "标记识别进度：{'frames': 1, 'markers': 1, 'wrong_id': 0, 'no_depth': 0}，最近原因=not_scanned"
+    },
+    {
+      "timestamp_ns": 1779121227757818840,
+      "source_stamp_ns": 1779121227756996216,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "标记确认成功：ID=18，有效观测=3"
+    },
+    {
+      "timestamp_ns": 1779121227794936824,
+      "source_stamp_ns": 1779121227794049656,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_8\""
+    },
+    {
+      "timestamp_ns": 1779121227802402424,
+      "source_stamp_ns": 1779121227801846776,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(-0.02, 0.00, 0.02, -62.6°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121227807454936,
+      "source_stamp_ns": 1779121227806841496,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121229066977592,
+      "source_stamp_ns": 1779121229065996024,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779121232080133368,
+      "source_stamp_ns": 1779121232077998776,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=8，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121234537624280,
+      "source_stamp_ns": 1779121234536664440,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -0.61, 0.05, -62.6°), 总超时=143s"
+    },
+    {
+      "timestamp_ns": 1779121235100650936,
+      "source_stamp_ns": 1779121235099460504,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=8，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121237170567960,
+      "source_stamp_ns": 1779121237169522296,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779121238310936312,
+      "source_stamp_ns": 1779121238310081944,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=8，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121241277000152,
+      "source_stamp_ns": 1779121241276228824,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121241902125880,
+      "source_stamp_ns": 1779121241901212120,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779121246621209016,
+      "source_stamp_ns": 1779121246620384120,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779121253325619128,
+      "source_stamp_ns": 1779121253324420088,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点8观察完成：已处理双目帧=36，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 73, 'processed_frames': 73, 'rejected_frames': 0, 'cone_candidates': 47, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 10, 'cone_observations': 37, 'unstable_frames': 26, 'moving_frames': 1, 'old_phase_frames': 7}"
+    },
+    {
+      "timestamp_ns": 1779121253327631000,
+      "source_stamp_ns": 1779121253326105144,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_7\""
+    },
+    {
+      "timestamp_ns": 1779121253342151960,
+      "source_stamp_ns": 1779121253339405624,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121253342706520,
+      "source_stamp_ns": 1779121253340540920,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -0.62, 0.06, -90.3°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121254850699448,
+      "source_stamp_ns": 1779121254849597048,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779121255846169624,
+      "source_stamp_ns": 1779121255845019192,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=7，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121257273540472,
+      "source_stamp_ns": 1779121257272772632,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -1.41, 0.05, -90.3°), 总超时=146s"
+    },
+    {
+      "timestamp_ns": 1779121259081175128,
+      "source_stamp_ns": 1779121259079955864,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=7，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121266125124984,
+      "source_stamp_ns": 1779121266124088056,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121266532154488,
+      "source_stamp_ns": 1779121266531264216,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779121269552713816,
+      "source_stamp_ns": 1779121269551574904,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779121272728798232,
+      "source_stamp_ns": 1779121272727956088,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779121278172896024,
+      "source_stamp_ns": 1779121278171805528,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点7观察完成：已处理双目帧=25，新增有效目标测量=7，累计有效目标测量=7；感知统计={'received_frames': 144, 'processed_frames': 144, 'rejected_frames': 0, 'cone_candidates': 130, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 69, 'cone_observations': 61, 'unstable_frames': 54, 'moving_frames': 1, 'old_phase_frames': 10}"
+    },
+    {
+      "timestamp_ns": 1779121278175430584,
+      "source_stamp_ns": 1779121278174145432,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_6\""
+    },
+    {
+      "timestamp_ns": 1779121278192644536,
+      "source_stamp_ns": 1779121278183211800,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -1.42, 0.06, -90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121278192977816,
+      "source_stamp_ns": 1779121278185851672,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121278211469048,
+      "source_stamp_ns": 1779121278209607480,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -2.21, 0.05, -90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121287270625656,
+      "source_stamp_ns": 1779121287269805976,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121287932817016,
+      "source_stamp_ns": 1779121287931546648,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=6"
+    },
+    {
+      "timestamp_ns": 1779121294020159480,
+      "source_stamp_ns": 1779121294019002520,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=6"
+    },
+    {
+      "timestamp_ns": 1779121299292627928,
+      "source_stamp_ns": 1779121299290665112,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点6观察完成：已处理双目帧=27，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 202, 'processed_frames': 202, 'rejected_frames': 0, 'cone_candidates': 220, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 103, 'cone_observations': 117, 'unstable_frames': 64, 'moving_frames': 1, 'old_phase_frames': 14}"
+    },
+    {
+      "timestamp_ns": 1779121299297164344,
+      "source_stamp_ns": 1779121299294277112,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_3\""
+    },
+    {
+      "timestamp_ns": 1779121299309531256,
+      "source_stamp_ns": 1779121299306827288,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121299314277848,
+      "source_stamp_ns": 1779121299312282328,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -2.22, 0.06, 0.9°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121300578990456,
+      "source_stamp_ns": 1779121300577929592,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779121303715157656,
+      "source_stamp_ns": 1779121303714198296,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779121304962541432,
+      "source_stamp_ns": 1779121304961994648,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -2.21, 0.05, 0.9°), 总超时=144s"
+    },
+    {
+      "timestamp_ns": 1779121310006053112,
+      "source_stamp_ns": 1779121310005074200,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121310438670776,
+      "source_stamp_ns": 1779121310437505048,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779121314479508632,
+      "source_stamp_ns": 1779121314478471928,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779121322017776376,
+      "source_stamp_ns": 1779121322016346360,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点3观察完成：已处理双目帧=27，新增有效目标测量=27，累计有效目标测量=33；感知统计={'received_frames': 251, 'processed_frames': 251, 'rejected_frames': 0, 'cone_candidates': 277, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 105, 'cone_observations': 172, 'unstable_frames': 93, 'moving_frames': 1, 'old_phase_frames': 16}"
+    },
+    {
+      "timestamp_ns": 1779121322022298104,
+      "source_stamp_ns": 1779121322019481208,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_5\""
+    },
+    {
+      "timestamp_ns": 1779121322031932856,
+      "source_stamp_ns": 1779121322031288056,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121322032369912,
+      "source_stamp_ns": 1779121322031487832,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.11, -2.21, 0.05, 90.5°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121323334831288,
+      "source_stamp_ns": 1779121323333818840,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779121326569368056,
+      "source_stamp_ns": 1779121326568144440,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779121327586687864,
+      "source_stamp_ns": 1779121327562773912,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -0.61, 0.05, 90.5°), 总超时=144s"
+    },
+    {
+      "timestamp_ns": 1779121332769370584,
+      "source_stamp_ns": 1779121332767776024,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779121344252723480,
+      "source_stamp_ns": 1779121344251396888,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121344807194296,
+      "source_stamp_ns": 1779121344805381304,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779121347968728536,
+      "source_stamp_ns": 1779121347967758744,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779121351233770104,
+      "source_stamp_ns": 1779121351232644888,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779121356267462296,
+      "source_stamp_ns": 1779121356261862360,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点5观察完成：已处理双目帧=22，新增有效目标测量=22，累计有效目标测量=30；感知统计={'received_frames': 342, 'processed_frames': 342, 'rejected_frames': 0, 'cone_candidates': 368, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 110, 'cone_observations': 258, 'unstable_frames': 127, 'moving_frames': 1, 'old_phase_frames': 20}"
+    },
+    {
+      "timestamp_ns": 1779121356273414072,
+      "source_stamp_ns": 1779121356272147480,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_4\""
+    },
+    {
+      "timestamp_ns": 1779121356284601784,
+      "source_stamp_ns": 1779121356284148760,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -0.60, 0.05, -90.2°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121356297237560,
+      "source_stamp_ns": 1779121356296213400,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121357455336920,
+      "source_stamp_ns": 1779121357454147576,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121360721143736,
+      "source_stamp_ns": 1779121360720177816,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121363923759064,
+      "source_stamp_ns": 1779121363922798008,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121366645794872,
+      "source_stamp_ns": 1779121366644757624,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -1.41, 0.05, -90.2°), 总超时=140s"
+    },
+    {
+      "timestamp_ns": 1779121375392529144,
+      "source_stamp_ns": 1779121375391565080,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121376187035224,
+      "source_stamp_ns": 1779121376185909176,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121381328654456,
+      "source_stamp_ns": 1779121381326895608,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121387396841208,
+      "source_stamp_ns": 1779121387393706488,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点4观察完成：已处理双目帧=34，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 418, 'processed_frames': 418, 'rejected_frames': 0, 'cone_candidates': 452, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 118, 'cone_observations': 334, 'unstable_frames': 172, 'moving_frames': 1, 'old_phase_frames': 24}"
+    },
+    {
+      "timestamp_ns": 1779121387405018424,
+      "source_stamp_ns": 1779121387398398360,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_2\""
+    },
+    {
+      "timestamp_ns": 1779121387414097816,
+      "source_stamp_ns": 1779121387410724440,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121387416377528,
+      "source_stamp_ns": 1779121387414904216,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -1.43, 0.05, 45.6°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121388531520152,
+      "source_stamp_ns": 1779121388530483128,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121391695513656,
+      "source_stamp_ns": 1779121391694734712,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121394152489528,
+      "source_stamp_ns": 1779121394151729592,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -0.61, 0.05, 45.6°), 总超时=143s"
+    },
+    {
+      "timestamp_ns": 1779121403113250712,
+      "source_stamp_ns": 1779121403112220152,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121403600417176,
+      "source_stamp_ns": 1779121403599069752,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121407270529144,
+      "source_stamp_ns": 1779121407268518968,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121415119583832,
+      "source_stamp_ns": 1779121415118454008,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点2观察完成：已处理双目帧=35，新增有效目标测量=0，累计有效目标测量=1；感知统计={'received_frames': 502, 'processed_frames': 502, 'rejected_frames': 0, 'cone_candidates': 471, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 128, 'cone_observations': 343, 'unstable_frames': 212, 'moving_frames': 1, 'old_phase_frames': 28}"
+    },
+    {
+      "timestamp_ns": 1779121415125566264,
+      "source_stamp_ns": 1779121415123071768,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_1\""
+    },
+    {
+      "timestamp_ns": 1779121415133760472,
+      "source_stamp_ns": 1779121415133032920,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.91, -0.60, 0.04, -90.5°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121415135713496,
+      "source_stamp_ns": 1779121415134753048,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121416082027896,
+      "source_stamp_ns": 1779121416081039960,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121419156592024,
+      "source_stamp_ns": 1779121419155640312,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121422072670168,
+      "source_stamp_ns": 1779121422072235128,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -1.41, 0.05, -90.5°), 总超时=143s"
+    },
+    {
+      "timestamp_ns": 1779121431128258616,
+      "source_stamp_ns": 1779121431127510264,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121431560986936,
+      "source_stamp_ns": 1779121431560125912,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121434768984216,
+      "source_stamp_ns": 1779121434768013656,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121443141460088,
+      "source_stamp_ns": 1779121443137872472,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点1观察完成：已处理双目帧=38，新增有效目标测量=0，累计有效目标测量=1；感知统计={'received_frames': 590, 'processed_frames': 590, 'rejected_frames': 0, 'cone_candidates': 476, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 129, 'cone_observations': 347, 'unstable_frames': 253, 'moving_frames': 1, 'old_phase_frames': 31}"
+    },
+    {
+      "timestamp_ns": 1779121443152022200,
+      "source_stamp_ns": 1779121443149403832,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_0\""
+    },
+    {
+      "timestamp_ns": 1779121443162880376,
+      "source_stamp_ns": 1779121443161469528,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -1.42, 0.06, -90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121443167713176,
+      "source_stamp_ns": 1779121443164597976,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121443181272312,
+      "source_stamp_ns": 1779121443177383128,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -2.21, 0.05, -90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121454843478968,
+      "source_stamp_ns": 1779121454842049336,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121455311194968,
+      "source_stamp_ns": 1779121455309869176,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=0"
+    },
+    {
+      "timestamp_ns": 1779121458357228632,
+      "source_stamp_ns": 1779121458356242456,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=0"
+    },
+    {
+      "timestamp_ns": 1779121466857110328,
+      "source_stamp_ns": 1779121466854802520,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "格点0观察完成：已处理双目帧=29，新增有效目标测量=29，累计有效目标测量=54；感知统计={'received_frames': 671, 'processed_frames': 671, 'rejected_frames': 0, 'cone_candidates': 521, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 131, 'cone_observations': 390, 'unstable_frames': 271, 'moving_frames': 1, 'old_phase_frames': 34}"
+    },
+    {
+      "timestamp_ns": 1779121466865144600,
+      "source_stamp_ns": 1779121466864319992,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "建图最终结果（两方两圆约束）：{3: 0, 7: 0, 0: 1, 5: 1}；类别0=方形，类别1=圆形；证据票数={7: (85, 0), 3: (18, 4), 6: (4, 0), 0: (6, 37), 5: (32, 60), 2: (0, 4), 8: (1, 0), 1: (2, 1)}"
+    },
+    {
+      "timestamp_ns": 1779121466871690936,
+      "source_stamp_ns": 1779121466869014584,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "建图独立调试完成：不执行锥桶遍历"
+    },
+    {
+      "timestamp_ns": 1779121466891599416,
+      "source_stamp_ns": 1779121466890595768,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "💡 灯光已打开：建图及遍历完成（数值=2）"
+    },
+    {
+      "timestamp_ns": 1779121466892313496,
+      "source_stamp_ns": 1779121466891542360,
+      "run": 2,
+      "task": "mapping_grid",
+      "message": "=== 任务列表执行完成（2/2）==="
+    },
+    {
+      "timestamp_ns": 1779121530184111512,
+      "source_stamp_ns": 1779121530183322456,
+      "run": 2,
+      "task": "",
+      "message": "启动配置：MCU原点重置=True，心跳发布器已创建=True，频率=15Hz，arm_mode=1；等待START成功后才发送心跳"
+    },
+    {
+      "timestamp_ns": 1779121543347840280,
+      "source_stamp_ns": 1779121543346860856,
+      "run": 2,
+      "task": "",
+      "message": "比赛目标元数据：turntable"
+    },
+    {
+      "timestamp_ns": 1779121543369425720,
+      "source_stamp_ns": 1779121543368645848,
+      "run": 2,
+      "task": "",
+      "message": "TaskRunner 节点已启动"
+    },
+    {
+      "timestamp_ns": 1779121543370095768,
+      "source_stamp_ns": 1779121543369395096,
+      "run": 2,
+      "task": "",
+      "message": "调试模式：False"
+    },
+    {
+      "timestamp_ns": 1779121543388998392,
+      "source_stamp_ns": 1779121543387666648,
+      "run": 2,
+      "task": "",
+      "message": "已从 /home/nvidia/YouLong_AUV_Control_System/workspace_auv/src/uv_task/config/missions/mapping_grid.json 加载 2 个任务"
+    },
+    {
+      "timestamp_ns": 1779121543397322776,
+      "source_stamp_ns": 1779121543391985688,
+      "run": 2,
+      "task": "",
+      "message": "已自动启动任务列表（共 2 个任务）"
+    },
+    {
+      "timestamp_ns": 1779121543398214392,
+      "source_stamp_ns": 1779121543394760088,
+      "run": 3,
+      "task": "",
+      "message": "=== 任务列表开始执行（共 2 个任务）==="
+    },
+    {
+      "timestamp_ns": 1779121543398596248,
+      "source_stamp_ns": 1779121543395910296,
+      "run": 3,
+      "task": "start",
+      "message": "[1/2] start 参数={'skip_preparation': True} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)"
+    },
+    {
+      "timestamp_ns": 1779121543398908984,
+      "source_stamp_ns": 1779121543398118648,
+      "run": 3,
+      "task": "start",
+      "message": "仿真/自动任务：跳过拔缆倒计时，立即初始化里程计原点"
+    },
+    {
+      "timestamp_ns": 1779121543399195896,
+      "source_stamp_ns": 1779121543398874488,
+      "run": 3,
+      "task": "start",
+      "message": "💡 灯光已关闭"
+    },
+    {
+      "timestamp_ns": 1779121543399827704,
+      "source_stamp_ns": 1779121543399530200,
+      "run": 3,
+      "task": "start",
+      "message": "⚙️  舵机1：START置零（抓取位置）（发布angle=0.0°；内部=0.0000 rad，已发指令）"
+    },
+    {
+      "timestamp_ns": 1779121543400345688,
+      "source_stamp_ns": 1779121543400082744,
+      "run": 3,
+      "task": "start",
+      "message": "发送动作目标：START，目标=[0.00, 0.00, 0.00, 0.00]，超时=0s，任务上下文=\"start task:1步骤-初始化里程计原点(all)\""
+    },
+    {
+      "timestamp_ns": 1779121543415926936,
+      "source_stamp_ns": 1779121543413399544,
+      "run": 3,
+      "task": "start",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121543535376312,
+      "source_stamp_ns": 1779121543534227096,
+      "run": 3,
+      "task": "start",
+      "message": "START[6/6]：PoseInfo已发布，agxhbt心跳已启用；START返回成功，不等待MCU解锁"
+    },
+    {
+      "timestamp_ns": 1779121543546029848,
+      "source_stamp_ns": 1779121543542146168,
+      "run": 3,
+      "task": "start",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121543547314840,
+      "source_stamp_ns": 1779121543542967160,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "[2/2] mapping_grid 参数={'timeout': 1800.0, 'move_timeout': 150.0, 'traversal_clearance_m': 0.4, 'traversal_tracking_margin_m': 0.15, 'observe_seconds': 12.0, 'stable_seconds': 1.0, 'stable_position_m': 0.03, 'stable_angle_deg': 2.0, 'allow_motion_observations': True, 'motion_window_seconds': 0.5, 'motion_position_m': 0.15, 'motion_angle_deg': 5.0, 'min_observations': 3, 'class_vote_ratio': 0.67, 'expected_cones': 4, 'grid_center_x': 1.1, 'grid_center_y': -1.41, 'grid_side_m': 2.4, 'grid_yaw_deg': 0.0, 'floor_z': 1.0, 'survey_z': 0.05, 'survey_yaw_deg': 0.0, 'tag_x': 0.0, 'tag_y': 0.0, 'tag_id': -1, 'allowed_tag_ids': [16, 18], 'tag_dictionary': 'DICT_APRILTAG_16h5', 'visit_order': [8, 7, 6, 3, 4, 5, 2, 1, 0], 'measurement_sigma_m': 0.035, 'process_noise': 0.0001, 'mahalanobis_gate': 11.345, 'cell_gate_m': 0.48, 'tag_timeout': 30.0, 'fallback_tag_id': 16, 'fallback_square_cells': [3, 7], 'fallback_round_cells': [0, 5], 'enable_traversal': False} | 指令位姿=(0.00, 0.00, 0.00, 0.0°)"
+    },
+    {
+      "timestamp_ns": 1779121543548681784,
+      "source_stamp_ns": 1779121543543637144,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "💡 灯光已打开：建图及遍历执行中（数值=3）"
+    },
+    {
+      "timestamp_ns": 1779121543702048760,
+      "source_stamp_ns": 1779121543700634200,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.00, 0.00, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_april_tag\""
+    },
+    {
+      "timestamp_ns": 1779121543713226904,
+      "source_stamp_ns": 1779121543712217176,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121544609111960,
+      "source_stamp_ns": 1779121544603130488,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=None，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121544609550584,
+      "source_stamp_ns": 1779121544603182168,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.00, 0.00, 0.05, 0.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121544625407736,
+      "source_stamp_ns": 1779121544621781080,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121544626272216,
+      "source_stamp_ns": 1779121544622828536,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "开始识别池底标记：字典=DICT_APRILTAG_16h5，期望ID=-1，输入=/perception/mapping/observations"
+    },
+    {
+      "timestamp_ns": 1779121544626609048,
+      "source_stamp_ns": 1779121544623524696,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "标记识别进度：{'frames': 1, 'markers': 1, 'wrong_id': 0, 'no_depth': 0}，最近原因=not_scanned"
+    },
+    {
+      "timestamp_ns": 1779121545799287672,
+      "source_stamp_ns": 1779121545798285848,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "标记确认成功：ID=18，有效观测=3"
+    },
+    {
+      "timestamp_ns": 1779121545831473912,
+      "source_stamp_ns": 1779121545829952376,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_8\""
+    },
+    {
+      "timestamp_ns": 1779121545843794904,
+      "source_stamp_ns": 1779121545842915192,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121545844610584,
+      "source_stamp_ns": 1779121545841890584,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(-0.01, 0.00, 0.01, -63.3°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121546983875640,
+      "source_stamp_ns": 1779121546982250584,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779121550127409560,
+      "source_stamp_ns": 1779121550123047672,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=8，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121552391409240,
+      "source_stamp_ns": 1779121552389930168,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -0.61, 0.05, -63.3°), 总超时=143s"
+    },
+    {
+      "timestamp_ns": 1779121553164861720,
+      "source_stamp_ns": 1779121553163598968,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=8，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121554935936216,
+      "source_stamp_ns": 1779121554934624472,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779121556386036696,
+      "source_stamp_ns": 1779121556385037528,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "建图数据被拒绝：格点=8，原因=outside_cell_gate"
+    },
+    {
+      "timestamp_ns": 1779121559234484088,
+      "source_stamp_ns": 1779121559233697944,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121559907364408,
+      "source_stamp_ns": 1779121559906289144,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779121563844778488,
+      "source_stamp_ns": 1779121563843567384,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=8"
+    },
+    {
+      "timestamp_ns": 1779121571236275704,
+      "source_stamp_ns": 1779121571235218072,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点8观察完成：已处理双目帧=35，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 71, 'processed_frames': 71, 'rejected_frames': 0, 'cone_candidates': 68, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 32, 'cone_observations': 36, 'unstable_frames': 26, 'moving_frames': 1, 'old_phase_frames': 7}"
+    },
+    {
+      "timestamp_ns": 1779121571238322008,
+      "source_stamp_ns": 1779121571237094904,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_7\""
+    },
+    {
+      "timestamp_ns": 1779121571249596920,
+      "source_stamp_ns": 1779121571248750072,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -0.61, 0.07, -90.2°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121571249896312,
+      "source_stamp_ns": 1779121571249205304,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121572414401080,
+      "source_stamp_ns": 1779121572413436952,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779121574874202584,
+      "source_stamp_ns": 1779121574873044600,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -1.41, 0.05, -90.2°), 总超时=146s"
+    },
+    {
+      "timestamp_ns": 1779121584223535192,
+      "source_stamp_ns": 1779121584222436504,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121584867021496,
+      "source_stamp_ns": 1779121584865515864,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779121589114462808,
+      "source_stamp_ns": 1779121589112525176,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=7"
+    },
+    {
+      "timestamp_ns": 1779121596275100984,
+      "source_stamp_ns": 1779121596273546040,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点7观察完成：已处理双目帧=31，新增有效目标测量=11，累计有效目标测量=11；感知统计={'received_frames': 148, 'processed_frames': 148, 'rejected_frames': 0, 'cone_candidates': 132, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 85, 'cone_observations': 47, 'unstable_frames': 49, 'moving_frames': 1, 'old_phase_frames': 12}"
+    },
+    {
+      "timestamp_ns": 1779121596277642328,
+      "source_stamp_ns": 1779121596275416056,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[0.30, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_6\""
+    },
+    {
+      "timestamp_ns": 1779121596288333368,
+      "source_stamp_ns": 1779121596285091320,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -1.42, 0.06, -90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121596289423512,
+      "source_stamp_ns": 1779121596287002520,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121596303472632,
+      "source_stamp_ns": 1779121596297471448,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -2.21, 0.05, -90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121604857564728,
+      "source_stamp_ns": 1779121604856015352,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121605452614136,
+      "source_stamp_ns": 1779121605451497528,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=6"
+    },
+    {
+      "timestamp_ns": 1779121616867231096,
+      "source_stamp_ns": 1779121616866313752,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点6观察完成：已处理双目帧=28，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 206, 'processed_frames': 206, 'rejected_frames': 0, 'cone_candidates': 223, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 119, 'cone_observations': 104, 'unstable_frames': 59, 'moving_frames': 1, 'old_phase_frames': 15}"
+    },
+    {
+      "timestamp_ns": 1779121616870073112,
+      "source_stamp_ns": 1779121616869597720,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_3\""
+    },
+    {
+      "timestamp_ns": 1779121616877073944,
+      "source_stamp_ns": 1779121616876809112,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(0.30, -2.30, 0.05, 6.3°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121616881635032,
+      "source_stamp_ns": 1779121616881088472,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121618033533240,
+      "source_stamp_ns": 1779121618032570008,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779121621253402680,
+      "source_stamp_ns": 1779121621252465400,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779121622914096952,
+      "source_stamp_ns": 1779121622913261304,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -2.21, 0.05, 6.3°), 总超时=144s"
+    },
+    {
+      "timestamp_ns": 1779121627852553816,
+      "source_stamp_ns": 1779121627851695224,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121628379046712,
+      "source_stamp_ns": 1779121628378044344,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779121632300902232,
+      "source_stamp_ns": 1779121632299335896,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=3"
+    },
+    {
+      "timestamp_ns": 1779121639864013272,
+      "source_stamp_ns": 1779121639862988280,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点3观察完成：已处理双目帧=25，新增有效目标测量=25，累计有效目标测量=30；感知统计={'received_frames': 255, 'processed_frames': 255, 'rejected_frames': 0, 'cone_candidates': 280, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 133, 'cone_observations': 147, 'unstable_frames': 90, 'moving_frames': 1, 'old_phase_frames': 19}"
+    },
+    {
+      "timestamp_ns": 1779121639867231768,
+      "source_stamp_ns": 1779121639865655032,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_4\""
+    },
+    {
+      "timestamp_ns": 1779121639876130712,
+      "source_stamp_ns": 1779121639875877848,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.11, -2.21, 0.05, 90.9°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121639878408568,
+      "source_stamp_ns": 1779121639877471544,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121641193089528,
+      "source_stamp_ns": 1779121641192246968,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121644343095864,
+      "source_stamp_ns": 1779121644342261560,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121645510455928,
+      "source_stamp_ns": 1779121645509771832,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -1.41, 0.05, 90.9°), 总超时=144s"
+    },
+    {
+      "timestamp_ns": 1779121654466770648,
+      "source_stamp_ns": 1779121654464654904,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121655132791736,
+      "source_stamp_ns": 1779121655131833656,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121659672744632,
+      "source_stamp_ns": 1779121659672057112,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=4"
+    },
+    {
+      "timestamp_ns": 1779121666470931800,
+      "source_stamp_ns": 1779121666469903864,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点4观察完成：已处理双目帧=37，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 329, 'processed_frames': 329, 'rejected_frames': 0, 'cone_candidates': 352, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 137, 'cone_observations': 215, 'unstable_frames': 121, 'moving_frames': 1, 'old_phase_frames': 22}"
+    },
+    {
+      "timestamp_ns": 1779121666476155512,
+      "source_stamp_ns": 1779121666473675992,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.10, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_5\""
+    },
+    {
+      "timestamp_ns": 1779121666481870776,
+      "source_stamp_ns": 1779121666481403448,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -1.40, 0.05, 90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121666486208056,
+      "source_stamp_ns": 1779121666485293112,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121666491728792,
+      "source_stamp_ns": 1779121666491203512,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -0.61, 0.05, 90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121675345664920,
+      "source_stamp_ns": 1779121675344861208,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121676055082328,
+      "source_stamp_ns": 1779121676054004184,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779121680427702040,
+      "source_stamp_ns": 1779121680426635352,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=5"
+    },
+    {
+      "timestamp_ns": 1779121687364882072,
+      "source_stamp_ns": 1779121687362905272,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点5观察完成：已处理双目帧=28，新增有效目标测量=28，累计有效目标测量=33；感知统计={'received_frames': 397, 'processed_frames': 397, 'rejected_frames': 0, 'cone_candidates': 390, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 141, 'cone_observations': 249, 'unstable_frames': 135, 'moving_frames': 1, 'old_phase_frames': 26}"
+    },
+    {
+      "timestamp_ns": 1779121687369986584,
+      "source_stamp_ns": 1779121687368331608,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -0.61, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_2\""
+    },
+    {
+      "timestamp_ns": 1779121687376128984,
+      "source_stamp_ns": 1779121687375816920,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.10, -0.60, 0.05, -0.8°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121687384709304,
+      "source_stamp_ns": 1779121687379845560,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121688345083672,
+      "source_stamp_ns": 1779121688344213592,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121691386533560,
+      "source_stamp_ns": 1779121691385586104,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121693507622296,
+      "source_stamp_ns": 1779121693507052728,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -0.61, 0.05, -0.8°), 总超时=144s"
+    },
+    {
+      "timestamp_ns": 1779121698840415928,
+      "source_stamp_ns": 1779121698839834488,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121699438754776,
+      "source_stamp_ns": 1779121699437749752,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121702691735768,
+      "source_stamp_ns": 1779121702691232600,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=2"
+    },
+    {
+      "timestamp_ns": 1779121710860907256,
+      "source_stamp_ns": 1779121710860052504,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点2观察完成：已处理双目帧=36，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 458, 'processed_frames': 458, 'rejected_frames': 0, 'cone_candidates': 415, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 141, 'cone_observations': 274, 'unstable_frames': 167, 'moving_frames': 1, 'old_phase_frames': 30}"
+    },
+    {
+      "timestamp_ns": 1779121710871551576,
+      "source_stamp_ns": 1779121710870766584,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -1.41, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_1\""
+    },
+    {
+      "timestamp_ns": 1779121710883533976,
+      "source_stamp_ns": 1779121710882989464,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121710883991064,
+      "source_stamp_ns": 1779121710883101208,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -0.61, 0.05, -89.7°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121711857808696,
+      "source_stamp_ns": 1779121711856824856,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121714952672728,
+      "source_stamp_ns": 1779121714951492792,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=travel_to_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121717224837912,
+      "source_stamp_ns": 1779121717224159960,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -1.41, 0.05, -89.7°), 总超时=144s"
+    },
+    {
+      "timestamp_ns": 1779121725881109144,
+      "source_stamp_ns": 1779121725879991032,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121726418569080,
+      "source_stamp_ns": 1779121726417671032,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121730836041880,
+      "source_stamp_ns": 1779121730835060504,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=1"
+    },
+    {
+      "timestamp_ns": 1779121737887505752,
+      "source_stamp_ns": 1779121737886563096,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点1观察完成：已处理双目帧=39，新增有效目标测量=0，累计有效目标测量=0；感知统计={'received_frames': 548, 'processed_frames': 548, 'rejected_frames': 0, 'cone_candidates': 416, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 141, 'cone_observations': 275, 'unstable_frames': 200, 'moving_frames': 1, 'old_phase_frames': 34}"
+    },
+    {
+      "timestamp_ns": 1779121737893317784,
+      "source_stamp_ns": 1779121737891650232,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "发送动作目标：WTRAVEL，目标=[1.90, -2.21, 0.05, 0.00]，超时=150s，任务上下文=\"mapping_grid task:2步骤-mapping:travel_to_cell_0\""
+    },
+    {
+      "timestamp_ns": 1779121737902461080,
+      "source_stamp_ns": 1779121737901160920,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -1.42, 0.05, -90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121737909056472,
+      "source_stamp_ns": 1779121737905218744,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "步进开始: 目标=(1.90, -2.21, 0.05, -90.0°), 总超时=150s"
+    },
+    {
+      "timestamp_ns": 1779121737909448152,
+      "source_stamp_ns": 1779121737904879768,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作目标已接受，等待执行结果……"
+    },
+    {
+      "timestamp_ns": 1779121746767756632,
+      "source_stamp_ns": 1779121746766596312,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "动作执行结果：成功"
+    },
+    {
+      "timestamp_ns": 1779121747320966360,
+      "source_stamp_ns": 1779121747320143192,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "暂不入图：采集前位姿变化超过当前静止/移动门限，或位姿历史缺失/不连续；状态=observe_cell，格点=0"
+    },
+    {
+      "timestamp_ns": 1779121758782945944,
+      "source_stamp_ns": 1779121758781886168,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "格点0观察完成：已处理双目帧=33，新增有效目标测量=33，累计有效目标测量=44；感知统计={'received_frames': 620, 'processed_frames': 620, 'rejected_frames': 0, 'cone_candidates': 460, 'cone_confidence_rejected': 0, 'cone_mask_rejected': 0, 'cone_depth_rejected': 141, 'cone_observations': 319, 'unstable_frames': 210, 'moving_frames': 1, 'old_phase_frames': 38}"
+    },
+    {
+      "timestamp_ns": 1779121758789388952,
+      "source_stamp_ns": 1779121758787415992,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "建图最终结果（两方两圆约束）：{6: 0, 7: 0, 0: 1, 5: 1}；类别0=方形，类别1=圆形；证据票数={7: (75, 1), 6: (5, 0), 3: (8, 3), 5: (3, 52), 2: (0, 1), 0: (0, 43)}"
+    },
+    {
+      "timestamp_ns": 1779121758794244376,
+      "source_stamp_ns": 1779121758793466680,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "建图独立调试完成：不执行锥桶遍历"
+    },
+    {
+      "timestamp_ns": 1779121758827848152,
+      "source_stamp_ns": 1779121758825727640,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "💡 灯光已打开：建图及遍历完成（数值=2）"
+    },
+    {
+      "timestamp_ns": 1779121758829270488,
+      "source_stamp_ns": 1779121758827205816,
+      "run": 3,
+      "task": "mapping_grid",
+      "message": "=== 任务列表执行完成（2/2）==="
+    }
+  ],
+  "status_events": []
+}
