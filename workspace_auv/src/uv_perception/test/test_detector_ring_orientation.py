@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 from rclpy.serialization import deserialize_message, serialize_message
 from uv_msgs.msg import Detection, DetectionArray, LineState
+from sensor_msgs.msg import CameraInfo
+from uv_camera.image_geometry import EyeUndistorter
 
 import uv_perception.object_detector as module
 from uv_perception.object_detector import ObjectDetector
@@ -66,6 +68,19 @@ def detector():
     instance._stop = threading.Event()
     instance._frame_health_lock = threading.Lock()
     instance._last_frame_at = {'front': 0., 'down': 0.}
+    instance.confidence = .5
+    instance._detectors = {'front': None, 'down': None}
+    instance._model_valid = {'front': True, 'down': True}
+    instance._model_errors = {}
+    instance._last_warning = {}
+    instance._mapping_registry = NS(class_info=lambda _: NS(camera=None))
+    def correct(camera, packet, image):
+        height, width = image.shape[:2];half=width//2
+        calibration = EyeUndistorter(CameraInfo(width=half, height=height,
+            k=[100.,0.,half/2,0.,100.,height/2,0.,0.,1.],d=[0.]*5))
+        return [(side, image[:, offset:offset+half], calibration)
+                for side, offset in (('left',0),('right',half))]
+    instance._correct_eyes = correct
     return instance
 
 
@@ -192,7 +207,7 @@ def test_one_inference_per_eye_and_independent_directions(detector, monkeypatch)
         bbox = (float(xs.min()-2), float(ys.min()-2),
                 float(xs.max()+2), float(ys.max()+2))
         return [(37, .9, bbox)], [None]
-    detector._detector = NS(detect_with_masks=infer)
+    detector._detectors['down'] = NS(detect_with_masks=infer)
     detector._mapping_ready.set()
     detector._read_loop('down', 'synthetic_camera')
     assert inference_calls == [(240, 320, 3), (240, 320, 3)]
@@ -202,6 +217,43 @@ def test_one_inference_per_eye_and_independent_directions(detector, monkeypatch)
     assert angular_error(messages[0].detections[0].orientation_axis_deg, 30) <= 3
     assert angular_error(messages[1].detections[0].orientation_axis_deg, 120) <= 3
     assert messages[0].capture_id == messages[1].capture_id == 101
+
+
+def test_jpeg_is_decoded_once_and_bad_frame_does_not_stop_detector(detector, monkeypatch):
+    from uv_image_transport import ENCODING_JPEG, FrameHeader, FramePacket, InvalidFrameError
+    image = np.zeros((32, 64, 3), np.uint8)
+    image[:, :32] = (200, 0, 0)
+    image[:, 32:] = (0, 0, 200)
+    payload = cv2.imencode('.jpg', image)[1].tobytes()
+    valid = FramePacket(FrameHeader(101, 1_000_000_000, 99, 2, 64, 32, 0,
+                                    encoding=ENCODING_JPEG), payload)
+    values = iter([InvalidFrameError('bad frame'), valid, None])
+
+    def read():
+        value = next(values)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(module, 'Iceoryx2Reader', lambda _: NS(read=read, close=lambda: None))
+    original_decode = cv2.imdecode
+    decodes = []
+
+    def decode(*args):
+        decodes.append(True)
+        return original_decode(*args)
+
+    monkeypatch.setattr(cv2, 'imdecode', decode)
+    published = []
+    detector._publish = lambda camera, side, packet, eye, *_: published.append(
+        (side, packet.header.capture_id, eye.copy()))
+    detector._detectors['down'] = NS(detect_with_masks=lambda eye: ((),()))
+    detector._mapping_ready.set()
+    detector._read_loop('down', 'jpeg_test_camera')
+    assert len(decodes) == 1
+    assert [item[:2] for item in published] == [('left', 101), ('right', 101)]
+    assert published[0][2][16, 16, 0] > 190
+    assert published[1][2][16, 16, 2] > 190
 
 
 def test_generated_message_serialization_preserves_orientation(detector):

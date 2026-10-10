@@ -2,8 +2,9 @@
 
 The registry is deliberately independent of ROS.  Camera YAML files describe
 the logical camera (input/eye resolution and calibration), while the vehicle
-URDF/TF tree is the source for all camera mounting geometry.  Stereo
-rectification is generated at runtime from YAML K/D and the relative TF pose.
+URDF/TF tree is the source for all camera mounting geometry. Lens correction
+uses K/D independently for each eye; ray triangulation uses the relative TF
+pose without requiring stereo epipolar rectification.
 """
 
 from __future__ import annotations

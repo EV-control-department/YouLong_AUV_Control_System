@@ -36,6 +36,8 @@ def generate_launch_description():
             "scenario_desc": str(scenario),
             "mission_file": LaunchConfiguration("mission_file"),
             "enable_ai": LaunchConfiguration("enable_ai"),
+            "front_model_path": LaunchConfiguration("front_model_path"),
+            "down_model_path": LaunchConfiguration("down_model_path"),
             "enable_motion": LaunchConfiguration("enable_motion"),
             "enable_nav": LaunchConfiguration("enable_nav"),
             "enable_task": LaunchConfiguration("enable_task"),
@@ -85,6 +87,8 @@ def generate_launch_description():
         )]
 
     return LaunchDescription([
+        DeclareLaunchArgument('front_model_path', default_value=''),
+        DeclareLaunchArgument('down_model_path', default_value=''),
         DeclareLaunchArgument(
             "world", default_value="guoshui_2026/cruise_seeded",
             description="World name, for example sauvc_2026/finals"),

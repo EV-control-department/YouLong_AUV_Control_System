@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from .jpeg_archive import archive_entries, read_payload
+from .detection_compat import deserialize_detection
 from .session import default_output_root
 
 
@@ -90,6 +91,11 @@ class BagPlayback:
 
     def __init__(self, bag_root: Path, node):
         self.bag_root = Path(bag_root)
+        try:
+            manifest = json.loads((self.bag_root.parent / 'manifest.json').read_text())
+        except (OSError, ValueError):
+            manifest = {}
+        self._allow_legacy_detections = manifest.get('perception', {}).get('detection_schema_version', 1) < 2
         self.node = node
         (
             self._rclpy,
@@ -228,7 +234,12 @@ class BagPlayback:
                 self._message_types[topic] = message_type
             if topic not in self._publishers:
                 qos = 10
-                if profiles and self._rosbag2_py is not None:
+                if topic_type in ('uv_msgs/msg/PerceptionCameraInfo', 'uv_msgs/msg/ModelClassMapping', 'sensor_msgs/msg/CameraInfo'):
+                    from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+                    qos = QoSProfile(depth=16, reliability=ReliabilityPolicy.RELIABLE,
+                                     durability=DurabilityPolicy.TRANSIENT_LOCAL)
+                if (profiles and self._rosbag2_py is not None
+                        and topic_type not in ('uv_msgs/msg/PerceptionCameraInfo', 'uv_msgs/msg/ModelClassMapping', 'sensor_msgs/msg/CameraInfo')):
                     try:
                         converted_qos = (
                             self._rosbag2_py
@@ -442,8 +453,11 @@ class BagPlayback:
             if raw_timestamp + self._time_offset_ns > target_ns:
                 break
             try:
-                message = self._deserialize_message(
-                    payload, self._message_types[topic])
+                if self._topic_types.get(topic) == 'uv_msgs/msg/DetectionArray':
+                    message = deserialize_detection(payload, self._deserialize_message,
+                                                    self._allow_legacy_detections)
+                else:
+                    message = self._deserialize_message(payload, self._message_types[topic])
                 self._publishers[topic].publish(message)
                 self._published_count += 1
                 published += 1
@@ -824,7 +838,7 @@ def _timeline_times(entries, fps: float) -> list[int]:
 
 
 class RawFrameVideo:
-    """Decode original PNG camera frames against their source timestamp index."""
+    """Decode JPEG or legacy PNG camera frames against their source timestamp index."""
 
     def __init__(self, directory: Path, fallback_fps: float):
         self.directory = directory

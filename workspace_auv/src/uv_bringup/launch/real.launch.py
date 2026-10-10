@@ -50,6 +50,8 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_stream', default_value='true'),
         DeclareLaunchArgument('enable_perception_gui', default_value='false'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
+        DeclareLaunchArgument('front_model_path', default_value='/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ6_aug.pt'),
+        DeclareLaunchArgument('down_model_path', default_value='/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ7_aug.pt'),
     ]
 
     manager_arguments = [
@@ -67,6 +69,8 @@ def generate_launch_description():
         '--enable-stream', LaunchConfiguration('enable_stream'),
         '--enable-perception-gui', LaunchConfiguration('enable_perception_gui'),
         '--camera-config-dir', LaunchConfiguration('camera_config_dir'),
+        '--front-model-path', LaunchConfiguration('front_model_path'),
+        '--down-model-path', LaunchConfiguration('down_model_path'),
         '--record-session', LaunchConfiguration('record_session'),
         '--record-root', LaunchConfiguration('record_root'),
         '--record-mode', LaunchConfiguration('record_mode'),

@@ -13,6 +13,7 @@ import time
 
 import cv2
 import numpy as np
+from uv_camera.perception_geometry import bind_detection_geometry, normalized_detection
 import rclpy
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
@@ -147,6 +148,8 @@ class FrontDownSearch:
         return frame is not None and self._now()-frame.received <= self.p['search_detection_timeout']
 
     def _detection_cb(self, message):
+        if not bind_detection_geometry(self.node, message):
+            return
         camera = str(message.camera_name).strip().lower()
         if camera not in self._latest:
             return
@@ -171,10 +174,7 @@ class FrontDownSearch:
             area = 1.0
             if camera.startswith('front_'):
                 try:
-                    calibration = self.node.camera_configs['front'].side(camera[len('front_'):])
-                    xy = cv2.undistortPoints(
-                        np.array([[[detection.pixel_x, detection.pixel_y]]], dtype=float),
-                        calibration.matrix, calibration.distortion).reshape(2)
+                    xy = normalized_detection(self.node, camera, detection)
                     extrinsic = self.node.camera_extrinsics[camera]
                     pose = self._pose()
                     rotation = _rotation(pose)

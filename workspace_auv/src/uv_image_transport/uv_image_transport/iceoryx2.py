@@ -3,23 +3,37 @@
 The official iceoryx2 PyO3 binding is used in-process. There is deliberately
 no subprocess, pipe, native bridge, DDS image topic, or private wire format
 here: the image payload stays in an iceoryx2 publish/subscribe sample until a
-consumer turns it into a NumPy frame.
+consumer copies its compressed payload and optionally decodes a NumPy frame.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import ctypes
+import logging
 import threading
+import time
 from typing import Any
 
 import numpy as np
+
+from .jpeg import jpeg_dimensions
 
 
 CAMERA_FRONT = 1
 CAMERA_DOWN = 2
 ENCODING_BGR8 = 1
+ENCODING_JPEG = 2
 _POLL_INTERVAL = 0.002
+_BAD_FRAME_LOG_TIMES = {}
+
+
+def warn_invalid_frame(service: str, error: Exception) -> None:
+    """Bound bad-frame diagnostics to one warning per service per 5 seconds."""
+    now = time.monotonic()
+    if now - _BAD_FRAME_LOG_TIMES.get(service, float('-inf')) >= 5.0:
+        _BAD_FRAME_LOG_TIMES[service] = now
+        logging.getLogger(__name__).warning('Discarding bad frame on %s: %s', service, error)
 
 
 class _IceoryxFrameHeader(ctypes.Structure):
@@ -44,6 +58,10 @@ class _IceoryxFrameHeader(ctypes.Structure):
 
 class Iceoryx2Error(RuntimeError):
     """Raised when the direct iceoryx2 Python binding cannot be used."""
+
+
+class InvalidFrameError(Iceoryx2Error):
+    """A bad sample that consumers may discard without stopping reception."""
 
 
 def _load_binding() -> Any:
@@ -82,16 +100,53 @@ class FramePacket:
     header: FrameHeader
     payload: bytes
 
-    def bgr(self) -> np.ndarray:
-        """Create a NumPy view-compatible array from a BGR8 payload."""
+    def validate(self) -> None:
+        """Validate the wire payload without decompressing JPEG pixels."""
         header = self.header
+        if header.width <= 0 or header.height <= 0:
+            raise InvalidFrameError(f'invalid frame dimensions: {header}')
+        if header.encoding == ENCODING_JPEG:
+            if header.stride != 0:
+                raise InvalidFrameError('JPEG stride must be zero')
+            try:
+                dimensions = jpeg_dimensions(self.payload)
+            except ValueError as error:
+                raise InvalidFrameError(str(error)) from error
+            if dimensions != (header.width, header.height):
+                raise InvalidFrameError(
+                    f'JPEG dimensions {dimensions} != {(header.width, header.height)}')
+        elif header.encoding == ENCODING_BGR8:
+            if header.stride < header.width * 3:
+                raise InvalidFrameError(f'invalid frame dimensions: {header}')
+            expected = header.height * header.stride
+            if len(self.payload) != expected:
+                raise InvalidFrameError(
+                    f'invalid payload length: {len(self.payload)} != {expected}')
+        else:
+            raise InvalidFrameError(f'unsupported frame encoding {header.encoding}')
+
+    def bgr(self) -> np.ndarray:
+        """Decode JPEG once, or create a NumPy view over a BGR8 payload."""
+        header = self.header
+        if header.encoding == ENCODING_JPEG:
+            self.validate()
+            import cv2
+            try:
+                image = cv2.imdecode(
+                    np.frombuffer(self.payload, dtype=np.uint8),
+                    cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+            except cv2.error as error:
+                raise InvalidFrameError(f'JPEG decode failed: {error}') from error
+            if image is None or image.shape != (header.height, header.width, 3):
+                raise InvalidFrameError('JPEG decode failed or dimensions do not match')
+            return image
         if header.encoding != ENCODING_BGR8:
-            raise Iceoryx2Error(
-                f'unsupported frame encoding {header.encoding}; expected BGR8')
+            raise InvalidFrameError(f'unsupported frame encoding {header.encoding}')
         required = header.height * header.stride
         if len(self.payload) < required:
-            raise Iceoryx2Error(
+            raise InvalidFrameError(
                 f'frame payload is short: {len(self.payload)} < {required}')
+        self.validate()
         raw = np.frombuffer(self.payload[:required], dtype=np.uint8)
         return raw.reshape(header.height, header.stride)[:, :header.width * 3].reshape(
             header.height, header.width, 3)
@@ -151,15 +206,9 @@ class Iceoryx2Reader:
                     header = _header_from_binding(
                         sample.user_header().contents)
                     payload = sample.payload().as_memory_view().tobytes()
-                    required = header.height * header.stride
-                    if header.width <= 0 or header.height <= 0 or header.stride < header.width * 3:
-                        raise Iceoryx2Error(
-                            f'invalid frame dimensions for {self.service}: {header}')
-                    if len(payload) != required:
-                        raise Iceoryx2Error(
-                            f'invalid payload length for {self.service}: '
-                            f'{len(payload)} != {required}')
-                    return FramePacket(header, payload)
+                    packet = FramePacket(header, payload)
+                    packet.validate()
+                    return packet
                 finally:
                     sample.delete()
             try:
@@ -195,7 +244,7 @@ class Iceoryx2Publisher:
         self._service = _new_service(self._node, self.service, self._iox2)
         self._publisher = (
             self._service.publisher_builder()
-            .initial_max_slice_len(2560 * 960 * 3)
+            .initial_max_slice_len(1024 * 1024)
             .allocation_strategy(self._iox2.AllocationStrategy.PowerOfTwo)
             .create()
         )
@@ -205,9 +254,7 @@ class Iceoryx2Publisher:
         if self._closed:
             raise Iceoryx2Error('iceoryx2 publisher is closed')
         data = bytes(payload)
-        expected = header.height * header.stride
-        if len(data) != expected:
-            raise Iceoryx2Error(f'payload size {len(data)} != {expected}')
+        FramePacket(header, data).validate()
         try:
             sample = self._publisher.loan_slice_uninit(len(data))
             native_header = sample.user_header().contents

@@ -1,4 +1,4 @@
-"""Standalone pure camera driver: acquisition, CameraInfo, iceoryx2 raw frames."""
+"""Standalone pure camera driver: acquisition, CameraInfo, iceoryx2 JPEG frames."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import threading
 import time
 from dataclasses import replace
 
-import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -16,8 +15,9 @@ from auv_protocol.topics import (
     CAMERA_HEALTH, ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT,
 )
 from uv_image_transport.iceoryx2 import (
-    CAMERA_DOWN, CAMERA_FRONT, FrameHeader, Iceoryx2Publisher,
+    CAMERA_DOWN, CAMERA_FRONT, ENCODING_JPEG, FrameHeader, Iceoryx2Publisher,
 )
+from uv_image_transport.jpeg import jpeg_dimensions
 
 from .camera_config import camera_mode_for_sim_mode, load_camera_config
 from .sensor import Sensor
@@ -90,7 +90,7 @@ class CameraDriver(Node):
                 publisher.close()
             raise
         self.get_logger().info(
-            'uv_camera started: two stitched raw services '
+            'uv_camera started: stitched JPEG services '
             'youlong/camera/front and youlong/camera/down')
         self._publish_camera_status()
 
@@ -100,13 +100,11 @@ class CameraDriver(Node):
         publisher = self._ice_publishers.get(camera)
         if publisher is None:
             return
-        image = np.ascontiguousarray(frame)
-        if image.ndim != 3 or image.shape[2] != 3:
-            self.get_logger().error(f'{camera} frame is not BGR8: {image.shape}')
+        try:
+            width, height = jpeg_dimensions(frame)
+        except ValueError as error:
+            self.get_logger().error(f'{camera} frame is not JPEG: {error}')
             return
-        with self._frame_health_lock:
-            self._camera_frame_count[camera] += 1
-            self._camera_last_frame_at[camera] = time.monotonic()
         with self._lock:
             self._capture_id += 1
             capture_id = self._capture_id
@@ -117,11 +115,14 @@ class CameraDriver(Node):
             timestamp_ns=timestamp_ns,
             stereo_pair_id=pair_id,
             camera_group=CAMERA_FRONT if camera == 'front' else CAMERA_DOWN,
-            width=int(image.shape[1]), height=int(image.shape[0]),
-            stride=int(image.strides[0]), camera_info_version=int(
+            width=width, height=height, stride=0, encoding=ENCODING_JPEG,
+            camera_info_version=int(
                 self.get_parameter('camera_info_version').value))
         try:
-            publisher.publish(header, image.tobytes())
+            publisher.publish(header, frame)
+            with self._frame_health_lock:
+                self._camera_frame_count[camera] += 1
+                self._camera_last_frame_at[camera] = time.monotonic()
         except Exception as error:
             self.get_logger().error(f'{camera} iceoryx2 publish failed: {error}')
 

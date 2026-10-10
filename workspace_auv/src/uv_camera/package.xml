@@ -3,7 +3,7 @@
 <package format="3">
   <name>uv_camera</name>
   <version>0.1.0</version>
-  <description>Pure camera acquisition, CameraInfo, and iceoryx2 raw image publisher.</description>
+  <description>Pure camera acquisition, CameraInfo, and iceoryx2 JPEG image publisher.</description>
   <maintainer email="origin@example.com">origin</maintainer>
   <license>GPL-3.0</license>
 
@@ -21,6 +21,7 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>libturbojpeg</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

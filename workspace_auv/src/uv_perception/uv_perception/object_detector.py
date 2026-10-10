@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 
 from std_msgs.msg import Int32MultiArray
+from sensor_msgs.msg import CameraInfo
+from uv_camera.image_geometry import EyeUndistorter, validate_info
 from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
 )
@@ -19,14 +21,19 @@ from auv_protocol.model_mapping import ModelClassRegistry
 from auv_protocol.topics import (
     ARUCO_IDS, ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT, LINES,
     MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, PERCEPTION_HEALTH,
+    FRONT_LEFT_INFO, FRONT_RIGHT_INFO, DOWN_LEFT_INFO, DOWN_RIGHT_INFO,
+    PERCEPTION_CAMERA_CALIBRATION,
 )
 from uv_msgs.msg import (
     Detection, DetectionArray, LineState, ModelClassMapping, SensorHealth,
+    PerceptionCameraInfo,
 )
 
 from .detector.yolo_detector import YoloDetector
 from .ring_orientation import estimate_ring_orientation
-from uv_image_transport.iceoryx2 import Iceoryx2Reader
+from uv_image_transport.iceoryx2 import (
+    Iceoryx2Reader, InvalidFrameError, warn_invalid_frame,
+)
 
 
 def _model_default() -> str:
@@ -114,16 +121,34 @@ class ObjectDetector:
         configured_model = str(
             node.declare_parameter('model_path', _model_default()).value or '').strip()
         model_path = configured_model or _model_default()
-        self._detector = None
-        if model_path and Path(model_path).is_file():
+        self._detectors = {}
+        self._model_errors = {}
+        self._model_paths = {}
+        for camera in ('front', 'down'):
+            path = str(node.declare_parameter(f'{camera}_model_path', '').value or '').strip() or model_path
+            self._model_paths[camera] = path
             try:
-                self._detector = YoloDetector(model_path, self.confidence, self.device)
-                node.get_logger().info(f'object_detector loaded YOLO model {model_path}')
+                if not path or not Path(path).is_file():
+                    raise ValueError(f'model does not exist: {path}')
+                self._detectors[camera] = YoloDetector(path, self.confidence, self.device)
+                node.get_logger().info(f'{camera} loaded YOLO model {path}')
             except Exception as error:
-                node.get_logger().error(f'cannot load YOLO model: {error}')
-        else:
-            node.get_logger().warning(
-                'object_detector has no model; it will publish empty detection arrays')
+                self._detectors[camera] = None
+                self._model_errors[camera] = str(error)
+                node.get_logger().error(f'{camera} cannot load YOLO model: {error}')
+        self._calibration_lock = threading.RLock()
+        self._source_infos = {}
+        self._undistorters = {}
+        self._published_calibrations = {}
+        self._last_warning = {}
+        self._model_valid = {'front': False, 'down': False}
+        self._calibration_publishers = {}
+        for name, topic in (('front_left', FRONT_LEFT_INFO), ('front_right', FRONT_RIGHT_INFO),
+                            ('down_left', DOWN_LEFT_INFO), ('down_right', DOWN_RIGHT_INFO)):
+            node.create_subscription(CameraInfo, topic,
+                                     lambda info, key=name: self._camera_info(key, info), mapping_qos)
+            self._calibration_publishers[name] = node.create_publisher(
+                PerceptionCameraInfo, PERCEPTION_CAMERA_CALIBRATION(name), mapping_qos)
         self._last_aruco_s = 0.0
         self._aruco_detector = self._make_aruco_detector()
         self._stop = threading.Event()
@@ -193,12 +218,90 @@ class ObjectDetector:
                 'gate_front', required=False)
             self._red_ring_class_id = registry.model_class_id(
                 'red_ring', required=False)
+            for camera, detector in self._detectors.items():
+                try:
+                    if detector is None:
+                        self._model_valid[camera] = False
+                        continue
+                    detector.validate_mapping(registry)
+                    self._model_valid[camera] = True
+                    self._model_errors.pop(camera, None)
+                except ValueError as error:
+                    self._model_valid[camera] = False
+                    self._model_errors[camera] = str(error)
+                    self.node.get_logger().error(f'{camera} model mapping mismatch: {error}')
             self._mapping_ready.set()
             self.node.get_logger().info(
                 'object_detector received model mapping {}'.format(registry.model))
         except Exception as error:
             self.node.get_logger().error(
                 'invalid model class mapping: {}'.format(error))
+
+    def _warn(self, key, text):
+        now = time.monotonic()
+        if now - self._last_warning.get(key, float('-inf')) >= 5.0:
+            self._last_warning[key] = now
+            self.node.get_logger().warning(text)
+
+    def _camera_info(self, name, info):
+        try:
+            validate_info(info)
+            with self._calibration_lock:
+                previous = self._source_infos.get(name)
+                self._source_infos[name] = info
+                if (previous is None or (previous.width, previous.height, list(previous.k), list(previous.d))
+                        != (info.width, info.height, list(info.k), list(info.d))):
+                    self._undistorters.pop(name, None)
+        except ValueError as error:
+            with self._calibration_lock:
+                self._source_infos.pop(name, None)
+                self._undistorters.pop(name, None)
+            self._warn(name, f'{name} invalid calibration: {error}')
+
+    def _correct_eyes(self, camera, packet, image):
+        half = image.shape[1] // 2
+        if image.shape[1] != half * 2:
+            raise ValueError('stitched image width must be even')
+        output = []
+        with self._calibration_lock:
+            for side, offset in (('left', 0), ('right', half)):
+                name = f'{camera}_{side}'
+                info = self._source_infos.get(name)
+                if info is None:
+                    raise ValueError(f'{name} calibration not received')
+                correction = self._undistorters.get(name)
+                version = int(packet.header.camera_info_version)
+                if correction is None or correction.version != version:
+                    correction = EyeUndistorter(info, version)
+                    self._undistorters[name] = correction
+                eye = correction.apply(image[:, offset:offset+half])
+                if self._published_calibrations.get(name) != correction.calibration_id:
+                    self._calibration_publishers[name].publish(correction.message(name))
+                    self._published_calibrations[name] = correction.calibration_id
+                output.append((side, eye, correction))
+        return output
+
+    def _filter_results(self, camera, image, results, polygons, correction=None):
+        kept, masks = [], []
+        registry = self._mapping_registry
+        height, width = image.shape[:2]
+        for index, result in enumerate(results):
+            class_id, confidence, box = result
+            entry = registry.class_info(class_id) if registry is not None else None
+            if entry is None or entry.camera not in (None, camera):
+                continue
+            values = np.asarray(box, dtype=float)
+            if (values.shape != (4,) or not np.all(np.isfinite(values))
+                    or not math.isfinite(confidence) or confidence < self.confidence
+                    or values[0] < 0 or values[1] < 0 or values[2] > width or values[3] > height
+                    or values[2] <= values[0] or values[3] <= values[1]):
+                continue
+            cx, cy = (values[:2] + values[2:]) * 0.5
+            if correction is not None and not correction.valid_point(cx, cy):
+                continue
+            kept.append(result)
+            masks.append(polygons[index] if index < len(polygons) else None)
+        return tuple(kept), tuple(masks)
 
     def _read_loop(self, camera, service):
         reader = None
@@ -207,20 +310,27 @@ class ObjectDetector:
             while not self._stop.is_set():
                 if not self._mapping_ready.wait(timeout=0.1):
                     continue
-                packet = reader.read()
-                if packet is None:
-                    return
-                image = packet.bgr()
-                if camera == 'front':
-                    self._publish_aruco(image)
-                half_width = image.shape[1] // 2
-                for side, offset in (('left', 0), ('right', half_width)):
-                    eye = image[:, offset:offset + half_width]
-                    if self._detector:
-                        results, polygons = self._detector.detect_with_masks(eye)
-                    else:
-                        results, polygons = (), ()
-                    self._publish(camera, side, packet, eye, results, polygons)
+                try:
+                    packet = reader.read()
+                    if packet is None:
+                        return
+                    if not self._model_valid[camera]:
+                        continue
+                    image = packet.bgr()
+                except InvalidFrameError as error:
+                    warn_invalid_frame(service, error)
+                    continue
+                try:
+                    eyes = self._correct_eyes(camera, packet, image)
+                    if camera == 'front':
+                        self._publish_aruco(np.hstack([eye for _, eye, _ in eyes]))
+                    for side, eye, correction in eyes:
+                        results, polygons = self._detectors[camera].detect_with_masks(eye)
+                        results, polygons = self._filter_results(camera, eye, results, polygons, correction)
+                        self._publish(camera, side, packet, eye, results, polygons, correction)
+                except (ValueError, cv2.error, RuntimeError) as error:
+                    self._warn(camera, f'{camera} perception frame discarded: {error}')
+                    continue
                 with self._frame_health_lock:
                     self._last_frame_at[camera] = time.monotonic()
         except Exception as error:
@@ -235,9 +345,13 @@ class ObjectDetector:
             last_frame = dict(self._last_frame_at)
         for camera in ('front', 'down'):
             age = now - last_frame[camera]
-            model_loaded = self._detector is not None
+            model_loaded = self._detectors[camera] is not None
+            mapping_valid = self._model_valid[camera]
+            with self._calibration_lock:
+                calibration_ready = all(f'{camera}_{side}' in self._source_infos
+                                        for side in ('left', 'right'))
             available = (
-                model_loaded and self._mapping_registry is not None
+                model_loaded and mapping_valid and self._mapping_registry is not None
                 and age <= 2.0)
             message = SensorHealth()
             message.header.stamp = self.node.get_clock().now().to_msg()
@@ -246,16 +360,22 @@ class ObjectDetector:
             message.quality = 1.0 if available else 0.0
             message.detail = (
                 f'model_loaded={model_loaded} frame_age={age:.2f}s '
-                f'mapping_ready={self._mapping_registry is not None}')
+                f'mapping_ready={mapping_valid} calibration_ready={calibration_ready} '
+                f'model={self._model_paths[camera]} '
+                f'error={self._model_errors.get(camera, "")}')
             self._health_pub.publish(message)
 
-    def _publish(self, camera, side, packet, image, results, polygons):
+    def _publish(self, camera, side, packet, image, results, polygons, correction=None):
         message = DetectionArray()
         message.header.stamp = _stamp(self.node, packet.header.timestamp_ns)
         message.header.frame_id = _camera_optical_frame(camera, side)
         message.camera_name = f'{camera}_{side}'
         message.capture_id = packet.header.capture_id
         message.stereo_pair_id = packet.header.stereo_pair_id
+        if correction is not None:
+            message.image_space = DetectionArray.IMAGE_UNDISTORTED
+            message.calibration_id = correction.calibration_id
+            message.camera_info_version = correction.version
         for index, (class_id, confidence, box) in enumerate(results):
             detection = Detection()
             detection.class_id = int(class_id)
@@ -272,6 +392,8 @@ class ObjectDetector:
             polygon = polygons[index] if index < len(polygons) else None
             self._set_gate_feature(detection, polygon, image)
             self._set_ring_orientation(detection, camera, image)
+            if correction is not None and not correction.valid_point(detection.feature_pixel_x, detection.feature_pixel_y):
+                continue
             message.detections.append(detection)
         self.publisher.publish(message)
         line = self._line_state(message, image, results, polygons)

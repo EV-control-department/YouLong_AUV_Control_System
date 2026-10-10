@@ -200,6 +200,10 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "release_repeat_count": int,
         "release_repeat_period": float,
         "release_settle_seconds": float,
+        "ring_release_angle_deg": float,
+        "ring_release_repeat_count": int,
+        "ring_release_repeat_period": float,
+        "ring_release_settle_seconds": float,
         "light_pulse_seconds": float,
         "light_gap_seconds": float,
         # Retain parsing compatibility for old task files. The drop task no
@@ -230,7 +234,11 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "down_epipolar_vertical_tolerance_fraction": float,
         "down_projection_depth_m": float,
         "down_visual_servo_gain": float,
-        "down_visual_servo_max_step_m": float,
+        "down_visual_servo_max_step_m": float,  # Legacy positional-servo input.
+        "down_visual_servo_max_speed_mps": float,
+        "down_depth_hold_gain": float,
+        "down_depth_hold_max_speed_mps": float,
+        "down_depth_hold_tolerance_m": float,
         "down_visual_servo_period": float,
         "down_visual_command_timeout": float,
         "light_hold_seconds": float,
@@ -242,6 +250,24 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
 # implementation detail (for example ``servo.timeout`` becomes
 # ``horizontal_servo_timeout``).  The resulting keys are still exactly the
 # names used by the existing task classes.
+TASK_SCHEMAS["26rb_grab_ball_ring"] = {
+    **{key: value for key, value in TASK_SCHEMAS["26rb_grab_golf"].items()
+       if key not in {"max_grab_retries", "search_cruise_depth_m",
+                      "ascent_speed_mps", "ascent_duration_seconds", "descent_duration_seconds"}},
+    "work_depth_m": float,
+    "golf_grab_depth_m": float, "ring_grab_depth_m": float,
+    "retry_depth_step_m": float, "descent_timeout": float,
+    "golf_max_attempts": int, "ring_max_attempts": int, "ring_class": str,
+    "ring_observe_seconds": float, "ring_orientation_timeout": float,
+    "ring_orientation_min_quality": float, "ring_orientation_min_samples": int,
+    "ring_orientation_spread_deg": float,
+    "ring_yaw_tolerance_deg": float, "ring_yaw_gain": float,
+    "ring_max_yaw_rate_deg_s": float,
+    "ring_open_angle_deg": float, "ring_close_angle_deg": float,
+    "ring_servo_repeat_count": int, "ring_servo_repeat_period": float,
+    "ring_servo_settle_seconds": float,
+}
+
 PARAMETER_ALIASES = {
     "26rb_hit_balls": {},
     "26rb_gate_task": GATE_ALIASES,
@@ -281,6 +307,10 @@ PARAMETER_ALIASES = {
         "release.repeat_count": "release_repeat_count",
         "release.repeat_period": "release_repeat_period",
         "release.settle_seconds": "release_settle_seconds",
+        "ring_release.angle_deg": "ring_release_angle_deg",
+        "ring_release.repeat_count": "ring_release_repeat_count",
+        "ring_release.repeat_period": "ring_release_repeat_period",
+        "ring_release.settle_seconds": "ring_release_settle_seconds",
         "light.pulse_seconds": "light_pulse_seconds",
         "light.gap_seconds": "light_gap_seconds",
         "target.timeout": "target_timeout",
@@ -302,6 +332,10 @@ PARAMETER_ALIASES = {
         "visual_servo.projection_depth_m": "down_projection_depth_m",
         "visual_servo.gain": "down_visual_servo_gain",
         "visual_servo.max_step_m": "down_visual_servo_max_step_m",
+        "visual_servo.max_speed_mps": "down_visual_servo_max_speed_mps",
+        "visual_servo.depth_gain": "down_depth_hold_gain",
+        "visual_servo.max_vertical_speed_mps": "down_depth_hold_max_speed_mps",
+        "visual_servo.depth_tolerance_m": "down_depth_hold_tolerance_m",
         "visual_servo.period": "down_visual_servo_period",
         "visual_servo.command_timeout": "down_visual_command_timeout",
         "light.color": "light_color",
@@ -320,6 +354,33 @@ def _read_yaml(path: Path) -> dict[str, Any]:
         raise ConfigError(f"{path}：根节点必须是 YAML 映射")
     return data
 
+
+PARAMETER_ALIASES["26rb_grab_ball_ring"] = {
+    **{key: value for key, value in PARAMETER_ALIASES["26rb_grab_golf"].items()
+       if value not in {"max_grab_retries", "ascent_speed_mps", "ascent_duration_seconds"}},
+    # Legacy YAML spelling maps to the same work-depth key; specifying both
+    # spellings is a duplicate configuration error, never two depth targets.
+    "search.cruise_depth_m": "work_depth_m",
+    "search_cruise_depth_m": "work_depth_m",
+    "golf.grab_depth_m": "golf_grab_depth_m", "ring.grab_depth_m": "ring_grab_depth_m",
+    "descent.retry_depth_step_m": "retry_depth_step_m",
+    "descent.timeout": "descent_timeout",
+    "descent.duration_seconds": "descent_timeout",  # Legacy spelling now means a timeout.
+    "descent_duration_seconds": "descent_timeout",
+    "golf.max_attempts": "golf_max_attempts", "ring.max_attempts": "ring_max_attempts",
+    "ring.class": "ring_class", "ring.observe_seconds": "ring_observe_seconds",
+    "ring.orientation_timeout": "ring_orientation_timeout",
+    "ring.orientation_min_quality": "ring_orientation_min_quality",
+    "ring.orientation_min_samples": "ring_orientation_min_samples",
+    "ring.orientation_spread_deg": "ring_orientation_spread_deg",
+    "ring.yaw_tolerance_deg": "ring_yaw_tolerance_deg", "ring.yaw_gain": "ring_yaw_gain",
+    "ring.max_yaw_rate_deg_s": "ring_max_yaw_rate_deg_s",
+    "ring.servo.open_angle_deg": "ring_open_angle_deg",
+    "ring.servo.close_angle_deg": "ring_close_angle_deg",
+    "ring.servo.repeat_count": "ring_servo_repeat_count",
+    "ring.servo.repeat_period": "ring_servo_repeat_period",
+    "ring.servo.settle_seconds": "ring_servo_settle_seconds",
+}
 
 def _flatten_params(
     value: dict[str, Any],
@@ -377,6 +438,8 @@ def _flatten_params(
 
 
 def _value_matches(value: Any, expected: Any) -> bool:
+    if isinstance(expected, tuple) and expected[0] is list:
+        return isinstance(value, list) and all(_value_matches(item, expected[1]) for item in value)
     if expected is float:
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     if expected is int:
@@ -395,7 +458,7 @@ def _type_name(expected: Any) -> str:
 
 
 def _validate_params(task_name: str, params: dict[str, Any],
-                     class_registry=None) -> dict[str, Any]:
+                     class_registry=None, *, complete=False) -> dict[str, Any]:
     if task_name not in TASK_SCHEMAS:
         raise ConfigError(f"未知任务：{task_name!r}")
     flattened = _flatten_params(
@@ -413,7 +476,7 @@ def _validate_params(task_name: str, params: dict[str, Any],
                 f"应为 {_type_name(expected)}")
     if task_name == "26rb_gate_task":
         try:
-            validate_gate_params(flattened)
+            validate_gate_params(flattened, complete=complete)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
     if task_name == "26rb_hit_balls":
@@ -433,17 +496,22 @@ def _validate_params(task_name: str, params: dict[str, Any],
             raise ConfigError(
                 "26rb_hit_balls.order 必须使用共享模型映射中的 "
                 "canonical impact-ball class name")
-    if task_name == "26rb_grab_golf":
+    if task_name in ("26rb_grab_golf", "26rb_grab_ball_ring"):
         try:
-            validate_search_params(flattened)
+            search_params = flattened
+            if task_name == "26rb_grab_ball_ring":
+                search_params = {**flattened, 'search_cruise_depth_m': flattened.get('work_depth_m', 0.2)}
+            validate_search_params(search_params)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
     if task_name == "26rb_drop_ball_target_rack":
         try:
             validate_drop_search_params(flattened)
+            from importlib import import_module
+            import_module('uv_task.26rb_drop_ball_target_rack').validate_ring_release_params(flattened)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
-    if task_name == "26rb_grab_golf" and "golf_color" in flattened:
+    if task_name in ("26rb_grab_golf", "26rb_grab_ball_ring") and "golf_color" in flattened:
         allowed = {"pink_golf", "yellow_golf"}
         if class_registry is not None:
             allowed &= {
@@ -454,6 +522,12 @@ def _validate_params(task_name: str, params: dict[str, Any],
             raise ConfigError(
                 "26rb_grab_golf.golf_color 必须为共享模型映射中的 "
                 "pink_golf 或 yellow_golf 高尔夫球类别")
+    if task_name == "26rb_grab_ball_ring":
+        from importlib import import_module
+        try:
+            import_module('uv_task.26rb_grab_ball_ring').validate_combined_params(flattened, complete=complete)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
     return flattened
 
 
@@ -500,7 +574,7 @@ def load_task(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
         raise ConfigError(f"{task_path}：params 必须是 YAML 映射")
 
     return [{"name": task_name, "params": _validate_params(
-        task_name, params, class_registry)}]
+        task_name, params, class_registry, complete=True)}]
 
 
 def load_mission(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
@@ -650,7 +724,7 @@ def load_mission(path: str | Path, class_registry=None) -> list[dict[str, Any]]:
         task = {
             "name": item["name"],
             "params": _validate_params(
-                item["name"], merged, class_registry),
+                item["name"], merged, class_registry, complete=True),
         }
         if item["initial_pose"] is not None:
             task["initial_pose"] = item["initial_pose"]

@@ -7,6 +7,7 @@ import time
 
 import cv2
 import numpy as np
+from uv_camera.perception_geometry import bind_detection_geometry, normalized_detection
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from auv_protocol.topics import PERCEPTION_DETECTIONS
 from uv_msgs.msg import DetectionArray
@@ -80,6 +81,8 @@ class FrontTargetObserver:
                            and f.sequence > after), key=lambda f: f.sequence)
 
     def _callback(self, msg):
+        if not bind_detection_geometry(self.node, msg):
+            return
         eye = str(msg.camera_name).strip().lower()
         if eye not in self.latest:
             return
@@ -101,10 +104,7 @@ class FrontTargetObserver:
                 self.latest[eye] = None
                 return
             try:
-                calibration = self.node.camera_configs['front'].side(eye[len('front_'):])
-                xy = cv2.undistortPoints(
-                    np.array([[[detection.pixel_x, detection.pixel_y]]], dtype=float),
-                    calibration.matrix, calibration.distortion).reshape(2)
+                xy = normalized_detection(self.node, eye, detection)
                 pose = tuple(float(x) for x in self.node._latest_robot_pose())
                 if len(pose) != 6 or not all(math.isfinite(x) for x in pose):
                     raise ValueError('实测位姿无效')

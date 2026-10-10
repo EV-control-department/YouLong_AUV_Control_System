@@ -34,6 +34,7 @@ RUN set -eux; \
         python3-pybind11 \
         libsdl2-dev \
         ffmpeg \
+        libturbojpeg0-dev \
         python3-numpy \
         python3-opencv \
         python3-pil \

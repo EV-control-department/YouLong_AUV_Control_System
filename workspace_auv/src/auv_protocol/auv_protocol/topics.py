@@ -187,3 +187,8 @@ LEGACY_TASK_RUN = '/task/run'
 LEGACY_TASK_STOP = '/task/stop'
 LEGACY_TASK_STATUS = '/task/status'
 LEGACY_TASK_EXECUTE = '/task/exec'
+
+
+def PERCEPTION_CAMERA_CALIBRATION(camera_channel):
+    """Versioned source/output calibration for one detector eye."""
+    return f'{ROOT}/perception/camera/{_camera_channel_path(camera_channel)}/calibration'

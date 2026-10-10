@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 import time
 
-import cv2
 import numpy as np
+from uv_camera.perception_geometry import normalized_detection
 
 
 def best_detection(message, class_id):
@@ -110,19 +110,9 @@ class DownCameraPriority:
         return self.active_camera, self.active_detection
 
 
-def normalized_image_error(node, camera_name, detection):
+def normalized_image_error(node, camera_name, detection, reference=None):
     """Remove K/skew/distortion from a single eye's detection centre."""
-    side = 'left' if camera_name == 'down_left' else 'right'
-    calibration = node.camera_configs['down'].side(side)
-    pixel = np.array([float(detection.pixel_x), float(detection.pixel_y), 1.0],
-                     dtype=np.float64)
-    normalized = np.linalg.solve(calibration.matrix, pixel)
-    point = (normalized[:2] / normalized[2]).reshape(1, 1, 2)
-    corrected = cv2.undistortPoints(
-        point, np.eye(3), calibration.distortion).reshape(2)
-    if not np.all(np.isfinite(corrected)):
-        raise ValueError('单目目标中心误差包含无效数值')
-    return float(corrected[0]), float(corrected[1])
+    return normalized_detection(node, camera_name, detection, reference)
 
 
 def body_image_step(camera, du, dv, scale_m, gain, max_step_m):

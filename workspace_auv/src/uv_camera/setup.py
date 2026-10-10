@@ -28,7 +28,7 @@ setup(
     zip_safe=True,
     maintainer='origin',
     maintainer_email='origin@example.com',
-    description='Camera acquisition, CameraInfo, and iceoryx2 raw image publisher',
+    description='Camera acquisition, CameraInfo, and iceoryx2 JPEG image publisher',
     license='GPL-3.0',
     tests_require=['pytest'],
     entry_points={

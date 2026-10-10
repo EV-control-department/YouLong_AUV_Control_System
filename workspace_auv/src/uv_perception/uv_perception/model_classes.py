@@ -17,7 +17,7 @@ except ImportError as error:  # pragma: no cover - exercised in bad installs
         "uv_perception requires PyYAML to load the shared model mapping") from error
 
 
-DEFAULT_MAPPING_FILENAME = "HQQ6_aug.yaml"
+DEFAULT_MAPPING_FILENAME = "HQQ7_aug.yaml"
 
 
 def _normalize_name(value) -> str:
@@ -81,6 +81,8 @@ def _load_mapping():
         entry["name"] = name
         entry["object"] = _normalize_name(entry.get("object", name))
         camera = _normalize_name(entry.get("camera", "any"))
+        if camera not in {"front", "down", "any"}:
+            raise ValueError("class camera must be front, down, or any")
         entry["camera"] = camera if camera in {"front", "down"} else None
         entry["multi_instance"] = bool(entry.get("multi_instance", False))
         entries[class_id] = entry

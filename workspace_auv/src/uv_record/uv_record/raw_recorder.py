@@ -1,4 +1,4 @@
-"""Losslessly record source BGR8 frames from the Iceoryx2 camera services."""
+"""Record JPEG payloads verbatim from the Iceoryx2 camera services."""
 
 from __future__ import annotations
 
@@ -12,10 +12,11 @@ import time
 from collections import deque
 from pathlib import Path
 
-import cv2
-
 from auv_protocol.topics import ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT
-from uv_image_transport.iceoryx2 import Iceoryx2Error, Iceoryx2Reader
+from uv_image_transport.iceoryx2 import (
+    ENCODING_JPEG, Iceoryx2Error, Iceoryx2Reader, InvalidFrameError,
+    warn_invalid_frame,
+)
 
 from .session import append_event
 
@@ -46,7 +47,7 @@ class RawFrameRecorder:
             camera: {
                 'samples': deque(maxlen=300),
                 'last': {},
-                'total_png_bytes': 0,
+                'total_jpeg_bytes': 0,
                 'active': None,
             }
             for camera in self.cameras
@@ -96,7 +97,15 @@ class RawFrameRecorder:
                     stage = 'reader_read'
                     self._set_active(camera, stage, frame_sequence)
                     read_started_ns = time.perf_counter_ns()
-                    packet = reader.read()
+                    try:
+                        packet = reader.read()
+                        if packet is not None:
+                            packet.validate()
+                            if packet.header.encoding != ENCODING_JPEG:
+                                raise InvalidFrameError('raw recording requires JPEG source frames')
+                    except InvalidFrameError as error:
+                        warn_invalid_frame(service, error)
+                        continue
                     receive_monotonic_ns = time.perf_counter_ns()
                     read_wait_ms = (receive_monotonic_ns - read_started_ns) / 1e6
                     if packet is None:
@@ -140,43 +149,34 @@ class RawFrameRecorder:
                         'capture_id_delta': capture_id_delta,
                         'stereo_pair_id_delta': stereo_pair_id_delta,
                     }
-                    stage = 'packet_to_bgr'
-                    self._set_active(camera, stage, frame_sequence)
-                    bgr_started_ns = time.perf_counter_ns()
-                    image = packet.bgr()
-                    bgr_ms = (time.perf_counter_ns() - bgr_started_ns) / 1e6
-                    current_probe['packet_to_bgr_ms'] = round(bgr_ms, 3)
                     # capture_id can restart when the camera producer restarts;
                     # use a session-local sequence for unique filenames and
                     # preserve the source capture_id separately in the index.
-                    filename = f'frame_{frame_sequence:020d}.png'
+                    filename = f'frame_{frame_sequence:020d}.jpg'
                     frame_path = camera_dir / filename
-                    stage = 'png_imwrite'
+                    stage = 'jpeg_write'
                     self._set_active(camera, stage, frame_sequence)
-                    png_started_ns = time.perf_counter_ns()
-                    write_ok = cv2.imwrite(
-                        str(frame_path), image,
-                        [cv2.IMWRITE_PNG_COMPRESSION, 1])
-                    png_write_ms = (time.perf_counter_ns() - png_started_ns) / 1e6
-                    current_probe['png_imwrite_ms'] = round(png_write_ms, 3)
-                    if not write_ok:
+                    write_started_ns = time.perf_counter_ns()
+                    written = frame_path.write_bytes(packet.payload)
+                    jpeg_write_ms = (time.perf_counter_ns() - write_started_ns) / 1e6
+                    current_probe['jpeg_write_ms'] = round(jpeg_write_ms, 3)
+                    if written != len(packet.payload):
                         raise OSError(f'failed to write {frame_path}')
                     receive_time_ns = time.time_ns()
-                    png_write_complete_unix_ns = receive_time_ns
-                    stage = 'png_stat'
+                    file_write_complete_unix_ns = receive_time_ns
+                    stage = 'jpeg_stat'
                     stat_started_ns = time.perf_counter_ns()
                     file_size_bytes = frame_path.stat().st_size
                     file_stat_ms = (time.perf_counter_ns() - stat_started_ns) / 1e6
                     current_probe = {
                         'frame_sequence': frame_sequence,
                         'camera_receive_unix_ns': camera_receive_unix_ns,
-                        'png_write_complete_unix_ns': png_write_complete_unix_ns,
+                        'file_write_complete_unix_ns': file_write_complete_unix_ns,
                         'reader_wait_ms': round(read_wait_ms, 3),
                         'reader_interarrival_ms': (
                             round(reader_interarrival_ms, 3)
                             if reader_interarrival_ms is not None else None),
-                        'packet_to_bgr_ms': round(bgr_ms, 3),
-                        'png_imwrite_ms': round(png_write_ms, 3),
+                        'jpeg_write_ms': round(jpeg_write_ms, 3),
                         'file_stat_ms': round(file_stat_ms, 3),
                         'source_interval_ms': (
                             round(source_interval_ms, 3)
@@ -199,10 +199,11 @@ class RawFrameRecorder:
                         'width': int(header.width),
                         'height': int(header.height),
                         'stride': int(header.stride),
-                        'encoding': 'BGR8',
+                        'encoding': 'JPEG',
+                        'format': 'jpeg',
                         'timestamp_aligned': timestamp_ns > 0,
                         'path': filename,
-                        'probe_version': 1,
+                        'probe_version': 2,
                         'probe': current_probe,
                     }
                     stage = 'index_write_flush'
@@ -230,14 +231,13 @@ class RawFrameRecorder:
                         timings = {
                             'reader_wait_ms': read_wait_ms,
                             'reader_interarrival_ms': reader_interarrival_ms,
-                            'packet_to_bgr_ms': bgr_ms,
-                            'png_imwrite_ms': png_write_ms,
+                            'jpeg_write_ms': jpeg_write_ms,
                             'file_stat_ms': file_stat_ms,
                             'index_write_flush_ms': index_write_flush_ms,
                             'index_fsync_ms': index_fsync_ms,
                         }
                         probe['samples'].append(timings)
-                        probe['total_png_bytes'] += file_size_bytes
+                        probe['total_jpeg_bytes'] += file_size_bytes
                         probe['last'] = {
                             'frame_sequence': frame_sequence,
                             'capture_id': capture_id,
@@ -249,7 +249,7 @@ class RawFrameRecorder:
                                 round(source_interval_ms, 3)
                                 if source_interval_ms is not None else None),
                             'camera_receive_unix_ns': camera_receive_unix_ns,
-                            'png_write_complete_unix_ns': png_write_complete_unix_ns,
+                            'file_write_complete_unix_ns': file_write_complete_unix_ns,
                             'file_size_bytes': file_size_bytes,
                             'timings_ms': {
                                 key: round(value, 3) if value is not None else None
@@ -311,7 +311,7 @@ class RawFrameRecorder:
                 camera: {
                     'samples': list(self.probes[camera]['samples']),
                     'last': dict(self.probes[camera]['last']),
-                    'total_png_bytes': self.probes[camera]['total_png_bytes'],
+                    'total_jpeg_bytes': self.probes[camera]['total_jpeg_bytes'],
                     'active': dict(self.probes[camera]['active'])
                     if self.probes[camera]['active'] else None,
                 }
@@ -322,8 +322,8 @@ class RawFrameRecorder:
         for camera, probe in probes.items():
             samples = probe['samples']
             fields = (
-                'reader_wait_ms', 'reader_interarrival_ms', 'packet_to_bgr_ms',
-                'png_imwrite_ms', 'file_stat_ms', 'index_write_flush_ms',
+                'reader_wait_ms', 'reader_interarrival_ms', 'jpeg_write_ms',
+                'file_stat_ms', 'index_write_flush_ms',
                 'index_fsync_ms',
             )
             rolling = {}
@@ -341,7 +341,7 @@ class RawFrameRecorder:
                     }
             diagnostics[camera] = {
                 'frames_written': counts[camera],
-                'total_png_bytes': probe['total_png_bytes'],
+                'total_jpeg_bytes': probe['total_jpeg_bytes'],
                 'window_frames': len(samples),
                 'last': probe['last'],
                 'last_300_frames_ms': rolling,
@@ -358,7 +358,7 @@ class RawFrameRecorder:
             'directory': 'camera/raw',
             'frames': counts,
             'unaligned_frames': unaligned,
-            'probe_version': 1,
+            'probe_version': 2,
             'diagnostics': diagnostics,
             'error_detail': error_detail,
             'timestamp_source': 'iceoryx2_frame_header',

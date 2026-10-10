@@ -67,6 +67,7 @@ from uv_task.arrow_surfacer import ArrowSurfacer
 # Such names cannot be used in a normal ``from package import module``
 # statement, so load them through importlib.
 RB26GrabGolfTask = import_module('uv_task.26rb_grab_golf').RB26GrabGolfTask
+RB26GrabBallRingTask = import_module('uv_task.26rb_grab_ball_ring').RB26GrabBallRingTask
 RB26GateTask = import_module('uv_task.26rb_gate_task').RB26GateTask
 RB26HitBallsTask = import_module('uv_task.26rb_hit_balls').RB26HitBallsTask
 RB26FindCollectionFrameTask = import_module(
@@ -77,6 +78,9 @@ RB26DropBeaconTask = import_module(
     'uv_task.26rb_drop_beacon').RB26DropBeaconTask
 from uv_task.line_follower import LineFollower
 from uv_camera.camera_tf import CameraExtrinsicsProvider, CameraExtrinsicsUnavailable
+from uv_camera.perception_geometry import (
+    TaskCameraGeometry, bind_detection_geometry, normalized_detection,
+)
 from uv_camera.camera_config import camera_mode_for_sim_mode, load_camera_config
 from auv_protocol.model_mapping import ModelClassRegistry
 
@@ -200,6 +204,7 @@ class TaskRunnerNode(Node):
             camera: load_camera_config(camera, camera_mode, camera_config_dir)
             for camera in ('front', 'down')
         }
+        self._detection_geometry = TaskCameraGeometry(self)
         self.camera_extrinsics_provider = CameraExtrinsicsProvider(
             self,
             base_frame=self.get_parameter('camera_base_frame').value,
@@ -273,6 +278,7 @@ class TaskRunnerNode(Node):
             '26rb_drop_ball_target_rack': self._task_drop_ball_target_rack,
             'grab_golf': self._task_grab_golf,
             '26rb_grab_golf': self._task_grab_golf,
+            '26rb_grab_ball_ring': self._task_grab_ball_ring,
             'drop_beacon': self._task_drop_beacon,
             '26rb_drop_beacon': self._task_drop_beacon,
             'take_water_sample': self._task_take_water_sample,
@@ -370,6 +376,8 @@ class TaskRunnerNode(Node):
             self.object_tracks = msg
 
     def _det_cb(self, msg: DetectionArray):
+        if not bind_detection_geometry(self, msg):
+            return
         camera_name = str(msg.camera_name).strip().lower()
         if camera_name not in ('down_left', 'down_right'):
             return
@@ -451,7 +459,7 @@ class TaskRunnerNode(Node):
         self.pub_servo.publish(msg)
         self.get_logger().info(
             f'⚙️  舵机：{label}（编号={msg.servo_id}，'
-            f'角度={angle_rad:.2f} rad）')
+            f'目标值={angle_rad:.2f}）')
 
     # ── 下视对齐工具 ───────────────────────────────────────────────
 
@@ -532,12 +540,9 @@ class TaskRunnerNode(Node):
         R = _euler_to_rotation_matrix(roll, pitch, yaw)
         rp = np.array([rx, ry, rz])
 
-        def _ray(px, py, off, optical_to_body):
-            vc = np.array([
-                (px - self._down_cx) / self._down_fx,
-                (py - self._down_cy) / self._down_fy,
-                1.0,
-            ])
+        def _ray(name, detection, off, optical_to_body):
+            xy = normalized_detection(self, name, detection)
+            vc = np.array([*xy, 1.0])
             vc /= np.linalg.norm(vc)
             vb = optical_to_body @ vc
             vw = R @ vb
@@ -545,10 +550,10 @@ class TaskRunnerNode(Node):
             return rp + R @ off, vw
 
         lo, ld_ray = _ray(
-            ld.pixel_x, ld.pixel_y, self._down_offset_left,
+            'down_left', ld, self._down_offset_left,
             self._down_optical_to_body)
         ro, rd_ray = _ray(
-            rd.pixel_x, rd.pixel_y, self._down_offset_right,
+            'down_right', rd, self._down_offset_right,
             self._down_optical_to_body_right)
         pos = _ray_intersection_midpoint(lo, ld_ray, ro, rd_ray)
         return (float(pos[0]), float(pos[1]), float(pos[2])) \
@@ -891,7 +896,8 @@ class TaskRunnerNode(Node):
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
                           quiet=False, task_context='', velocity_lease=0.0,
                           light_color=None, light_pattern=None,
-                          light_interval=1.0, cruise_speed=0.0, wait_deadline=None):
+                          light_interval=1.0, cruise_speed=0.0, wait_deadline=None,
+                          cancel_wait_timeout=0.0):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -925,6 +931,7 @@ class TaskRunnerNode(Node):
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
         self._last_motion_final_target = None
+        self._last_motion_cleanup_confirmed = True
         task_context = (str(task_context).strip() or self._format_motion_context(
             self._default_motion_purpose(cmd_type, axes)))
 
@@ -965,6 +972,7 @@ class TaskRunnerNode(Node):
         goal.cruise_speed = float(cruise_speed)
 
         send_future = self._action_client.send_goal_async(goal)
+        self._last_motion_cleanup_confirmed = False
         blink_colors = tuple(int(color) for color in (light_pattern or ()))
         blink_interval = max(0.05, float(light_interval))
         blink_index = 0
@@ -983,13 +991,53 @@ class TaskRunnerNode(Node):
                     blink_colors[blink_index], f'{type_name} 初始动作闪灯',
                     log=False)
 
+        def cancel_and_confirm(handle, result_future=None, cleanup_deadline=None):
+            try:
+                if not handle.accepted:
+                    return True
+                if result_future is None:
+                    result_future = handle.get_result_async()
+                if not result_future.done():
+                    handle.cancel_goal_async()
+                if cleanup_deadline is not None:
+                    while rclpy.ok() and not result_future.done() and time.monotonic() < cleanup_deadline:
+                        time.sleep(0.01)
+                # A cancel acknowledgement alone is not a terminal result.
+                if result_future.done():
+                    result_future.result()
+                    return True
+            except Exception:
+                pass
+            return False
+
         def cancel_late_goal(future):
             try:
+                # This callback may run on the executor: never block it.
                 handle = future.result()
                 if handle.accepted:
                     handle.cancel_goal_async()
             except Exception:
                 pass
+
+        def abandon_send():
+            if cancel_wait_timeout <= 0:
+                send_future.add_done_callback(cancel_late_goal)
+                return
+            cleanup_deadline = time.monotonic()+cancel_wait_timeout
+            while rclpy.ok() and not send_future.done() and time.monotonic() < cleanup_deadline:
+                time.sleep(0.01)
+            if send_future.done():
+                try:
+                    handle = send_future.result()
+                    self._active_goal_handle = handle if handle.accepted else None
+                    self._last_motion_cleanup_confirmed = cancel_and_confirm(
+                        handle, cleanup_deadline=cleanup_deadline)
+                    if self._last_motion_cleanup_confirmed:
+                        self._active_goal_handle = None
+                except Exception:
+                    self._last_motion_cleanup_confirmed = False
+            else:
+                send_future.add_done_callback(cancel_late_goal)
 
         def within_deadline():
             return wait_deadline is None or time.monotonic() < wait_deadline
@@ -998,7 +1046,7 @@ class TaskRunnerNode(Node):
             update_blink_light()
             time.sleep(0.01)
         if not rclpy.ok() or self.stopped:
-            send_future.add_done_callback(cancel_late_goal)
+            abandon_send()
             if not quiet:
                 self.get_logger().warn(f'动作目标被中断（stopped={self.stopped}）')
             self._last_motion_failure_kind = 'motion'
@@ -1006,7 +1054,7 @@ class TaskRunnerNode(Node):
             return False, '已停止'
         if not send_future.done():
             # Cancel a late acceptance too; a timed-out goal must not start later.
-            send_future.add_done_callback(cancel_late_goal)
+            abandon_send()
             self.get_logger().error('发送动作目标超时')
             self._last_motion_failure_kind = 'timeout'
             self._last_motion_failure_message = '发送动作目标超时'
@@ -1015,6 +1063,7 @@ class TaskRunnerNode(Node):
         goal_handle = send_future.result()
         self._active_goal_handle = goal_handle
         if not goal_handle.accepted:
+            self._last_motion_cleanup_confirmed = True
             self._active_goal_handle = None
             self.get_logger().error('动作目标被服务器拒绝')
             self._last_motion_failure_kind = 'motion'
@@ -1028,16 +1077,23 @@ class TaskRunnerNode(Node):
         while rclpy.ok() and not self.stopped and within_deadline() and not result_future.done():
             update_blink_light()
             time.sleep(0.01)
+        completed_in_time = result_future.done() and (cancel_wait_timeout <= 0 or within_deadline())
+        interrupted = not rclpy.ok() or self.stopped
         if not result_future.done():
-            goal_handle.cancel_goal_async()
-        self._active_goal_handle = None
-        if not rclpy.ok() or self.stopped:
+            self._last_motion_cleanup_confirmed = cancel_and_confirm(
+                goal_handle, result_future,
+                time.monotonic()+cancel_wait_timeout if cancel_wait_timeout > 0 else None)
+        else:
+            self._last_motion_cleanup_confirmed = True
+        if self._last_motion_cleanup_confirmed or cancel_wait_timeout <= 0:
+            self._active_goal_handle = None
+        if interrupted:
             if not quiet:
                 self.get_logger().warn(f'动作结果等待被中断（stopped={self.stopped}）')
             self._last_motion_failure_kind = 'motion'
             self._last_motion_failure_message = '已停止'
             return False, '已停止'
-        if not result_future.done():
+        if not completed_in_time:
             self.get_logger().error('等待动作结果超时')
             self._last_motion_failure_kind = 'timeout'
             self._last_motion_failure_message = '等待动作结果超时'
@@ -1066,7 +1122,8 @@ class TaskRunnerNode(Node):
                             yaw_rate_deg_s: float = 0.0,
                             *, lease_s: float = 0.25,
                             quiet: bool = True,
-                            task_context: str = '', light_color=None, wait_deadline=None):
+                            task_context: str = '', light_color=None, wait_deadline=None,
+                            cancel_wait_timeout=0.0):
         """Renew the BasicMotion body-velocity lease.
 
         Tasks deliberately do not construct or publish ``ZitSetpoint``
@@ -1078,7 +1135,8 @@ class TaskRunnerNode(Node):
             [forward_mps, lateral_mps, vertical_mps, yaw_rate_deg_s],
             axes='xyzrz', timeout=0.0, quiet=quiet,
             task_context=task_context, velocity_lease=lease_s,
-            light_color=light_color, wait_deadline=wait_deadline)
+            light_color=light_color, wait_deadline=wait_deadline,
+            cancel_wait_timeout=cancel_wait_timeout)
 
     # ========================================================================
     # Task implementations
@@ -1166,6 +1224,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], timeout=0)
         if success:
             self._cmd_x = self._cmd_y = self._cmd_z = self._cmd_yaw = 0.0
+            self.state.reset_pickup(start_xy=(0.0, 0.0))
         else:
             self.get_logger().error(f'START 执行失败：{msg}')
         return success
@@ -1640,12 +1699,14 @@ class TaskRunnerNode(Node):
         """Wrap a yaw command to the controller's conventional range."""
         return (float(value) + 180.0) % 360.0 - 180.0
 
-    def _latest_robot_pose(self):
-        """Return the latest measured odom pose, or the command pose fallback."""
+    def _latest_robot_pose(self, require_measured=False):
+        """Return measured odom; callers may explicitly disallow command fallback."""
         with self._perception_lock:
             pose = self._robot_pose
         if pose is not None and all(math.isfinite(float(value)) for value in pose):
             return tuple(float(value) for value in pose)
+        if require_measured:
+            raise ValueError('没有有效 odom 实测位姿')
         return (
             float(self._cmd_x), float(self._cmd_y), float(self._cmd_z),
             0.0, 0.0, float(self._cmd_yaw),
@@ -1901,6 +1962,9 @@ class TaskRunnerNode(Node):
     def _task_drop_ball_target_rack(self, p: dict) -> TaskOutcome:
         """从目标架上方开始视觉伺服，圆盘爪对准后释放球。"""
         return RB26DropBallTargetRackTask(self, p).execute()
+
+    def _task_grab_ball_ring(self, p: dict) -> TaskOutcome:
+        return RB26GrabBallRingTask(self, p).execute()
 
     def _task_grab_golf(self, p: dict) -> TaskOutcome:
         """使用左右下视相机竞争单目伺服，抓取指定颜色的高尔夫球并回位复检。"""

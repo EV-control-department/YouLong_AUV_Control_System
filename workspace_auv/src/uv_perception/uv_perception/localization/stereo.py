@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import math
+from uv_camera.image_geometry import normalized_pixel
 
 
 def camera_ray(info, pixel_x: float, pixel_y: float):
-    k = list(info.k)
-    fx, fy, cx, cy = float(k[0]), float(k[4]), float(k[2]), float(k[5])
-    if fx <= 0.0 or fy <= 0.0:
-        return (0.0, 0.0, 1.0)
-    x = (float(pixel_x) - cx) / fx
-    y = (float(pixel_y) - cy) / fy
+    x, y = normalized_pixel(info.k, getattr(info, 'd', ()), pixel_x, pixel_y)
     length = math.sqrt(x * x + y * y + 1.0)
     return (x / length, y / length, 1.0 / length)
 

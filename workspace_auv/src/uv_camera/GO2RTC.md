@@ -3,11 +3,12 @@
 当前像素数据不经过 ROS 2/DDS 图像话题，也不走旧的本地 MJPEG 相机服务器：
 
 ```text
-uv_camera.driver
+uv_camera.driver（真机 MJPG 无损旋转；仿真 BGR 编码 quality 95）
   └─ uv_image_transport (iceoryx2 Python API)
-       └─ iceoryx2: youlong/camera/front|down
-            ├─ uv_perception / uv_record 读取原始帧
-            └─ uv_stream/camera_streamer
+       └─ iceoryx2 JPEG: youlong/camera/front|down
+            ├─ uv_perception 解码一次 BGR 后切分左右眼
+            ├─ uv_record raw 直接写入逐帧 JPG
+            └─ uv_stream/camera_streamer（选帧后解码 JPEG）
                  └─ stdout MPEG-TS/H.264
                       └─ go2rtc exec
                            ├─ HTTP 播放器、API 和 WebRTC 信令 :1984
@@ -49,7 +50,7 @@ go2rtc 的 `/api/stream.mjpeg` 只输出 MJPEG/JPEG 编码源；本项目的 H.2
 默认无有效帧 5 秒后判定为掉线，每 1 秒重试一次，可通过
 `camera_startup_timeout_sec` 和 `camera_reconnect_interval_sec` 调整。
 
-raw 录制使用统一入口并直接保存 iceoryx2 源帧，不依赖推流：
+raw 录制使用统一入口并直接保存 iceoryx2 的 JPEG payload 为 JPG，不解码或重新编码，不依赖推流：
 
 ```bash
 ros2 launch uv_sim_bringup sim.launch.py \
@@ -87,3 +88,29 @@ YOULONG_RUNTIME=real ./scripts/compose_up.sh run --rm auv real \
 
 如果设备枚举不同，可以覆盖 `CAMERA_FRONT_DEVICE`、`CAMERA_DOWN_DEVICE` 和
 `HARDWARE_SERIAL_DEVICE`。
+
+## JPEG 采集及部署
+
+真机明确使用 OpenCV V4L2 + MJPG，并设置 `CAP_PROP_CONVERT_RGB=0`。
+读取的压缩帧先通过 libjpeg-turbo `tjTransform` 在 DCT 系数域旋转整幅图像 180°，
+恢复原有方向及左/右眼顺序，再以 JPEG 写入 Ice。每路工作线程复用自己的变换句柄，
+不生成 BGR，也不逐帧启动子进程。使用 `TJXOPT_PERFECT` 拒绝无法完整变换的 MCU
+边缘，不裁剪图像；移除 EXIF 等附加标记以避免查看器再次旋转。默认 2560×960 满足
+常见 JPEG MCU 的完整旋转要求。无效 JPEG、尺寸不符或旋转失败按单路掉线逻辑报告和重连。
+
+仿真在拼接 BGR 后编码一次 JPEG（quality 95），不旋转。感知及推流都在消费端解码；
+推流仍然编码为 MPEG-TS/H.264，网络侧的编码参数保持不变。主要优化的是 Ice 上的
+共享内存数据量及 raw 的 PNG 编码/写入开销，实际收益应在目标设备测量。
+
+Docker 已增加 `libturbojpeg0-dev`；直接运行真机节点时先安装该依赖：
+
+```bash
+sudo apt-get install libturbojpeg0-dev
+```
+
+Foxy/Python 3.8 与 Jazzy 共用稳定的 TurboJPEG 2.x C API。部署需重建镜像/包并
+统一重启相机、感知、录制、推流及 go2rtc exec 消费进程，避免旧消费者收到 JPEG。
+
+## 感知去畸变与推流坐标
+
+相机继续发布方向修正后的原始 JPEG，不执行全图去畸变。感知解码后按每眼 K/D 校正；普通流和 raw JPG 保留原图，标注流用相同标定校正底图后叠框。详见 [感知链路说明](../uv_perception/README.md)。

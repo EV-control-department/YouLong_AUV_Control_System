@@ -14,13 +14,15 @@ from rclpy.qos import (
     QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy,
 )
 from auv_protocol.model_mapping import ModelClassRegistry
+from uv_camera.image_geometry import CalibrationCache
 from auv_protocol.topics import (
     DOWN_LEFT_INFO, DOWN_RIGHT_INFO, FRONT_LEFT_INFO, FRONT_RIGHT_INFO,
     MEASUREMENTS, MODEL_CLASS_MAPPING, PERCEPTION_DETECTIONS, STATE_ODOM, STATE_RESET_RESULT,
+    PERCEPTION_CAMERA_CALIBRATION,
 )
 from sensor_msgs.msg import CameraInfo
 from uv_msgs.msg import (
-    StateResetResult, PoseInfo,
+    StateResetResult, PoseInfo, PerceptionCameraInfo,
     DetectionArray, ModelClassMapping, ObjectMeasurement, ObjectMeasurementArray,
 )
 
@@ -69,6 +71,7 @@ class ObjectLocalizer:
         self._last_cleared_generation = None
         self._origin_ready = True
         self._infos = {}
+        self._calibrations = CalibrationCache()
         self._warned_tf_frames = set()
         # Distinguish IDs produced by separate localizer process lifetimes.
         self._id_prefix = (uuid.uuid4().int >> 96) & 0xffffffff
@@ -92,6 +95,9 @@ class ObjectLocalizer:
             node.create_subscription(CameraInfo, topic,
                                      lambda message, key=name: self._info(key, message),
                                      info_qos)
+        for name in ('front_left', 'front_right', 'down_left', 'down_right'):
+            node.create_subscription(PerceptionCameraInfo, PERCEPTION_CAMERA_CALIBRATION(name),
+                                     self._calibration, info_qos)
         node.create_subscription(DetectionArray, PERCEPTION_DETECTIONS,
                                  self._detections, 10)
         node.create_subscription(
@@ -110,6 +116,12 @@ class ObjectLocalizer:
     def _info(self, name, message):
         with self._lock:
             self._infos[name] = message
+
+    def _calibration(self, message):
+        try:
+            self._calibrations.add(message)
+        except ValueError as error:
+            self.node.get_logger().error(f'invalid perception calibration: {error}')
 
     def _origin_state_callback(self, message):
         self._origin_ready = bool(message.origin_initialized)
@@ -218,6 +230,11 @@ class ObjectLocalizer:
         rays_by_camera = {}
         for camera_name, message in messages.items():
             info = infos.get(camera_name)
+            calibrations = getattr(self, '_calibrations', None)
+            if calibrations is not None:
+                info = calibrations.resolve(message, info)
+            elif int(getattr(message, 'image_space', 0)) != 0:
+                info = None
             ids = pending.detection_ids.get(camera_name, [])
             camera_rays = []
             for index in self._eligible(message, info):

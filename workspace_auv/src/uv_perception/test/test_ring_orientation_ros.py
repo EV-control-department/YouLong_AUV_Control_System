@@ -14,10 +14,11 @@ from auv_protocol.topics import PERCEPTION_DETECTIONS
 from test_ring_orientation import line_image, angular_error
 
 
-def test_orientation_fields_cross_real_ros_transport():
+def test_orientation_fields_cross_real_ros_transport(monkeypatch):
     # Separate from any vehicle's default domain; synthetic image only.
     context = Context()
-    context.init(args=[], domain_id=185)
+    monkeypatch.setenv('ROS_DOMAIN_ID', '185')
+    context.init(args=[])
     node = None
     executor = None
     try:

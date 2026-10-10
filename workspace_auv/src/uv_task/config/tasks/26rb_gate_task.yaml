@@ -1,17 +1,21 @@
-# 每个门: 定深 -> 观察/扫视 -> 对准 -> 横移 -> 再观察对准 -> 记录水平射线
-# -> 面积控制 -> 最终 yaw 伺服 -> BLINE。z 正方向向下，角度/角速度为度。
-# depth.front / lateral.front 按四个门的顺序填写（米）。横移正值为起点机体 y。
-# 面积百分比 = 裁剪到单目图像内的 bbox 面积 / 单目画面面积 * 100。
-# 切目保留横移进度与固定射线；释放后只允许新帧竞争优先权。
-# 最终 yaw 达到最长时限后，只要观测有效，按实测航向继续；不是对准失败。
-# pass.speed_mps 必须 0 < speed < 0.18，与 BasicMotion BLINE 接口一致。
+# 每门: BTRAVEL + SET -> 观察/完整左右扫视 -> 固定目标对正 -> 高度伺服 -> BLINE。
+# z 正向向下；yaw/角速度为度/度每秒；高度百分比使用单目画面高度。
 task: 26rb_gate_task
 params:
   gate_count: 1
-  timeout: 720.0
+  timeout: 720.0  # 单门总时限，下一门重新计时。
+  max_failures: 1  # 允许失败后跳到下一门的次数；最后一门失败仍返回失败。
+  observation:
+    poses: [[1.5, -2.0, 0.2, 0.0]]  # odom 绝对 [x,y,z,yaw]；数量等于 gate_count。
+    travel_timeout: 60.0
+    set_timeout: 20.0
+  tracking:
+    confirm_frames: 3
+    max_center_distance_fraction: 0.12
+    max_height_ratio: 1.5
+    ambiguity_margin: 0.15
   # 门深：米；kp 输出 m/s，容限米。
   depth:
-    front: [0.2, 0.2, 0.2, 0.2]
     set_timeout: 10.0
     kp: 0.8
     max_speed_mps: 0.12
@@ -19,14 +23,12 @@ params:
   # 观察/超时/灯光均为秒，转向角度为度，角速度为度/秒。
   search:
     observe_seconds: 2.0
-    start_offset_deg: -30.0
-    sweep_degrees: [60.0, 120.0, 180.0]
+    scan_angle_deg: 90.0  # 右扫 -> SET 返回观测位姿 -> 左扫，途中见框也完成搜索。
     yaw_rate_deg_s: 10.0
     timeout: 60.0
     detection_timeout: 1.5
     min_confidence: 0.02
     min_bbox_pixels: 12.0
-    lock_center_delta_fraction: 0.35
     lock_bearing_tolerance_deg: 20.0
     priority_release_seconds: 2.0
     reacquire_timeout: 10.0
@@ -45,21 +47,21 @@ params:
     timeout: 40.0
     path_kp: 0.5
     max_path_speed_mps: 0.03
-  # 面积容限单位为“百分点”，位移米，速度 m/s；不使用视觉高度。
+  # 高度容限为百分点，目标 70±1%；保持本门巡游深度。
   fore_aft:
-    target_area_percent: 70.0
-    area_tolerance_percent: 1.0
+    target_height_percent: 70.0
+    height_tolerance_percent: 1.0
     stable_seconds: 0.5
     speed_mps: 0.1
     reverse_speed_mps: 0.08
-    area_kp: 0.4
+    height_kp: 0.4
     line_kp: 0.5
     max_cross_speed_mps: 0.03
     line_tolerance_m: 0.03
     max_travel_m: 4.0
     timeout: 90.0
     observe_seconds: 1.0
-  # 双目配对时间秒、射线距离米；最终 yaw 达到 3 秒仍有框即可过门。
+  # 双目配对时间秒、射线距离米；最终 yaw 超时未稳定则失败。
   pass:
     yaw_servo_min_seconds: 1.0
     yaw_servo_max_seconds: 3.0

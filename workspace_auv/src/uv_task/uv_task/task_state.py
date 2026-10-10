@@ -18,7 +18,9 @@ messages, estimate drift, or change an already running controller goal.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from threading import RLock
+from uv_task.pickup_progress import PickupProgress
 from typing import Iterable
 
 
@@ -51,6 +53,7 @@ class TaskState:
     def __init__(self, bias: Iterable[float] = (0.0, 0.0, 0.0, 0.0)):
         self._lock = RLock()
         self._bias = (0.0, 0.0, 0.0, 0.0)
+        self._pickup = PickupProgress()
         self.set_bias(bias)
 
     @property
@@ -106,3 +109,30 @@ class TaskState:
     def task_vector_to_odom(self, values: Iterable[float]) -> tuple[float, ...]:
         """Inverse world-vector mapping; body-frame commands use no bias."""
         return self._map(values, inverse=True, translation=False)
+
+
+    @property
+    def pickup(self) -> PickupProgress:
+        """Immutable raw-odom frame anchor, attempt counters and pickup results."""
+        with self._lock:
+            return self._pickup
+
+    def reset_pickup(self, start_xy=None) -> None:
+        with self._lock:
+            origin = self._pickup.start_xy if start_xy is None else _finite_values(start_xy, (2,), '出发点')
+            self._pickup = PickupProgress(start_xy=origin)
+
+    def update_pickup(self, **values) -> None:
+        for key in ('frame_pose', 'golf_camera_pose', 'ring_camera_pose'):
+            if key in values and values[key] is not None:
+                values[key] = _finite_values(values[key], (4,), key)
+        if 'depth' in values:
+            values['depth'] = _finite_values((values['depth'], 0.0, 0.0), (3,), '抓取深度')[0]
+        for key in ('golf_attempts', 'ring_attempts'):
+            if key in values and (isinstance(values[key], bool) or not isinstance(values[key], int) or values[key] < 0):
+                raise ValueError(key+'必须是非负整数')
+        for key in ('golf_status', 'ring_status'):
+            if key in values and values[key] not in ('pending', 'success', 'failed'):
+                raise ValueError(key+'状态无效')
+        with self._lock:
+            self._pickup = replace(self._pickup, **values)

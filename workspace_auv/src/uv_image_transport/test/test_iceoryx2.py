@@ -8,11 +8,13 @@ from uv_image_transport import (
     CAMERA_DOWN,
     CAMERA_FRONT,
     ENCODING_BGR8,
+    ENCODING_JPEG,
     FrameHeader,
     FramePacket,
     Iceoryx2Error,
     Iceoryx2Publisher,
     Iceoryx2Reader,
+    InvalidFrameError,
 )
 from uv_image_transport import iceoryx2 as transport
 
@@ -24,6 +26,7 @@ def test_shared_header_abi_and_binding_mapping():
     assert CAMERA_FRONT == 1
     assert CAMERA_DOWN == 2
     assert ENCODING_BGR8 == 1
+    assert ENCODING_JPEG == 2
     assert fields == [
         'capture_id', 'timestamp_ns', 'stereo_pair_id', 'camera_group',
         'width', 'height', 'stride', 'encoding', 'camera_info_version',
@@ -212,3 +215,87 @@ def test_reader_and_publisher_lifecycle(monkeypatch):
     publisher.close()
     with pytest.raises(Iceoryx2Error, match='publisher is closed'):
         publisher.publish(FrameHeader(0, 0, 0, CAMERA_FRONT, 1, 1, 3), b'123')
+
+
+def jpeg_packet(image=None):
+    import cv2
+    if image is None:
+        image = np.zeros((16, 32, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode('.jpg', image)
+    assert ok
+    header = FrameHeader(1, 2, 3, CAMERA_FRONT, image.shape[1], image.shape[0],
+                         0, encoding=ENCODING_JPEG)
+    return FramePacket(header, encoded.tobytes())
+
+
+def test_jpeg_decode_and_variable_length_reader(monkeypatch):
+    import cv2
+    images = [np.zeros((16, 32, 3), dtype=np.uint8),
+              np.random.default_rng(7).integers(0, 256, (16, 32, 3), dtype=np.uint8)]
+    packets = [jpeg_packet(image) for image in images]
+    assert len(packets[0].payload) != len(packets[1].payload)
+    for packet in packets:
+        native = _native_header(width=32, height=16, stride=0)
+        native.encoding = ENCODING_JPEG
+        sample = _Sample(native, packet.payload)
+        with _make_reader(monkeypatch, sample) as reader:
+            received = reader.read()
+        np.testing.assert_array_equal(
+            received.bgr(), cv2.imdecode(np.frombuffer(packet.payload, np.uint8), cv2.IMREAD_COLOR))
+        assert received.payload == packet.payload
+        assert sample.deleted
+
+
+def test_jpeg_validation_and_decoder_failures(monkeypatch):
+    from dataclasses import replace
+    import cv2
+    packet = jpeg_packet()
+    for invalid in (
+        FramePacket(packet.header, packet.payload[:-2]),
+        FramePacket(replace(packet.header, stride=96), packet.payload),
+        FramePacket(replace(packet.header, width=31), packet.payload),
+        FramePacket(packet.header, b'\xff\xd8\xff\xe0\xff\xff\xff\xd9'),
+    ):
+        with pytest.raises(InvalidFrameError):
+            invalid.validate()
+    monkeypatch.setattr(cv2, 'imdecode', lambda *_args: None)
+    with pytest.raises(InvalidFrameError, match='decode failed'):
+        packet.bgr()
+
+
+def test_publisher_copies_exact_jpeg_and_rejects_bad_payload():
+    packet = jpeg_packet()
+    native = transport._IceoryxFrameHeader()
+    buffer = (ctypes.c_uint8 * len(packet.payload))()
+    sent = []
+
+    class Loan:
+        payload_ptr = ctypes.addressof(buffer)
+
+        def user_header(self):
+            return SimpleNamespace(contents=native)
+
+        def assume_init(self):
+            return self
+
+        def send(self):
+            sent.append(True)
+
+    publisher = Iceoryx2Publisher.__new__(Iceoryx2Publisher)
+    publisher._closed = False
+    publisher.service = 'camera/test'
+    sizes = []
+
+    def loan(size):
+        sizes.append(size)
+        return Loan()
+
+    publisher._publisher = SimpleNamespace(loan_slice_uninit=loan)
+    publisher.publish(packet.header, packet.payload)
+    assert bytes(buffer) == packet.payload
+    assert sizes == [len(packet.payload)]
+    assert sent == [True]
+    assert transport._header_from_binding(native) == packet.header
+    with pytest.raises(InvalidFrameError):
+        publisher.publish(packet.header, packet.payload[:-1])
+    assert len(sent) == 1

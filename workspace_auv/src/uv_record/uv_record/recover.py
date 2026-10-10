@@ -54,7 +54,7 @@ def _rewrite_jsonl(path: Path, keep_record) -> bool:
 
 
 def recover_raw_camera(directory: Path) -> bool:
-    """Keep only raw frame index entries whose PNG files are complete."""
+    """Keep only raw frame index entries whose JPEG or legacy PNG files are complete."""
     index = directory / 'frames.jsonl'
     if not index.is_file():
         return False
@@ -67,6 +67,9 @@ def recover_raw_camera(directory: Path) -> bool:
         try:
             if frame.stat().st_size <= 0 or int(record.get('timestamp_ns', -1)) < 0:
                 return False
+            if frame.suffix.lower() in ('.jpg', '.jpeg'):
+                from uv_image_transport.jpeg import jpeg_dimensions
+                jpeg_dimensions(frame.read_bytes())
             image = cv2.imread(str(frame), cv2.IMREAD_COLOR)
             if image is None:
                 return False
@@ -112,7 +115,7 @@ def recover_one(session_dir: Path) -> bool:
     syncer = SegmentSyncer(
         directories + raw_directories + [session_dir / 'bag'],
         patterns=(
-            '*.ts', '*.mjpg', '*.png', '*.jsonl', '*.mcap', '*.db3',
+            '*.ts', '*.mjpg', '*.jpg', '*.jpeg', '*.png', '*.jsonl', '*.mcap', '*.db3',
             'metadata.yaml'),
     )
     syncer.sync_all()

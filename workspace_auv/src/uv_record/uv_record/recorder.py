@@ -723,11 +723,17 @@ class Recorder:
                  self._bag_record_help},
             camera_raw=({
                 'directory': 'camera/raw',
-                'format': 'png',
+                'format': 'jpeg',
                 'frame_index': 'frames.jsonl',
                 'timestamp_source': 'iceoryx2_frame_header',
-                'probe_version': 1,
+                'probe_version': 2,
             } if self.record_mode == 'raw' else {}),
+            perception={
+                'detection_schema_version': 2,
+                'detection_image_space': 'undistorted',
+                'raw_image_space': 'distorted',
+                'calibration_topic_pattern': '/auv/perception/camera/*/*/calibration',
+            },
             recorder={
                 'pid': os.getpid(),
                 'topic_regex': self._bag_topic_regex(),

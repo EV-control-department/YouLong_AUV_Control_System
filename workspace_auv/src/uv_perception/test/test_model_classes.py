@@ -43,6 +43,6 @@ def test_semantic_colour_aliases_are_not_in_the_shared_mapping():
 
 
 def test_mapping_and_weights_are_owned_by_uv_perception():
-    assert MODEL_MAPPING_PATH.name == "robotcup20260901.yaml"
+    assert MODEL_MAPPING_PATH.name == "HQQ7_aug.yaml"
     assert MODEL_MAPPING_PATH.is_file()
-    assert (MODEL_MAPPING_PATH.parent / "robotcup20260901.pt").is_file()
+    assert (MODEL_MAPPING_PATH.parent / "HQQ7_aug.pt").is_file()

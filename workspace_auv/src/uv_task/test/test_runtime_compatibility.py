@@ -189,3 +189,19 @@ def test_task_launch_description_loads():
 
     launch = runpy.run_path(str(ROOT / 'launch/task_launch.py'))
     assert isinstance(launch['generate_launch_description'](), LaunchDescription)
+
+
+@pytest.mark.parametrize('configured_angle, expected_angle', [(None, 90.0), (45.0, 45.0)])
+def test_rack_release_publishes_degree_value_without_radian_conversion(configured_angle, expected_angle):
+    from uv_task.task_runner import TaskRunnerNode
+    task_class = importlib.import_module('uv_task.26rb_drop_ball_target_rack').RB26DropBallTargetRackTask
+    messages, waits = [], []
+    node = NS(stopped=False, pub_servo=NS(publish=messages.append),
+              get_logger=lambda: NS(info=lambda message: None))
+    node.set_servo = lambda *args, **kwargs: TaskRunnerNode.set_servo(node, *args, **kwargs)
+    params = {} if configured_angle is None else {'release_angle_deg': configured_angle}
+    task = task_class(node, params)
+    task._sleep = lambda seconds: waits.append(seconds) or True
+    assert task._release_ball()
+    assert [(msg.servo_id, msg.angle) for msg in messages] == [(1, expected_angle)]*3
+    assert waits == [.1, .1, 1.0]

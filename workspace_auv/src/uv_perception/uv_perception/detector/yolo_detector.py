@@ -13,6 +13,15 @@ class YoloDetector:
         self.confidence = float(confidence)
         self.device = str(device or '')
 
+    def validate_mapping(self, registry):
+        names = self.model.names
+        names = dict(enumerate(names)) if isinstance(names, (list, tuple)) else names
+        expected = {entry.id: entry.name for entry in registry.entries}
+        normalize = lambda value: str(value).strip().lower().replace('-', '_').replace(' ', '_')
+        actual = {int(key): normalize(value) for key, value in names.items()}
+        if not expected or actual != expected:
+            raise ValueError(f'weight labels {actual} do not match shared mapping {expected}')
+
     def detect(self, image):
         """Return the legacy box tuples while preserving the simple API."""
         return self.detect_with_masks(image)[0]

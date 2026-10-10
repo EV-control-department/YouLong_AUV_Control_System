@@ -1,7 +1,7 @@
 """Camera frame source for Stonefish simulation or real V4L2 cameras.
 
 The camera driver selects a source through parameters, then hands each
-stitched BGR frame to its acquisition callback.
+stitched JPEG frame to its acquisition callback.
 """
 
 import threading
@@ -12,6 +12,8 @@ import numpy as np
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from .sim_shm import SimStereoShmSource
+from .jpeg_transform import JpegRotator
+from uv_image_transport.jpeg import jpeg_dimensions
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import Header
 
@@ -27,6 +29,18 @@ def normalize_frame(frame):
     if frame.shape[2] == 4:
         return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
     return frame
+
+
+def capture_jpeg(frame, resolution):
+    """Copy the actual V4L2 byte vector without decoding or re-encoding."""
+    if (not isinstance(frame, np.ndarray) or frame.dtype != np.uint8
+            or frame.size == 0 or frame.ndim not in (1, 2)
+            or (frame.ndim == 2 and 1 not in frame.shape)):
+        raise ValueError('camera did not return a raw MJPEG byte vector')
+    payload = frame.tobytes()
+    if jpeg_dimensions(payload) != tuple(resolution):
+        raise ValueError('camera JPEG dimensions do not match capture resolution')
+    return payload
 
 
 class Sensor:
@@ -184,12 +198,15 @@ class Sensor:
             side_config = config.side(side)
             info.k = side_config.matrix.reshape(-1).tolist()
             info.d = side_config.distortion.tolist()
+            info.distortion_model = ('rational_polynomial' if len(info.d) > 5 else 'plumb_bob')
+            info.r = np.eye(3).reshape(-1).tolist()
+            info.p = np.column_stack((side_config.matrix, np.zeros(3))).reshape(-1).tolist()
             info_publisher.publish(info)
         self._published_info_cameras.add(camera)
 
     @staticmethod
     def _open_cap(path, res):
-        cap = cv2.VideoCapture(path)
+        cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
         # These properties are honored by V4L2/GStreamer builds that expose
         # them. Unsupported backends simply ignore the setting.
         for property_name in ('CAP_PROP_OPEN_TIMEOUT_MSEC',
@@ -201,9 +218,17 @@ class Sensor:
                 except cv2.error:
                     pass
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        if not cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG')):
+            cap.release()
+            raise RuntimeError('camera does not support MJPG capture')
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, res[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res[1])
+        if not cap.set(cv2.CAP_PROP_CONVERT_RGB, 0):
+            cap.release()
+            raise RuntimeError('V4L2 backend cannot disable MJPEG decoding')
+        if int(cap.get(cv2.CAP_PROP_FOURCC)) != cv2.VideoWriter_fourcc(*'MJPG'):
+            cap.release()
+            raise RuntimeError('camera negotiated a format other than MJPG')
         return cap
 
     def _probe_first_frame(self, cap, camera, path):
@@ -215,9 +240,11 @@ class Sensor:
             attempts += 1
             ret, frame = cap.read()
             if ret:
-                normalized = normalize_frame(frame)
-                if normalized is not None:
-                    return normalized
+                try:
+                    capture_jpeg(frame, self._camera_configs[camera].capture_resolution)
+                    return frame
+                except ValueError:
+                    pass
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     f'{camera} camera opened but produced no valid frame '
@@ -234,7 +261,9 @@ class Sensor:
         failure_started = None
         last_failure_log = 0.0
         failure_reported = False
+        rotator = None
         try:
+            rotator = JpegRotator()
             while not self._capture_stop.is_set():
                 if cap is None:
                     try:
@@ -344,7 +373,13 @@ class Sensor:
                             min(0.5, 0.01 * (2 ** read_failures)))
                     continue
 
-                normalized = normalize_frame(current)
+                try:
+                    normalized = rotator.rotate_180(capture_jpeg(current, resolution))
+                    if jpeg_dimensions(normalized) != tuple(resolution):
+                        raise ValueError('rotated JPEG dimensions changed')
+                except ValueError as error:
+                    normalized = None
+                    frame_error = str(error)
                 if normalized is None:
                     now = time.monotonic()
                     if failure_started is None:
@@ -352,7 +387,7 @@ class Sensor:
                     if now - last_failure_log >= 5.0:
                         self.node.get_logger().error(
                             f'Invalid frame from {camera} camera '
-                            f'(path={path})')
+                            f'(path={path}): {frame_error}')
                         last_failure_log = now
                     if (not failure_reported
                             and now - failure_started >= self._startup_timeout_s):
@@ -384,7 +419,7 @@ class Sensor:
                     failure_reported = False
                     last_failure_log = 0.0
                 read_failures = 0
-                # hand the latest normalized capture directly to the camera driver
+                # The corrected JPEG remains compressed through the publisher.
                 stamp = self.node.get_clock().now().to_msg()
                 self._publish_real_sensor_frame(camera, normalized, stamp)
                 self._submit_frame(camera, normalized, stamp)
@@ -392,6 +427,8 @@ class Sensor:
             self._report_camera_failure(
                 camera, f'capture loop stopped unexpectedly: {error} (path={path})')
         finally:
+            if rotator is not None:
+                rotator.close()
             if cap is not None:
                 try:
                     cap.release()
@@ -419,10 +456,14 @@ class Sensor:
 
     def _submit_frame(self, camera, frame, stamp, right_stamp=None,
                       stereo_pair_id=0):
-        if camera in ('front', 'down') and not self._sim_mode:
-            # Rotate the full stereo frame so each eye is corrected and the
-            # reversed input eye order is restored to left-then-right.
-            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        if self._sim_mode:
+            image = normalize_frame(frame)
+            if image is None:
+                raise ValueError('invalid simulator BGR frame')
+            ok, encoded = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            if not ok:
+                raise ValueError('simulator JPEG encoding failed')
+            frame = encoded.tobytes()
         self._frame_callback(
             camera, frame, stamp, right_stamp=right_stamp,
             stereo_pair_id=stereo_pair_id)

@@ -10,6 +10,7 @@ import threading
 import time
 
 import numpy as np
+from uv_camera.perception_geometry import bind_detection_geometry, normalized_detection
 
 from uv_msgs.action import BasicMotion
 from uv_msgs.msg import Detection, DetectionArray, PoseInfo
@@ -149,6 +150,8 @@ class ArrowSurfacer:
     # ── 感知回调 ──────────────────────────────────────────────────────
 
     def _det_cb(self, msg: DetectionArray):
+        if not bind_detection_geometry(self._node, msg):
+            return
         camera_name = str(msg.camera_name).strip().lower()
         if camera_name not in ('down_left', 'down_right'):
             return
@@ -219,10 +222,11 @@ class ArrowSurfacer:
     def _pixel_to_world_ray(self, px: float, py: float,
                              offset: np.ndarray, R_robot: np.ndarray,
                              robot_pos: np.ndarray,
-                             optical_to_body: np.ndarray):
+                             optical_to_body: np.ndarray, normalized=None):
         """像素坐标 → 世界系射线 (origin, direction)。"""
-        v_cam = np.array([(px - self._down_cx) / self._down_fx,
-                          (py - self._down_cy) / self._down_fy, 1.0])
+        xy = normalized if normalized is not None else (
+            (px - self._down_cx) / self._down_fx, (py - self._down_cy) / self._down_fy)
+        v_cam = np.array([*xy, 1.0])
         v_cam = v_cam / np.linalg.norm(v_cam)
         v_body = optical_to_body @ v_cam
         v_world = R_robot @ v_body
@@ -245,11 +249,11 @@ class ArrowSurfacer:
         l_origin, l_dir = self._pixel_to_world_ray(
             left_det.pixel_x, left_det.pixel_y,
             self._down_offset_left, R_robot, robot_pos,
-            self._down_optical_to_body)
+            self._down_optical_to_body, normalized_detection(self._node, 'down_left', left_det))
         r_origin, r_dir = self._pixel_to_world_ray(
             right_det.pixel_x, right_det.pixel_y,
             self._down_offset_right, R_robot, robot_pos,
-            self._down_optical_to_body_right)
+            self._down_optical_to_body_right, normalized_detection(self._node, 'down_right', right_det))
 
         pos = _ray_intersection_midpoint(l_origin, l_dir, r_origin, r_dir)
         if pos is None:

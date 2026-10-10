@@ -14,6 +14,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AuvState.msg"
   "msg/Detection.msg"
   "msg/DetectionArray.msg"
+  "msg/LegacyDetectionArray.msg"
+  "msg/PerceptionCameraInfo.msg"
   "msg/ObjectMeasurement.msg"
   "msg/ObjectMeasurementArray.msg"
   "msg/ObjectTrack.msg"

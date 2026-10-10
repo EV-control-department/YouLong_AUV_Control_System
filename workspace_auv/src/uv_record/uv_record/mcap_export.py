@@ -129,7 +129,7 @@ def _bag_topics(rosbag2_py, paths: list[Path]) -> dict:
     return topics
 
 
-def _bag_records(rosbag2_py, paths: list[Path]):
+def _bag_records(rosbag2_py, paths: list[Path], topic_specs=None, allow_legacy=True):
     last_timestamp = 0
     timestamp_offset = 0
     for path in paths:
@@ -137,6 +137,10 @@ def _bag_records(rosbag2_py, paths: list[Path]):
         try:
             while reader.has_next():
                 topic, serialized, timestamp = reader.read_next()
+                if topic_specs and topic_specs.get(str(topic), {}).get('type') == 'uv_msgs/msg/DetectionArray':
+                    from rclpy.serialization import deserialize_message, serialize_message
+                    from .detection_compat import deserialize_detection
+                    serialized = serialize_message(deserialize_detection(serialized, deserialize_message, allow_legacy))
                 timestamp = int(timestamp) + timestamp_offset
                 if timestamp < last_timestamp:
                     timestamp_offset += last_timestamp + 1 - timestamp
@@ -194,9 +198,10 @@ def _camera_records(
             except OSError:
                 continue
             metadata = dict(record)
-            metadata['format'] = 'png'
+            image_format = 'jpeg' if filename.suffix.lower() in ('.jpg', '.jpeg') else 'png'
+            metadata['format'] = image_format
             timestamp = times[index] if index < len(times) else 0
-            yield from emit(timestamp, image_data, 'png', metadata)
+            yield from emit(timestamp, image_data, image_format, metadata)
         return
 
     if kind == 'jpeg':
@@ -299,6 +304,11 @@ def export_session_mcap(
     if output_path.exists():
         raise FileExistsError('refusing to overwrite {}'.format(output_path))
     bag_paths = _bag_part_paths(session_root / 'bag')
+    try:
+        manifest = json.loads((session_root / 'manifest.json').read_text())
+    except (OSError, ValueError):
+        manifest = {}
+    allow_legacy = manifest.get('perception', {}).get('detection_schema_version', 1) < 2
     sources = _camera_sources(session_root, record_mode)
     bag_topics = _bag_topics(rosbag2_py, bag_paths) if bag_paths else {}
     topic_specs = dict(bag_topics)
@@ -338,7 +348,7 @@ def export_session_mcap(
 
         streams = []
         if bag_paths:
-            streams.append(_bag_records(rosbag2_py, bag_paths))
+            streams.append(_bag_records(rosbag2_py, bag_paths, bag_topics, allow_legacy))
         for source, _image_topic, _metadata_topic, _segment_topic in source_topics:
             streams.append(_camera_records(
                 source, fps, segment_duration, serialize_message))

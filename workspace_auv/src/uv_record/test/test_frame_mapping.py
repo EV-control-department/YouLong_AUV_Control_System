@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
+
+from uv_image_transport import ENCODING_JPEG, FrameHeader, FramePacket
 
 from uv_record.frame_mapping import FrameMappingSubscriber
 from uv_record.mjpeg_proxy import (
@@ -74,12 +77,10 @@ def test_unmatched_pts_does_not_substitute_receive_time():
 
 
 def test_raw_recorder_writes_header_timestamp_and_camera_metadata(tmp_path, monkeypatch):
-    packet = SimpleNamespace(
-        header=SimpleNamespace(
-            timestamp_ns=4_321_000_000, capture_id=42, stereo_pair_id=40,
-            camera_info_version=7, width=2, height=1, stride=6),
-        bgr=lambda: np.zeros((1, 2, 3), dtype=np.uint8),
-    )
+    encoded = cv2.imencode('.jpg', np.zeros((16, 32, 3), dtype=np.uint8))[1].tobytes()
+    packet = FramePacket(
+        FrameHeader(42, 4_321_000_000, 40, 1, 32, 16, 0,
+                    encoding=ENCODING_JPEG, camera_info_version=7), encoded)
 
     class Reader:
         def __init__(self, _service):
@@ -92,7 +93,9 @@ def test_raw_recorder_writes_header_timestamp_and_camera_metadata(tmp_path, monk
             pass
 
     monkeypatch.setattr('uv_record.raw_recorder.Iceoryx2Reader', Reader)
-    monkeypatch.setattr(cv2, 'imwrite', lambda *_args, **_kwargs: True)
+    for function in ('imwrite', 'imencode', 'imdecode'):
+        monkeypatch.setattr(cv2, function, lambda *_a, **_k: pytest.fail('raw used a pixel codec'))
+    monkeypatch.setattr(FramePacket, 'bgr', lambda *_: pytest.fail('raw decoded BGR'))
     recorder = RawFrameRecorder(tmp_path, cameras=('front',))
     recorder.start()
     recorder.threads[0].join(timeout=2.0)
@@ -105,12 +108,19 @@ def test_raw_recorder_writes_header_timestamp_and_camera_metadata(tmp_path, monk
     assert item['timestamp_ns'] == 4_321_000_000
     assert item['capture_id'] == 42
     assert item['frame_sequence'] == 0
-    assert item['path'] == 'frame_00000000000000000000.png'
+    assert item['path'] == 'frame_00000000000000000000.jpg'
     assert items[1]['capture_id'] == 42
-    assert items[1]['path'] == 'frame_00000000000000000001.png'
+    assert items[1]['path'] == 'frame_00000000000000000001.jpg'
     assert item['stereo_pair_id'] == 40
     assert item['camera_info_version'] == 7
-    assert item['stride'] == 6
+    assert item['stride'] == 0
+    assert item['encoding'] == 'JPEG'
+    assert item['probe_version'] == 2
+    assert (index.parent / item['path']).read_bytes() == encoded
+    assert recorder.error is None
+    assert 'jpeg_write_ms' in item['probe']
+    assert 'packet_to_bgr_ms' not in item['probe']
+    assert recorder.snapshot()['diagnostics']['front']['total_jpeg_bytes'] == 2 * len(encoded)
     assert item['timestamp_aligned'] is True
 
 
@@ -135,6 +145,70 @@ def test_raw_player_normalizes_source_clock_reset(tmp_path):
     assert video._times_ns == [1_000_000_000, 1_100_000_000, 1_200_000_000]
     assert video.read_to_ns(1_200_000_000) is not None
     video.close()
+
+
+def test_jpeg_raw_player_and_legacy_png_mcap_formats(tmp_path):
+    import json
+    from uv_record.mcap_export import _camera_records, _camera_sources
+    directory = tmp_path / 'camera' / 'raw' / 'front'
+    directory.mkdir(parents=True)
+    image = np.zeros((16, 32, 3), np.uint8)
+    image[:, :16] = (200, 20, 10)
+    records = []
+    for index, extension in enumerate(('jpg', 'png', 'jpg')):
+        name = f'frame_{index}.{extension}'
+        assert cv2.imwrite(str(directory / name), image)
+        records.append({'path': name, 'timestamp_ns': (100, 200, 10)[index],
+                        'timestamp_epoch': int(index == 2), 'capture_id': index})
+    (directory / 'frames.jsonl').write_text(''.join(json.dumps(x) + '\n' for x in records))
+    video = RawFrameVideo(directory, 10)
+    assert video._times_ns[-1] > video._times_ns[-2]
+    frame = video.read_to_ns(video._times_ns[-1])
+    assert frame.shape == image.shape
+    assert frame[8, 4, 0] > frame[8, 20, 0] + 150
+    source, = _camera_sources(tmp_path, 'raw')
+    emitted = list(_camera_records(source, 10, 2, lambda message: message))
+    images = [message for _, topic, message in emitted if topic.endswith('/compressed')]
+    assert [message.format for message in images] == ['jpeg', 'png', 'jpeg']
+    for record, message in zip(records, images):
+        assert bytes(message.data) == (directory / record['path']).read_bytes()
+    metadata = [json.loads(message.data) for _, topic, message in emitted
+                if topic.endswith('/frame_metadata')]
+    assert [item['capture_id'] for item in metadata] == [0, 1, 2]
+    assert [item['format'] for item in metadata] == ['jpeg', 'png', 'jpeg']
+
+
+def test_raw_discards_bad_jpeg_and_preserves_clock_reset(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from uv_image_transport import InvalidFrameError
+    import json
+    payload = cv2.imencode('.jpg', np.zeros((16, 32, 3), np.uint8))[1].tobytes()
+    first = FramePacket(FrameHeader(9, 1_000_000_000, 8, 1, 32, 16, 0,
+                                    encoding=ENCODING_JPEG), payload)
+    reset = FramePacket(replace(first.header, capture_id=1, stereo_pair_id=1,
+                                timestamp_ns=100_000_000), payload)
+    values = iter([InvalidFrameError('bad transport sample'),
+                   FramePacket(first.header, payload[:-2]), first, reset, None])
+
+    def read():
+        value = next(values)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    reader = SimpleNamespace(read=read, close=lambda: None)
+    monkeypatch.setattr('uv_record.raw_recorder.Iceoryx2Reader', lambda _: reader)
+    recorder = RawFrameRecorder(tmp_path, cameras=('front',))
+    recorder.start()
+    recorder.threads[0].join(timeout=2)
+    assert recorder.stop()
+    assert recorder.error is None
+    index = tmp_path / 'camera/raw/front/frames.jsonl'
+    items = [json.loads(line) for line in index.read_text().splitlines()]
+    assert [item['timestamp_epoch'] for item in items] == [0, 1]
+    assert [item['capture_id'] for item in items] == [9, 1]
+    assert [item['frame_sequence'] for item in items] == [0, 1]
+    assert all((index.parent / item['path']).read_bytes() == payload for item in items)
 
 
 def test_recorded_stream_choice_is_exclusive():

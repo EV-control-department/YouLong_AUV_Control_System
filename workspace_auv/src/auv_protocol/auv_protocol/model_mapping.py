@@ -42,6 +42,8 @@ class ModelClassRegistry:
             object_name = (str(object_name or name).strip().lower()
                            .replace('-', '_').replace(' ', '_'))
             camera = str(camera or '').strip().lower() or None
+            if camera == 'any':
+                camera = None
             if class_id < 0 or class_id in seen_ids or not name or name in seen_names:
                 raise ValueError('model class mapping contains duplicate or invalid entries')
             if camera not in (None, 'front', 'down'):

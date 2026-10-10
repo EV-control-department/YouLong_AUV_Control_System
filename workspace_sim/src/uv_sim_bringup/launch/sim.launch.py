@@ -175,6 +175,8 @@ def generate_launch_description():
     })
     perception = _include('uv_perception', 'perception_launch.py', {
         'confidence': LaunchConfiguration('ai_confidence'),
+        'front_model_path': LaunchConfiguration('front_model_path'),
+        'down_model_path': LaunchConfiguration('down_model_path'),
         'enable_gui': enable_perception_gui,
     }, condition=IfCondition(enable_ai))
     stream = _include(
@@ -258,6 +260,8 @@ def generate_launch_description():
         DeclareLaunchArgument('usbl_outlier_probability', default_value='0.0'),
         DeclareLaunchArgument('usbl_outlier_stddev', default_value='0.0'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
+        DeclareLaunchArgument('front_model_path', default_value=''),
+        DeclareLaunchArgument('down_model_path', default_value=''),
         configure_simulator_gpu_environment(gpu, gpu_backend),
         LogInfo(msg=['Simulation profile: ', profile]),
         prepare_scene(

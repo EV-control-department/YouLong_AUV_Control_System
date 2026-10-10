@@ -13,6 +13,8 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_localizer', default_value='true'),
         DeclareLaunchArgument('enable_estimator', default_value='true'),
         DeclareLaunchArgument('model_path', default_value=''),
+        DeclareLaunchArgument('front_model_path', default_value='/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ6_aug.pt'),
+        DeclareLaunchArgument('down_model_path', default_value='/home/doc049/dev/UUV/YouLong_AUV_Control_System/workspace_auv/src/uv_perception/weights/HQQ7_aug.pt'),
         DeclareLaunchArgument('confidence', default_value='0.5'),
         DeclareLaunchArgument('world_frame', default_value='odom'),
         DeclareLaunchArgument('edge_margin_px', default_value='8.0'),
@@ -45,6 +47,8 @@ def generate_launch_description():
             name='object_detector', output='both', respawn=True,
             respawn_delay=1.0, parameters=[{
                 'model_path': LaunchConfiguration('model_path'),
+                'front_model_path': LaunchConfiguration('front_model_path'),
+                'down_model_path': LaunchConfiguration('down_model_path'),
                 'confidence': LaunchConfiguration('confidence'),
             }], condition=IfCondition(LaunchConfiguration('enable_detector'))),
         Node(

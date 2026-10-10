@@ -696,10 +696,14 @@ class RealStartupManager(Node):
                         'latched perception model mapping')
             perception_args = [
                 'confidence:=0.8', 'enable_gui:=false',
+                f'front_model_path:={self.args.front_model_path}',
+                f'down_model_path:={self.args.down_model_path}',
             ]
             for name, switch, node_name, params in (
                 ('object_detector', 'enable_detector', '/object_detector',
-                 {'confidence': 0.8}),
+                 {'confidence': 0.8,
+                  'front_model_path': self.args.front_model_path,
+                  'down_model_path': self.args.down_model_path}),
                 ('object_localizer', 'enable_localizer', '/object_localizer',
                  {'world_frame': 'odom'}),
                 ('object_estimator', 'enable_estimator', '/object_estimator',
@@ -1092,6 +1096,8 @@ def _parse_args(argv=None):
         parser.add_argument('--' + name.replace('_', '-'),
                             default=str(default).lower())
     parser.add_argument('--camera-config-dir', default='')
+    parser.add_argument('--front-model-path', default='')
+    parser.add_argument('--down-model-path', default='')
     parser.add_argument('--record-root', default=str(Path.home() / 'auv_recordings'))
     parser.add_argument('--record-mode', default='raw')
     parser.add_argument('--go2rtc-stream-mode', default='unannotated')

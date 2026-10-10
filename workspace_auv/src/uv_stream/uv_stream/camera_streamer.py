@@ -7,7 +7,7 @@ small ROS semantic data and is used only for the optional annotated overlay.
 
 from __future__ import annotations
 
-from collections import deque
+from collections import deque, OrderedDict
 from dataclasses import dataclass
 import argparse
 import os
@@ -23,12 +23,15 @@ import numpy as np
 
 from auv_protocol.topics import (
     ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT, PERCEPTION_DETECTIONS,
-    STREAM_FRAME_INFO,
+    STREAM_FRAME_INFO, PERCEPTION_CAMERA_CALIBRATION,
 )
 from uv_image_transport.iceoryx2 import (
-    FramePacket, Iceoryx2Error, Iceoryx2Reader,
+    FramePacket, Iceoryx2Error, Iceoryx2Reader, InvalidFrameError,
+    warn_invalid_frame,
 )
 
+
+from uv_camera.image_geometry import CalibrationCache, EyeUndistorter
 
 from .stream_geometry import (
     DISPLAY_HEIGHT, DISPLAY_WIDTH, resize_stitched_bgr, scale_detection_box,
@@ -46,6 +49,9 @@ class CachedFrame:
     stereo_pair_id: int
     timestamp_ns: int
     arrival_monotonic_ns: int
+    camera: str = ''
+    calibration_ids: tuple = (0, 0)
+    image_space: int = 0
 
 
 @dataclass(frozen=True)
@@ -55,12 +61,16 @@ class DetectionBatch:
     stereo_pair_id: int
     timestamp_ns: int
     detections: tuple
+    image_space: int = 0
+    calibration_id: int = 0
+    camera_info_version: int = 0
 
 
 class DetectionCache:
     """Thread-safe bounded detection metadata cache."""
 
-    def __init__(self):
+    def __init__(self, camera=None):
+        self.camera = camera
         self._lock = threading.Lock()
         self._batches: deque[DetectionBatch] = deque(maxlen=256)
 
@@ -75,28 +85,47 @@ class DetectionCache:
             stereo_pair_id=int(getattr(message, 'stereo_pair_id', 0)),
             timestamp_ns=timestamp_ns,
             detections=tuple(getattr(message, 'detections', ())),
+            image_space=int(getattr(message, 'image_space', 0)),
+            calibration_id=int(getattr(message, 'calibration_id', 0)),
+            camera_info_version=int(getattr(message, 'camera_info_version', 0)),
         )
-        if not batch.camera_name:
+        if not batch.camera_name or (self.camera and not batch.camera_name.startswith(self.camera + '_')):
             return
         with self._lock:
             self._batches.append(batch)
 
-    def for_frame(self, frame: CachedFrame) -> tuple:
-        """Return exact metadata, falling back to a nearby frame only."""
+    def clear(self):
+        with self._lock:
+            self._batches.clear()
+
+    def for_frame_batches(self, frame: CachedFrame):
         with self._lock:
             batches = tuple(self._batches)
-        exact = [batch for batch in batches
-                 if batch.camera_name and batch.capture_id == frame.capture_id
-                 and batch.stereo_pair_id == frame.stereo_pair_id]
-        if exact:
-            return tuple(detection for batch in exact for detection in batch.detections)
-        nearby = [batch for batch in batches
-                  if batch.camera_name and batch.stereo_pair_id == frame.stereo_pair_id
-                  and abs(batch.timestamp_ns - frame.timestamp_ns) <= OVERLAY_WINDOW_NS]
-        if not nearby:
-            return ()
-        best = min(nearby, key=lambda batch: abs(batch.timestamp_ns - frame.timestamp_ns))
-        return tuple(best.detections)
+        def compatible(batch):
+            if frame.camera and not batch.camera_name.startswith(frame.camera + '_'):
+                return False
+            if batch.image_space != frame.image_space:
+                return False
+            side = 1 if batch.camera_name.endswith('_right') else 0
+            return (frame.image_space == 0
+                    or batch.calibration_id == frame.calibration_ids[side])
+        batches = [batch for batch in batches if compatible(batch)]
+        selected = []
+        for side in ('left', 'right'):
+            candidates = [batch for batch in batches if batch.camera_name.endswith('_' + side)]
+            exact = [batch for batch in candidates if batch.capture_id == frame.capture_id
+                     and batch.stereo_pair_id == frame.stereo_pair_id
+                     and batch.timestamp_ns == frame.timestamp_ns]
+            nearby = exact or [batch for batch in candidates
+                               if batch.stereo_pair_id == frame.stereo_pair_id
+                               and abs(batch.timestamp_ns - frame.timestamp_ns) <= OVERLAY_WINDOW_NS]
+            if nearby:
+                selected.append(min(nearby, key=lambda item: abs(item.timestamp_ns - frame.timestamp_ns)))
+        return tuple(selected)
+
+    def for_frame(self, frame: CachedFrame) -> tuple:
+        return tuple(detection for batch in self.for_frame_batches(frame)
+                     for detection in batch.detections)
 
 
 class StreamMetadataBridge:
@@ -114,13 +143,17 @@ class StreamMetadataBridge:
         self.stream_instance_id = stream_instance_id
         self.timestamp_epoch = 0
         self.last_source_timestamp_ns = None
-        self.detection_cache = DetectionCache()
+        self.detection_cache = DetectionCache(camera)
+        self.calibrations = CalibrationCache()
+        self._corrections = OrderedDict()
+        self._last_calibration_warning = float('-inf')
         try:
             import rclpy
             from rclpy.executors import SingleThreadedExecutor
             from rclpy.qos import (
                 QoSProfile, ReliabilityPolicy, qos_profile_sensor_data)
-            from uv_msgs.msg import CameraStreamFrameInfo, DetectionArray
+            from uv_msgs.msg import CameraStreamFrameInfo, DetectionArray, PerceptionCameraInfo
+            from rclpy.qos import DurabilityPolicy
         except Exception as error:  # pragma: no cover - deployment error
             print(f'camera_streamer: frame metadata unavailable: {error}',
                   file=sys.stderr, flush=True)
@@ -145,6 +178,12 @@ class StreamMetadataBridge:
             self.node.create_subscription(
                 DetectionArray, PERCEPTION_DETECTIONS,
                 self.detection_cache.add, qos_profile_sensor_data)
+            calibration_qos = QoSProfile(depth=16, reliability=ReliabilityPolicy.RELIABLE,
+                                         durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            for side in ('left', 'right'):
+                self.node.create_subscription(
+                    PerceptionCameraInfo, PERCEPTION_CAMERA_CALIBRATION(f'{camera}_{side}'),
+                    self._calibration, calibration_qos)
             self.message_type = CameraStreamFrameInfo
             self.executor = SingleThreadedExecutor()
             self.executor.add_node(self.node)
@@ -159,6 +198,45 @@ class StreamMetadataBridge:
                 f'could not be created: {error}',
                 file=sys.stderr, flush=True)
             self.close()
+
+    def _calibration(self, message):
+        try:
+            self.calibrations.add(message)
+        except ValueError as error:
+            print(f'camera_streamer: invalid calibration: {error}', file=sys.stderr, flush=True)
+
+    def prepare(self, packet):
+        # Only called after frame selection. Never decode again for overlay.
+        image = packet.bgr()
+        if self.mode != 'annotated':
+            return resize_stitched_bgr(image), (0, 0), 0
+        entries = [self.calibrations.latest(f'{self.camera}_{side}', packet.header.camera_info_version)
+                   for side in ('left', 'right')]
+        if any(entry is None for entry in entries):
+            now = time.monotonic()
+            if now - self._last_calibration_warning >= 5.0:
+                self._last_calibration_warning = now
+                print('camera_streamer: waiting for calibration; showing unannotated source image',
+                      file=sys.stderr, flush=True)
+            return resize_stitched_bgr(image), (0, 0), 0
+        half = image.shape[1] // 2
+        corrected, ids = [], []
+        for index, entry in enumerate(entries):
+            key = (entry.camera_name, int(entry.calibration_id))
+            transform = self._corrections.get(key)
+            if transform is None:
+                transform = EyeUndistorter(entry.source_info, entry.camera_info_version)
+                if transform.calibration_id != entry.calibration_id:
+                    raise InvalidFrameError('perception calibration ID does not match its source')
+                self._corrections[key] = transform
+                while len(self._corrections) > 8:
+                    self._corrections.popitem(last=False)
+            try:
+                corrected.append(transform.apply(image[:, index*half:(index+1)*half]))
+            except ValueError as error:
+                raise InvalidFrameError(str(error)) from error
+            ids.append(entry.calibration_id)
+        return resize_stitched_bgr(np.hstack(corrected)), tuple(ids), 1
 
     def _spin(self):
         try:
@@ -313,8 +391,12 @@ def _sample_source_rate(reader: Iceoryx2Reader, target_fps: float):
     packet = None
     arrivals = []
     timestamps = []
-    for _ in range(FPS_SAMPLE_FRAMES):
-        packet = reader.read()
+    while len(arrivals) < FPS_SAMPLE_FRAMES:
+        try:
+            packet = reader.read()
+        except InvalidFrameError as error:
+            warn_invalid_frame(getattr(reader, 'service', 'camera'), error)
+            continue
         if packet is None:
             return None, max(0.1, float(target_fps)), 0, False
         arrivals.append(time.monotonic_ns())
@@ -370,13 +452,20 @@ def run(camera: str, mode: str, output_fps: float, *, video_output=None) -> int:
         newest_arrival_ns = 0
         min_frame_period_ns = int(round(1_000_000_000 / effective_fps))
         output_sequence = 0
+        last_capture_id = int(first_packet.header.capture_id)
+        last_info_version = int(first_packet.header.camera_info_version)
 
         def encode_packet(packet):
             nonlocal newest_arrival_ns, output_sequence
-            image = _resize_stitched(packet)
+            try:
+                image, calibration_ids, image_space = metadata_bridge.prepare(packet)
+            except InvalidFrameError as error:
+                warn_invalid_frame(service, error)
+                return True
             cached = CachedFrame(
                 image, packet.header.capture_id, packet.header.stereo_pair_id,
-                int(packet.header.timestamp_ns), time.monotonic_ns())
+                int(packet.header.timestamp_ns), time.monotonic_ns(), camera,
+                calibration_ids, image_space)
             cache.append(cached)
             newest_arrival_ns = max(
                 newest_arrival_ns, cached.arrival_monotonic_ns)
@@ -400,18 +489,29 @@ def run(camera: str, mode: str, output_fps: float, *, video_output=None) -> int:
         if not encode_packet(first_packet):
             return 0
         while True:
-            packet = reader.read()
+            try:
+                packet = reader.read()
+            except InvalidFrameError as error:
+                warn_invalid_frame(service, error)
+                continue
             if packet is None:
                 return 0
             clock_ns = (int(packet.header.timestamp_ns)
                         if use_header_timestamps else time.monotonic_ns())
             if use_header_timestamps and clock_ns <= 0:
                 continue
+            capture_id = int(packet.header.capture_id)
+            info_version = int(packet.header.camera_info_version)
+            if (clock_ns < last_frame_clock_ns or capture_id < last_capture_id
+                    or info_version != last_info_version):
+                # Do not overlay detections retained from a previous producer,
+                # simulator clock epoch, or source calibration.
+                cache.clear()
+                detection_cache.clear()
+                last_frame_clock_ns = clock_ns - min_frame_period_ns
+            last_capture_id, last_info_version = capture_id, info_version
             if clock_ns == last_frame_clock_ns:
                 continue
-            if clock_ns < last_frame_clock_ns:
-                # Camera/ROS time can reset during a simulator reset.
-                last_frame_clock_ns = clock_ns - min_frame_period_ns
             if clock_ns - last_frame_clock_ns < min_frame_period_ns:
                 continue
             if not encode_packet(packet):
@@ -439,19 +539,8 @@ def run(camera: str, mode: str, output_fps: float, *, video_output=None) -> int:
 
 
 def _annotate_from_cache(image, frame: CachedFrame, cache: DetectionCache):
-    # Keep side grouping here rather than adding camera_name to every
-    # Detection.msg.  DetectionCache exposes this small snapshot privately so
-    # the ROS contract remains one array per camera side.
-    with cache._lock:
-        batches = tuple(cache._batches)
-    exact = [batch for batch in batches
-             if batch.capture_id == frame.capture_id
-             and batch.stereo_pair_id == frame.stereo_pair_id]
-    nearby = exact or [batch for batch in batches
-                       if batch.stereo_pair_id == frame.stereo_pair_id
-                       and abs(batch.timestamp_ns - frame.timestamp_ns) <= OVERLAY_WINDOW_NS]
     result = image
-    for batch in nearby:
+    for batch in cache.for_frame_batches(frame):
         result = _draw_batch(result, batch.camera_name, batch.detections)
     return result
 

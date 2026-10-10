@@ -62,6 +62,8 @@ def test_nested_parameters_are_merged_and_flattened(tmp_path):
         """task: 26rb_gate_task
 params:
   gate_count: 4
+  observation:
+    poses: [[1, 0, .2, 0], [2, 0, .2, 0], [3, 0, .2, 0], [4, 0, .2, 0]]
   search:
     start_offset_deg: -30.0
     timeout: 60.0
@@ -93,6 +95,7 @@ params:
         "name": "26rb_gate_task",
         "params": {
             "gate_count": 4,
+            "observation_poses": [[1, 0, .2, 0], [2, 0, .2, 0], [3, 0, .2, 0], [4, 0, .2, 0]],
             "search_start_offset_deg": -30.0,
             "search_timeout": 12.0,
             "depth_kp": 1.2,

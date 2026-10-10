@@ -24,18 +24,25 @@ def _clamp(value: float, low: float, high: float) -> float:
 class RB26GrabGolfTask:
     """Use one down camera at a time and TF offsets to pick up a golf ball."""
 
-    def __init__(self, node, params: dict):
+    def __init__(self, node, params: dict, *, target_name=None, target_class_id=None,
+                 gripper_frame='disc_claw_link', task_name='26rb_grab_golf'):
         self._node = node
         self._params = params
         self._logger = node.get_logger()
+        self._task_name = task_name
+        self._gripper_frame = gripper_frame
+        self._servo_yaw_target = None
+        self._servo_yaw_gain = 1.2
+        self._servo_max_yaw_rate = 10.0
+        self._servo_yaw_tolerance = 3.0
 
         self._aligned_camera = None
         self._pending_golf_priority = None
         self._servo_depth = None
 
-        golf_color = params.get('golf_color', 'pink_golf')
+        golf_color = params.get('golf_color', 'pink_golf') if target_name is None else target_name
         self._golf_color = str(golf_color)
-        self._golf_class_id = self._parse_golf_color(golf_color)
+        self._golf_class_id = self._parse_golf_color(golf_color) if target_name is None else target_class_id
         collection_class = params.get(
             'collection_frame_class', 'collection_frame_down')
         self._collection_class_id = node._model_mapping.model_class_id(
@@ -98,7 +105,7 @@ class RB26GrabGolfTask:
         self._return_timeout = max(
             1.0, float(params.get('return_timeout', 60.0)))
         self._verification_timeout = max(
-            0.2, float(params.get('verification_timeout', 5.0)))
+            0.2, float(params.get('verification_timeout', 2.0)))
         self._verification_absence_hold_seconds = _clamp(
             float(params.get('verification_absence_hold_seconds', 0.8)),
             0.0, self._verification_timeout)
@@ -122,13 +129,13 @@ class RB26GrabGolfTask:
         priority = DownCameraPriority(
             self._node, class_id, priority_seconds=self._priority_seconds,
             detection_timeout=self._detection_timeout,
-            label=f'26rb_grab_golf {label}观测')
+            label=f'{self._task_name} {label}观测')
         started = time.monotonic()
         deadline = started + max(0.0, float(duration))
         next_log = float('-inf')
         first_detection = None
         self._logger.info(
-            f'26rb_grab_golf：开始观察 {label}，窗口={duration:.1f}s，'
+            f'{self._task_name}：开始观察 {label}，窗口={duration:.1f}s，'
             '相机=down_left/down_right')
         while not self._node.stopped and time.monotonic() < deadline:
             now = time.monotonic()
@@ -137,32 +144,32 @@ class RB26GrabGolfTask:
                 camera_name, first_detection = priority.first_observation
                 detection = first_detection
                 self._logger.info(
-                    f'26rb_grab_golf：观察到 {label}，相机={camera_name}；'
+                    f'{self._task_name}：观察到 {label}，相机={camera_name}；'
                     f'像素=({float(detection.pixel_x):.1f},'
                     f'{float(detection.pixel_y):.1f})，'
                     f'置信度={float(detection.confidence):.3f}，'
                     '继续完成观察窗口')
             if first_detection is None and now - next_log >= self._log_period:
                 self._logger.info(
-                    f'26rb_grab_golf：观察 {label} 中，尚未收到新鲜目标检测')
+                    f'{self._task_name}：观察 {label} 中，尚未收到新鲜目标检测')
                 next_log = now
             time.sleep(min(self._servo_period, max(0.0, deadline - now)))
         if self._node.stopped:
             return None
         if first_detection is not None:
             self._logger.info(
-                f'26rb_grab_golf：{label} 的 {duration:.1f}s 观察窗口结束，'
+                f'{self._task_name}：{label} 的 {duration:.1f}s 观察窗口结束，'
                 '窗口内曾检测到目标')
             return first_detection
         self._logger.warning(
-            f'26rb_grab_golf：{duration:.1f}s 内未观测到 {label}')
+            f'{self._task_name}：{duration:.1f}s 内未观测到 {label}')
         return None
 
     def _flash_green(self, count: int, label: str) -> bool:
         """Flash green the requested number of times, then resume yellow."""
         count = max(1, int(count))
         self._logger.info(
-            f'26rb_grab_golf：{label}，绿灯闪烁 {count} 次')
+            f'{self._task_name}：{label}，绿灯闪烁 {count} 次')
         for index in range(count):
             if self._node.stopped:
                 return False
@@ -215,11 +222,13 @@ class RB26GrabGolfTask:
         # BODY_VELOCITY is in the body frame. Transform the complete world
         # velocity so horizontal motion has no world-Z component at any tilt.
         body = body_to_world_rotation(pose).T @ np.array([*horizontal, vz])
+        yaw_error = 0.0 if self._servo_yaw_target is None else (self._servo_yaw_target-pose[5]+180.0) % 360.0-180.0
+        yaw_rate = _clamp(yaw_error*self._servo_yaw_gain, -self._servo_max_yaw_rate, self._servo_max_yaw_rate)
         success, message = self._node._send_body_velocity(
-            *body.tolist(), yaw_rate_deg_s=0.0,
+            *body.tolist(), yaw_rate_deg_s=yaw_rate,
             lease_s=max(0.25, 4*self._servo_period),
             wait_deadline=min(deadline, time.monotonic()+2.0),
-            task_context='26rb_grab_golf 定深水平速度伺服',
+            task_context=f'{self._task_name} 定深水平速度伺服',
             light_color=self._node.LIGHT_YELLOW)
         if not success:
             raise RuntimeError(f'水平速度指令失败：{message}')
@@ -228,33 +237,34 @@ class RB26GrabGolfTask:
         """Stop the lease and hand measured XY / locked depth to position hold."""
         success, message = self._node._send_body_velocity(
             wait_deadline=time.monotonic()+2.0,
-            task_context='26rb_grab_golf 结束水平速度伺服')
+            task_context=f'{self._task_name} 结束水平速度伺服')
         if not success:
-            self._logger.error(f'26rb_grab_golf：停止水平速度失败：{message}')
+            self._logger.error(f'{self._task_name}：停止水平速度失败：{message}')
             return None
         if self._node.stopped:
             return None
         pose = self._servo_pose()
-        recorded = [pose[0], pose[1], self._servo_depth, pose[5]]
+        yaw = pose[5] if self._servo_yaw_target is None else self._servo_yaw_target
+        recorded = [pose[0], pose[1], self._servo_depth, yaw]
         success, message = self._node._send_action_goal(
             BasicMotion.Goal.SET, recorded, 'xyzrz',
             timeout=self._command_timeout,
             wait_deadline=time.monotonic()+self._command_timeout, quiet=True,
-            task_context='26rb_grab_golf 水平伺服后保持位置和深度')
+            task_context=f'{self._task_name} 水平伺服后保持位置和深度')
         if not success:
-            self._logger.error(f'26rb_grab_golf：水平伺服后定深保持失败：{message}')
+            self._logger.error(f'{self._task_name}：水平伺服后定深保持失败：{message}')
             return None
         (self._node._cmd_x, self._node._cmd_y,
          self._node._cmd_z, self._node._cmd_yaw) = recorded
         return recorded
 
-    def _servo_horizontally(self, class_id: int, label: str):
+    def _servo_horizontally(self, class_id: int, label: str, *, allow_target_handoff=True):
         """Servo image error with XY velocity while holding one measured depth."""
         if class_id is None:
-            self._logger.error(f'26rb_grab_golf：模型映射中没有 {label} 类别')
+            self._logger.error(f'{self._task_name}：模型映射中没有 {label} 类别')
             return None
         if not self._node._ensure_camera_extrinsics():
-            self._logger.error(f'26rb_grab_golf：{label} 伺服缺少相机 TF')
+            self._logger.error(f'{self._task_name}：{label} 伺服缺少相机 TF')
             return None
         priority = self._pending_golf_priority if class_id == self._golf_class_id else None
         if priority is not None:
@@ -263,13 +273,13 @@ class RB26GrabGolfTask:
             priority = DownCameraPriority(
                 self._node, class_id, priority_seconds=self._priority_seconds,
                 detection_timeout=self._detection_timeout,
-                label=f'26rb_grab_golf {label}伺服')
+                label=f'{self._task_name} {label}伺服')
         ball_priority = None
-        if class_id == self._collection_class_id:
+        if class_id == self._collection_class_id and allow_target_handoff:
             ball_priority = DownCameraPriority(
                 self._node, self._golf_class_id, priority_seconds=self._priority_seconds,
                 detection_timeout=self._detection_timeout,
-                label=f'26rb_grab_golf frame修正途中观察{self._golf_color}')
+                label=f'{self._task_name} frame修正途中观察{self._golf_color}')
         self._aligned_camera = None
         deadline = time.monotonic()+self._servo_timeout
         hold_generation = None
@@ -283,7 +293,7 @@ class RB26GrabGolfTask:
             if self._servo_depth is None:
                 self._servo_depth = self._servo_pose()[2]
             self._logger.info(
-                f'26rb_grab_golf：开始 {label} 定深速度伺服；'
+                f'{self._task_name}：开始 {label} 定深速度伺服；'
                 f'锁定深度={self._servo_depth:.3f}m，'
                 f'水平限速={self._max_xy_speed:.3f}m/s，'
                 f'深度容差={self._depth_hold_tolerance:.3f}m')
@@ -293,8 +303,8 @@ class RB26GrabGolfTask:
                     if ball is not None:
                         self._pending_golf_priority = ball_priority
                         self._logger.info(
-                            f'26rb_grab_golf：frame 修正途中在 {ball_camera} 看到 '
-                            f'{self._golf_color}，直接切换到球水平伺服')
+                            f'{self._task_name}：frame 修正途中在 {ball_camera} 看到 '
+                            f'{self._golf_color}，直接切换到目标水平伺服')
                         completed = True
                         break
                 camera_name, detection = priority.update()
@@ -307,7 +317,7 @@ class RB26GrabGolfTask:
                     hold_since = None
                     if now-last_status_log >= self._log_period:
                         self._logger.info(
-                            f'26rb_grab_golf：{label} 未收到有效检测，停止 XY 并继续定深')
+                            f'{self._task_name}：{label} 未收到有效检测，停止 XY 并继续定深')
                         last_status_log = now
                 else:
                     pose, horizontal, du, dv = self._horizontal_velocity(camera_name, detection)
@@ -315,13 +325,15 @@ class RB26GrabGolfTask:
                     at_depth = abs(pose[2]-self._servo_depth) <= self._depth_hold_tolerance
                     if centered:
                         horizontal = np.zeros(2)
-                    if centered and at_depth:
+                    at_yaw = (self._servo_yaw_target is None or
+                              abs((self._servo_yaw_target-pose[5]+180.0) % 360.0-180.0) <= self._servo_yaw_tolerance)
+                    if centered and at_depth and at_yaw:
                         hold_since = now if hold_since is None else hold_since
                     else:
                         hold_since = None
                     if now-last_status_log >= self._log_period:
                         self._logger.info(
-                            f'26rb_grab_golf：{label} 定深速度伺服，相机={camera_name}，'
+                            f'{self._task_name}：{label} 定深速度伺服，相机={camera_name}，'
                             f'误差=({du:+.4f},{dv:+.4f})，'
                             f'世界水平速度=({horizontal[0]:+.3f},{horizontal[1]:+.3f})m/s，'
                             f'深度={pose[2]:.3f}/{self._servo_depth:.3f}m')
@@ -333,23 +345,23 @@ class RB26GrabGolfTask:
                 self._send_horizontal_velocity(horizontal, deadline)
                 time.sleep(min(self._servo_period, max(0.0, deadline-time.monotonic())))
         except (KeyError, ValueError, RuntimeError, cv2.error, np.linalg.LinAlgError) as error:
-            self._logger.error(f'26rb_grab_golf：{label} 定深速度伺服失败：{error}')
+            self._logger.error(f'{self._task_name}：{label} 定深速度伺服失败：{error}')
         finally:
             try:
                 recorded = self._stop_horizontal_velocity()
             except Exception as error:
-                self._logger.error(f'26rb_grab_golf：水平伺服停车失败：{error}')
+                self._logger.error(f'{self._task_name}：水平伺服停车失败：{error}')
         if not completed or recorded is None:
             self._aligned_camera = None
             self._pending_golf_priority = None
-            self._logger.error(f'26rb_grab_golf：{label} 伺服未完成、超时或被中止')
+            self._logger.error(f'{self._task_name}：{label} 伺服未完成、超时或被中止')
             return None
         return recorded
 
     def _prepare_claw(self) -> bool:
         """Repeatedly command servo 1 to the requested open/pre-grab angle."""
         self._logger.info(
-            f'26rb_grab_golf：夹爪进入准备状态；舵机 ID=1，'
+            f'{self._task_name}：夹爪进入准备状态；舵机 ID=1，'
             f'角度={self._claw_prepare_angle:.3f}rad，'
             f'重复发送 {self._claw_prepare_repeat_count} 次')
         for index in range(self._claw_prepare_repeat_count):
@@ -380,7 +392,7 @@ class RB26GrabGolfTask:
         provider = self._node.camera_extrinsics_provider
         try:
             transform = provider.lookup_transform(
-                provider.base_frame, 'disc_claw_link')
+                provider.base_frame, self._gripper_frame)
             message = (transform.transform
                        if hasattr(transform, 'transform') else transform)
             claw_xyz = (
@@ -389,7 +401,7 @@ class RB26GrabGolfTask:
                 float(message.translation.z))
         except Exception as error:
             self._logger.error(
-                f'26rb_grab_golf：读取 disc_claw_link 外参失败：{error}')
+                f'{self._task_name}：读取 disc_claw_link 外参失败：{error}')
             return None
 
         # When the target is centred in the successful eye, it lies on its
@@ -418,7 +430,7 @@ class RB26GrabGolfTask:
                     f'按相机外参对准 {self._golf_color} 高尔夫球与圆盘爪'))
             if not success:
                 self._logger.error(
-                    f'26rb_grab_golf：相机到圆盘爪外参平移失败：{message}')
+                    f'{self._task_name}：相机到圆盘爪外参平移失败：{message}')
                 return None
         # BMOVE starts at the measured position, not the preceding command.
         self._node._cmd_x = float(pose[0]) + world_dx
@@ -430,7 +442,7 @@ class RB26GrabGolfTask:
             float(self._node._cmd_x), float(self._node._cmd_y),
             float(self._node._cmd_z), float(self._node._cmd_yaw)]
         self._logger.info(
-            f'26rb_grab_golf：圆盘爪已对准高尔夫球，记录下潜前位姿='
+            f'{self._task_name}：圆盘爪已对准高尔夫球，记录下潜前位姿='
             f'({recorded[0]:.3f},{recorded[1]:.3f},{recorded[2]:.3f},'
             f'{recorded[3]:.1f}°)')
         return recorded
@@ -439,7 +451,7 @@ class RB26GrabGolfTask:
         if self._pre_descent_settle_seconds <= 0.0:
             return not self._node.stopped
         self._logger.info(
-            f'26rb_grab_golf：等待艇体稳定 '
+            f'{self._task_name}：等待艇体稳定 '
             f'{self._pre_descent_settle_seconds:.1f}s')
         deadline = time.monotonic() + self._pre_descent_settle_seconds
         while not self._node.stopped and time.monotonic() < deadline:
@@ -452,7 +464,7 @@ class RB26GrabGolfTask:
         deadline = time.monotonic() + duration
         command_ok = True
         self._logger.info(
-            f'26rb_grab_golf：{label}，速度={speed_mps:+.3f}m/s，'
+            f'{self._task_name}：{label}，速度={speed_mps:+.3f}m/s，'
             f'持续={duration:.1f}s（NED 正值向下）')
         try:
             while not self._node.stopped and time.monotonic() < deadline:
@@ -460,10 +472,10 @@ class RB26GrabGolfTask:
                     vertical_mps=speed_mps,
                     lease_s=max(0.25, self._vertical_period * 4.0),
                     task_context=self._node._format_motion_context(
-                        f'抓高尔夫球{label}速度控制'))
+                        f'{self._task_name} {label}速度控制'))
                 if not success:
                     self._logger.error(
-                        f'26rb_grab_golf：{label}速度指令失败：{message}')
+                        f'{self._task_name}：{label}速度指令失败：{message}')
                     command_ok = False
                     break
                 time.sleep(min(
@@ -473,10 +485,10 @@ class RB26GrabGolfTask:
             neutral_ok, neutral_message = self._node._send_body_velocity(
                 lease_s=max(0.25, self._vertical_period * 4.0),
                 task_context=self._node._format_motion_context(
-                    f'结束抓高尔夫球{label}速度控制'))
+                    f'{self._task_name} 结束{label}速度控制'))
             if not neutral_ok:
                 self._logger.error(
-                    f'26rb_grab_golf：{label}结束时发送中性速度失败：'
+                    f'{self._task_name}：{label}结束时发送中性速度失败：'
                     f'{neutral_message}')
                 command_ok = False
         return command_ok and not self._node.stopped
@@ -490,7 +502,7 @@ class RB26GrabGolfTask:
             -self._ascent_speed, self._ascent_duration, '上浮')
 
     def _verify_golf_removed(self):
-        """Require a fresh post-return image where the golf ball stays absent."""
+        """Observe the full window at the saved camera-centred pose, using fresh images."""
         camera_name = self._aligned_camera
         if camera_name is None:
             self._logger.error('26rb_grab_golf：复检缺少抓高尔夫球伺服成功相机')
@@ -503,11 +515,11 @@ class RB26GrabGolfTask:
         last_status_log = float('-inf')
         target_present = False
         self._logger.info(
-            f'26rb_grab_golf：已回到记录位置，检查 {self._golf_color} 是否仍在盘上；'
+            f'{self._task_name}：已回到相机居中位置，检查 {self._golf_color} 是否仍在盘上；'
             f'复检相机={camera_name}，'
-            f'检查超时={self._verification_timeout:.1f}s，'
+            f'完整观察窗口={self._verification_timeout:.1f}s，'
             f'连续消失确认={self._verification_absence_hold_seconds:.1f}s')
-        while not self._node.stopped and time.monotonic() < deadline:
+        while not self._node.stopped:
             now = time.monotonic()
             with self._node._perception_lock:
                 entry = self._node._down_detections.get(camera_name)
@@ -521,6 +533,8 @@ class RB26GrabGolfTask:
                     self._logger.info(
                         '26rb_grab_golf：复检等待回位后的新鲜视觉消息')
                     last_status_log = now
+                if now >= deadline:
+                    break
                 time.sleep(min(self._servo_period, max(0.0, deadline - now)))
                 continue
 
@@ -535,53 +549,59 @@ class RB26GrabGolfTask:
                 if absent_since is None:
                     absent_since = entry[0]
                     self._logger.info(
-                        f'26rb_grab_golf：当前未检测到 {self._golf_color}，'
+                        f'{self._task_name}：当前未检测到 {self._golf_color}，'
                         '开始连续消失计时')
-                if (entry[0] - absent_since
-                        >= self._verification_absence_hold_seconds):
-                    self._logger.info(
-                        f'26rb_grab_golf：复检确认 {self._golf_color} 已不在盘上')
-                    return True
             else:
                 target_present = True
                 absent_since = None
                 if now - last_status_log >= self._log_period:
                     self._logger.warning(
-                        f'26rb_grab_golf：复检仍检测到盘上的 {self._golf_color}；'
+                        f'{self._task_name}：复检仍检测到盘上的 {self._golf_color}；'
                         f'像素=({float(detection.pixel_x):.1f},'
                         f'{float(detection.pixel_y):.1f})')
                     last_status_log = now
+            if now >= deadline:
+                break
             time.sleep(min(self._servo_period, max(0.0, deadline - now)))
 
+        if self._node.stopped:
+            return False
+        if (absent_since is not None and last_processed_message_at is not None
+                and time.monotonic()-last_processed_message_at <= self._detection_timeout
+                and last_processed_message_at-absent_since >= self._verification_absence_hold_seconds):
+            self._logger.info(
+                f'{self._task_name}：{self._verification_timeout:.1f}s 复检窗口结束，'
+                f'确认 {self._golf_color} 已不在盘上')
+            return True
         if not fresh_message_seen:
             self._logger.error(
                 '26rb_grab_golf：复检超时，回位后没有收到新鲜视觉消息')
         elif target_present:
             self._logger.warning(
-                f'26rb_grab_golf：复检超时，盘上仍能看到 {self._golf_color}')
+                f'{self._task_name}：复检超时，盘上仍能看到 {self._golf_color}')
         else:
             self._logger.warning('26rb_grab_golf：复检超时，无法确认高尔夫球已离盘')
         return False
 
     def _return_to_recorded_pose(self, recorded_pose):
-        """Return to the pre-dive pose saved after camera/gripper alignment."""
+        """Return to the camera-centred pose saved before translating to the gripper."""
         success, message = self._node._send_action_goal(
             BasicMotion.Goal.SET, recorded_pose, 'xyzrz',
             timeout=self._return_timeout,
             task_context=self._node._format_motion_context(
-                f'抓取{self._golf_color}高尔夫球后返回下潜前位置'))
+                f'抓取{self._golf_color}高尔夫球后返回相机居中复检位置'))
         if not success:
             self._logger.error(
-                f'26rb_grab_golf：返回记录位置失败：{message}')
+                f'{self._task_name}：返回记录位置失败：{message}')
             return False
         (self._node._cmd_x, self._node._cmd_y,
          self._node._cmd_z, self._node._cmd_yaw) = recorded_pose
-        self._logger.info('26rb_grab_golf：已返回记录的下潜前位置')
+        self._logger.info('26rb_grab_golf：已返回记录的相机居中复检位置')
         return True
 
     def _pickup_attempt(self, attempt: int, total_attempts: int):
         self._logger.info(
-            f'26rb_grab_golf：开始第 {attempt}/{total_attempts} 次抓取；'
+            f'{self._task_name}：开始第 {attempt}/{total_attempts} 次抓取；'
             f'视觉伺服目标={self._golf_color}')
         camera_pose = self._servo_horizontally(
             self._golf_class_id, self._golf_color)
@@ -590,8 +610,8 @@ class RB26GrabGolfTask:
         if not self._flash_green(3, f'{self._golf_color} 已对准'):
             return False, '高尔夫球居中提示灯中断'
 
-        recorded_pose = self._apply_camera_gripper_offset()
-        if recorded_pose is None:
+        gripper_pose = self._apply_camera_gripper_offset()
+        if gripper_pose is None:
             return False, '相机到圆盘爪外参对准失败'
         if not self._wait_pre_descent_settle():
             return False, '下潜前稳定等待被中止'
@@ -600,17 +620,17 @@ class RB26GrabGolfTask:
         # Attempt the ascent and positional recovery even if a descent velocity
         # renewal failed, so the vehicle still gets a chance to return upward.
         ascent_ok = self._ascend() if not self._node.stopped else False
-        return_ok = (self._return_to_recorded_pose(recorded_pose)
+        return_ok = (self._return_to_recorded_pose(camera_pose)
                      if not self._node.stopped else False)
         if not descent_ok or not ascent_ok or not return_ok:
             return False, '下潜、上浮或回到记录位置失败'
 
         if self._verify_golf_removed():
-            self._logger.info(f'26rb_grab_golf：第 {attempt} 次抓取确认成功')
+            self._logger.info(f'{self._task_name}：第 {attempt} 次抓取确认成功')
             return True, ''
         if attempt < total_attempts:
             self._logger.warning(
-                f'26rb_grab_golf：第 {attempt} 次后高尔夫球仍在盘上，'
+                f'{self._task_name}：第 {attempt} 次后高尔夫球仍在盘上，'
                 f'剩余 {total_attempts - attempt} 次机会，将重新伺服并抓取')
         return False, '复检时高尔夫球仍在盘上'
 
@@ -674,7 +694,7 @@ class RB26GrabGolfTask:
                     '26rb_grab_golf.stopped', '抓高尔夫球任务被中止')
             if attempt == total_attempts:
                 self._logger.error(
-                    f'26rb_grab_golf：已完成 {total_attempts} 次抓取，'
+                    f'{self._task_name}：已完成 {total_attempts} 次抓取，'
                     f'仍未确认 {self._golf_color} 离开置物盘')
                 return TaskOutcome.failed(
                     '26rb_grab_golf.verification',

@@ -27,8 +27,8 @@ mission:
     #   on_failure:
     #     "26rb_hit_balls.timeout": {}
 
-    - name: 26rb_grab_golf
-      config: ../tasks/26rb_grab_golf.yaml
+    - name: 26rb_grab_ball_ring
+      config: ../tasks/26rb_grab_ball_ring.yaml
       initial:
         poses:
           - command: SET
@@ -44,7 +44,7 @@ mission:
           #   axes: rz
           #   target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
       on_failure:
-        "26rb_grab_golf.timeout": {}
+        "26rb_grab_ball_ring.both_exhausted": {}
 
     - name: 26rb_drop_ball_target_rack
       config: ../tasks/26rb_drop_ball_target_rack.yaml
@@ -54,7 +54,7 @@ mission:
           axes: xyzrz
           target: [0.0, 0.0, 0.0, 0.0]
       on_failure:
-        "26rb_grab_golf.timeout": {}
+        "26rb_drop_ball_target_rack.timeout": {}
 
     # - name: 26rb_gate_task
     #   config: ../tasks/26rb_gate_task.yaml

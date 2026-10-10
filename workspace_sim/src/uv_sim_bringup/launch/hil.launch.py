@@ -91,7 +91,10 @@ def generate_launch_description():
         'sim_mode': 'true', 'camera_mode': 'sim',
         'camera_config_dir': camera_dir,
     })
-    perception = _include('uv_perception', 'perception_launch.py', {},
+    perception = _include('uv_perception', 'perception_launch.py', {
+        'front_model_path': LaunchConfiguration('front_model_path'),
+        'down_model_path': LaunchConfiguration('down_model_path'),
+    },
                           condition=IfCondition(LaunchConfiguration('enable_ai')))
     stream = _include(
         'uv_stream', 'stream_launch.py', {},
@@ -147,6 +150,8 @@ def generate_launch_description():
         configure_simulator_gpu_environment(
             LaunchConfiguration('gpu'), LaunchConfiguration('gpu_backend')),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
+        DeclareLaunchArgument('front_model_path', default_value=''),
+        DeclareLaunchArgument('down_model_path', default_value=''),
         DeclareLaunchArgument('serial_dev', default_value='/dev/ttyUSB0'),
         DeclareLaunchArgument('serial_baud', default_value='921600'),
         DeclareLaunchArgument('agent_executable', default_value=_agent_default()),

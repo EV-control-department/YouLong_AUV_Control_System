@@ -1,4 +1,5 @@
-# Single object detection result
+# Single object detection result. Pixel coordinates refer to the image_space
+# and calibration_id in its enclosing DetectionArray; they are eye-local.
 
 uint16 class_id
 float32 confidence
@@ -20,7 +21,7 @@ float32 feature_pixel_x
 float32 feature_pixel_y
 
 # Optional projected red-ring axis, computed only for down-view detections.
-# Original eye-image coordinates: right=0 deg, down=90 deg, modulo 180 deg.
+# Detector eye-image coordinates: right=0 deg, down=90 deg, modulo 180 deg.
 # This is an undirected 2D axis, not a body yaw or complete 3D normal.
 # Quality is PCA anisotropy in [0,1], not a detection probability.
 # Invalid orientation: all three fields are false/0/0.

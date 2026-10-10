@@ -52,7 +52,7 @@ def test_execute_retries_when_golf_remains_after_return(monkeypatch, early_ball)
 
     def offset():
         events.append('offset')
-        return [1.0, 2.0, -0.3, 15.0]
+        return [1.25, 1.97, -0.3, 15.0]
 
     def settle():
         events.append('settle')
@@ -67,6 +67,7 @@ def test_execute_retries_when_golf_remains_after_return(monkeypatch, early_ball)
         return True
 
     def return_pose(_pose):
+        assert _pose == [1.0, 2.0, -0.3, 15.0]  # Camera centre, before the gripper offset.
         events.append('return')
         return True
 
@@ -286,3 +287,49 @@ def test_yaml_exposes_velocity_and_depth_parameters():
         assert params['depth_hold_max_speed_mps'] == configured['max_vertical_speed_mps']
         assert params['depth_hold_tolerance_m'] == configured['depth_tolerance_m']
         assert 'max_horizontal_step_m' not in params
+
+
+@pytest.mark.parametrize('camera', ['down_left', 'down_right'])
+@pytest.mark.parametrize('stream', ['absent', 'present', 'missing', 'stale', 'late_present', 'gap', 'other_eye_only'])
+def test_verification_observes_two_seconds_of_fresh_camera_images(velocity_rig, camera, stream):
+    import threading
+    rig = velocity_rig
+    rig.task._aligned_camera = camera
+    rig.node._perception_lock = threading.Lock()
+    rig.node._down_detections = {}
+    ball = SimpleNamespace(class_id=7, pixel_x=30., pixel_y=40., confidence=.9)
+    started = rig.clock[0]
+    def update():
+        elapsed = rig.clock[0]-started
+        if stream == 'missing' or (stream == 'gap' and .45 < elapsed < 1.8):
+            return
+        received = started-.1 if stream == 'stale' else rig.clock[0]
+        present = stream == 'present' or (stream == 'late_present' and elapsed >= 1.9)
+        eye = ('down_right' if camera == 'down_left' else 'down_left') if stream == 'other_eye_only' else camera
+        rig.node._down_detections[eye] = (
+            received, SimpleNamespace(detections=[ball] if present else []))
+    rig.state.hook = update
+    result = rig.task._verify_golf_removed()
+    assert result is (stream == 'absent')
+    assert rig.clock[0]-started == pytest.approx(2.0)
+
+
+def test_pickup_does_not_verify_until_camera_return_succeeds(monkeypatch):
+    node = SimpleNamespace(stopped=False, get_logger=lambda: _Logger(),
+        _model_mapping=SimpleNamespace(model_class_id=lambda name, **kwargs:
+            1 if name == 'collection_frame_down' else 7))
+    task = GrabGolfTask(node, {})
+    camera_pose = [1., 2., .2, 30.]
+    task._servo_horizontally = lambda *args: list(camera_pose)
+    task._flash_green = lambda *args: True
+    task._apply_camera_gripper_offset = lambda: [1.25, 2.03, .2, 30.]
+    task._wait_pre_descent_settle = lambda: True
+    task._descend = lambda: True
+    task._ascend = lambda: True
+    returned, verified = [], []
+    task._return_to_recorded_pose = lambda pose: returned.append(pose) or False
+    task._verify_golf_removed = lambda: verified.append(True) or True
+    success, message = task._pickup_attempt(1, 1)
+    assert not success
+    assert returned == [camera_pose]
+    assert verified == []

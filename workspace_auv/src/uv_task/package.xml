@@ -21,6 +21,7 @@
   <depend>uv_msgs</depend>
   <depend>auv_protocol</depend>
   <depend>uv_camera</depend>
+  <exec_depend>uv_perception</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>

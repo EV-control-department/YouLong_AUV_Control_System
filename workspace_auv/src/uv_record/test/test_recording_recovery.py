@@ -188,3 +188,21 @@ def test_frame_alignment_recovery_discards_partial_jsonl_tail(tmp_path):
 
     assert recover_frame_alignment(directory)
     assert [json.loads(line) for line in index.read_text().splitlines()] == [record]
+
+
+def test_raw_jpeg_recovery_rejects_truncated_even_if_decoder_is_tolerant(tmp_path):
+    import cv2
+    import numpy as np
+    payload = cv2.imencode('.jpg', np.zeros((16, 32, 3), np.uint8))[1].tobytes()
+    (tmp_path / 'complete.jpg').write_bytes(payload)
+    (tmp_path / 'truncated.jpg').write_bytes(payload[:-2])
+    records = [
+        {'path': 'complete.jpg', 'timestamp_ns': 100, 'width': 32, 'height': 16},
+        {'path': 'truncated.jpg', 'timestamp_ns': 200, 'width': 32, 'height': 16},
+        {'path': 'missing.jpg', 'timestamp_ns': 300, 'width': 32, 'height': 16},
+        {'path': 'complete.jpg', 'timestamp_ns': 400, 'width': 33, 'height': 16},
+    ]
+    index = tmp_path / 'frames.jsonl'
+    index.write_text(''.join(json.dumps(item) + '\n' for item in records) + '{"partial":')
+    assert recover_raw_camera(tmp_path)
+    assert [json.loads(line) for line in index.read_text().splitlines()] == records[:1]
