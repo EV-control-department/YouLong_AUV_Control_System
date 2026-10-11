@@ -21,7 +21,7 @@ params:
     max_yaw_rate_deg_s: 10.0
     depth_gain: 0.8
     max_vertical_speed_mps: 0.08
-    speed_mps: 0.15 # BLINE 要求 0 < speed < 0.30。
+    speed_mps: 0.15 # 请求巡游速度；uv_control 按配置限幅。
     detection_timeout: 0.8
     min_confidence: 0.02
     detection_stop_delay: 0.5 # 巡游时下视看到 frame 后继续半秒，再取消 BLINE。

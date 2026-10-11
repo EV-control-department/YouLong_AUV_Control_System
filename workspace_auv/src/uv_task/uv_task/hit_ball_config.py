@@ -1,8 +1,6 @@
 """ROS-independent parameters for the preset-position impact-ball workflow."""
 import math
 
-from uv_task.golf_search_config import BLINE_SPEED_LIMIT_MPS
-
 BALL_NAMES = {'impact_ball_blue', 'impact_ball_red'}
 DEFAULTS = {
     'order': ['impact_ball_blue'],
@@ -80,11 +78,6 @@ def validate_hit_params(params):
                 or (value == 0 and key not in nonnegative)):
             raise ValueError(f'{key} 必须为有限正数（深度、置信度、保持和间隔可为零）')
         p[key] = float(value)
-    for key in ('cruise_speed_mps', 'approach_speed_mps',
-                'charge_speed_mps', 'fallback_speed_mps'):
-        if not 0 < p[key] < BLINE_SPEED_LIMIT_MPS:
-            raise ValueError(
-                f'{key} 必须满足 BLINE 接口要求 0 < speed < {BLINE_SPEED_LIMIT_MPS:.2f}')
     if p['search_min_confidence'] > 1:
         raise ValueError('search.min_confidence 必须在 [0,1] 内')
     if p['observe_yaw_step_deg'] > 180:

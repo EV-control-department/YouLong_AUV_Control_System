@@ -57,6 +57,8 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_stream', default_value='true'),
         DeclareLaunchArgument('enable_perception_gui', default_value='false'),
         DeclareLaunchArgument('camera_config_dir', default_value=''),
+        DeclareLaunchArgument('front_camera_device', default_value='/dev/video2'),
+        DeclareLaunchArgument('down_camera_device', default_value='/dev/video0'),
         DeclareLaunchArgument('front_model_path', default_value=str(weights_dir / 'HQQ6_aug.pt')),
         DeclareLaunchArgument('down_model_path', default_value=str(weights_dir / 'HQQ7_aug.pt')),
     ]
@@ -77,6 +79,8 @@ def generate_launch_description():
         '--enable-stream', LaunchConfiguration('enable_stream'),
         '--enable-perception-gui', LaunchConfiguration('enable_perception_gui'),
         '--camera-config-dir', LaunchConfiguration('camera_config_dir'),
+        '--front-camera-device', LaunchConfiguration('front_camera_device'),
+        '--down-camera-device', LaunchConfiguration('down_camera_device'),
         '--front-model-path', LaunchConfiguration('front_model_path'),
         '--down-model-path', LaunchConfiguration('down_model_path'),
         '--record-session', LaunchConfiguration('record_session'),

@@ -808,16 +808,22 @@ class RealStartupManager(Node):
     def _start_camera_perception(self):
         if self.args.enable_camera:
             camera_dir = self.args.camera_config_dir
+            front_device = self.args.front_camera_device
+            down_device = self.args.down_camera_device
             self._launch(
                 'camera',
                 ['ros2', 'launch', 'uv_camera', 'camera_launch.py',
                  'sim_mode:=false', 'camera_mode:=real',
-                 f'camera_config_dir:={camera_dir}'],
+                 f'camera_config_dir:={camera_dir}',
+                 f'front_camera_device:={front_device}',
+                 f'down_camera_device:={down_device}'],
                 ['/uv_camera'],
                 {'/uv_camera': {
                     'sim_mode': False, 'camera_mode': 'real',
                     'enable_front': True, 'enable_down': True,
-                    'camera_config_dir': camera_dir}})
+                    'camera_config_dir': camera_dir,
+                    'front_camera_device': front_device,
+                    'down_camera_device': down_device}})
             self._observe_phase('camera gate', lambda: bool(self._healthy_cameras()),
                         'at least one fresh calibrated camera view')
         else:
@@ -1229,6 +1235,8 @@ def _parse_args(argv=None):
         parser.add_argument('--' + name.replace('_', '-'),
                             default=str(default).lower())
     parser.add_argument('--camera-config-dir', default='')
+    parser.add_argument('--front-camera-device', default='/dev/video2')
+    parser.add_argument('--down-camera-device', default='/dev/video0')
     parser.add_argument('--front-model-path', default='')
     parser.add_argument('--down-model-path', default='')
     parser.add_argument('--record-root', default=str(Path.home() / 'auv_recordings'))

@@ -32,6 +32,9 @@ arguments:
   enable_ai: true
   enable_motion: true
   enable_camera: false
+  # 真机相机设备映射：前视 video2，下视 video0；可用 launch 参数覆盖。
+  front_camera_device: /dev/video2
+  down_camera_device: /dev/video0
   enable_nav: false
   enable_stream: true
   record_session: false

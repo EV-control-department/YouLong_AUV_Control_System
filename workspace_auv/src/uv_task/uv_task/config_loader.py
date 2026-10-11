@@ -13,9 +13,7 @@ from typing import Any
 
 import yaml
 
-from uv_task.golf_search_config import (
-    BLINE_SPEED_LIMIT_MPS, SEARCH_SCHEMA, validate_search_params,
-)
+from uv_task.golf_search_config import SEARCH_SCHEMA, validate_search_params
 from uv_task.drop_search_config import DROP_SEARCH_SCHEMA, validate_drop_search_params
 from uv_task.hit_ball_config import SCHEMA as HIT_SCHEMA, validate_hit_params
 
@@ -483,10 +481,9 @@ def _validate_params(task_name: str, params: dict[str, Any],
                 f"应为 {_type_name(expected)}")
     if task_name in ("bline", "wline") and "speed_mps" in flattened:
         speed = float(flattened["speed_mps"])
-        if speed < 0.0 or speed >= BLINE_SPEED_LIMIT_MPS:
+        if not math.isfinite(speed) or speed < 0.0:
             raise ConfigError(
-                f"{task_name}.speed_mps 必须满足 0 <= speed < "
-                f"{BLINE_SPEED_LIMIT_MPS:.2f}（0 使用 LINE 默认速度）")
+                f"{task_name}.speed_mps 必须为有限非负数（0 使用 LINE 默认速度）")
     if task_name == "26rb_gate_task":
         try:
             validate_gate_params(flattened, complete=complete)
