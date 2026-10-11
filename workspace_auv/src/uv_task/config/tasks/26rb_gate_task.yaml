@@ -2,11 +2,16 @@
 # z 正向向下；yaw/角速度为度/度每秒；高度百分比使用单目画面高度。
 task: 26rb_gate_task
 params:
-  gate_count: 1
+  gate_count: 1 # 实际执行门数，范围 1–4；按顺序使用下面前 gate_count 条位姿。
   timeout: 720.0 # 单门总时限，下一门重新计时。
   max_failures: 1 # 允许失败后跳到下一门的次数；最后一门失败仍返回失败。
   observation:
-    poses: [[0.5, 1.2, 0.34, 90.0]] # odom 绝对 [x,y,z,yaw]；数量等于 gate_count。
+    # 四个门的 odom 绝对 [x,y,z,yaw]；第 2–4 门暂时沿用第 1 门，后续分别修改。
+    poses:
+      - [0.5, 1.2, 0.34, 90.0] # 第 1 门
+      - [0.5, 1.2, 0.34, 90.0] # 第 2 门
+      - [0.5, 1.2, 0.34, 90.0] # 第 3 门
+      - [0.5, 1.2, 0.34, 90.0] # 第 4 门
     travel_timeout: 60.0
     set_timeout: 20.0
   tracking:

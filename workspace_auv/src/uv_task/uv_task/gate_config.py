@@ -72,10 +72,11 @@ def validate_gate_params(params, complete=False):
         raise ValueError('gate_count 必须为 1–4')
     poses = values['observation_poses']
     # Partial mission overrides are validated before merging. Only compare an
-    # explicitly supplied pair here; execute() validates the merged contract.
+    # explicitly supplied pair here; runtime validates the merged contract.
+    # Extra poses may remain configured; gate_count selects the active prefix.
     if ((complete or ('gate_count' in params and 'observation_poses' in params))
-            and len(poses) != values['gate_count']):
-        raise ValueError('observation.poses 数量必须等于 gate_count')
+            and len(poses) < values['gate_count']):
+        raise ValueError('observation.poses 数量不能少于 gate_count')
     if not poses or len(poses) > 4 or any(not isinstance(pose, list) or len(pose) != 4 for pose in poses):
         raise ValueError('observation.poses 每项必须为 [x,y,z,yaw]')
     if any(pose[2] < 0 for pose in poses):
