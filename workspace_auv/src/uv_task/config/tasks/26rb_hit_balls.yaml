@@ -8,7 +8,7 @@ params:
     blue_position: [2.8, 1.6, 0.4]
     red_position: [2.8, 1.05, 0.4]
   depth:
-    task_depth_m: 0.25 # 任务入场定深一次，之后不再发送 z 定位或垂向修正速度。
+    task_depth_m: 0.35 # 任务入场定深一次，之后不再发送 z 定位或垂向修正速度。
     timeout: 15.0
   search:
     initial_observe_seconds: 2.0 # 朝向预设位置后完整观察两秒。

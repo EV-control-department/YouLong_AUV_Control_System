@@ -161,7 +161,6 @@ class RB26GrabBallRingTask:
                            for kind in ('golf', 'ring')}
         self.retry_depth_step = float(params.get('retry_depth_step_m', 0.05))
         self.descent_timeout = float(params.get('descent_timeout', 15.0))
-        self.descent_speed = float(params.get('descent_speed_mps', 0.03))
         if not hasattr(node, 'state'):
             node.state = TaskState()
         self.state = node.state
@@ -848,54 +847,63 @@ class RB26GrabBallRingTask:
         return target
 
     def _descend_to_depth(self, kind, controller):
-        """Descend in world Z until measured depth reaches this attempt's target."""
+        """Use one POS target, preserving the completed claw-alignment XY/yaw."""
+        self._check()
         target = self._grab_target_depth(kind)
         attempt = max(1, getattr(self.state.pickup, kind+'_attempts'))
+        # Retain the commanded claw-alignment point throughout descent. A
+        # z-only SET would replace XY/yaw with the measured pose on dispatch.
+        point = [float(self.node._cmd_x), float(self.node._cmd_y), target,
+                 float(self.node._cmd_yaw)]
+        if not all(math.isfinite(value) for value in point):
+            raise PickupFailure('POS下潜目标位姿无效')
+        tolerance = controller._depth_hold_tolerance
         deadline = time.monotonic()+self.descent_timeout
-        period = controller._vertical_period
-        lease = max(0.25, 4*period)
-        reached = False
-        neutral_ok = False
         self.log.info(
-            f'组合抓取：{kind} 第{attempt}次下潜，基础深度={self.grab_depths[kind]:.3f}m，'
+            f'组合抓取：{kind} 第{attempt}次POS下潜，基础深度={self.grab_depths[kind]:.3f}m，'
             f'重试增量={(attempt-1)*self.retry_depth_step:.3f}m，目标深度={target:.3f}m，'
-            f'速度上限={self.descent_speed:.3f}m/s，超时={self.descent_timeout:.1f}s')
-        try:
-            while not self.node.stopped:
-                pose = self._pose()
-                remaining = target-pose[2]
-                now = time.monotonic()
-                if remaining <= 1e-6 and now <= deadline:
-                    reached = True
-                    break
-                if now >= deadline:
-                    self.log.warning(f'组合抓取：{kind} 下潜超时，实测深度={pose[2]:.3f}m，目标={target:.3f}m')
-                    break
-                # Reduce the final step and compensate roll/pitch so descent
-                # changes world Z without introducing world XY motion.
-                vz = min(self.descent_speed, remaining/period)
-                body = body_to_world_rotation(pose).T @ np.array([0.0, 0.0, vz])
-                ok, message = self.node._send_body_velocity(
-                    *body.tolist(), yaw_rate_deg_s=0.0, lease_s=lease,
-                    wait_deadline=min(deadline, now+2.0),
-                    light_color=self.node.LIGHT_OFF,
-                    task_context=f'组合抓取：{kind} 下潜到{target:.3f}m')
-                if not ok:
-                    self.log.warning(f'组合抓取：{kind} 下潜速度指令失败：{message}')
-                    break
-                self._wait(min(period, max(0.0, deadline-time.monotonic())))
-        finally:
-            # Cleanup gets its own deadline even after the 15-second budget.
-            neutral_ok, message = self.node._send_body_velocity(
-                lease_s=lease, wait_deadline=time.monotonic()+2.0,
-                light_color=self.node.LIGHT_OFF,
-                task_context=f'组合抓取：{kind} 结束目标深度下潜')
-            if not neutral_ok:
-                self.log.warning(f'组合抓取：{kind} 下潜停车失败：{message}')
-        if reached and neutral_ok and not self.node.stopped:
-            self.log.info(f'组合抓取：{kind} 已到目标深度{target:.3f}m，停止下潜')
-            return True
-        return False
+            f'深度容差=±{tolerance:.3f}m，超时={self.descent_timeout:.1f}s，'
+            f'固定XY=({point[0]:.3f},{point[1]:.3f})m，yaw={point[3]:.1f}°')
+        ok, message = self.node._send_action_goal(
+            BasicMotion.Goal.SET, point, 'xyzrz',
+            timeout=self.descent_timeout, wait_deadline=deadline,
+            cancel_wait_timeout=2.0,
+            light_color=self.node.LIGHT_OFF,
+            task_context=f'组合抓取：{kind} POS下潜到{target:.3f}m并保持夹爪对准位置')
+        if not ok:
+            self._check()
+            if not getattr(self.node, '_last_motion_cleanup_confirmed', True):
+                raise PickupFailure(f'{kind} POS下潜结束未确认，禁止继续运动：{message}')
+            self.log.warning(f'组合抓取：{kind} POS下潜失败：{message}')
+            return False
+        self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = point
+        # BasicMotion SET has a generic arrival tolerance. Keep its position
+        # target active and wait for the pickup depth tolerance before closing
+        # the ring claw or starting recovery. No velocity neutralization here:
+        # it would switch the MCU out of position hold at the grab point.
+        last_log = float('-inf')
+        while True:
+            self._check()
+            pose = self._pose()
+            now = time.monotonic()
+            error = target-pose[2]
+            if now > deadline:
+                self.log.warning(
+                    f'组合抓取：{kind} POS下潜超时，实测深度={pose[2]:.3f}m，'
+                    f'目标={target:.3f}m，残差={error:+.3f}m')
+                return False
+            if abs(error) <= tolerance:
+                self.log.info(
+                    f'组合抓取：{kind} POS已到抓取深度，实测={pose[2]:.3f}m，'
+                    f'目标={target:.3f}m，继续保持定位目标')
+                return True
+            if now-last_log >= controller._log_period:
+                self.log.info(
+                    f'[PICKUP POS] obj={kind:<4} z_m={pose[2]:7.3f} '
+                    f'target_z_m={target:7.3f} dz_m={error:+8.3f} '
+                    f'tol_m={tolerance:6.3f} remain_s={max(0.0, deadline-now):7.2f}')
+                last_log = now
+            self._wait(min(.05, max(0.0, deadline-time.monotonic())))
 
     def _mechanical_attempt(self, kind, controller):
         if kind == 'golf':
@@ -908,13 +916,12 @@ class RB26GrabBallRingTask:
         if not controller._wait_pre_descent_settle():
             raise PickupFailure('下潜前等待被取消')
         if not self._descend_to_depth(kind, controller):
-            # A vertical velocity timeout is a failed attempt, not a task
-            # abort.  First return to the work depth with a position SET so
-            # the next check/retry (and the following target) starts safely.
+            # A completed/confirmed failed POS action consumes this attempt.
+            # Recover to work depth before the next check/retry or target.
             self.log.warning(
-                f'组合抓取：{kind} 下潜或停车失败，使用SET上浮到作业深度后继续任务')
+                f'组合抓取：{kind} POS下潜失败，使用SET上浮到作业深度后继续任务')
             self._restore_work_depth(
-                f'组合抓取：{kind} 下潜超时后SET上浮到作业深度')
+                f'组合抓取：{kind} POS下潜失败后SET上浮到作业深度')
             return False
         if kind == 'ring':
             self._ring_servo(self.p.get('ring_close_angle_deg', 90.0), '合爪')

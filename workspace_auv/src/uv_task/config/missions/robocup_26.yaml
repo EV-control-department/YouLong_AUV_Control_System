@@ -31,9 +31,9 @@ mission:
       config: ../tasks/26rb_gate_task.yaml
       initial:
         poses:
-          - command: SET
-            axes: x
-            target: [1.0, 0.2, 0.2, 0.0] # 下潜0.2m
+          - command: BMOVE
+            axes: xyzrz
+            target: [0.0, 0.0, 0.0, 0.0]
           # - command: WTRAVEL
           #   axes: xyz
           #   target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。

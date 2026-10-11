@@ -92,15 +92,14 @@ params:
   # 目标对准直接发送SET位姿，不再另起速度伺服。
   settle_seconds: 3.0 # 外参平移到点后，继续定点保持3秒再下潜；组合抓取的球/环共用。
 
-  # 按实测Z下潜到当前目标深度；球到深度直接恢复，环到深度先合爪再恢复。
+  # 用SET位置目标下潜，固定外参对准后的XY和yaw，由ZIT6位置环到达目标Z。
+  # 深度进入servo.depth_tolerance_m后：球直接恢复，环先合爪再恢复；全过程保持POS。
   # 第n次目标 = 对应grab_depth_m + (n-1)*retry_depth_step_m，球/环分别计数。
   descent:
-    speed_mps: 0.03 # 下沉速度，NED 正值向下，单位：米/秒。
-    timeout: 15.0 # 最长下潜时间；到达目标深度立即停止，不等待满15秒。
+    timeout: 15.0 # 下潜SET及深度确认的总时限；到点立即进入下一阶段。
     retry_depth_step_m: 0.05 # 每次重试比上次加深5cm；首次不加，设0可禁用。
   # 恢复使用Z轴SET到work_depth_m，不再按固定时间上浮。
   # 定深动作超时沿用servo.position_command_timeout（默认10秒）。
-  vertical_publish_period: 0.05 # 速度指令周期，单位：秒。
   return_timeout: 60.0 # 抓后返回该目标原本下视对齐位姿的运动超时。
 
   # 最多尝试次数包含首次，球失败用尽后仍继续抓环。
