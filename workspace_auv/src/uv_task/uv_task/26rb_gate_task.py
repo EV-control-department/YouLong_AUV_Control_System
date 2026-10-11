@@ -896,7 +896,8 @@ class RB26GateTask:
 
     def execute(self):
         passed = skipped = 0
-        for index, observation_pose in enumerate(self.p['observation_poses']):
+        active_poses = self.p['observation_poses'][:self.p['gate_count']]
+        for index, observation_pose in enumerate(active_poses):
             self._gate_index = index
             self.node._task_failure_light_handled = False
             self._stage = '准备'

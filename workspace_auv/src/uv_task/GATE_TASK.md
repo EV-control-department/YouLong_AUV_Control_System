@@ -19,14 +19,18 @@
 
 ## 配置
 
-`config/tasks/26rb_gate_task.yaml` 当前配置一个门：
+`config/tasks/26rb_gate_task.yaml` 保留四个门的观测位姿，用 `gate_count` 选择实际执行数量：
 
 ```yaml
-gate_count: 1
+gate_count: 1            # 实际执行前 1–4 个门
 timeout: 720.0           # 每门总时限，包含导航、搜索、伺服和穿越
 max_failures: 1         # 允许失败后跳到下一门的次数
 observation:
-  poses: [[1.5, -2.0, 0.2, 0.0]]  # odom 绝对 [x,y,z,yaw]
+  poses:                # odom 绝对 [x,y,z,yaw]
+    - [0.5, 1.2, 0.34, 90.0] # 第 1 门
+    - [0.5, 1.2, 0.34, 90.0] # 第 2 门，暂用第 1 门位姿
+    - [0.5, 1.2, 0.34, 90.0] # 第 3 门，暂用第 1 门位姿
+    - [0.5, 1.2, 0.34, 90.0] # 第 4 门，暂用第 1 门位姿
   travel_timeout: 60.0
   set_timeout: 20.0
 fore_aft:
@@ -35,7 +39,9 @@ fore_aft:
   max_distance_m: 0.50
 ```
 
-`poses` 长度必须等于 `gate_count`（1–4）；新增门须填写真实观测位姿。
+`gate_count` 范围为 1–4，任务只按顺序执行 `poses` 的前 `gate_count` 条，
+其余配置保留备用。`poses` 最多四条，数量不能少于 `gate_count`。
+第 2–4 门暂时复制第 1 门的位置；实际使用前分别填写对应门的观测位姿。
 每个 pose 的 z 是该门搜索、对正和穿越全过程的巡游深度。
 `depth` 配置垂向增益、限速和容限；旧 `depth.front` 若显式配置且与 pose z 冲突，
 启动时报错。过门流程不再包含左右横向对正阶段。
