@@ -56,6 +56,13 @@ def validate_combined_params(params, *, complete=True):
                 if (isinstance(value, bool) or not isinstance(value, (int, float))
                         or not math.isfinite(value) or value <= 0):
                     raise ValueError(f'{gain_key} 必须是有限正数')
+        for suffix, default in (('ki', 0.0), ('kd', 0.0),
+                                ('integral_limit', 0.2)):
+            key = kind+'_servo_pid_'+suffix
+            value = params.get(key, default)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                raise ValueError(f'{kind}.servo.pid.{suffix} 必须是有限非负数')
     if 'frame_servo_gain' in params:
         value = params['frame_servo_gain']
         if (isinstance(value, bool) or not isinstance(value, (int, float))
@@ -164,6 +171,10 @@ class RB26GrabBallRingTask:
                 target_params['horizontal_hold_seconds'] = params[kind+'_hold_seconds']
             if kind+'_servo_gain' in params:
                 target_params['horizontal_servo_gain'] = params[kind+'_servo_gain']
+            for suffix in ('ki', 'kd', 'integral_limit'):
+                key = kind+'_servo_pid_'+suffix
+                if key in params:
+                    target_params['target_servo_pid_'+suffix] = params[key]
             return target_params
 
         self.ball = PickupController(node, target_servo_params('golf'))
@@ -426,11 +437,14 @@ class RB26GrabBallRingTask:
                     break
                 horizontal = np.zeros(2)
                 controller._servo_yaw_target = None
+                if window.mode != 'target' or detection is None:
+                    controller._reset_target_servo_pid()
                 if window.mode == 'target' and detection is not None:
                     controller._aligned_camera = camera
                     du, dv = normalized_image_error(self.node, camera, detection)
                     controller._servo_gain = self._target_servo_gain(kind, du, dv)
-                    pose, horizontal, du, dv = controller._horizontal_velocity(camera, detection)
+                    pose, horizontal, du, dv = controller._horizontal_velocity(
+                        camera, detection, target_pid=True)
                     if kind == 'ring':
                         self._sample_axis()
                     centred = abs(du) <= controller._pixel_tolerance and abs(dv) <= controller._pixel_tolerance
@@ -440,6 +454,7 @@ class RB26GrabBallRingTask:
                         stable_camera = camera
                     stable_since = (now if stable_since is None else stable_since) if centred and at_depth else None
                     if centred:
+                        controller._reset_target_servo_pid()
                         horizontal[:] = 0.
                     if stable_since is not None and now-stable_since >= controller._hold_seconds:
                         result = self._record_target(kind, controller, camera, detection, timed_out=False)
@@ -526,6 +541,7 @@ class RB26GrabBallRingTask:
             # Cleanup holds the measured heading; it must not finish an old
             # fallback yaw move after the shared visual deadline has expired.
             controller._servo_yaw_target = None
+            controller._reset_target_servo_pid()
             if controller._stop_horizontal_velocity(
                     light_color=self.node.LIGHT_OFF) is None:
                 raise PickupFailure('组合抓取：视觉修正结束停车保持失败')

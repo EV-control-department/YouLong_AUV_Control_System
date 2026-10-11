@@ -171,6 +171,9 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "horizontal_hold_seconds": float,
         "projection_depth_m": float,
         "horizontal_servo_gain": float,
+        "target_servo_pid_ki": float,
+        "target_servo_pid_kd": float,
+        "target_servo_pid_integral_limit": float,
         "max_horizontal_step_m": float,  # Legacy input accepted; velocity uses max_speed_mps.
         "horizontal_max_speed_mps": float,
         "depth_hold_gain": float,
@@ -262,6 +265,10 @@ TASK_SCHEMAS["26rb_grab_ball_ring"] = {
     "golf_pixel_tolerance_fraction": float, "golf_hold_seconds": float,
     "ring_pixel_tolerance_fraction": float, "ring_hold_seconds": float,
     "frame_servo_gain": float, "golf_servo_gain": float, "ring_servo_gain": float,
+    "golf_servo_pid_ki": float, "golf_servo_pid_kd": float,
+    "golf_servo_pid_integral_limit": float,
+    "ring_servo_pid_ki": float, "ring_servo_pid_kd": float,
+    "ring_servo_pid_integral_limit": float,
     "frame_yaw_gain": float, "frame_yaw_max_rate_deg_s": float,
     "golf_micro_servo_zone_fraction": float, "golf_micro_servo_gain": float,
     "ring_micro_servo_zone_fraction": float, "ring_micro_servo_gain": float,
@@ -295,6 +302,9 @@ PARAMETER_ALIASES = {
         "servo.log_period": "horizontal_servo_log_period",
         "servo.hold_seconds": "horizontal_hold_seconds",
         "servo.gain": "horizontal_servo_gain",
+        "servo.pid.ki": "target_servo_pid_ki",
+        "servo.pid.kd": "target_servo_pid_kd",
+        "servo.pid.integral_limit": "target_servo_pid_integral_limit",
         "servo.max_step_m": "max_horizontal_step_m",
         "servo.max_speed_mps": "horizontal_max_speed_mps",
         "servo.depth_gain": "depth_hold_gain",
@@ -374,6 +384,12 @@ PARAMETER_ALIASES["26rb_grab_ball_ring"] = {
     "loss.target_timeout": "target_loss_timeout",
     "loss.frame_timeout": "frame_loss_timeout",
     "pickup.order": "pickup_order",
+    "golf.servo.pid.ki": "golf_servo_pid_ki",
+    "golf.servo.pid.kd": "golf_servo_pid_kd",
+    "golf.servo.pid.integral_limit": "golf_servo_pid_integral_limit",
+    "ring.servo.pid.ki": "ring_servo_pid_ki",
+    "ring.servo.pid.kd": "ring_servo_pid_kd",
+    "ring.servo.pid.integral_limit": "ring_servo_pid_integral_limit",
     **{key: value for key, value in PARAMETER_ALIASES["26rb_grab_golf"].items()
        if value not in {"max_grab_retries", "ascent_speed_mps", "ascent_duration_seconds"}},
     # Legacy YAML spelling maps to the same work-depth key; specifying both
@@ -528,6 +544,16 @@ def _validate_params(task_name: str, params: dict[str, Any],
             sticky_seconds = float(flattened.get('lost_observation_hold_seconds', 2.0))
             if not math.isfinite(sticky_seconds) or sticky_seconds < 0.0:
                 raise ValueError('loss.sticky_seconds 必须是有限非负数')
+            pid_keys = (
+                ('target_servo_pid_ki', 'servo.pid.ki'),
+                ('target_servo_pid_kd', 'servo.pid.kd'),
+                ('target_servo_pid_integral_limit', 'servo.pid.integral_limit'),
+            ) if task_name == '26rb_grab_golf' else ()
+            for key, label in pid_keys:
+                value = flattened.get(key, 0.0)
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not math.isfinite(value) or value < 0.0):
+                    raise ValueError(f'{label} 必须是有限非负数')
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
     if task_name == "26rb_drop_ball_target_rack":

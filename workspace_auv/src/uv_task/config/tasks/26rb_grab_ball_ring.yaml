@@ -107,7 +107,12 @@ params:
     grab_depth_m: 0.65 # 机器人目标Z，暂按旧0.2+0.03*8的深度；不是球自身深度。
     pixel_tolerance_fraction: 0.02 # 球心归一化误差容差。
     hold_seconds: 0.5 # 球心进入容差后的保持时间，单位：秒。
-    servo_gain: 1.0 # 球的主水平伺服增益。
+    servo_gain: 1.0 # 球target PID的Kp。
+    servo:
+      pid:
+        ki: 0.05 # 球target积分增益；中心容差内或丢失时清零。
+        kd: 0.01 # 球target微分增益。
+        integral_limit: 0.2 # 归一化像素误差积分限幅，单位：秒。
     micro_servo:
       zone_fraction: 0.10 # 球心进入图像中心30%半径后切换微伺服增益。
       gain: 0.45 # 球进入微伺服区后的水平伺服增益。
@@ -117,7 +122,12 @@ params:
     grab_depth_m: 0.58 # 机器人目标Z，可与球分别设置；不是环自身深度。
     pixel_tolerance_fraction: 0.03 # 环中心归一化误差容差。
     hold_seconds: 0.3 # 环中心进入容差后的保持时间，单位：秒。
-    servo_gain: 1.0 # 环的主水平伺服增益。
+    servo_gain: 1.0 # 环target PID的Kp。
+    servo:
+      pid:
+        ki: 0.05 # 环target积分增益；中心容差内或丢失时清零。
+        kd: 0.01 # 环target微分增益。
+        integral_limit: 0.2 # 归一化像素误差积分限幅，单位：秒。
     micro_servo:
       zone_fraction: 0.20 # 环中心进入图像中心30%半径后切换微伺服增益。
       gain: 0.45 # 环进入微伺服区后的水平伺服增益。

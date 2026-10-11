@@ -36,6 +36,16 @@ class RB26GrabGolfTask:
         self._servo_yaw_gain = 1.2
         self._servo_max_yaw_rate = 10.0
         self._servo_yaw_tolerance = 3.0
+        # ``horizontal_servo_gain`` remains Kp; I/D are optional and default
+        # to zero so old task configurations retain their proportional motion.
+        self._target_servo_ki = float(params.get('target_servo_pid_ki', 0.0))
+        self._target_servo_kd = float(params.get('target_servo_pid_kd', 0.0))
+        self._target_servo_integral_limit = float(
+            params.get('target_servo_pid_integral_limit', 0.2))
+        self._target_pid_integral = np.zeros(2, dtype=float)
+        self._target_pid_previous_error = None
+        self._target_pid_previous_time = None
+        self._target_pid_camera = None
 
         self._aligned_camera = None
         self._pending_golf_priority = None
@@ -187,13 +197,69 @@ class RB26GrabGolfTask:
         c, s = math.cos(yaw), math.sin(yaw)
         return c * dx - s * dy, s * dx + c * dy
 
-    def _horizontal_velocity(self, camera_name, detection):
+    def _reset_target_servo_pid(self):
+        self._target_pid_integral[:] = 0.0
+        self._target_pid_previous_error = None
+        self._target_pid_previous_time = None
+        self._target_pid_camera = None
+
+    def _pid_body_image_step(self, camera_name, du, dv):
+        """Map target image error to bounded body velocity with I/D correction."""
+        camera = self._node.camera_extrinsics[camera_name]
+        if self._target_pid_camera != camera_name:
+            self._reset_target_servo_pid()
+            self._target_pid_camera = camera_name
+
+        now = time.monotonic()
+        error = np.array([float(du), float(dv)], dtype=float)
+        previous_time = self._target_pid_previous_time
+        previous_error = self._target_pid_previous_error
+        dt = (0.0 if previous_time is None else
+              _clamp(now-previous_time, 0.0, max(0.5, 4*self._servo_period)))
+        derivative = (np.zeros(2, dtype=float) if previous_error is None or dt <= 1e-6
+                      else (error-previous_error)/dt)
+        candidate_integral = np.clip(
+            self._target_pid_integral + error*dt,
+            -self._target_servo_integral_limit,
+            self._target_servo_integral_limit)
+
+        def to_body(integral):
+            optical = (self._servo_gain*error
+                       + self._target_servo_ki*integral
+                       + self._target_servo_kd*derivative)
+            return (camera.optical_to_body @ np.array(
+                [optical[0], optical[1], 0.0])) * self._projection_depth
+
+        body = to_body(candidate_integral)
+        norm = math.hypot(float(body[0]), float(body[1]))
+        if (norm > self._max_xy_speed
+                and float(np.dot(error, self._servo_gain*error
+                                 + self._target_servo_ki*candidate_integral
+                                 + self._target_servo_kd*derivative)) > 0.0):
+            # Conditional integration: do not accumulate error while the
+            # bounded XY command is already saturated in the same direction.
+            body = to_body(self._target_pid_integral)
+        else:
+            self._target_pid_integral = candidate_integral
+
+        norm = math.hypot(float(body[0]), float(body[1]))
+        if norm > self._max_xy_speed:
+            body[:2] *= self._max_xy_speed/norm
+        self._target_pid_previous_error = error
+        self._target_pid_previous_time = now
+        return float(body[0]), float(body[1])
+
+    def _horizontal_velocity(self, camera_name, detection, *, target_pid=False):
         """Project pixel error into bounded world-horizontal velocity (m/s)."""
         du, dv = normalized_image_error(self._node, camera_name, detection)
         camera = self._node.camera_extrinsics[camera_name]
-        body_vx, body_vy = body_image_step(
-            camera, du, dv, self._projection_depth,
-            self._servo_gain, self._max_xy_speed)
+        if target_pid:
+            body_vx, body_vy = self._pid_body_image_step(camera_name, du, dv)
+        else:
+            self._reset_target_servo_pid()
+            body_vx, body_vy = body_image_step(
+                camera, du, dv, self._projection_depth,
+                self._servo_gain, self._max_xy_speed)
         pose = self._servo_pose()
         world = body_to_world_rotation(pose) @ np.array([body_vx, body_vy, 0.0])
         return pose, world[:2], du, dv
@@ -308,6 +374,7 @@ class RB26GrabGolfTask:
                 now = time.monotonic()
                 horizontal = np.zeros(2)
                 if detection is None:
+                    self._reset_target_servo_pid()
                     hold_since = None
                     age = now-last_target_received
                     if (last_world_target is not None
@@ -326,7 +393,8 @@ class RB26GrabGolfTask:
                             f'{self._task_name}：{label} 未收到有效检测，{state}')
                         last_status_log = now
                 else:
-                    pose, horizontal, du, dv = self._horizontal_velocity(camera_name, detection)
+                    pose, horizontal, du, dv = self._horizontal_velocity(
+                        camera_name, detection, target_pid=True)
                     received_at = float(getattr(priority, 'received_at', now))
                     if (camera_name != last_target_camera
                             or received_at > last_target_received):
@@ -344,6 +412,7 @@ class RB26GrabGolfTask:
                     centered = abs(du) <= self._pixel_tolerance and abs(dv) <= self._pixel_tolerance
                     at_depth = abs(pose[2]-self._servo_depth) <= self._depth_hold_tolerance
                     if centered:
+                        self._reset_target_servo_pid()
                         horizontal = np.zeros(2)
                     at_yaw = (self._servo_yaw_target is None or
                               abs((self._servo_yaw_target-pose[5]+180.0) % 360.0-180.0) <= self._servo_yaw_tolerance)
@@ -367,6 +436,7 @@ class RB26GrabGolfTask:
         except (KeyError, ValueError, RuntimeError, cv2.error, np.linalg.LinAlgError) as error:
             self._logger.error(f'{self._task_name}：{label} 定深速度伺服失败：{error}')
         finally:
+            self._reset_target_servo_pid()
             try:
                 recorded = self._stop_horizontal_velocity()
             except Exception as error:
