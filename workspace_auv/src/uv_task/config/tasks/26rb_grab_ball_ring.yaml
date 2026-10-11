@@ -109,7 +109,7 @@ params:
     hold_seconds: 0.5 # 球心进入容差后的保持时间，单位：秒。
     servo_gain: 1.0 # 球的主水平伺服增益。
     micro_servo:
-      zone_fraction: 0.20 # 球心进入图像中心30%半径后切换微伺服增益。
+      zone_fraction: 0.10 # 球心进入图像中心30%半径后切换微伺服增益。
       gain: 0.45 # 球进入微伺服区后的水平伺服增益。
   ring:
     class: red_ring
@@ -120,7 +120,7 @@ params:
     servo_gain: 1.0 # 环的主水平伺服增益。
     micro_servo:
       zone_fraction: 0.20 # 环中心进入图像中心30%半径后切换微伺服增益。
-      gain: 0.25 # 环进入微伺服区后的水平伺服增益。
+      gain: 0.45 # 环进入微伺服区后的水平伺服增益。
     # 伺服途中采集方向；方向无效时保持航向，转向和对爪同时执行。
     orientation_min_quality: 0.8
     orientation_min_samples: 3
