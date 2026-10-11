@@ -25,10 +25,10 @@ params:
     max_yaw_rate_deg_s: 10.0
     depth_gain: 0.8
     max_vertical_speed_mps: 0.08
-    speed_mps: 0.15 # 请求巡游速度；uv_control 按配置限幅。
+    speed_mps: 0.28 # 请求巡游速度；uv_control 按配置限幅。
     detection_timeout: 0.8
     min_confidence: 0.02
-    detection_stop_delay: 0.5 # 巡游时下视看到 frame 后继续半秒，再取消 BLINE。
+    detection_stop_delay: 1.5 # 巡游时下视看到 frame 后继续半秒，再取消 BLINE。
     fallback_observe_seconds: 2.0 # 定点到预设 XY/巡游深度后等待新的下视检测。
     fallback_rotate_speed_deg_s: 30.0 # 定点观察失败后，保持深度缓慢旋转搜索 frame。
     fallback_rotate_degrees: 360.0 # 最多旋转一整圈；期间发现 frame 会立即停止。
@@ -58,9 +58,9 @@ params:
     period: 0.15 # 水平伺服周期，单位：秒。
     log_period: 0.5 # 水平伺服日志周期，单位：秒。
     hold_seconds: 0.5 # 高尔夫球心进入容差后的保持时间，单位：秒。
-    projection_depth_m: 0.6 # 像素修正的固定米制尺度，不是观测出的距离。
-    gain: 0.8 # 像素误差到水平速度的增益，单位：1/秒。
-    max_speed_mps: 0.03 # 水平合速度上限，单位：米/秒。
+    projection_depth_m: 0.7 # 像素修正的固定米制尺度，不是观测出的距离。
+    gain: 0.45 # 像素误差到水平速度的增益，单位：1/秒。
+    max_speed_mps: 0.06 # 水平合速度上限，单位：米/秒。
     depth_gain: 0.8 # 实测深度偏差到世界垂直速度的增益，单位：1/秒。
     max_vertical_speed_mps: 0.08 # 定深修正最大垂直速度，单位：米/秒。
     depth_tolerance_m: 0.03 # 进入居中保持需同时满足的深度误差，单位：米。
@@ -106,7 +106,7 @@ params:
     max_yaw_rate_deg_s: 10.0
     servo:
       open_angle_deg: 270.0 # servo_id=2，直接给角度数值。
-      close_angle_deg: 150.0 # 下沉完成后合爪，再上浮。
+      close_angle_deg: 80.0 # 下沉完成后合爪，再上浮。
       repeat_count: 3
       repeat_period: 0.1
       settle_seconds: 1.0
