@@ -3,7 +3,7 @@ task: 26rb_grab_ball_ring
 params:
   # 全任务作业深度：搜索、frame/球/环水平伺服、抓取前后恢复共用。
   # NED向下为正，单位米；仅抓取下沉阶段暂时离开此深度。
-  work_depth_m: 0.2
+  work_depth_m: 0.05
   depth:
     timeout: 15.0 # 进入作业深度的SET动作超时，单位：秒。
   # 使用 robotcup20260901.yaml 中的 canonical detector class name。
@@ -48,11 +48,12 @@ params:
     timeout: 5.0 # 抓后回到本次目标下视对齐位姿时启动；新鲜双目确认目标消失。
   loss:
     timeout: 5.0 # 目标丢失回frame；frame丢失闭环回历史位姿或预设位置。
+    sticky_seconds: 2.0 # 丢失frame/目标后，沿最后有效世界位置低增益伺服的最长时间。
 
   # frame/目标/回位连续速度修正，所有切换共用servo截止时间。
   vision:
     detection_timeout: 0.8 # 检测结果最大允许年龄，单位：秒。
-    pixel_tolerance_fraction: 0.02 # 目标中心归一化误差容差。
+    pixel_tolerance_fraction: 0.05 # 目标中心归一化误差容差。
   servo:
     timeout: 20.0 # 与find/check同起点；到期且曾看到目标时仍按最后观测完成抓取。
     period: 0.15 # 水平伺服周期，单位：秒。

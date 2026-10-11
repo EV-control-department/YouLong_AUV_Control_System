@@ -57,6 +57,10 @@ def validate_combined_params(params, *, complete=True):
         value = params.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f'{key} 必须是有限正数')
+    sticky_seconds = params.get('lost_observation_hold_seconds', 2.0)
+    if (isinstance(sticky_seconds, bool) or not isinstance(sticky_seconds, (int, float))
+            or not math.isfinite(sticky_seconds) or sticky_seconds < 0):
+        raise ValueError('lost_observation_hold_seconds 必须是有限非负数')
     for key, default in (('ring_servo_repeat_period', .1), ('ring_servo_settle_seconds', 1.0)):
         value = params.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
@@ -167,7 +171,7 @@ class RB26GrabBallRingTask:
         self._restore_work_depth('组合抓取：抓取后恢复作业深度')
         self._set_pose(anchor, '组合抓取：返回'+kind+'下视对齐位姿', axes='xyrz')
 
-    def _fresh_detection(self, class_id, controller):
+    def _fresh_detection(self, class_id, controller, *, active_camera=None):
         with self.node._perception_lock:
             entries = dict(self.node._down_detections)
         candidates = []
@@ -179,12 +183,13 @@ class RB26GrabBallRingTask:
                 if detection is not None:
                     candidates.append((entry[0], camera, detection))
         if not candidates:
-            return None, None
+            return None, None, None
         # Keep one eye while it still has a valid observation, then switch to
         # the freshest other eye. Both eyes count as visibility for loss timing.
-        active = getattr(controller, '_aligned_camera', None)
-        selected = next((item for item in candidates if item[1] == active), max(candidates, key=lambda x: x[0]))
-        return selected[1], selected[2]
+        selected = next(
+            (item for item in candidates if item[1] == active_camera),
+            max(candidates, key=lambda x: x[0]))
+        return selected[1], selected[2], selected[0]
 
     def _fallback_pose(self):
         recorded = self.state.pickup.last_servo_pose
@@ -193,10 +198,13 @@ class RB26GrabBallRingTask:
         position = self.p['collection_frame_position']
         return (float(position[0]), float(position[1]), self.work_depth, self._pose()[5])
 
-    def _record_target(self, kind, controller, camera, detection, *, timed_out):
+    def _record_target(self, kind, controller, camera, detection, *, timed_out,
+                       world_target=None):
         pose = self._pose()
         anchor = (*pose[:2], self.work_depth, pose[5])
-        target = target_world_xy(self.node, camera, detection, pose, controller._projection_depth)
+        target = (target_world_xy(self.node, camera, detection, pose,
+                                  controller._projection_depth)
+                  if world_target is None else world_target)
         self._targets[kind] = (target, pose, camera)
         if kind == 'ring':
             self._ring_axis_at_alignment = self._axis_estimate()
@@ -226,6 +234,12 @@ class RB26GrabBallRingTask:
         self.sample_cursor = None
         last_target_camera = None
         last_target_detection = None
+        last_target_world = None
+        last_target_world_camera = None
+        last_target_received = float('-inf')
+        last_frame_world = None
+        last_frame_camera = None
+        last_frame_received = float('-inf')
         result = None
         try:
             while True:
@@ -239,9 +253,26 @@ class RB26GrabBallRingTask:
                     cursor = sequence
                     window.observe(received, camera, message, controller._golf_class_id,
                                    controller._detection_timeout)
-                camera, detection = self._fresh_detection(controller._golf_class_id, controller)
+                camera, detection, target_received = self._fresh_detection(
+                    controller._golf_class_id, controller,
+                    active_camera=(controller._aligned_camera
+                                   if window.mode == 'target' else None))
                 if detection is not None:
                     last_target_camera, last_target_detection = camera, detection
+                    if (camera != last_target_world_camera
+                            or target_received > last_target_received):
+                        pose = self._pose()
+                        try:
+                            world_target = target_world_xy(
+                                self.node, camera, detection, pose,
+                                controller._projection_depth)
+                        except (AttributeError, KeyError, ValueError,
+                                np.linalg.LinAlgError):
+                            world_target = None
+                        if world_target is not None:
+                            last_target_world = world_target
+                            last_target_world_camera = camera
+                            last_target_received = target_received
                 # A fresh cached sighting may predate entry into a new ring stage.
                 if not checking and detection is not None and now <= window.search_deadline:
                     window.seen = True
@@ -252,7 +283,24 @@ class RB26GrabBallRingTask:
                 if exhausted and window.seen:
                     result = 'exhausted'
                     break
-                frame_camera, frame = self._fresh_detection(controller._collection_class_id, controller)
+                frame_camera, frame, frame_received = self._fresh_detection(
+                    controller._collection_class_id, controller,
+                    active_camera=(controller._aligned_camera
+                                   if window.mode == 'frame' else None))
+                if frame is not None and (frame_camera != last_frame_camera
+                        or frame_received > last_frame_received):
+                    pose = self._pose()
+                    try:
+                        world_frame = target_world_xy(
+                            self.node, frame_camera, frame, pose,
+                            controller._projection_depth)
+                    except (AttributeError, KeyError, ValueError,
+                            np.linalg.LinAlgError):
+                        world_frame = None
+                    if world_frame is not None:
+                        last_frame_world = world_frame
+                        last_frame_camera = frame_camera
+                        last_frame_received = frame_received
                 if window.transition(now, detection is not None, frame is not None):
                     stable_since = frame_stable_since = None
                 if announced != window.mode:
@@ -275,7 +323,8 @@ class RB26GrabBallRingTask:
                         # pickup sequence after a real sighting.
                         result = self._record_target(
                             kind, controller, last_target_camera,
-                            last_target_detection, timed_out=True)
+                            last_target_detection, timed_out=True,
+                            world_target=last_target_world)
                     else:
                         pose = self._pose()
                         self.state.update_pickup(last_servo_pose=(*pose[:2], self.work_depth, pose[5]))
@@ -310,6 +359,30 @@ class RB26GrabBallRingTask:
                             self.state.update_pickup(last_servo_pose=(*pose[:2], self.work_depth, pose[5]))
                     else:
                         frame_stable_since = None
+                elif window.mode == 'target' and last_target_world is not None:
+                    age = now-last_target_received
+                    if 0.0 <= age <= controller._lost_observation_hold_seconds:
+                        pose = self._pose()
+                        delta = np.asarray(last_target_world)-np.asarray(pose[:2])
+                        tolerance = max(0.01, controller._projection_depth*controller._pixel_tolerance)
+                        if np.linalg.norm(delta) > tolerance:
+                            horizontal = bounded_velocity(
+                                delta, controller._servo_gain*0.5,
+                                controller._max_xy_speed)
+                        controller._aligned_camera = last_target_world_camera
+                    stable_since = None
+                elif window.mode == 'frame' and last_frame_world is not None:
+                    age = now-last_frame_received
+                    if 0.0 <= age <= controller._lost_observation_hold_seconds:
+                        pose = self._pose()
+                        delta = np.asarray(last_frame_world)-np.asarray(pose[:2])
+                        tolerance = max(0.01, controller._projection_depth*controller._pixel_tolerance)
+                        if np.linalg.norm(delta) > tolerance:
+                            horizontal = bounded_velocity(
+                                delta, controller._servo_gain*0.5,
+                                controller._max_xy_speed)
+                        controller._aligned_camera = last_frame_camera
+                    frame_stable_since = None
                 elif window.mode == 'return':
                     anchor = self._fallback_pose()
                     pose = self._pose()

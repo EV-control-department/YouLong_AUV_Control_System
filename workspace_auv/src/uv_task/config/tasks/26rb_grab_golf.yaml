@@ -43,6 +43,8 @@ params:
   vision:
     detection_timeout: 0.8 # 检测结果最大允许年龄，单位：秒。
     pixel_tolerance_fraction: 0.02 # 目标中心归一化误差容差。
+  loss:
+    sticky_seconds: 2.0 # 丢失frame/目标后，沿最后有效世界位置低增益伺服的最长时间。
   servo:
     camera_priority_seconds: 3.0 # 谁先观测谁获得固定时长优先权，丢目标或超时提前释放。
     timeout: 30.0 # 单次水平视觉伺服最长时间，单位：秒。

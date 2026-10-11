@@ -15,6 +15,7 @@ from uv_task.down_camera_servo import (
 )
 from uv_task.task_outcome import TaskOutcome
 from uv_task.collection_frame_search import CollectionFrameSearch
+from uv_task.pickup_alignment import target_world_xy, bounded_velocity
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -50,6 +51,8 @@ class RB26GrabGolfTask:
 
         self._detection_timeout = max(
             0.1, float(params.get('detection_timeout', 0.8)))
+        self._lost_observation_hold_seconds = max(
+            0.0, float(params.get('lost_observation_hold_seconds', 2.0)))
         self._priority_seconds = max(
             0.1, float(params.get('camera_priority_seconds', 3.0)))
         self._observe_seconds = max(
@@ -273,6 +276,9 @@ class RB26GrabGolfTask:
         hold_generation = None
         hold_since = None
         last_status_log = float('-inf')
+        last_world_target = None
+        last_target_camera = None
+        last_target_received = float('-inf')
         completed = False
         recorded = None
         self._node._set_task_phase_light(
@@ -303,12 +309,38 @@ class RB26GrabGolfTask:
                 horizontal = np.zeros(2)
                 if detection is None:
                     hold_since = None
+                    age = now-last_target_received
+                    if (last_world_target is not None
+                            and 0.0 <= age <= self._lost_observation_hold_seconds):
+                        pose = self._servo_pose()
+                        delta = np.asarray(last_world_target)-np.asarray(pose[:2])
+                        tolerance = max(0.01, self._projection_depth*self._pixel_tolerance)
+                        if np.linalg.norm(delta) > tolerance:
+                            horizontal = bounded_velocity(
+                                delta, self._servo_gain*0.5, self._max_xy_speed)
                     if now-last_status_log >= self._log_period:
+                        state = ('沿最后有效位置低速伺服'
+                                 if np.linalg.norm(horizontal) > 1e-6
+                                 else '停止XY并继续定深')
                         self._logger.info(
-                            f'{self._task_name}：{label} 未收到有效检测，停止 XY 并继续定深')
+                            f'{self._task_name}：{label} 未收到有效检测，{state}')
                         last_status_log = now
                 else:
                     pose, horizontal, du, dv = self._horizontal_velocity(camera_name, detection)
+                    received_at = float(getattr(priority, 'received_at', now))
+                    if (camera_name != last_target_camera
+                            or received_at > last_target_received):
+                        try:
+                            world_target = target_world_xy(
+                                self._node, camera_name, detection, pose,
+                                self._projection_depth)
+                        except (AttributeError, KeyError, ValueError,
+                                np.linalg.LinAlgError):
+                            world_target = None
+                        if world_target is not None:
+                            last_world_target = world_target
+                            last_target_camera = camera_name
+                            last_target_received = received_at
                     centered = abs(du) <= self._pixel_tolerance and abs(dv) <= self._pixel_tolerance
                     at_depth = abs(pose[2]-self._servo_depth) <= self._depth_hold_tolerance
                     if centered:

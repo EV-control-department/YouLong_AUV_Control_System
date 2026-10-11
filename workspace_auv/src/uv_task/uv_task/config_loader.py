@@ -162,6 +162,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "collection_frame_observe_seconds": float,
         "golf_observe_seconds": float,
         "detection_timeout": float,
+        "lost_observation_hold_seconds": float,
         "camera_priority_seconds": float,
         "horizontal_servo_timeout": float,
         "horizontal_servo_period": float,
@@ -276,6 +277,7 @@ PARAMETER_ALIASES = {
     "26rb_gate_task": GATE_ALIASES,
     "26rb_grab_golf": {
         "servo.camera_priority_seconds": "camera_priority_seconds",
+        "loss.sticky_seconds": "lost_observation_hold_seconds",
         "claw.prepare_angle_rad": "claw_prepare_angle_rad",
         "claw.prepare_repeat_count": "claw_prepare_repeat_count",
         "claw.prepare_repeat_period": "claw_prepare_repeat_period",
@@ -512,6 +514,9 @@ def _validate_params(task_name: str, params: dict[str, Any],
             if task_name == "26rb_grab_ball_ring":
                 search_params = {**flattened, 'search_cruise_depth_m': flattened.get('work_depth_m', 0.2)}
             validate_search_params(search_params)
+            sticky_seconds = float(flattened.get('lost_observation_hold_seconds', 2.0))
+            if not math.isfinite(sticky_seconds) or sticky_seconds < 0.0:
+                raise ValueError('loss.sticky_seconds 必须是有限非负数')
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
     if task_name == "26rb_drop_ball_target_rack":
