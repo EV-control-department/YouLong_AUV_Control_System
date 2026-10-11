@@ -878,7 +878,7 @@ def _parse_args():
             ('--duration-minutes', 'duration_minutes', 60.0),
             ('--max-session-gb', 'max_session_gb', 4.8 if args.profile == 'competition' else 0.0),
             ('--topic-regex', 'topic_regex',
-             r'^/(clock|rosout|diagnostics|(auv/)?basic_motion/pose_info|task/(status|mapping/(map|events))|perception/(mapping/observations|aruco/ids|objects|target_positions|target_observations)|zit6/(state/(pos|vel|status|odom)|cmd/(setpoint|servo|light)))$'),
+             r'^/(clock|rosout|diagnostics|(auv/)?basic_motion/pose_info|task/(status|mapping/(map|events|conclusion))|perception/(mapping/observations|aruco/ids|objects|target_positions|target_observations)|zit6/(state/(pos|vel|status|odom)|cmd/(setpoint|servo|light)))$'),
         ):
             default(option, attribute, value)
     for attribute, value in (('video_source', 'go2rtc'), ('video_width', 0),

@@ -1,0 +1,35 @@
+# 全流程联调任务树：一次START建立公共odom，后续阶段不再次重置原点。
+# 配置数值沿用各任务文件；按本次START原点实测区域、盘心、收集框坐标。
+# [P0-核对] mapping类别0/1、转盘3、海参2/框4须对应实际权重；本链不自动切换YOLO模型。
+# 任一步失败/停止会终止后续任务；return_origin是正常完成后的返回步骤。
+mission:
+  name: full_flow_mapping_turntable_trepang_return
+  tasks:
+    - name: start
+      config: ../tasks/start.yaml
+      params:
+        skip_preparation: true
+
+    - name: mapping_grid
+      config: ../tasks/mapping_grid.json
+      params:
+        enable_traversal: true       # 完整巡检后沿原路线反向再走一圈。
+        enable_conclusion: true      # false关闭结论接口；地图仍输出。
+        require_complete_survey: true # 未执行首圈时失败，禁止跳到转盘。
+
+    - name: turntable
+      config: ../tasks/turntable_simple.yaml
+      # 盘心预输入接口位于上述文件params.disk_pose_odom，使用同一次START坐标。
+      # 联调请填写转盘盘心；[]表示在mapping结束位置直接寻找YOLO框。
+
+    - name: grab_sea_cucumber
+      config: ../tasks/grab_sea_cucumber.yaml
+      # search.pose、delivery.pose、collection_center_odom_xy也使用同一次START坐标。
+      # 抓取、复检、运输和投放按任务自身参数执行，正常结束后返回起点。
+
+    - name: return_origin
+      config: ../tasks/return_origin.yaml
+      params:
+        state_settle_time: 0.3
+        timeout: 150.0
+      # 返回当前任务odom的x=0,y=0,yaw=0，保持实测深度，不下发z=0。

@@ -760,7 +760,10 @@ class BasicMotionNode(Node):
             step_along = base_step * math.exp(-LATERAL_LAMBDA * abs(e_lateral))
 
             dz_total = target_z - p.z
-            drz_total = target_yaw_degree - p.rz
+            # set_step把增量加到上一条目标target_odom，而非实测pose。
+            # 按pose算差再加到target会反复累加控制滞后；不wrap还会把
+            # 179°→-179°误拆成-358°，导致中间目标大幅转向。
+            drz_total = wrap_deg(target_yaw_degree - target_odom.rz)
             steps_remaining = max(1, math.ceil(dist_xy / base_step))
 
             step_z = dz_total / steps_remaining
@@ -1146,7 +1149,7 @@ class BasicMotionNode(Node):
                                    'z': tz, 'yaw': trz}
             self.get_logger().info(
                 f'WTRAVEL: 目标=({tx:.2f}, {ty:.2f}, {tz:.2f}), '
-                f'方向角={math.degrees(math.atan2(ty - t.y, tx - t.x)):.1f}°')
+                f'方向角={math.degrees(math.atan2(ty - p.y, tx - p.x)):.1f}°')
             success = self._travel_world(tx, ty, tz, trz, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.BTRAVEL:
             off = p.body_to_world(x, y)

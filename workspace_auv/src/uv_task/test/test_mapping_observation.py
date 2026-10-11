@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import numpy as np
 from uv_msgs.msg import MappingObservation, MappingObservationArray
 from uv_task.config_loader import load_task
 from uv_task.mapping_task import MappingTask
@@ -40,7 +41,8 @@ class _Node:
         return SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=1_000_000_000))
 
     def get_logger(self):
-        return SimpleNamespace(info=lambda *_: None, warning=lambda *_: None)
+        return SimpleNamespace(info=lambda *_: None, warning=lambda *_: None,
+                               error=lambda *_: None)
 
 
 def _frame(stamp, *observations, processed=True):
@@ -178,23 +180,178 @@ def test_unverified_fallback_keeps_visual_cells_and_marks_guesses():
     assert payload['cells'][4]['source'] == 'none'
 
 
-def test_fallback_map_does_not_trigger_cone_traversal(monkeypatch):
+@pytest.mark.parametrize('enabled', [True, False])
+def test_fallback_map_retraces_survey_without_vision_positions(monkeypatch, enabled):
     path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
     params = load_task(path)[0]['params']
+    params['enable_traversal'] = enabled
     task = MappingTask(_Node(), params)
     task.perception_stats['processed_frames'] = 1
     task.camera_ready = True
     task.pose_history.append(object())
     monkeypatch.setattr('uv_task.mapping_task.rclpy.ok', lambda: True)
-    monkeypatch.setattr(task, '_travel_to', lambda *_: True)
+    travels = []
+    monkeypatch.setattr(task, '_travel_to',
+                        lambda position, label: travels.append((list(position), label)) or True)
     monkeypatch.setattr(task, '_read_tag',
                         lambda: task._assume_tag('标记未识别') or True)
     monkeypatch.setattr(task, '_observe_cones', lambda: False)
     monkeypatch.setattr(task, '_select_final_assignment', lambda: {})
-    monkeypatch.setattr(task, '_traverse_cones',
-                        lambda: pytest.fail('猜测地图不得触发自动遍历'))
-
     assert task.execute() is True
     assert task.state == 'complete_with_fallback'
     assert len(task.final_assignment) == 4
-    assert task.traversal_order == []
+    reverse = list(reversed(params['visit_order']))
+    assert task.traversal_order == (reverse if enabled else [])
+    assert len(travels) == (19 if enabled else 10)
+    if enabled:
+        assert [position for position, _ in travels[10:-1]] == [
+            task.grid_centers[cell][:2].tolist() for cell in reverse[1:]]
+        assert travels[-1][0] == [params['tag_x'], params['tag_y']]
+    assert task.filters == {}  # Neither fused positions nor avoidance circles required.
+
+
+def test_conclusion_uses_fallback_even_when_visual_assignment_disagrees():
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    task = MappingTask(_Node(), load_task(path)[0]['params'])
+    task.publish_map()
+    assert json.loads(task.conclusion_pub.messages[-1].data)['ready'] is False
+    task.final_assignment = {0: 0, 1: 0, 3: 1, 5: 1}
+    task.tag_id = 18
+    task.tag_filter = SimpleNamespace(position=np.array([1., 2., 1.]),
+                                     covariance=np.eye(3), observations=4)
+    task.publish_map()
+    conclusion = json.loads(task.conclusion_pub.messages[-1].data)
+    assert conclusion['ready'] is True
+    assert conclusion['assignment'] == {'2': 0, '6': 0, '4': 1, '8': 1}
+    assert conclusion['tag']['id'] == 16
+    assert conclusion['verified'] is False
+    assert conclusion['source'] == 'fallback'
+    payload = json.loads(task.map_pub.messages[-1].data)
+    assert payload['tag']['id'] == 18
+    assert payload['final_assignment'] == {'0': 0, '1': 0, '3': 1, '5': 1}
+    assert payload['conclusion'] == conclusion
+
+
+def test_invalid_conclusion_does_not_publish_ready_assignment():
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    params = load_task(path)[0]['params']
+    params['fallback_round_cells'] = [2, 8]
+    task = MappingTask(_Node(), params)
+    task.final_assignment = {0: 0, 1: 0, 3: 1, 5: 1}
+    task.publish_map()
+    conclusion = json.loads(task.conclusion_pub.messages[-1].data)
+    assert not conclusion['ready'] and not conclusion['valid']
+    assert conclusion['assignment'] == {}
+
+
+def test_reverse_traversal_stops_after_failed_waypoint(monkeypatch):
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    task = MappingTask(_Node(), load_task(path)[0]['params'])
+    task.visit_order = list(task.params['visit_order'])
+    monkeypatch.setattr(task, '_ready', lambda: True)
+    travels = []
+    monkeypatch.setattr(task, '_travel_to',
+                        lambda position, label: travels.append(label) or False)
+    with pytest.raises(RuntimeError, match='反向遍历格点'):
+        task._traverse_cones()
+    assert len(travels) == 1
+    assert task.traversal_order == [task.visit_order[-1]]
+
+
+def test_reverse_traversal_requires_completed_first_lap():
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    task = MappingTask(_Node(), load_task(path)[0]['params'])
+    task.visit_order = [8, 7]
+    with pytest.raises(RuntimeError, match='巡检路线未完整'):
+        task._traverse_cones()
+
+
+def test_traversal_mission_explicitly_enables_second_lap():
+    from uv_task.config_loader import load_mission
+    root = Path(__file__).parents[1] / 'config/missions'
+    assert load_mission(root/'mapping_grid.json')[-1]['params']['enable_traversal'] is False
+    assert load_mission(root/'mapping_grid_traversal.json')[-1]['params']['enable_traversal'] is True
+
+
+def test_new_run_clears_previous_latched_conclusion():
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    params = load_task(path)[0]['params']
+    node = _Node()
+    first = MappingTask(node, params)
+    first.final_assignment = {2: 0, 6: 0, 4: 1, 8: 1}
+    first.publish_map()
+    assert json.loads(first.conclusion_pub.messages[-1].data)['ready']
+    second = MappingTask(node, params)
+    second.publish_map()
+    assert second.conclusion_pub is first.conclusion_pub
+    assert not json.loads(second.conclusion_pub.messages[-1].data)['ready']
+
+
+def test_no_camera_does_not_move_without_a_completed_survey(monkeypatch):
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    task = MappingTask(_Node(), load_task(path)[0]['params'])
+    monkeypatch.setattr(task, '_ready', lambda: False)
+    monkeypatch.setattr('uv_task.mapping_task.rclpy.ok', lambda: True)
+    monkeypatch.setattr(task, '_travel_to', lambda *_: pytest.fail('未完成首圈不能遍历'))
+    assert task.execute()
+    assert task.visit_order == task.traversal_order == []
+    assert json.loads(task.conclusion_pub.messages[-1].data)['ready']
+
+
+def test_disabled_conclusion_keeps_map_without_creating_result_publisher():
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    params = load_task(path)[0]['params']
+    params['enable_conclusion'] = False
+    task = MappingTask(_Node(), params)
+    task.publish_map()
+    assert task.conclusion_pub is None
+    payload = json.loads(task.map_pub.messages[-1].data)
+    assert payload['conclusion_enabled'] is False
+    assert payload['conclusion'] is None
+    assert len(payload['cells']) == 9
+
+
+def test_disabling_conclusion_revokes_old_latched_result_once():
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    params = load_task(path)[0]['params']
+    node = _Node()
+    first = MappingTask(node, params)
+    first.final_assignment = {2: 0, 6: 0, 4: 1, 8: 1}
+    first.publish_map()
+    count = len(first.conclusion_pub.messages)
+    params = dict(params, enable_conclusion=False)
+    second = MappingTask(node, params)
+    second.publish_map()
+    second.publish_map()
+    assert len(first.conclusion_pub.messages) == count+1
+    revoked = json.loads(first.conclusion_pub.messages[-1].data)
+    assert not revoked['enabled'] and not revoked['ready']
+    assert revoked['assignment'] == {}
+    third = MappingTask(node, dict(params, enable_conclusion=True))
+    third.publish_map()
+    assert json.loads(first.conclusion_pub.messages[-1].data)['enabled']
+
+
+def test_full_flow_requires_survey_instead_of_skipping_to_next_task(monkeypatch):
+    path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
+    task = MappingTask(_Node(), dict(load_task(path)[0]['params'], require_complete_survey=True))
+    monkeypatch.setattr(task, '_ready', lambda: False)
+    monkeypatch.setattr('uv_task.mapping_task.rclpy.ok', lambda: True)
+    assert not task.execute()
+    assert task.node.stopped
+    assert task.state == 'failed'
+    assert not json.loads(task.conclusion_pub.messages[-1].data)['ready']
+
+
+def test_full_flow_mission_orders_stages_under_one_start():
+    from uv_task.config_loader import load_mission
+    path = Path(__file__).parents[1] / 'config/missions/full_flow_debug.yaml'
+    tasks = load_mission(path)
+    assert [task['name'] for task in tasks] == [
+        'start', 'mapping_grid', 'turntable', 'grab_sea_cucumber', 'return_origin']
+    assert tasks[1]['params']['enable_traversal']
+    assert tasks[1]['params']['enable_conclusion']
+    assert tasks[1]['params']['require_complete_survey']
+    assert tasks[2]['params']['mode'] == 'yolo_bump'
+    assert 'disk_pose_odom' in tasks[2]['params']
+    assert tasks[-1]['params']['timeout'] == 150.

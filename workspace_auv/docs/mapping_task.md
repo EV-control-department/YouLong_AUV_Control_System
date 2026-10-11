@@ -2,6 +2,55 @@
 
 > 默认任务链 `config/missions/mapping_grid.json` 为独立建图调试：START 初始化原点 → 驶向并识别 AprilTag 16h5 → 九宫格巡检建图。链中设置 `enable_traversal=false`，建图后结束，不执行锥桶遍历。位置、深度、标签 ID 等参数填写在 `config/tasks/mapping_grid.json`；当前数值需现场核对。START 跳过拔缆倒计时，启动 task_runner 后立即执行。
 
+## 开启反向遍历（2026-10-11）
+
+使用新增任务链 `config/missions/mapping_grid_traversal.json`，其中
+`enable_traversal=true`。它引用同一份任务参数，执行 START、建图和反向第二圈。
+camera、basic_motion 已运行时，在仓库根目录启动：
+
+```bash
+source /opt/ros/humble/setup.bash
+source workspace_auv/install/setup.bash
+ros2 launch uv_task task_launch.py target_id:=mapping_grid \
+  mission_file:="$PWD/workspace_auv/src/uv_task/config/missions/mapping_grid_traversal.json"
+```
+
+也可把原调试任务链的 `params.enable_traversal` 改为 `true` 后重启 task_runner。
+任务链中的覆盖值优先于 tasks/mapping_grid.json，仅修改被覆盖的任务参数不会开启遍历。
+当前建图顺序为 `8→7→6→3→5→4→2→1→0`，第二圈从终点0开始，
+走 `0→1→2→4→5→3→6→7→8→标签配置位置`。终点0不重复发零距离移动。
+不计算避让圆、不按锥桶类别排序、不依赖视觉融合坐标；复用原巡检理论格点。
+视觉fallback仍执行第二圈；首圈未执行/未走完、停止或运动失败时不继续移动。
+两圈共用 `timeout`，单航点仍受 `move_timeout` 和剩余总时限约束。
+
+## fallback 结论接口
+
+`params.enable_conclusion: true` 开启，`false` 关闭，默认true。
+可在 `tasks/mapping_grid.json` 配置，任务链中的同名覆盖值优先；修改后重启task_runner。
+关闭时地图仍发布，但 `conclusion_enabled=false`、`conclusion=null`。
+如果本节点此前发布过结论，关闭时仅发送一次 `enabled=false, ready=false`
+撤销旧的latched结果，之后不再发布结论；从未开启过的节点不会创建结论发布者。
+消费者也可检查 `enabled` 字段。
+
+新增 `/task/mapping/conclusion`，类型 `std_msgs/msg/String`，内容为JSON，
+QoS为可靠、TRANSIENT_LOCAL、depth=1。任务完成后后加入的订阅者仍可读取。
+
+```bash
+ros2 topic echo /task/mapping/conclusion --qos-durability transient_local
+```
+
+消费端检查 `ready=true` 和 `valid=true`，再读取 `assignment`、`square_cells`、
+`round_cells`、`cells[].position` 和 `tag`。
+结论固定以 `fallback_square_cells`、`fallback_round_cells`、`fallback_tag_id`
+及理论格点/标签配置坐标为准，即使视觉给出不同类别或标签ID也不覆盖结论。
+当前结论为方形 `[2,6]`、圆形 `[4,8]`、标签16。
+数据标记 `source=fallback`、`verified=false`；`ready`表示结论可读，
+不表示视觉验证或第二圈已完成，第二圈完成看 `state` 或 `traversal_completed` 事件。
+格点必须是两个方形、两个圆形且四格不重复，否则 `valid=false`、`ready=false`。
+新任务开始时清除上一任务的ready状态；无相机时可输出fallback结论，但不凭空执行首圈/第二圈。
+原 `/task/mapping/map` 保留视觉及补齐后的地图，同时含同一 `conclusion` 字段。
+competition录制包含结论话题，地图JSONL也保留内嵌结论。
+
 ## 信息流与边界
 
 ```text
@@ -50,11 +99,10 @@ camera 感知线程独立运行；任务仅采纳到点后稳定帧，主流程�
    Task 按 XY 最近理论格关联，先做格位门限，再做静态目标滤波/离群剔除/类别投票。
 4. 空格或暂时无深度只记观测不足，仍访问剩余格子。运动失败或标记未确认
    才提前中止。九格后按“两方两圆”约束选最可信的部分/完整结果并发布地图。
-5. 返回已观测 AprilTag 位置，先圆形后方形遍历已确认锥桶。
-   遍历在九宫格四邻接图上沿格点中心走；锥桶格进入一次后不可再次进入。
-   有目标的终点使用融合坐标，不回退到 JSON 理论中心。
+5. 启用遍历时，从建图终点沿实际格点访问顺序反向走完，最后返回标签配置位置。
+   路线复用巡检格点，不执行圆形避让规划；与视觉结论是否使用fallback无关。
 
-任务仍订阅小型 `/basic_motion/pose_info`，用于遍历阶段实时位置安全监测；
+任务仍订阅小型 `/basic_motion/pose_info`，用于采集位姿与观察稳定性检查；
 它不再做图像/检测/CameraInfo 的时间配对。九格关联和 Kalman 状态都在 task，
 不会被 camera 的单帧视觉判断固定。
 

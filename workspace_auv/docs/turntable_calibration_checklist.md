@@ -1,5 +1,7 @@
 # 转盘任务：最小标定与放行清单
 
+> 2026-10-11：当前 `turn_table.yaml` 任务链已切换到 [YOLO box顶碰+yaw简单版](turntable_simple.md)。下文为保留的旧孔位方案，只适用于 `tasks/turntable.yaml` 的precise模式。
+
 ## 2026-10-10 移动逻辑更新
 
 盘心odom粗定位仍使用WTRAVEL加SET归向；盘前“视觉正视对准”和

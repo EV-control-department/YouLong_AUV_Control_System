@@ -102,6 +102,7 @@ def test_competition_includes_analysis_evidence(monkeypatch):
     matcher = re.compile(args.topic_regex)
     for name in ('/perception/mapping/observations',
                  '/perception/aruco/ids', '/perception/target_observations', '/task/status',
+                 '/task/mapping/conclusion',
                  '/zit6/state/odom', '/zit6/cmd/servo', '/zit6/cmd/setpoint'):
         assert matcher.match(name), name
     assert not matcher.match('/camera/down/image_raw')

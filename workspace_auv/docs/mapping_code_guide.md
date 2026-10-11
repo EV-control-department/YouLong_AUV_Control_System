@@ -53,7 +53,9 @@ CameraInfo 只供 uv_camera 内部在仿真初始化标定。真机下视使用
    失败立即停机。
 4. `_select_final_assignment()` 在两方两圆约束下选最多四个最可信格位；
    若不足四个，以部分结果报告，不伪造目标。
-5. `_traverse_cones()` 返回融合 Tag XY，先圆后方，四邻接格点规划。
+5. `_traverse_cones()` 从巡检终点沿 `visit_order` 的实际逆序走回格点，最后返回标签配置位置；不做避让圆规划。
+6. `_conclusion_json()` 输出以配置fallback为准的结论；`publish_map()` 同步发布到
+   `/task/mapping/conclusion` 并嵌入地图。视觉与补齐地图仍在 `final_assignment` 中保留。
    空格可复用作通道；锥桶格不可二次进入。入目标格的终点使用观测融合 XY，
    不使用 JSON 理论中心替代。遍历安全监测仍需要 PoseInfo。
 

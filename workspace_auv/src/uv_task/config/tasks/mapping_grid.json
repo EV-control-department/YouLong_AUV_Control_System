@@ -2,11 +2,9 @@
   "task": "mapping_grid",
   "comments": {
     "usage": "本文件仍是标准 JSON；comments 仅供阅读，任务加载器不会将其作为参数。真机发车前必须现场测量并修改 params 中的坐标和深度。执行 START 后才确定里程计原点，所有平面目标坐标均相对该原点。默认 mapping_grid.json 任务链包含标签识别和九宫格建图，并通过 enable_traversal=false 在建图后结束。",
-    "enable_traversal": "建图后是否返回标签并遍历锥桶；省略时为 true。独立建图调试任务链覆盖为 false，不影响标签识别。",
+    "enable_traversal": "建图后从最后格点沿实际visit_order逆序走回所有格点，再回到首次出发的标签配置位置；不按类别排序、不计算避让圆。默认调试链覆盖false；mapping_grid_traversal.json覆盖true。",
     "timeout": "整个建图及后续遍历任务的总时限，单位秒；不是单个航点的超时。",
     "move_timeout": "单次 WTRAVEL 的最大耗时，单位秒；实际调用还受任务剩余总时限约束。",
-    "traversal_clearance_m": "建图后的遍历规划与非目标锥桶保持的最小避让距离，单位米。",
-    "traversal_tracking_margin_m": "遍历规划额外考虑的轨迹跟踪误差裕量，单位米。",
     "observe_seconds": "到达每个格点后的停留观察时限，当前12秒；停留阶段仍要求位置姿态稳定。移动阶段可通过allow_motion_observations独立接收低动态帧；延迟到达的旧阶段帧不会入图。空格也按同样时限观察。",
     "stable_seconds": "采集前需要连续稳定的时间，秒。稳定等待包含在 observe_seconds/tag_timeout 内。",
     "stable_position_m": "稳定时间窗内三维位置的最大包围盒对角线，米。",
@@ -24,7 +22,7 @@
     "grid_yaw_deg": "九宫格相对里程计坐标轴的平面旋转角，单位度；真机现场测量。",
     "floor_z": "池底平面在任务深度坐标中的 z 值，单位米；仅按真机实际深度约定填写。",
     "survey_z": "WTRAVEL 巡检目标深度 z，单位米；需保证安全浸没、池底净距及相机视野，真机必调。",
-    "survey_yaw_deg": "巡检时 WTRAVEL 的最终目标航向角，单位度。",
+    "survey_yaw_deg": "传入WTRAVEL的yaw，单位度；当前有水平行程时实际保持航行方向，不自动恢复此配置航向。",
     "tag_x": "池底 AprilTag 的理论 x 坐标，单位米；用于首次驶往标记，真机必填。",
     "tag_y": "池底 AprilTag 的理论 y 坐标，单位米；用于首次驶往标记，真机必填。",
     "tag_id": "期望标记 ID；-1 表示接受 allowed_tag_ids 中任一种。当前仅接受 16 或 18；需与 camera 配置一致。",
@@ -36,16 +34,17 @@
     "mahalanobis_gate": "位置测量的马氏距离拒绝阈值；过小会拒绝更多观测。",
     "cell_gate_m": "将观测锥桶关联到理论格点中心的最大距离，单位米；应结合定位误差调节。",
     "tag_timeout": "到达标记附近后，等待确认 AprilTag 的最长时间，单位秒。",
-    "fallback_tag_id": "标记无法确认时使用的猜测 ID；目前填 16。该值未经视觉验证，18 可按现场需求替换；不能用猜测 ID 作为真实识别结果。",
-    "fallback_square_cells": "视觉证据不足时，猜测方形锥桶所在的两个格点索引。当前值只来自固定仿真场景，真机必须重新填写。",
-    "fallback_round_cells": "视觉证据不足时，猜测圆形锥桶所在的两个格点索引。当前值只来自固定仿真场景，真机必须重新填写。",
-    "camera": "相机设备、双目标定、相机外参、SGBM 和分割阈值属于 uv_camera 配置，不在本任务 JSON 中设置。"
+    "fallback_tag_id": "结论接口固定采用的预设标签ID；标记识别失败时也作为地图猜测ID。当前16，现场可改18；与真实识别结果分别保留。",
+    "fallback_square_cells": "结论接口采用的两个方形格点；地图视觉不足时也用于补齐。当前[2,6]只来自仿真场景，真机需现场填写，与圆形格点不可重复。",
+    "fallback_round_cells": "结论接口采用的两个圆形格点；地图视觉不足时也用于补齐。当前[4,8]只来自仿真场景，真机需现场填写，与方形格点不可重复。",
+    "camera": "相机设备、双目标定、相机外参、SGBM 和分割阈值属于 uv_camera 配置，不在本任务 JSON 中设置。",
+    "conclusion": "新增/task/mapping/conclusion (std_msgs/String JSON, TRANSIENT_LOCAL)。ready=true后输出结论以fallback_square_cells、fallback_round_cells、fallback_tag_id及理论格点坐标为准；视觉证据仍保留在/task/mapping/map，结论不宣称视觉验证。",
+    "enable_conclusion": "true开启/task/mapping/conclusion与地图内嵌结论；false关闭，地图conclusion=null。若本节点上次发布过结论，关闭时只发送一次enabled=false/ready=false撤销消息。任务链的覆盖值优先；修改后重启task_runner。",
+    "require_complete_survey": "默认false保持独立建图fallback调试；全流程任务链覆盖true，相机/位姿不可用导致首圈不能执行时失败，不进入下一任务。视觉分类不足仍可输出fallback，并执行反向第二圈。"
   },
   "params": {
     "timeout": 1800.0,
     "move_timeout": 150.0,
-    "traversal_clearance_m": 0.40,
-    "traversal_tracking_margin_m": 0.15,
     "observe_seconds": 12.0,
     "stable_seconds": 1.0,
     "stable_position_m": 0.03,
@@ -57,7 +56,6 @@
     "min_observations": 3,
     "class_vote_ratio": 0.67,
     "expected_cones": 4,
-
     "grid_center_x": 2.0,
     "grid_center_y": -4.0,
     "grid_side_m": 2.4,
@@ -68,17 +66,37 @@
     "tag_x": 0.0,
     "tag_y": 0.0,
     "tag_id": -1,
-    "allowed_tag_ids": [16, 18],
+    "allowed_tag_ids": [
+      16,
+      18
+    ],
     "tag_dictionary": "DICT_APRILTAG_16h5",
-    "visit_order": [8, 7, 6, 3, 5, 4, 2, 1, 0],
-
+    "visit_order": [
+      8,
+      7,
+      6,
+      3,
+      5,
+      4,
+      2,
+      1,
+      0
+    ],
     "measurement_sigma_m": 0.035,
     "process_noise": 0.0001,
     "mahalanobis_gate": 11.345,
     "cell_gate_m": 0.48,
     "tag_timeout": 30.0,
     "fallback_tag_id": 16,
-    "fallback_square_cells": [2, 6],
-    "fallback_round_cells": [4, 8]
+    "fallback_square_cells": [
+      2,
+      6
+    ],
+    "fallback_round_cells": [
+      4,
+      8
+    ],
+    "enable_conclusion": true,
+    "require_complete_survey": false
   }
 }

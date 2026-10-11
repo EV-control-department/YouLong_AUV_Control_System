@@ -58,6 +58,7 @@ from uv_task.line_follower import LineFollower
 from uv_task.mapping_task import MappingTask
 from uv_task.grab_sea_cucumber import GrabSeaCucumberTask
 from uv_task.turntable_task import TurntableTask
+from uv_task.simple_turntable_task import SimpleTurntableTask
 from uv_camera.model_classes import model_class_id
 
 
@@ -1411,7 +1412,11 @@ class TaskRunnerNode(Node):
 
     def _task_turntable(self, p: dict) -> bool:
         """真机调试专用；注册任务名，但不加入任一自动仿真任务链。"""
-        return self._run_major_task_with_light(TurntableTask, p, '转盘')
+        mode = p.get('mode', 'precise')
+        if mode not in ('precise', 'yolo_bump'):
+            raise ValueError(f'未知转盘mode: {mode}')
+        task_type = SimpleTurntableTask if mode == 'yolo_bump' else TurntableTask
+        return self._run_major_task_with_light(task_type, p, '转盘')
 
     # ── 置物台 / target-rack 搜索任务 ─────────────────────────────
 

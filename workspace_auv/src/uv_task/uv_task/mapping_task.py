@@ -31,7 +31,8 @@ uv_camera 在同一帧内完成 YOLO-Seg、AprilTag、SGBM、掩膜深度主峰�
 * 订阅：``/basic_motion/pose_info``（遍历安全监测）、
   ``/perception/mapping/observations``（带采集时间和质量的小型观测）。
 * 发布：``/task/mapping/map``（低频地图快照，TRANSIENT_LOCAL，后加入的
-  订阅者也能立刻拿到最新地图）、``/task/mapping/events``（逐事件调试流）。
+  订阅者也能立刻拿到最新地图）、``/task/mapping/events``（逐事件调试流）、
+  ``/task/mapping/conclusion``（以配置fallback为准的JSON结论，TRANSIENT_LOCAL）。
 """
 
 from collections import deque
@@ -225,6 +226,16 @@ class MappingTask:
         qos_map = QoSProfile(
             depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.map_pub = node.create_publisher(String, '/task/mapping/map', qos_map)
+        # Reuse one latched publisher across repeated tasks to avoid stale
+        # conclusions being replayed by multiple surviving DDS writers.
+        self.conclusion_pub = getattr(node, '_mapping_conclusion_pub', None)
+        self._conclusion_enabled = bool(params.get('enable_conclusion', True))
+        self._conclusion_clear_pending = (not self._conclusion_enabled
+                                          and self.conclusion_pub is not None)
+        if self._conclusion_enabled and self.conclusion_pub is None:
+            self.conclusion_pub = node.create_publisher(
+                String, '/task/mapping/conclusion', qos_map)
+            node._mapping_conclusion_pub = self.conclusion_pub
         self.event_pub = node.create_publisher(String, '/task/mapping/events', 100)
         self._subscribe(MappingObservationArray,
                         '/perception/mapping/observations', self._observation_cb)
@@ -528,6 +539,8 @@ class MappingTask:
             payload = {
                 'schema_version': 2,
                 'final_assignment': getattr(self, 'final_assignment', None),
+                'conclusion_enabled': self._conclusion_enabled,
+                'conclusion': self._conclusion_json() if self._conclusion_enabled else None,
                 'frame_id': 'mapping_odom',
                 'state': self.state,
                 'stamp': self.node.get_clock().now().nanoseconds * 1e-9,
@@ -553,6 +566,48 @@ class MappingTask:
                     len(points) for points in self.measurement_points.values()),
             }
         self.map_pub.publish(String(data=json.dumps(payload, allow_nan=False)))
+        if self._conclusion_enabled:
+            self.conclusion_pub.publish(String(data=json.dumps(
+                payload['conclusion'], allow_nan=False)))
+        elif self._conclusion_clear_pending:
+            self._conclusion_clear_pending = False
+            # Revoke a previous run's latched result once; no conclusions
+            # are published while this run has the interface disabled.
+            self.conclusion_pub.publish(String(data=json.dumps({
+                'schema_version': 1, 'enabled': False, 'ready': False,
+                'valid': False, 'assignment': {}, 'state': self.state,
+                'stamp': payload['stamp'], 'reason': 'enable_conclusion=false'},
+                allow_nan=False)))
+
+    def _conclusion_json(self):
+        """Explicit result interface: configured fallback always wins over vision."""
+        squares = [int(cell) for cell in self.params.get('fallback_square_cells', ())]
+        rounds = [int(cell) for cell in self.params.get('fallback_round_cells', ())]
+        valid = (len(squares) == len(rounds) == 2
+                 and len(set(squares + rounds)) == 4
+                 and all(cell in self.grid_centers for cell in squares + rounds))
+        assignment = {**dict.fromkeys(squares, 0), **dict.fromkeys(rounds, 1)} if valid else {}
+        return {
+            'schema_version': 1, 'enabled': True, 'frame_id': 'mapping_odom',
+            'stamp': self.node.get_clock().now().nanoseconds * 1e-9,
+            'state': self.state,
+            'ready': hasattr(self, 'final_assignment') and valid,
+            'source': 'fallback', 'verified': False,
+            'valid': valid,
+            'reason': None if valid else 'fallback需配置两个方形、两个圆形且格点不重复',
+            'assignment': assignment,
+            'square_cells': squares, 'round_cells': rounds,
+            'cells': [{'id': cell, 'class_id': kind,
+                       'label': 'square_cone' if kind == 0 else 'round_cone',
+                       'position': self.grid_centers[cell].tolist(),
+                       'source': 'fallback', 'verified': False}
+                      for cell, kind in assignment.items()],
+            'tag': {'id': int(self.params.get('fallback_tag_id', 16)),
+                    'position': [float(self.params.get('tag_x', 0.0)),
+                                 float(self.params.get('tag_y', 0.0)),
+                                 float(self.params['floor_z'])],
+                    'source': 'fallback', 'verified': False},
+        }
 
     def _tag_json(self):
         """把池底标记的融合结果序列化成地图里的一段。"""
@@ -672,7 +727,7 @@ class MappingTask:
         self.fallback_reason = reason
         self.node.get_logger().warning(
             f'标记识别失败，使用未验证的预设 ID={guessed_id} 和位置；'
-            '仅用于地图输出，不据此执行锥桶遍历')
+            '结论接口使用fallback；反向遍历仍沿已完成的巡检路线')
         self._emit('tag_fallback', **self.fallback_tag)
         self.publish_map()
 
@@ -694,7 +749,7 @@ class MappingTask:
             self.fallback_reason = self.fallback_reason or '锥桶视觉观测不足'
             self.node.get_logger().warning(
                 f'建图使用未验证的默认格点：{sorted(self.fallback_cells)}；'
-                '不会依据猜测地图自动遍历')
+                '反向遍历沿巡检格点路线，不依赖猜测锥桶位置')
             self._emit('map_fallback', cells=sorted(self.fallback_cells),
                        assignment=result)
         return result
@@ -702,8 +757,8 @@ class MappingTask:
     def _travel_to(self, position, label):
         """用 WTRAVEL 走到世界系 xy 位置。
 
-        z 固定为巡检高度 survey_z，yaw 固定为 survey_yaw_deg（下视相机视野
-        与艇体朝向一致，便于左右目图像稳定对齐）。
+        z固定为survey_z；yaw参数传survey_yaw_deg，但WTRAVEL有水平行程时
+        实际保持行进方向，不自动恢复配置航向。
         单次超时取 move_timeout 与「任务剩余时间」的较小值，避免超出总时限。
         返回值来自 BasicMotion 的执行结果。
         """
@@ -733,13 +788,14 @@ class MappingTask:
           3. WTRAVEL 到池底标记附近并确认标记（触发器）；
           4. 按 visit_order 逐格：WTRAVEL 到理论格点中心 -> 等待观察时间 ->
              记录该格点观测统计。单格点观测不足只记警告并继续（空格是允许的）；
-          5. 九格走完冻结地图，返回标记上方，先圆形后方形遍历已确认目标；
-          6. 视觉不足时发布明确标记的猜测地图并跳过遍历；运动失败或
+          5. 九格走完冻结地图；启用遍历时沿实际巡检路线反向走一圈回标签；
+          6. 结论接口以配置fallback为准；视觉不足不阻止反向遍历，运动失败或
              未预期异常仍安全中止整条任务链；
           7. finally 中再发布一次最终地图。
         """
         self._emit('started', model='best.pt', class_map={0: 'square_cone', 1: 'round_cone'},
                    depth_method='sgbm_local_floor_cone_center')
+        self.publish_map()  # Clear a previous run's latched ready conclusion.
         try:
             # camera 只在标定和采集位姿可用后才发 processed=true。
             ready_end = min(self.deadline, time.monotonic() + 20.0)
@@ -754,12 +810,15 @@ class MappingTask:
             if not ready:
                 if self.node.stopped or not rclpy.ok():
                     raise RuntimeError('任务被停止')
+                if self.params.get('require_complete_survey', False):
+                    raise RuntimeError('全流程要求完整巡检，但相机建图观测或位姿不可用')
                 self._assume_tag('相机建图观测或位姿不可用')
                 self.final_assignment = self._fill_fallback_assignment({})
                 self.state = 'fallback'
                 self._emit('completed_with_fallback',
                            reason=self.fallback_reason,
                            assignment=self.final_assignment)
+                self._emit('traversal_skipped', reason='首圈巡检未执行，无法反向走原路线')
                 return True
             self._emit('calibration_ready', source='uv_camera')
             self.state = 'travel_to_tag'
@@ -805,22 +864,19 @@ class MappingTask:
                                         and not self.fallback_cells
                                         and self.fallback_tag is None))
             self.publish_map()
-            if self.fallback_tag or self.fallback_cells:
-                self.state = 'complete_with_fallback'
-                self._emit('traversal_skipped',
-                           reason='地图包含未验证猜测，禁止自动遍历')
-                self.publish_map()
-                return True
             if self.params.get('enable_traversal', True):
                 self._traverse_cones()
             else:
                 self.node.get_logger().info('建图独立调试完成：不执行锥桶遍历')
                 self._emit('traversal_skipped', reason='独立建图调试配置')
-            self.state = 'complete'
+            self.state = ('complete_with_fallback' if self.fallback_tag or self.fallback_cells
+                          else 'complete')
             self._emit('completed', confirmed_cells=confirmed,
                        assignment=self.final_assignment,
                        traversal_order=list(self.traversal_order),
-                       result_complete=len(confirmed) == 4)
+                       result_complete=(len(confirmed) == 4
+                                        and not self.fallback_cells
+                                        and self.fallback_tag is None))
             return True
         except Exception as error:
             # 失败时区分「被外部停止」和「真实失败」，并停止整条任务链
@@ -834,129 +890,39 @@ class MappingTask:
             self.publish_map()
 
     def _traverse_cones(self):
-        """冻结后的地图驱动遍历：返回标记，然后圆形、方形各访问一次。"""
-        tag = getattr(self, 'tag_filter', None)
-        if tag is None or not np.all(np.isfinite(tag.position)):
-            raise RuntimeError('缺少 AprilTag 有效观测位置，不使用 JSON 坐标替代遍历目标')
-        tag_position = tag.position[:2].copy()
-        # 先验证整条路线，避免已知地图缺陷导致途中才失败。
-        route = []
-        for kind in (1, 0):
-            for cell in sorted(self.final_assignment):
-                if self.final_assignment[cell] != kind or cell in self.traversal_order:
-                    continue
-                track = self.filters.get(cell)
-                if track is None or not np.all(np.isfinite(track.position)):
-                    raise RuntimeError(f'格点{cell}缺少有效融合位置，无法遍历')
-                route.append((cell, kind, track.position[:2].copy()))
-        self.current_cell = None
-        self.state = 'return_to_tag'
-        self.node.get_logger().info('建图结束：返回 AprilTag 上方，准备先圆形后方形遍历')
-        self._emit('traversal_started', route=[cell for cell, _, _ in route])
+        """Retrace the completed survey in reverse, ending at its starting tag."""
+        route = list(reversed(self.visit_order))
+        if (len(route) != len(self.grid_centers)
+                or set(route) != set(self.grid_centers)):
+            raise RuntimeError('巡检路线未完整走完，不能开始反向遍历')
+        tag_position = [float(self.params['tag_x']), float(self.params['tag_y'])]
+        self.traversal_path = [self.grid_centers[cell][:2].tolist() for cell in route]
+        self.traversal_path.append(tag_position)
+        self.state = 'reverse_traversal'
+        self._emit('traversal_started', route=route, direction='reverse_survey',
+                   waypoints=self.traversal_path, target_source='survey_route')
+        self.node.get_logger().info(f'建图结束：沿巡检反方向遍历{route}，最后返回标签起点')
         self.publish_map()
-        if not self._travel_mapped(tag_position, 'mapping:return_to_april_tag'):
-            raise RuntimeError('返回 AprilTag 上方失败，停止遍历')
-        for cell, kind, position in route:
+        for index, cell in enumerate(route):
+            if not self._ready():
+                raise RuntimeError('反向遍历被停止或超时')
             self.current_cell = cell
-            self.state = 'traverse_round_cone' if kind == 1 else 'traverse_square_cone'
-            name = '圆形' if kind == 1 else '方形'
-            self.node.get_logger().info(f'遍历{name}锥桶：格点{cell}，目标xy={position.tolist()}')
-            self.publish_map()
-            if not self._travel_mapped(position, f'mapping:traverse_cone_{cell}'):
-                raise RuntimeError(f'遍历格点{cell}失败，停止后续移动')
+            # The last survey cell is already reached; do not issue another
+            # zero-distance WTRAVEL that could unnecessarily change heading.
+            if index and not self._travel_to(
+                    self.grid_centers[cell][:2], f'mapping:reverse_cell_{cell}'):
+                raise RuntimeError(f'反向遍历格点{cell}失败，停止后续移动')
             self.traversal_order.append(cell)
-            self._emit('cone_traversed', cell=cell, class_id=kind,
+            self._emit('cell_traversed', cell=cell,
+                       already_at_start=(index == 0),
                        traversal_order=list(self.traversal_order))
             self.publish_map()
+        self.current_cell = None
+        self.state = 'return_to_tag'
+        if not self._travel_to(tag_position, 'mapping:reverse_return_to_april_tag'):
+            raise RuntimeError('反向遍历返回标签起点失败')
         self._emit('traversal_completed', traversal_order=list(self.traversal_order),
-                   result_complete=len(self.traversal_order) == 4)
-
-    @staticmethod
-    def _avoidance_path(start, goal, centers, radius):
-        """圆形禁入区的可见图最短折线；仅允许从起点区退出、向终点区进入。"""
-        start, goal = np.asarray(start, float), np.asarray(goal, float)
-        centers = [np.asarray(center, float) for center in centers]
-        if not radius > 0 or not np.all(np.isfinite([start, goal])):
-            raise RuntimeError('遍历路径参数无效')
-        nodes = [start, goal]
-        for center in centers:
-            for angle in np.linspace(0, 2 * math.pi, 24, endpoint=False):
-                point = center + radius * 1.12 * np.array([math.cos(angle), math.sin(angle)])
-                if all(np.linalg.norm(point - other) >= radius for other in centers):
-                    nodes.append(point)
-
-        def visible(i, j):
-            a, b = nodes[i], nodes[j]
-            delta = b - a
-            length2 = float(delta @ delta)
-            if length2 < 1e-12:
-                return True
-            for center in centers:
-                # 在区内起步只能持续向外；抵达区内目标只能作为最后一段。
-                if i == 0 and np.linalg.norm(a - center) < radius:
-                    if float((a - center) @ delta) >= -1e-9:
-                        continue
-                    return False
-                if j == 1 and np.linalg.norm(b - center) < radius:
-                    if float((b - center) @ delta) <= 1e-9:
-                        continue
-                    return False
-                fraction = np.clip(float((center - a) @ delta) / length2, 0, 1)
-                if np.linalg.norm(a + fraction * delta - center) < radius - 1e-9:
-                    return False
-            return True
-
-        distances = [float('inf')] * len(nodes)
-        distances[0] = 0.0
-        parents, remaining = {}, set(range(len(nodes)))
-        while remaining:
-            i = min(remaining, key=lambda n: distances[n])
-            if not math.isfinite(distances[i]):
-                break
-            remaining.remove(i)
-            if i == 1:
-                path, cursor = [], 1
-                while cursor != 0:
-                    path.append(nodes[cursor].tolist())
-                    cursor = parents[cursor]
-                return path[::-1]
-            for j in remaining:
-                cost = distances[i] + float(np.linalg.norm(nodes[j] - nodes[i]))
-                if cost < distances[j] and visible(i, j):
-                    distances[j], parents[j] = cost, i
-        raise RuntimeError('无法找到不重复经过锥桶的路径，请检查观测位置及避让半径')
-
-    def _travel_mapped(self, position, label):
-        """使用观测地图绕开其他锥桶，不把去重仅限于终点列表。"""
-        with self.lock:
-            if not self.pose_history:
-                raise RuntimeError('遍历缺少实时艇位')
-            pose = self.pose_history[-1]
-            start = [pose.robot_x, pose.robot_y]
-        centers = [self.filters[cell].position[:2].copy() for cell in self.final_assignment]
-        radius = float(self.params.get('traversal_clearance_m', 0.3))
-        margin = float(self.params.get('traversal_tracking_margin_m', 0.15))
-        if margin < 0 or not math.isfinite(margin):
-            raise RuntimeError('遍历跟踪余量无效')
-        self.traversal_path = self._avoidance_path(start, position, centers, radius + margin)
-        self._emit('traversal_path_planned', label=label, start=list(map(float, start)),
-                   waypoints=self.traversal_path, clearance_m=radius,
-                   tracking_margin_m=margin,
-                   target_source='observed_map')
-        self.node.get_logger().info(
-            f'观测地图避让路径：{label}，半径={radius:.2f}m，航点={self.traversal_path}')
-        self.publish_map()
-        for index, waypoint in enumerate(self.traversal_path):
-            # WTRAVEL 按实时艇位起步；到点容差导致的偏差也必须通过安全检查。
-            with self.lock:
-                pose = self.pose_history[-1]
-                actual = [pose.robot_x, pose.robot_y]
-            checked = self._avoidance_path(actual, waypoint, centers, radius)
-            if len(checked) > 1:
-                raise RuntimeError('实际艇位偏离避让走廊，停止遍历，禁止直接穿过锥桶')
-            if not self._travel_to(waypoint, f'{label}:waypoint_{index}'):
-                return False
-        return True
+                   direction='reverse_survey', result_complete=True)
 
     def _select_final_assignment(self):
         """在有类别观测支持的格点中联合选择两方两圆，不补造无观测目标。"""

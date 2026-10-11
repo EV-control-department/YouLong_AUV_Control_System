@@ -1,5 +1,7 @@
 # 转盘任务：实现和调试
 
+> 2026-10-11：当前 `turn_table.yaml` 任务链已切换到 [YOLO box顶碰+yaw简单版](turntable_simple.md)。下文为保留的旧孔位方案，只适用于 `tasks/turntable.yaml` 的precise模式。
+
 此任务只用于真机独立调试，未加入 Stonefish mission。它执行**三次预设动作**，不根据黄标变化、盘心位移或累计角度判定转盘是否转成。日志中的“执行完毕”只表示运动指令完成，不代表实际盘体转角达标。
 
 默认列表为 [mapping_grid.json](../src/uv_task/config/missions/mapping_grid.json)，现已按要求覆盖为 `start → turntable`；原建图任务实现和任务参数文件仍保留，但这个默认列表不再执行建图。启动前须把 AUV 人工放在前视能看到转盘、且不会碰撞盘架的位置；START 会建立 odom 原点，保留真机拔缆倒计时。若需要任务链自行粗定位，先实测盘心 odom 位姿，再在两项之间插入现有 `wtravelxyz` 和 `setrz`；这些基础动作的参数直接写在 mission 的 `params` 中，不需另建 YAML。当前没有填入猜测坐标。

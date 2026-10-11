@@ -1,0 +1,37 @@
+# 简单版：前视YOLO box居中 → 低速接近 → 定时顶碰一次 → yaw一下 → 零速度结束。
+# 执行动作即结束；不测量触碰，不验证盘体转角，无孔位/掩膜/SGBM依赖。
+task: turntable
+params:
+  mode: yolo_bump
+  # 可选预输入盘心：[x米,y米,z米,yaw度]，START后odom系，z向下。
+  # yaw表示正对转盘的艇体航向。留空则从当前位置直接识别。
+  # 例如 disk_pose_odom: [1.0, 2.0, 0.6, 90.0]；示例不作为实际运行目标。
+  disk_pose_odom: []
+  # 先到盘前观察位，随后YOLO闭环接近；不是直接航行到盘心。
+  front_standoff_m: 0.55 # 相机到名义盘面的观察距离，米。
+  front_camera_center_body: [0.230, 0.0, 0.076]
+  motion_timeout_s: 90.0 # 预定位WTRAVEL/SET各自上限，同时受总超时限制。
+  # [P0-核对] 沿用camera的turntable_disk_class_id=3，但共享模型表3=gate_front。
+  # 必须按实际转盘模型标签确认本项，不能把门的box当转盘。
+  disk_class_id: 3
+  image_width: 640
+  image_height: 480
+  # 当前front物理倒装；检测box已恢复原像素，本项反转横/纵误差方向。
+  front_camera_upside_down: true
+  min_confidence: 0.35
+  timeout: 180.0 # 包含可选预定位、识别、接近、顶碰和yaw。
+  observation_timeout_s: 8.0
+  approach_timeout_s: 25.0
+  box_max_age_s: 0.8
+  target_lost_timeout_s: 1.0
+  center_tolerance_fraction: 0.06
+  # box宽占每目宽45%后执行定时顶碰；仅为接近代理，不是真实距离/触碰反馈。
+  bump_box_width_fraction: 0.45
+  approach_speed_mps: 0.08 # 接近和顶碰均为body+x速度，m/s；现场试调。
+  bump_seconds: 1.0      # 单次顶碰持续时间；期望自由行程约8cm，不保证实际触碰。
+  stroke_yaw_deg: 6.0    # 正数右转、负数左转；期望指令行程，非实测盘体转角。
+  yaw_rate_deg_s: 6.0    # 正的速率大小；6度/6度每秒=1秒yaw动作。
+  align_yaw_gain: 12.0
+  align_vertical_gain: 0.12
+  max_align_yaw_rate_deg_s: 6.0
+  max_vertical_speed_mps: 0.04
