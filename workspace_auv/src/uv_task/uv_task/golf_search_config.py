@@ -1,6 +1,8 @@
 """Validated settings for the collection-frame approach before golf pickup."""
 import math
 
+BLINE_SPEED_LIMIT_MPS = 0.30
+
 SEARCH_DEFAULTS = {
     'collection_frame_position': [5.8, -0.3, 0.5],
     'search_cruise_depth_m': 0.2,
@@ -55,8 +57,9 @@ def validate_search_params(params, *, defaults=None, position_key='collection_fr
                 or value < 0 or (key not in nonnegative and value == 0)):
             raise ValueError(f'{key} 必须为有限的正数（深度、置信度、保持和延时可为零）')
         values[key] = float(value)
-    if not 0 < values['search_speed_mps'] < 0.28:
-        raise ValueError('search.speed_mps 必须满足 0 < speed < 0.28（BLINE 接口）')
+    if not 0 < values['search_speed_mps'] < BLINE_SPEED_LIMIT_MPS:
+        raise ValueError(
+            f'search.speed_mps 必须满足 0 < speed < {BLINE_SPEED_LIMIT_MPS:.2f}（BLINE 接口）')
     if values['search_min_confidence'] > 1:
         raise ValueError('search.min_confidence 必须在 [0,1] 内')
     if values['search_yaw_stable_seconds'] > values['search_front_align_seconds']:

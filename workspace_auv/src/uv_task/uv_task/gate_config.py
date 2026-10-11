@@ -2,6 +2,8 @@
 import math
 from copy import deepcopy
 
+from uv_task.golf_search_config import BLINE_SPEED_LIMIT_MPS
+
 GROUPS = {
     'observation': dict(poses=[[1.5, -2.0, 0.2, 0.0]], travel_timeout=60.0,
                         set_timeout=20.0),
@@ -119,8 +121,9 @@ def validate_gate_params(params, complete=False):
         raise ValueError('面积容限必须小于目标面积百分比')
     if values['pass_yaw_servo_min_seconds'] > values['pass_yaw_servo_max_seconds']:
         raise ValueError('最终 yaw 最短时限不能大于最长时限')
-    if not 0 < values['pass_speed_mps'] < 0.28:
-        raise ValueError('pass.speed_mps 必须在 (0,0.28) 内，与 BLINE 接口一致')
+    if not 0 < values['pass_speed_mps'] < BLINE_SPEED_LIMIT_MPS:
+        raise ValueError(
+            f'pass.speed_mps 必须在 (0,{BLINE_SPEED_LIMIT_MPS:.2f}) 内，与 BLINE 接口一致')
     if not 0 < values['search_lock_center_delta_fraction'] <= 1:
         raise ValueError('search.lock_center_delta_fraction 必须在 (0,1] 内')
     return values

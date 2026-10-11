@@ -17,7 +17,7 @@ mission:
     #     poses:
     #       - command: SET
     #         axes: xz
-    #         target: [0.5, 0.0, 0.2, 0.0] # 下潜0.2m
+    #         target: [0.5, 0.5, 0.2, 0.0] # 下潜0.2m
     #       # - command: WTRAVEL
     #       #   axes: xyz
     #       #   target: [4.0, -1.8, 0.2, 89.9544] # 世界系绝对位置；航向先沿行进方向。

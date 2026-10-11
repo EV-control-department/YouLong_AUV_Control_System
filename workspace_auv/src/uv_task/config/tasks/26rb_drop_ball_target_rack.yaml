@@ -18,7 +18,7 @@ params:
     yaw_stable_seconds: 0.2
     yaw_gain: 1.2
     max_yaw_rate_deg_s: 10.0
-    speed_mps: 0.15 # BLINE 要求 0 < speed < 0.18。
+    speed_mps: 0.15 # BLINE 要求 0 < speed < 0.30。
     detection_timeout: 0.8
     min_confidence: 0.02
     detection_stop_delay: 0.5 # 下视发现 rack 后亮绿灯，继续半秒，再停止巡游。

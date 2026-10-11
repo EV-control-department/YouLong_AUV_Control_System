@@ -4,8 +4,8 @@ import math
 import pytest
 
 from uv_control.line_guidance import (
-    LineConfig, LineGuidance, dot, norm, rotate_body_to_world,
-    rotate_world_to_body, validate_goal,
+    CRUISE_SPEED_LIMIT, TOTAL_SPEED_LIMIT, LineConfig, LineGuidance,
+    dot, norm, rotate_body_to_world, rotate_world_to_body, validate_goal,
 )
 
 
@@ -60,7 +60,8 @@ def test_tracking_capture_brake_overshoot_converges(length, offset):
         command, phase, sample = guide.step(position, measured, .05)
         phases.add(phase)
         assert norm(command) <= cfg.max_speed + 1e-9
-        assert norm(tuple(v - p for v, p in zip(command, previous))) <= .0025 + 1e-9
+        assert norm(tuple(v - p for v, p in zip(command, previous))) <= (
+            cfg.vector_acceleration * .05 + 1e-9)
         # Simple velocity-loop lag, distinct from guidance command.
         measured = tuple(v + .2 * (c - v) for v, c in zip(measured, command))
         position = tuple(p + v * .05 for p, v in zip(position, measured))
@@ -89,17 +90,17 @@ def test_brake_uses_measured_velocity():
     assert phase == 'BRAKE'
 
 
-@pytest.mark.parametrize('speed', [.18, .25, .28, .32, 1.0, 1e300])
+@pytest.mark.parametrize('speed', [.18, .25, .30, .32, 1.0, 1e300])
 def test_overspeed_is_accepted_and_clamped(speed):
     applied = validate_goal([1, 0, 0, 0], 'xyz', speed, 0, LineConfig())
-    assert 0 < applied < .28
-    assert applied == pytest.approx(min(speed, .28 - 1e-6))
+    assert 0 < applied < CRUISE_SPEED_LIMIT
+    assert applied == pytest.approx(min(speed, CRUISE_SPEED_LIMIT))
 
 
 def test_overspeed_default_is_clamped_instead_of_rejected():
     cfg = LineConfig(default_speed=.5, max_speed=1.)
     cfg.validate()
-    assert validate_goal([1, 0, 0, 0], '', 0, 0, cfg) < .28
+    assert validate_goal([1, 0, 0, 0], '', 0, 0, cfg) < CRUISE_SPEED_LIMIT
 
 
 @pytest.mark.parametrize('terminal', [False, True])
@@ -111,10 +112,10 @@ def test_total_speed_is_hard_limited_even_with_large_parameters(terminal):
     position = (101, .5, .5) if terminal else (0, .5, .5)
     for _ in range(500):
         command, _, _ = guide.step(position, (0, 0, 0), .05)
-        assert norm(command) < .32
+        assert norm(command) < TOTAL_SPEED_LIMIT
         if not terminal:
-            assert dot(command, guide.direction) < .28
-    assert norm(command) > .3  # exercises combined along/cross limiting
+            assert dot(command, guide.direction) < CRUISE_SPEED_LIMIT
+    assert norm(command) > TOTAL_SPEED_LIMIT - .01  # exercises combined limiting
 
 
 def test_lower_configured_total_limit_is_respected():
@@ -132,7 +133,7 @@ def test_float32_body_transport_remains_below_total_limit(attitude):
         command, _, _ = guide.step((0, .5, .5), (0, 0, 0), .05)
     body = rotate_world_to_body(command, *attitude)
     transported = struct.unpack('fff', struct.pack('fff', *body))
-    assert norm(transported) < .32
+    assert norm(transported) < TOTAL_SPEED_LIMIT
 
 
 @pytest.mark.parametrize('position,yaw,target', [

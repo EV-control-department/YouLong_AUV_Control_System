@@ -4,10 +4,10 @@ from dataclasses import dataclass
 import math
 
 
-# Leave a small margin so float32 transport rounding stays strictly below
-# the requested 0.28m/s cruise and 0.32m/s total command speed ceilings.
-CRUISE_SPEED_LIMIT = 0.28 - 1e-6
-TOTAL_SPEED_LIMIT = 0.32 - 1e-6
+# Leave a small margin so float32 transport rounding stays strictly below the
+# unified 0.30m/s LINE speed ceiling.
+CRUISE_SPEED_LIMIT = 0.30 - 1e-6
+TOTAL_SPEED_LIMIT = 0.30 - 1e-6
 
 
 def norm(vector):
@@ -47,27 +47,27 @@ def rotate_world_to_body(vector, roll_deg, pitch_deg, yaw_deg):
 @dataclass(frozen=True)
 class LineConfig:
     default_speed: float = 0.15
-    max_speed: float = 0.32
-    acceleration: float = 0.05
-    deceleration: float = 0.05
-    vector_acceleration: float = 0.05
-    brake_acceleration: float = 0.03
-    cross_gain: float = 0.5
-    cross_speed: float = 0.10
+    max_speed: float = 0.30
+    acceleration: float = 0.15
+    deceleration: float = 0.10
+    vector_acceleration: float = 0.15
+    brake_acceleration: float = 0.08
+    cross_gain: float = 0.8
+    cross_speed: float = 0.14
     capture_enter: float = 0.30
     capture_exit: float = 0.15
-    capture_speed: float = 0.05
-    reverse_speed: float = 0.05
-    terminal_speed: float = 0.08
+    capture_speed: float = 0.10
+    reverse_speed: float = 0.08
+    terminal_speed: float = 0.10
     terminal_radius: float = 0.20
     position_tolerance: float = 0.10
     stop_speed: float = 0.06
     yaw_tolerance: float = 5.0
     stable_seconds: float = 0.5
     align_timeout: float = 30.0
-    yaw_gain: float = 0.8
-    yaw_rate_limit: float = 15.0
-    brake_delay: float = 0.25
+    yaw_gain: float = 1.0
+    yaw_rate_limit: float = 20.0
+    brake_delay: float = 0.15
 
     def validate(self):
         if not all(math.isfinite(value) and value > 0.0
