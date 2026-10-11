@@ -50,7 +50,9 @@ params:
   check:
     timeout: 5.0 # 抓后回到本次目标下视对齐位姿时启动；新鲜双目确认目标消失。
   loss:
-    timeout: 5.0 # 目标丢失回frame；frame丢失闭环回历史位姿或预设位置。
+    timeout: 5.0 # 旧版共用值兼容；以下两项优先，只有旧配置缺少新项时才作为回退。
+    target_timeout: 5.0 # 目标丢失后继续沿最后目标伺服，再切回frame。
+    frame_timeout: 8.0 # frame丢失后闭环回历史伺服位姿或预设位置。
     sticky_seconds: 2.0 # 丢失frame/目标后，沿最后有效世界位置低增益伺服的最长时间。
 
   # frame/目标/回位连续速度修正，所有切换共用servo截止时间。

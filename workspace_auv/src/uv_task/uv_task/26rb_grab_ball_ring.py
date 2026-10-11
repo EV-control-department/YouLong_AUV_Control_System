@@ -93,6 +93,7 @@ def validate_combined_params(params, *, complete=True):
             raise ValueError(f'{key} 必须是至少1的整数')
     for key, default in (('find_timeout', 15.0), ('check_timeout', 5.0),
                          ('horizontal_servo_timeout', 20.0), ('loss_timeout', 5.0),
+                         ('target_loss_timeout', 5.0), ('frame_loss_timeout', 5.0),
                          ('ring_yaw_tolerance_deg', 3.0), ('ring_yaw_gain', 1.2),
                          ('ring_max_yaw_rate_deg_s', 10.0),
                          ('ring_orientation_spread_deg', 5.0), ('verification_timeout', 2.0),
@@ -176,7 +177,11 @@ class RB26GrabBallRingTask:
         self.find_timeout = float(params.get('find_timeout', 15.0))
         self.check_timeout = float(params.get('check_timeout', 5.0))
         self.servo_timeout = float(params.get('horizontal_servo_timeout', 20.0))
-        self.loss_timeout = float(params.get('loss_timeout', 5.0))
+        legacy_loss_timeout = float(params.get('loss_timeout', 5.0))
+        self.target_loss_timeout = float(
+            params.get('target_loss_timeout', legacy_loss_timeout))
+        self.frame_loss_timeout = float(
+            params.get('frame_loss_timeout', legacy_loss_timeout))
         self._targets = {}
         self._ring_axis_at_alignment = None
         self._first_find_started = None
@@ -301,8 +306,10 @@ class RB26GrabBallRingTask:
 
     def _align_target(self, kind, controller, started, *, checking=False, exhausted=False):
         """One deadline survives frame/target/closed-loop-return transitions."""
-        window = PickupWindow(started, self.check_timeout if checking else self.find_timeout,
-                              self.servo_timeout, self.loss_timeout, checking=checking)
+        window = PickupWindow(
+            started, self.check_timeout if checking else self.find_timeout,
+            self.servo_timeout, self.target_loss_timeout, checking=checking,
+            frame_loss_seconds=self.frame_loss_timeout)
         controller._servo_depth = self.work_depth
         controller._servo_yaw_target = None
         controller._aligned_camera = None

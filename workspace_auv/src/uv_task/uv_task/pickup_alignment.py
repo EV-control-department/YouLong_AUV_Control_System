@@ -11,8 +11,9 @@ class PickupWindow:
     started: float
     search_seconds: float
     servo_seconds: float
-    loss_seconds: float
+    target_loss_seconds: float
     checking: bool = False
+    frame_loss_seconds: float | None = None
     seen: bool = False
     mode: str = 'frame'
     missing_since: float | None = None
@@ -78,7 +79,7 @@ class PickupWindow:
         elif self.mode == 'target':
             if self.missing_since is None:
                 self.missing_since = now
-            if now-self.missing_since >= self.loss_seconds:
+            if now-self.missing_since >= self.target_loss_seconds:
                 self.mode = 'frame'
                 self.missing_since = now
         elif frame_visible:
@@ -87,7 +88,10 @@ class PickupWindow:
         else:
             if self.missing_since is None:
                 self.missing_since = now
-            if now-self.missing_since >= self.loss_seconds:
+            frame_loss_seconds = (self.target_loss_seconds
+                                  if self.frame_loss_seconds is None
+                                  else self.frame_loss_seconds)
+            if now-self.missing_since >= frame_loss_seconds:
                 self.mode = 'return'
         return previous != self.mode
 
