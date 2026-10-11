@@ -105,17 +105,17 @@ params:
   golf:
     max_attempts: 3
     grab_depth_m: 0.65 # 机器人目标Z，暂按旧0.2+0.03*8的深度；不是球自身深度。
-    pixel_tolerance_fraction: 0.015 # 球心归一化误差容差。
+    pixel_tolerance_fraction: 0.02 # 球心归一化误差容差。
     hold_seconds: 0.5 # 球心进入容差后的保持时间，单位：秒。
     servo_gain: 1.0 # 球的主水平伺服增益。
     micro_servo:
       zone_fraction: 0.20 # 球心进入图像中心30%半径后切换微伺服增益。
-      gain: 0.35 # 球进入微伺服区后的水平伺服增益。
+      gain: 0.45 # 球进入微伺服区后的水平伺服增益。
   ring:
     class: red_ring
     max_attempts: 3
     grab_depth_m: 0.58 # 机器人目标Z，可与球分别设置；不是环自身深度。
-    pixel_tolerance_fraction: 0.02 # 环中心归一化误差容差。
+    pixel_tolerance_fraction: 0.03 # 环中心归一化误差容差。
     hold_seconds: 0.3 # 环中心进入容差后的保持时间，单位：秒。
     servo_gain: 1.0 # 环的主水平伺服增益。
     micro_servo:
