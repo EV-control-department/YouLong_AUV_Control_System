@@ -5,6 +5,8 @@ from copy import deepcopy
 GROUPS = {
     'observation': dict(poses=[[1.5, -2.0, 0.2, 0.0]], travel_timeout=60.0,
                         set_timeout=20.0),
+    # Legacy tracking/association keys remain accepted for existing mission overrides.
+    # The gate task no longer uses them for selection, alignment or loss handling.
     'tracking': dict(confirm_frames=3, max_center_distance_fraction=0.12,
                      max_height_ratio=1.5, ambiguity_margin=0.15),
     'depth': dict(front=[0.1]*4, set_timeout=10.0, kp=0.8,
@@ -23,15 +25,15 @@ GROUPS = {
                    light_gap_seconds=0.3),
     'lateral': dict(front=[0.0]*4, speed_mps=0.05, tolerance_m=0.02,
                     timeout=40.0, path_kp=0.5, max_path_speed_mps=0.03),
-    'fore_aft': dict(height_limit_percent=75.0, speed_mps=0.15,
-                     max_distance_m=0.50,
+    'fore_aft': dict(height_limit_percent=80.0, speed_mps=0.15,
+                     max_distance_m=0.30,
                      position_tolerance_m=0.01, timeout=30.0,
                      observe_seconds=1.0),
     'pass': dict(yaw_servo_min_seconds=1.0, yaw_servo_max_seconds=3.0,
                  yaw_tolerance_deg=2.0, yaw_stable_seconds=0.3, yaw_kp=1.2,
                  max_yaw_rate_deg_s=12.0, stereo_pair_slop=0.25,
                  stereo_max_ray_gap_m=0.15, stereo_min_angle_deg=0.1,
-                 stereo_max_distance_m=30.0, distance_m=1.6,
+                 stereo_max_distance_m=30.0, distance_m=1.0,
                  speed_mps=0.15, timeout=60.0, pause_seconds=0.5,
                  next_observe_seconds=2.0),
 }

@@ -1,12 +1,10 @@
-"""Fixed-depth gate sequence driven by front-eye detections and measured odom.
+"""Fixed-depth gate sequence using the largest current front-eye bbox.
 
-Camera ownership is independent of the motion phase. A handover never changes
-the recorded fore/aft ray. Servo errors use the owning eye; validated stereo supports identity projection
-and the final yaw correction.
+Each decision selects the highest fresh bbox across both eyes. No target IDs,
+tracking, cross-eye association or reacquisition are required after alignment.
 """
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
 import math
 import threading
@@ -21,7 +19,6 @@ from uv_msgs.action import BasicMotion
 from uv_msgs.msg import DetectionArray
 from auv_protocol.topics import PERCEPTION_DETECTIONS
 from uv_task.gate_config import validate_gate_params
-from uv_task.gate_tracking import DetectionTracks
 from uv_task.task_outcome import TaskOutcome
 
 
@@ -47,26 +44,9 @@ class GateFrame:
     eye: str
     sequence: int
     received: float
-    stamp: float
-    pair_id: int
-    bbox: tuple
-    pose: tuple
-    origin: np.ndarray
     ray: np.ndarray
     area_percent: float
     height_percent: float
-    image_space: int = 0
-
-    @property
-    def center(self):
-        x1, y1, x2, y2 = self.bbox
-        return np.array([(x1+x2)/2, (y1+y2)/2])
-
-
-@dataclass(frozen=True)
-class RecordedRay:
-    origin: np.ndarray
-    direction: np.ndarray
 
 
 class GateFailure(RuntimeError):
@@ -92,18 +72,8 @@ class RB26GateTask:
             raise ValueError('模型映射中没有 gate_front')
         self.sequence = 0
         self._last_capture_id = dict(left=None, right=None)
-        self.owner = None
-        self.generation = 0
-        self._race_floor = 0
-        self._last_valid = 0.0
-        self._lost_since = None
-        self._latest = dict(left=None, right=None)
-        self._history = {e: deque(maxlen=16) for e in ('left', 'right')}
-        self._identity = dict(left=None, right=None)
-        self._landmark = None
-        self._reference = None
-        self._recorded_ray = None
-        self._fore_aft_start = None
+        self._current_frames = dict(left=(), right=())
+        self._height_stop_frame = None
         self._accept_frames = False
         self._capture_floor = 0.0
         self._velocity_active = False
@@ -113,11 +83,6 @@ class RB26GateTask:
         self._phase_deadline = math.inf
         self.depth = self.p['observation_poses'][0][2]
         self._observation_pose = self.p['observation_poses'][0]
-        self._target_id = None
-        self._target_aliases = {}
-        self._cross_pending = {}
-        self._collecting = True
-        self._tracks = self._new_tracks()
         self._cleanup_unconfirmed = False
         self._gate_index = 0
         self._observe_after_pass = False
@@ -166,39 +131,23 @@ class RB26GateTask:
     def _fresh(self, frame, now):
         return frame is not None and now-frame.received <= self.p['search_detection_timeout']
 
-    def _new_tracks(self):
-        return DetectionTracks(self.width, self.height, self.p,
-                               self._predict_box, self._tracking_box)
-
-    def _release_if_lost(self, now):
-        if self.owner is not None and now-self._last_valid > self.p['search_priority_release_seconds']:
-            old = self.owner
-            self.owner = None
-            self.generation += 1
-            self._race_floor = self.sequence
-            self._log(f'释放 {old} 相机优先权，保留门框目标 ID={self._target_id}', True)
-
     def _reset_gate(self, depth):
         with self._lock:
             self.depth = depth
-            self.owner = None
-            self.generation += 1
-            self._race_floor = self.sequence
-            self._last_valid = 0.0
-            self._lost_since = None
-            self._latest = dict(left=None, right=None)
-            self._identity = dict(left=None, right=None)
-            for history in self._history.values():
-                history.clear()
-            self._reference = self._landmark = self._recorded_ray = None
-            self._fore_aft_start = None
+            self._current_frames = dict(left=(), right=())
+            self._height_stop_frame = None
             self._last_capture_id = dict(left=None, right=None)
             self._accept_frames = False
-            self._target_id = None
-            self._target_aliases = {}
-            self._cross_pending = {}
-            self._collecting = True
-            self._tracks = self._new_tracks()
+
+    def _largest_frame(self):
+        """Select from each eye's latest message; never reuse a tracked target."""
+        with self._lock:
+            now = self._now()
+            frames = (frame for candidates in self._current_frames.values()
+                      for frame in candidates if self._fresh(frame, now))
+            return max(frames,
+                       key=lambda frame: (frame.height_percent, frame.area_percent, frame.sequence),
+                       default=None)
 
     def _camera_ray(self, eye, center, pose, image_info=None):
         matrix = image_info.k if image_info is not None else self.k[eye]
@@ -208,113 +157,7 @@ class RB26GateTask:
         transform = rotation(pose)
         ray = transform @ extrinsic.optical_to_body @ np.array([xy[0], xy[1], 1.0])
         ray /= np.linalg.norm(ray)
-        origin = np.asarray(pose[:3]) + transform @ extrinsic.translation
-        return origin, ray
-
-    def _tracking_box(self, frame):
-        if frame.image_space == 1:
-            return np.asarray(frame.bbox)
-        x1, y1, x2, y2 = frame.bbox
-        corners = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float64)
-        normalized = [normalized_pixel(self.k[frame.eye], self.distortion[frame.eye], *point)
-                      for point in corners]
-        projected = self.k[frame.eye] @ np.column_stack((normalized, np.ones(4))).T
-        points = (projected[:2] / projected[2]).T
-        return np.r_[points.min(axis=0), points.max(axis=0)]
-
-    def _predict_box(self, old, eye, pose, box):
-        x1, y1, x2, y2 = box
-        points = np.array([[x1, y1, 1], [x2, y1, 1], [x2, y2, 1], [x1, y2, 1]])
-        optical = (np.linalg.inv(self.k[old.eye]) @ points.T)
-        world = rotation(old.pose) @ self.extrinsics[old.eye].optical_to_body @ optical
-        # Range belongs only to the selected identity, never to neighbouring
-        # tracks in the bank. Project its local gate plane when stereo is valid.
-        if (self._landmark is not None and not self._collecting
-                and self._identity.get(old.eye) is old):
-            old_transform = rotation(old.pose) @ self.extrinsics[old.eye].optical_to_body
-            optical_depth = (old_transform.T @ (self._landmark-old.origin))[2]
-            if optical_depth > 1e-6:
-                new_origin = np.asarray(pose[:3])+rotation(pose)@self.extrinsics[eye].translation
-                world = old.origin.reshape(3, 1)+world*optical_depth-new_origin.reshape(3, 1)
-        current = self.extrinsics[eye].optical_to_body.T @ rotation(pose).T @ world
-        if np.any(current[2] <= 1e-6):
-            return None
-        pixels = (self.k[eye] @ current)[:2]/current[2]
-        return np.r_[pixels.min(axis=1), pixels.max(axis=1)]
-
-    def _select_track(self, track, fresh):
-        with self._lock:
-            self._collecting = False
-            self._target_id = track.id
-            self._target_aliases = {track.eye: track.id}
-            self._tracks.locked.add(track.id)
-            self._reference = track.frame
-            self._latest = dict(left=None, right=None)
-            self._identity = dict(left=None, right=None)
-            self.owner = None
-            self._lost_since = self._now()
-            if fresh:
-                self._accept_target(track.frame)
-            else:
-                track.streak = 0
-                track.heights.clear()
-                track.velocity[:] = 0
-            self._log(f'锁定门框 ID={track.id}，稳定高度 {track.peak_height:.1f}%')
-
-    def _accept_target(self, frame):
-        self._latest[frame.eye] = frame
-        self._identity[frame.eye] = frame
-        self._history[frame.eye].append(frame)
-        if self.owner is None and frame.sequence > self._race_floor:
-            self.owner = frame.eye
-            self.generation += 1
-            self._log(f'{frame.eye} 接管固定门框 ID={self._target_id}')
-        if self.owner == frame.eye:
-            self._last_valid = self._now()
-            self._reference = frame
-        center = self._stereo_center(self._now())
-        if center is not None:
-            self._landmark = center
-
-    def _cross_eye_target(self, eye, frames):
-        reference = self._reference
-        if reference is None or not frames:
-            self._cross_pending.pop(eye, None)
-            return None
-        predicted = self._predict_box(reference, eye, frames[0][1].pose, self._tracking_box(reference))
-        if predicted is None:
-            self._cross_pending.pop(eye, None)
-            return None
-        ranked = []
-        for track_id, frame in frames:
-            cost = self._tracks.cost(predicted, self._tracking_box(frame))
-            angle = math.degrees(math.acos(float(np.clip(reference.ray @ frame.ray, -1, 1))))
-            if cost is None or angle > self.p['search_lock_bearing_tolerance_deg']:
-                continue
-            # If simultaneous stereo is available, a bad triangulation is a
-            # veto rather than permission to fall back to another gate.
-            same_pair = (reference.pair_id == frame.pair_id if reference.pair_id and frame.pair_id
-                         else bool(reference.stamp and frame.stamp))
-            simultaneous = (same_pair
-                            and abs(reference.stamp-frame.stamp) <= self.p['pass_stereo_pair_slop']
-                            and abs(reference.received-frame.received) <= self.p['pass_stereo_pair_slop'])
-            if simultaneous and self._triangulate(reference, frame) is None:
-                continue
-            ranked.append((cost, track_id, frame))
-        ranked.sort(key=lambda item: item[0])
-        if not ranked or (len(ranked) > 1 and ranked[1][0]-ranked[0][0] < self.p['tracking_ambiguity_margin']):
-            self._cross_pending.pop(eye, None)
-            return None
-        _, track_id, frame = ranked[0]
-        pending_id, count, last = self._cross_pending.get(eye, (None, 0, 0.0))
-        continuous = pending_id == track_id and self._now()-last <= self.p['search_detection_timeout']
-        count = count+1 if continuous else 1
-        self._cross_pending[eye] = (track_id, count, self._now())
-        if count < self.p['tracking_confirm_frames']:
-            return None
-        self._target_aliases[eye] = track_id
-        self._tracks.locked.add(track_id)
-        return frame
+        return ray
 
     def _detection_cb(self, msg):
         if not bind_detection_geometry(self.node, msg):
@@ -324,13 +167,12 @@ class RB26GateTask:
         eye = str(msg.camera_name)
         if eye.startswith('front_'):
             eye = eye[len('front_'):]
-        if eye not in self._latest:
+        if eye not in self._current_frames:
             return
         with self._lock:
             if not self._accept_frames:
                 return
             now = self._now()
-            self._release_if_lost(now)
             capture_id = int(getattr(msg, 'capture_id', 0))
             if capture_id and capture_id == self._last_capture_id[eye]:
                 return
@@ -338,17 +180,20 @@ class RB26GateTask:
                 self._last_capture_id[eye] = capture_id
             self.sequence += 1
             stamp = float(msg.header.stamp.sec)+float(msg.header.stamp.nanosec)*1e-9
+            observed_at = now
             if stamp > 0:
                 if stamp < self._capture_floor:
                     return
                 ros_now = self.node.get_clock().now().nanoseconds*1e-9
                 if ros_now-stamp > self.p['search_detection_timeout'] or stamp-ros_now > self.p['search_detection_timeout']:
-                    self._latest[eye] = None
+                    self._current_frames[eye] = ()
                     return
+                # Account for transport latency when applying observation age.
+                observed_at -= max(0.0, ros_now-stamp)
             try:
                 pose = self._pose()
             except GateFailure:
-                self._latest[eye] = None
+                self._current_frames[eye] = ()
                 return
             candidates = []
             for detection in msg.detections:
@@ -368,103 +213,18 @@ class RB26GateTask:
                     continue
                 if image_info is not None:
                     self.k[eye] = np.asarray(image_info.k).reshape(3, 3)
-                origin, ray = self._camera_ray(eye, [(x1+x2)/2, (y1+y2)/2], pose, image_info)
+                ray = self._camera_ray(eye, [(x1+x2)/2, (y1+y2)/2], pose, image_info)
                 if np.linalg.norm(ray[:2]) < 1e-6:
                     continue
-                candidate = GateFrame(eye, self.sequence, now, stamp, int(msg.stereo_pair_id),
-                                      bbox, pose, origin, ray,
+                candidate = GateFrame(eye, self.sequence, observed_at, ray,
                                       100*(x2-x1)*(y2-y1)/(self.width*self.height),
-                                      100*(y2-y1)/self.height, int(getattr(msg, 'image_space', 0)))
+                                      100*(y2-y1)/self.height)
                 candidates.append(candidate)
-            matched = self._tracks.update(eye, candidates, pose, now)
-            if self._collecting:
-                return
-            self._latest[eye] = None
-            alias = self._target_aliases.get(eye)
-            target = matched.get(alias)
-            track = self._tracks.tracks.get(alias)
-            if target is not None and track.streak >= self.p['tracking_confirm_frames']:
-                self._accept_target(target)
-            elif eye not in self._target_aliases:
-                target = self._cross_eye_target(eye, list(matched.items()))
-                if target is not None:
-                    self._accept_target(target)
-            else:
-                self._cross_pending.pop(eye, None)
+            # An empty/new message replaces all previous boxes for this eye.
+            self._current_frames[eye] = tuple(candidates)
 
-    def _owner_frame(self):
-        with self._lock:
-            now = self._now()
-            self._release_if_lost(now)
-            frame = self._latest.get(self.owner)
-            if self._fresh(frame, now):
-                self._lost_since = None
-                return frame
-            if self._reference is None:
-                return None
-            if self._lost_since is None:
-                self._lost_since = now
-            if now-self._lost_since >= self.p['search_reacquire_timeout']:
-                raise GateFailure('observation_lost', '门框重获超时')
-            return None
-
-    def _stereo_center(self, now):
-        """Pair matching IDs (or stamps without IDs), then check ray geometry."""
-        if not all(self._fresh(self._latest[e], now) for e in ('left', 'right')):
-            return None
-        pairs = []
-        for left in reversed(self._history['left']):
-            if not self._fresh(left, now):
-                continue
-            for right in reversed(self._history['right']):
-                if not self._fresh(right, now):
-                    continue
-                if left.pair_id and right.pair_id:
-                    if left.pair_id != right.pair_id:
-                        continue
-                elif not left.stamp or not right.stamp or abs(left.stamp-right.stamp) > self.p['pass_stereo_pair_slop']:
-                    continue
-                # Even equal IDs must describe a reasonably simultaneous capture.
-                if abs(left.received-right.received) > self.p['pass_stereo_pair_slop']:
-                    continue
-                pairs.append((min(left.sequence, right.sequence), left, right))
-        for _, left, right in sorted(pairs, key=lambda item: item[0], reverse=True):
-            center = self._triangulate(left, right)
-            if center is None:
-                continue
-            if self._reference is not None:
-                direction = center-self._reference.origin
-                direction /= np.linalg.norm(direction)
-                if math.degrees(math.acos(float(np.clip(direction @ self._reference.ray, -1, 1)))) > self.p['search_lock_bearing_tolerance_deg']:
-                    continue
-            return center
-        return None
-
-    def _triangulate(self, left, right):
-        dot = float(np.clip(left.ray @ right.ray, -1, 1))
-        if math.degrees(math.acos(dot)) < self.p['pass_stereo_min_angle_deg']:
-            return None
-        matrix = np.column_stack([left.ray, -right.ray])
-        distances = np.linalg.lstsq(matrix, right.origin-left.origin, rcond=None)[0]
-        if min(distances) <= 0 or max(distances) > self.p['pass_stereo_max_distance_m']:
-            return None
-        a, b = left.origin+distances[0]*left.ray, right.origin+distances[1]*right.ray
-        if np.linalg.norm(a-b) > self.p['pass_stereo_max_ray_gap_m']:
-            return None
-        if max(left.height_percent, right.height_percent)/min(left.height_percent, right.height_percent) > self.p['tracking_max_height_ratio']:
-            return None
-        return (a+b)/2
-
-    def _yaw_error(self, frame, stereo=False):
-        pose = self._pose()
-        if stereo:
-            with self._lock:
-                center = self._stereo_center(self._now())
-            if center is not None:
-                delta = center-np.asarray(pose[:3])
-                if np.linalg.norm(delta[:2]) > 1e-6:
-                    return wrap_degrees(heading(delta)-pose[5]), 'stereo'
-        return wrap_degrees(heading(frame.ray)-pose[5]), frame.eye
+    def _yaw_error(self, frame):
+        return wrap_degrees(heading(frame.ray)-self._pose()[5])
 
     def _light(self, color, label):
         self._light_color = color
@@ -567,24 +327,17 @@ class RB26GateTask:
             self._depth_hold(self.p['search_light_gap_seconds'], self.node.LIGHT_OFF)
         self._neutral()
 
-    def _observe(self, seconds, deadline, require=False, color=None):
+    def _observe(self, seconds, deadline, color=None):
         self._phase_deadline = deadline
         if color is None:
             color = self.node.LIGHT_YELLOW
+        hold_xy = self._observation_pose[:2]
         until = min(deadline, self._now()+seconds)
         while self._now() < until:
             self._check(deadline)
-            self._owner_frame()
-            self._velocity(color=color)
+            self._velocity(horizontal=self._position_hold_velocity(hold_xy), color=color)
             self._tick(deadline)
-        frame = self._owner_frame()
-        if require and frame is None:
-            while frame is None:
-                self._check(deadline)
-                self._velocity()
-                self._tick(deadline)
-                frame = self._owner_frame()
-        return frame
+        return self._largest_frame()
 
     def _reach_observation(self):
         self._stage = '预设观测位姿 SET'
@@ -609,21 +362,17 @@ class RB26GateTask:
         while self._now() < until:
             self._tick(until)
         self._check()
-        with self._lock:
-            selected = self._tracks.highest(self._now(), fresh_only=True)
-            if selected is not None:
-                self._select_track(selected, fresh=True)
+        selected = self._largest_frame()
         if selected is not None:
             pose = self._pose()
             self._observation_pose = [pose[0], pose[1], self.depth, pose[5]]
-            self._log(f'第 {self._gate_index+1} 门：过门后观察发现稳定门框，跳过预设位姿 SET，直接对准')
+            self._log(f'第 {self._gate_index+1} 门：原地观察发现最大框 '
+                      f'eye={selected.eye} height={selected.height_percent:.1f}%，跳过预设位姿 SET')
             self._flash(self.node.LIGHT_GREEN, 1, '过门后观察发现下一门')
-            return True
-        self._log(f'第 {self._gate_index+1} 门：过门后 {seconds:.2f}s 未见稳定门框，转到预设位姿 SET')
-        # Disable detections throughout the fallback navigation. The normal
-        # search will establish another capture floor after SET completes.
+            return selected
+        self._log(f'第 {self._gate_index+1} 门：过门后 {seconds:.2f}s 未见有效门框，转到预设位姿 SET')
         self._reset_gate(self.depth)
-        return False
+        return None
 
     def _scan(self, sign, deadline):
         previous = self._pose()[5]
@@ -632,8 +381,11 @@ class RB26GateTask:
         self._light(self.node.LIGHT_YELLOW, '左右扫描观测')
         while travelled < self.p['search_scan_angle_deg']:
             self._check(deadline)
-            horizontal = self._position_hold_velocity(hold_xy)
-            self._velocity(horizontal=horizontal,
+            frame = self._largest_frame()
+            if frame is not None:
+                self._neutral()
+                return frame
+            self._velocity(horizontal=self._position_hold_velocity(hold_xy),
                            yaw_rate=sign*self.p['search_yaw_rate_deg_s'],
                            color=self.node.LIGHT_YELLOW)
             self._tick(deadline)
@@ -641,213 +393,147 @@ class RB26GateTask:
             travelled += sign*wrap_degrees(current-previous)
             previous = current
         self._neutral()
+        return self._largest_frame()
 
     def _search(self):
         with self._lock:
+            self._current_frames = dict(left=(), right=())
             self._capture_floor = self.node.get_clock().now().nanoseconds*1e-9
             self._accept_frames = True
         self._stage = '原地观察'
         self._light(self.node.LIGHT_YELLOW, '初始观察')
-        self._observe(self.p['search_observe_seconds'], self._deadline,
-                      color=self.node.LIGHT_YELLOW)
-        with self._lock:
-            selected = self._tracks.highest(self._now(), fresh_only=True)
-            if selected is not None:
-                self._select_track(selected, fresh=True)
+        selected = self._observe(self.p['search_observe_seconds'], self._deadline)
         if selected is not None:
             self._flash(self.node.LIGHT_GREEN, 1, '初始观察发现门框')
-            return
+            return selected
         self._flash(self.node.LIGHT_RED, 1)
         deadline = self._limit(self.p['search_timeout'])
-        self._stage = '右扫 90°'
-        self._scan(1.0, deadline)
-        self._stage = '扫描返回观测位姿'
-        self._action(BasicMotion.Goal.SET, self._observation_pose, 'xyzrz',
-                     min(deadline, self._now()+self.p['observation_set_timeout']))
-        self._stage = '左扫 90°'
-        self._phase_deadline = deadline
-        self._scan(-1.0, deadline)
-        with self._lock:
-            selected = self._tracks.highest(self._now(), fresh_only=False)
-            if selected is not None:
-                selected_frame = getattr(selected, 'peak_frame', None) or selected.frame
-                self._select_track(selected, fresh=False)
+        self._stage = '右扫'
+        selected = self._scan(1.0, deadline)
         if selected is None:
-            self._flash(self.node.LIGHT_RED, 2, '完整搜索未找到门框')
+            self._stage = '扫描返回观测位姿'
+            self._action(BasicMotion.Goal.SET, self._observation_pose, 'xyzrz',
+                         min(deadline, self._now()+self.p['observation_set_timeout']))
+            self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, self._observation_pose)
+            # Only current observations after this SET can start the left scan.
+            with self._lock:
+                self._current_frames = dict(left=(), right=())
+                self._capture_floor = self.node.get_clock().now().nanoseconds*1e-9
+            self._stage = '左扫'
+            self._phase_deadline = deadline
+            selected = self._scan(-1.0, deadline)
+        if selected is None:
+            self._flash(self.node.LIGHT_RED, 2, '搜索未找到门框')
             self.node._task_failure_light_handled = True
-            raise GateFailure('search', '左右扫视结束仍未找到稳定门框')
-        self._flash(self.node.LIGHT_GREEN, 1, '完整扫描发现门框')
-        self._stage = '扫描目标转向与重捕获'
-        deadline = self._limit(self.p['search_reacquire_timeout'])
-        self._lost_since = self._now()
-        pose = self._pose()
-        self._action(BasicMotion.Goal.SET, [pose[0], pose[1], self.depth, heading(selected_frame.ray)],
-                     'xyzrz', deadline)
-        self._fresh_after(self.sequence, deadline=deadline)
+            raise GateFailure('search', '左右扫视结束仍未找到有效门框')
+        self._flash(self.node.LIGHT_GREEN, 1, '扫描发现门框')
+        return selected
 
-    def _align(self, observe_seconds):
+    def _align(self, frame):
+        """Turn directly to the largest current bbox's world bearing."""
         deadline = self._limit(self.p['search_align_timeout'])
-        frame = self._observe(observe_seconds, deadline, require=True)
         self._neutral()
+        frame = self._largest_frame() or frame
         pose = self._pose()
-        target_yaw = heading(frame.ray)
-        self._action(BasicMotion.Goal.SET, [pose[0], pose[1], self.depth, target_yaw], 'xyzrz', deadline)
-        self._flash(self.node.LIGHT_GREEN, 1, '门框对准完成')
-        # A pre-turn pixel must never be applied to a post-turn pose.
-        with self._lock:
-            floor = self.sequence
-        return floor
-
-    def _fresh_after(self, floor, deadline=None):
-        deadline = self._limit(self.p['search_reacquire_timeout']) if deadline is None else deadline
-        self._phase_deadline = deadline
-        while True:
-            self._check(deadline)
-            frame = self._owner_frame()
-            if frame is not None and frame.sequence > floor:
-                return frame
-            self._velocity(color=self.node.LIGHT_YELLOW)
-            self._tick(deadline)
-
-    def _fresh_frame_while_holding(self, floor, deadline):
-        """Wait for a new camera frame without publishing motion during a hold."""
-        while True:
-            self._check(deadline)
-            frame = self._owner_frame()
-            if frame is not None and frame.sequence > floor:
-                return frame
-            self._tick(deadline)
+        target = [pose[0], pose[1], self.depth, heading(frame.ray)]
+        self._log(f'对准当前最大门框 eye={frame.eye} height={frame.height_percent:.1f}% '
+                  f'target_yaw={target[3]:.2f}°')
+        self._action(BasicMotion.Goal.SET, target, 'xyzrz', deadline)
+        self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, target)
+        self._flash(self.node.LIGHT_GREEN, 1, '最大门框对准完成')
+        self._log('已看到最大门框并完成对正，执行近距校准和穿门；后续无需重获门框')
 
     def _height_limit_reached(self):
-        frame = self._owner_frame()
-        return (frame is not None
-                and frame.height_percent > self.p['fore_aft_height_limit_percent'])
-
-    def _record_ray(self, frame):
-        direction = frame.ray[:2].copy()
-        direction /= np.linalg.norm(direction)
-        # Immutable horizontal camera ray projected onto the fixed depth plane.
-        origin = np.array([frame.origin[0], frame.origin[1], self.depth])
-        direction = np.array([direction[0], direction[1], 0.0])
-        origin.setflags(write=False)
-        direction.setflags(write=False)
-        self._recorded_ray = RecordedRay(origin, direction)
-        self._fore_aft_start = np.asarray(self._pose()[:2]).copy()
-        self._log(f'记录固定水平射线: origin={origin.tolist()}, direction={direction.tolist()}')
+        frame = self._largest_frame()
+        if frame is not None and frame.height_percent > self.p['fore_aft_height_limit_percent']:
+            self._height_stop_frame = frame
+            return True
+        return False
 
     def _fore_aft(self):
         deadline = self._limit(self.p['fore_aft_timeout'])
         self._stage = '门框近距 BLINE 校准'
         self._light(self.node.LIGHT_YELLOW, '门框近距 BLINE 校准')
         self._neutral()
-        ray = self._recorded_ray
-        start = self._fore_aft_start
-        while True:
-            self._check(deadline)
-            pose = self._pose()
-            direction = ray.direction[:2]
-            travelled = max(0.0, float((np.asarray(pose[:2])-start) @ direction))
-            remaining = self.p['fore_aft_max_distance_m']-travelled
-            if remaining <= self.p['fore_aft_position_tolerance_m']:
-                self._log(f'近距 BLINE 行程达到上限 {travelled:.2f}m，进入 pass 阶段')
-                return
-
-            frame = self._owner_frame()
-            if frame is None:
-                floor = self.sequence
-                self._fresh_frame_while_holding(floor, deadline)
-                continue
-            if frame.height_percent > self.p['fore_aft_height_limit_percent']:
-                self._log(f'门框高度 {frame.height_percent:.1f}% 超过 '
-                          f'{self.p["fore_aft_height_limit_percent"]:.1f}%，进入 pass 阶段')
-                return
-
-            desired_yaw = heading(direction)
-            relative_yaw = wrap_degrees(desired_yaw-pose[5])
-            relative_yaw_rad = math.radians(relative_yaw)
-            body_dx = remaining*math.cos(relative_yaw_rad)
-            body_dy = remaining*math.sin(relative_yaw_rad)
-            self._log(f'近距 BLINE 前进: {remaining:.2f}m / '
-                      f'{self.p["fore_aft_max_distance_m"]:.2f}m，'
-                      f'框高 {frame.height_percent:.1f}% / '
-                      f'{self.p["fore_aft_height_limit_percent"]:.1f}%，'
-                      f'巡航 {self.p["fore_aft_speed_mps"]:.2f}m/s')
-            self._bline_active = True
-            try:
-                self._action(
-                    BasicMotion.Goal.BLINE,
-                    [body_dx, body_dy, 0.0, relative_yaw], 'xyz', deadline,
-                    cruise_speed=self.p['fore_aft_speed_mps'],
-                    position_tolerance=self.p['fore_aft_position_tolerance_m'],
-                    cancel_predicate=self._height_limit_reached)
-            finally:
-                self._bline_active = False
-            if getattr(self.node, '_last_motion_cancelled_by_condition', False):
-                pose = self._pose()
-                self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = (
-                    float(pose[0]), float(pose[1]), float(pose[2]), float(pose[5]))
-                self._log(f'前进中门框高度超过 '
-                          f'{self.p["fore_aft_height_limit_percent"]:.1f}%，'
-                          'BLINE 已停住，进入最终对准和 pass 阶段')
-                return
-            target = getattr(self.node, '_last_motion_final_target', None)
-            if target is not None and len(target) == 4 and all(
-                    math.isfinite(float(value)) for value in target):
-                self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, target)
-            pose = self._pose()
-            travelled = max(0.0, float((np.asarray(pose[:2])-start) @ direction))
-            self._log(f'近距 BLINE 到达终点，实测行程 {travelled:.2f}m，进入 pass 阶段')
+        if self._height_limit_reached():
+            self._log(f'当前最大框高 {self._height_stop_frame.height_percent:.1f}% > '
+                      f'{self.p["fore_aft_height_limit_percent"]:.1f}%，直接进入最终对准和 pass')
             return
+        pose = self._pose()
+        start = np.asarray(pose[:2])
+        distance = self.p['fore_aft_max_distance_m']
+        self._log(f'近距 BLINE 单次前进 {distance:.2f}m，巡航 {self.p["fore_aft_speed_mps"]:.2f}m/s；'
+                  f'所有当前框的最大高度 > {self.p["fore_aft_height_limit_percent"]:.1f}% 时停车')
+        self._bline_active = True
+        try:
+            self._action(BasicMotion.Goal.BLINE,
+                         [distance, 0.0, self.depth-pose[2], 0.0], 'xyz', deadline,
+                         cruise_speed=self.p['fore_aft_speed_mps'],
+                         position_tolerance=self.p['fore_aft_position_tolerance_m'],
+                         cancel_predicate=self._height_limit_reached)
+        finally:
+            self._bline_active = False
+        if getattr(self.node, '_last_motion_cancelled_by_condition', False):
+            pose = self._pose()
+            self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = (
+                float(pose[0]), float(pose[1]), float(pose[2]), float(pose[5]))
+            self._log(f'途中最大框高 {self._height_stop_frame.height_percent:.1f}% > '
+                      f'{self.p["fore_aft_height_limit_percent"]:.1f}%，BLINE 已确认停止')
+            return
+        target = getattr(self.node, '_last_motion_final_target', None)
+        if target is not None and len(target) == 4 and all(math.isfinite(float(value)) for value in target):
+            self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, target)
+        travelled = float(np.linalg.norm(np.asarray(self._pose()[:2])-start))
+        self._log(f'近距 BLINE 完成，实测位移 {travelled:.2f}m，进入最终对准和 pass')
 
     def _final_yaw(self):
+        """Best-effort alignment; no fresh bbox or no stable yaw still permits pass."""
+        if self._largest_frame() is None:
+            self._log('停车后没有当前有效门框，保留当前航向直接 pass')
+            return
         start = self._now()
         deadline = min(self._deadline, start+self.p['pass_yaw_servo_max_seconds'])
         self._phase_deadline = deadline
+        hold_xy = self._pose()[:2]
         stable_since = None
-        generation = self.generation
-        while True:
+        while self._now() < deadline:
             self._check()
-            frame = self._owner_frame()
-            now = self._now()
-            if self.generation != generation:
-                stable_since = None
-                generation = self.generation
+            frame = self._largest_frame()
             if frame is None:
-                stable_since = None
-                error, source = None, 'lost'
-            else:
-                error, source = self._yaw_error(frame, stereo=True)
-                if abs(error) <= self.p['pass_yaw_tolerance_deg']:
-                    stable_since = now if stable_since is None else stable_since
-                else:
-                    stable_since = None
-            aligned = (now <= deadline and frame is not None and stable_since is not None
-                       and now-start >= self.p['pass_yaw_servo_min_seconds']
-                       and now-stable_since >= self.p['pass_yaw_stable_seconds'])
-            if aligned or now >= deadline:
                 self._neutral()
-                frame = self._owner_frame()
-                if frame is None:
-                    raise GateFailure('observation_lost', '最终 yaw 结束时没有有效门框，不发送 BLINE')
-                error, source = self._yaw_error(frame, stereo=True)
-                aligned = aligned and abs(error) <= self.p['pass_yaw_tolerance_deg']
-                if not aligned:
-                    raise GateFailure('timeout', '最终 yaw 在时限内未稳定对准，不发送 BLINE')
-                if aligned:
-                    self._flash(self.node.LIGHT_GREEN, 1, '最终 yaw 稳定达标')
-                self._log(f'最终 yaw {source}: 耗时 {now-start:.2f}s，剩余误差 {error:.2f}°，'
-                          '稳定达标')
+                self._log('再次对准时已无当前门框，停止转向并直接 pass')
                 return
-            rate = 0.0 if error is None else float(np.clip(error*self.p['pass_yaw_kp'],
+            now = self._now()
+            error = self._yaw_error(frame)
+            if abs(error) <= self.p['pass_yaw_tolerance_deg']:
+                stable_since = now if stable_since is None else stable_since
+            else:
+                stable_since = None
+            if (stable_since is not None
+                    and now-start >= self.p['pass_yaw_servo_min_seconds']
+                    and now-stable_since >= self.p['pass_yaw_stable_seconds']):
+                self._neutral()
+                self._flash(self.node.LIGHT_GREEN, 1, '最终 yaw 对准完成')
+                self._log(f'当前最大框再次对准完成 eye={frame.eye} error={error:+.2f}° '
+                          f'elapsed={now-start:.2f}s，开始 pass')
+                return
+            rate = float(np.clip(error*self.p['pass_yaw_kp'],
                                  -self.p['pass_max_yaw_rate_deg_s'], self.p['pass_max_yaw_rate_deg_s']))
-            self._velocity(yaw_rate=rate)
+            try:
+                self._velocity(horizontal=self._position_hold_velocity(hold_xy), yaw_rate=rate)
+            except GateFailure as exc:
+                # A servo-window boundary is optional. Communication failures,
+                # unconfirmed cancellation and the overall deadline remain fatal.
+                if (exc.kind != 'timeout' or self.node.stopped
+                        or self._cleanup_unconfirmed or self._now() >= self._deadline):
+                    raise
+                break
             self._tick()
+        self._neutral()
+        self._log(f'再次对准在 {self.p["pass_yaw_servo_max_seconds"]:.2f}s 内未稳定，保留当前航向直接 pass', True)
 
     def _pass(self):
         self._neutral()
-        frame = self._owner_frame()
-        if frame is None:
-            raise GateFailure('observation_lost', 'BLINE 交接前门框已丢失')
         pose = self._pose()
         deadline = self._limit(self.p['pass_timeout'])
         self._light(self.node.LIGHT_OFF, 'BLINE 过门')
@@ -908,23 +594,19 @@ class RB26GateTask:
         return confirmed and not self._cleanup_unconfirmed
 
     def _run_gate(self):
-        observed_here = self._observe_after_pass and self._observe_next_gate_here()
-        if not observed_here:
+        frame = self._observe_next_gate_here() if self._observe_after_pass else None
+        if frame is None:
             self._reach_observation()
-            self._search()
-        self._stage = '门框航向对准'
-        self._align(self.p['search_align_observe_seconds'])
-        self._stage = '门框近距 BLINE 校准'
-        floor = self._align(self.p['fore_aft_observe_seconds'])
-        self._record_ray(self._fresh_after(floor))
+            frame = self._search()
+        self._stage = '最大门框航向对准'
+        self._align(frame)
         self._fore_aft()
         self._flash(self.node.LIGHT_GREEN, 1, '门框近距校准完成')
-        self._stage = '最终 yaw 对准'
+        self._stage = '可选最终 yaw 对准'
         self._final_yaw()
-        floor = self.sequence
-        self._fresh_after(floor)
         self._stage = 'BLINE 穿门'
         self._pass()
+        self._log(f'第 {self._gate_index+1} 门：已看到最大框并对正，穿门动作完成，记为通过')
 
     def execute(self):
         passed = skipped = 0

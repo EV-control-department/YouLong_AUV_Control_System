@@ -255,7 +255,7 @@ class RB26GrabBallRingTask:
         timeout = float(self.p.get('return_timeout', 60.0) if timeout is None else timeout)
         ok, message = self.node._send_action_goal(
             BasicMotion.Goal.SET, list(target), axes, timeout=timeout,
-            wait_deadline=time.monotonic()+timeout,
+            wait_deadline=time.monotonic()+timeout, cancel_wait_timeout=2.0,
             light_color=self.node.LIGHT_OFF, task_context=label)
         if not ok:
             raise PickupFailure(f'{label}失败：{message}')

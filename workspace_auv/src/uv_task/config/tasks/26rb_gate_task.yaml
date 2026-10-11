@@ -1,5 +1,5 @@
 # 首门 SET 到预设位姿；过门后原地观察下一门，没看到才 SET 到下一条预设位姿。
-# 搜索/对准 -> 近距 BLINE 校准 -> 穿门；实际门数由 gate_count 控制。
+# 当前最大框对准 -> 单次近距 BLINE -> 可选再次对准 -> 1m 穿门；不跟踪门框身份。
 # z 正向向下；yaw/角速度为度/度每秒；高度百分比使用单目画面高度。
 task: 26rb_gate_task
 params:
@@ -7,18 +7,13 @@ params:
   timeout: 720.0 # 单门总时限，下一门重新计时。
   max_failures: 2 # 允许失败后跳到下一门的次数；最后一门失败仍返回失败。
   observation:
-    # 四个门的 odom 绝对 [x,y,z,yaw]；第 2–4 门暂时沿用第 1 门，后续分别修改。
+    # 四个门的 odom 绝对 [x,y,z,yaw]；深度沿用各条位姿的 z。
     poses:
-      - [1.8, 0.3, 0.4, 60.0] # 第 1 门
+      - [1.8, 0.3, 0.4, 90.0] # 第 1 门
       - [1.8, 2.0, 0.18, 90.0] # 第 2 门
       - [1.9, 2.9, 0.18, 90.0] # 第 3 门
       - [1.7, 4.2, 0.4, 90.0] # 第 4 门
     set_timeout: 20.0 # SET 到预设完整位姿的到点超时，单位秒。
-  tracking:
-    confirm_frames: 3
-    max_center_distance_fraction: 0.12
-    max_height_ratio: 1.5
-    ambiguity_margin: 0.15
   # 门深：米；kp 输出 m/s，容限米。
   depth:
     set_timeout: 10.0
@@ -28,7 +23,7 @@ params:
   # 观察/超时/灯光均为秒，转向角度为度，角速度为度/秒。
   search:
     observe_seconds: 2.0
-    scan_angle_deg: 90.0 # 右扫 -> SET 返回观测位姿 -> 左扫，途中见框也完成搜索。
+    scan_angle_deg: 90.0 # 右扫 -> SET 返回观测位姿 -> 左扫；发现当前有效门框就停止扫描并对准。
     yaw_rate_deg_s: 10.0
     position_hold_kp: 0.8 # 左右扫视时将世界XY拉回观测位姿，单位：1/秒。
     position_hold_max_speed_mps: 0.05 # 扫视中的XY位置保持速度上限。
@@ -37,25 +32,18 @@ params:
     detection_timeout: 1.5
     min_confidence: 0.02
     min_bbox_pixels: 12.0
-    lock_bearing_tolerance_deg: 20.0
-    priority_release_seconds: 2.0
-    reacquire_timeout: 10.0
-    align_observe_seconds: 1.0
     align_timeout: 20.0
-    yaw_kp: 1.2
-    max_yaw_rate_deg_s: 12.0
     velocity_period: 0.05
     light_pulse_seconds: 0.3
     light_gap_seconds: 0.3
-  # 目标对正后沿固定射线单次正向 BLINE；框高超限时中止，或走满上限后进入穿门。
+  # 对正后单次向前 BLINE；所有当前有效观测中的最大框高超限时停车，丢框继续走到上限。
   fore_aft:
-    height_limit_percent: 75.0 # 框高严格大于此值时停止校准，进入下一个 pass 阶段。
+    height_limit_percent: 80.0 # 最大 bbox 高度 / 单目画面高度 > 80% 时停车。
     speed_mps: 0.25 # 近距 BLINE 正向巡航速度。
-    max_distance_m: 0.50 # 近距校准累计 BLINE 行程上限。
+    max_distance_m: 0.30 # 单次近距 BLINE 行程上限，单位米。
     position_tolerance_m: 0.01 # 此次 BLINE 到点容差。
     timeout: 30.0
-    observe_seconds: 1.0
-  # 双目配对时间秒、射线距离米；最终 yaw 超时未稳定则失败。
+  # 停车后对准当前最大框；无框或 yaw 未稳定就直接穿门，不再等待重获。
   pass:
     yaw_servo_min_seconds: 1.0
     yaw_servo_max_seconds: 3.0
@@ -63,11 +51,7 @@ params:
     yaw_stable_seconds: 0.3
     yaw_kp: 1.2
     max_yaw_rate_deg_s: 12.0
-    stereo_pair_slop: 0.25
-    stereo_max_ray_gap_m: 0.15
-    stereo_min_angle_deg: 0.1
-    stereo_max_distance_m: 30.0
-    distance_m: 1.6
+    distance_m: 1.0
     speed_mps: 0.2
     timeout: 20.0
     next_observe_seconds: 2.0 # 过门后保持终点观察下一门；没看到才 SET 到下一条预设位姿。

@@ -165,6 +165,7 @@ class TaskRunnerNode(Node):
         self.running = False
         self.stopped = False
         self._active_goal_handle = None
+        self._pending_goal_send_future = None
         self._motion_stop_sent = False
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
@@ -1082,11 +1083,48 @@ class TaskRunnerNode(Node):
         purpose = purposes.get(cmd_type, '执行运动指令')
         return f'{purpose}({axes or "all"})'
 
+    def _confirm_previous_motion(self, timeout):
+        """Finish a previous cancellation before a new exclusive motion goal."""
+        pending = getattr(self, '_pending_goal_send_future', None)
+        handle = self._active_goal_handle
+        if pending is None and handle is None:
+            return True
+        deadline = time.monotonic()+timeout
+        self.get_logger().warning('下发新定位前，等待上一条动作结束确认')
+        try:
+            if pending is not None:
+                while rclpy.ok() and not pending.done() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                if not pending.done():
+                    raise RuntimeError('上一条目标的接受结果仍未返回')
+                handle = pending.result()
+                self._pending_goal_send_future = None
+                self._active_goal_handle = handle if handle.accepted else None
+            if handle is not None and handle.accepted:
+                result_future = handle.get_result_async()
+                if not result_future.done():
+                    handle.cancel_goal_async()
+                while rclpy.ok() and not result_future.done() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                if not result_future.done() or result_future.result() is None:
+                    raise RuntimeError('上一条动作的终态仍未返回')
+            self._active_goal_handle = None
+            self._last_motion_cleanup_confirmed = True
+            self.get_logger().info('上一条动作已确认结束，可以下发新定位')
+            return True
+        except Exception as exc:
+            self._last_motion_cleanup_confirmed = False
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = f'旧动作结束未确认，停止任务列表：{exc}'
+            self.stopped = True
+            self.get_logger().error(self._last_motion_failure_message)
+            return False
+
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
                           quiet=False, task_context='', velocity_lease=0.0,
                           light_color=None, light_pattern=None,
                           light_interval=1.0, cruise_speed=0.0, wait_deadline=None,
-                          cancel_wait_timeout=0.0, position_tolerance=0.0,
+                          cancel_wait_timeout=2.0, position_tolerance=0.0,
                           cancel_predicate=None):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
@@ -1101,6 +1139,8 @@ class TaskRunnerNode(Node):
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
             velocity_lease: BODY_VELOCITY short lease or BODY_THRUST pulse duration
+            cancel_wait_timeout: independent cancellation/result confirmation budget;
+                exclusive motion goals always get at least 2 seconds
             quiet: if True, suppress per-goal INFO logs (errors still logged)
             task_context: context shown by basic_motion; empty uses the standard
                 current-task/current-step/action context.
@@ -1108,6 +1148,17 @@ class TaskRunnerNode(Node):
         Returns:
             (success: bool, message: str)
         """
+        is_neutral_velocity = (
+            cmd_type == BasicMotion.Goal.BODY_VELOCITY and len(target) >= 4
+            and all(abs(float(value)) <= 1e-6 for value in target[:4]))
+        if self.stopped and not is_neutral_velocity:
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = '任务列表已停止，禁止下发新的运动目标'
+            return False, self._last_motion_failure_message
+        if cmd_type != BasicMotion.Goal.BODY_VELOCITY:
+            cancel_wait_timeout = max(2.0, float(cancel_wait_timeout))
+            if not self._confirm_previous_motion(cancel_wait_timeout):
+                return False, self._last_motion_failure_message
         type_names = {
             1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
             5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY', 8: 'BLINE', 9: 'WLINE',
@@ -1167,7 +1218,13 @@ class TaskRunnerNode(Node):
         if hasattr(goal, 'position_tolerance'):
             goal.position_tolerance = float(position_tolerance)
 
+        # A zero-velocity cleanup must not overwrite an older unconfirmed
+        # exclusive goal; retain that goal for the next handoff check.
+        track_goal = (getattr(self, '_pending_goal_send_future', None) is None
+                      and self._active_goal_handle is None)
         send_future = self._action_client.send_goal_async(goal)
+        if track_goal:
+            self._pending_goal_send_future = send_future
         self._last_motion_cleanup_confirmed = False
         blink_colors = tuple(int(color) for color in (light_pattern or ()))
         blink_interval = max(0.05, float(light_interval))
@@ -1187,6 +1244,13 @@ class TaskRunnerNode(Node):
                     blink_colors[blink_index], f'{type_name} 初始动作闪灯',
                     log=False)
 
+        def cleanup_unconfirmed():
+            self._last_motion_cleanup_confirmed = False
+            if cmd_type != BasicMotion.Goal.BODY_VELOCITY:
+                self.stopped = True
+                self.get_logger().error(
+                    f'{type_name} 取消后未收到动作终态，停止任务列表并保留旧动作记录')
+
         def cancel_and_confirm(handle, result_future=None, cleanup_deadline=None):
             try:
                 if not handle.accepted:
@@ -1194,16 +1258,19 @@ class TaskRunnerNode(Node):
                 if result_future is None:
                     result_future = handle.get_result_async()
                 if not result_future.done():
+                    self.get_logger().warning(
+                        f'{type_name} 等待中断，已请求取消；等待动作终态确认')
                     handle.cancel_goal_async()
                 if cleanup_deadline is not None:
                     while rclpy.ok() and not result_future.done() and time.monotonic() < cleanup_deadline:
                         time.sleep(0.01)
                 # A cancel acknowledgement alone is not a terminal result.
-                if result_future.done():
-                    result_future.result()
+                if result_future.done() and result_future.result() is not None:
+                    self.get_logger().info(f'{type_name} 旧动作已确认结束')
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                self.get_logger().warning(f'{type_name} 取消确认失败：{exc}')
+            cleanup_unconfirmed()
             return False
 
         def cancel_late_goal(future):
@@ -1218,6 +1285,7 @@ class TaskRunnerNode(Node):
         def abandon_send():
             if cancel_wait_timeout <= 0:
                 send_future.add_done_callback(cancel_late_goal)
+                cleanup_unconfirmed()
                 return
             cleanup_deadline = time.monotonic()+cancel_wait_timeout
             while rclpy.ok() and not send_future.done() and time.monotonic() < cleanup_deadline:
@@ -1225,15 +1293,18 @@ class TaskRunnerNode(Node):
             if send_future.done():
                 try:
                     handle = send_future.result()
-                    self._active_goal_handle = handle if handle.accepted else None
+                    if track_goal:
+                        self._pending_goal_send_future = None
+                        self._active_goal_handle = handle if handle.accepted else None
                     self._last_motion_cleanup_confirmed = cancel_and_confirm(
                         handle, cleanup_deadline=cleanup_deadline)
-                    if self._last_motion_cleanup_confirmed:
+                    if track_goal and self._last_motion_cleanup_confirmed:
                         self._active_goal_handle = None
                 except Exception:
-                    self._last_motion_cleanup_confirmed = False
+                    cleanup_unconfirmed()
             else:
                 send_future.add_done_callback(cancel_late_goal)
+                cleanup_unconfirmed()
 
         def within_deadline():
             return wait_deadline is None or time.monotonic() < wait_deadline
@@ -1257,10 +1328,13 @@ class TaskRunnerNode(Node):
             return False, '发送动作目标超时'
 
         goal_handle = send_future.result()
-        self._active_goal_handle = goal_handle
+        if track_goal:
+            self._pending_goal_send_future = None
+            self._active_goal_handle = goal_handle
         if not goal_handle.accepted:
             self._last_motion_cleanup_confirmed = True
-            self._active_goal_handle = None
+            if track_goal:
+                self._active_goal_handle = None
             self.get_logger().error('动作目标被服务器拒绝')
             self._last_motion_failure_kind = 'motion'
             self._last_motion_failure_message = '动作目标被服务器拒绝'
@@ -1294,7 +1368,7 @@ class TaskRunnerNode(Node):
                 time.monotonic()+cancel_wait_timeout if cancel_wait_timeout > 0 else None)
         else:
             self._last_motion_cleanup_confirmed = True
-        if self._last_motion_cleanup_confirmed or cancel_wait_timeout <= 0:
+        if track_goal and self._last_motion_cleanup_confirmed:
             self._active_goal_handle = None
         if interrupted:
             if not quiet:
