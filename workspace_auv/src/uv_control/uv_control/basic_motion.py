@@ -3,7 +3,7 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
 
 分层架构（从底到顶）：
 
-  Layer 5: 对外高级 API (SET / WMOVE / BMOVE / TRAVEL / BODY_VELOCITY)
+  Layer 5: 对外高级 API (SET / SETPOINT / WMOVE / BMOVE / TRAVEL / BODY_VELOCITY / BODY_THRUST)
   Layer 4: 步进坐标系 (运动方向 along/lateral 分解 + 动态步长)
   Layer 3: 机器人坐标系 (body frame — set_body / set_step)
   Layer 2: 世界坐标系 (odom — start / set_world / get_state)
@@ -47,8 +47,9 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
 三类运动函数
 ================================================================================
 
-1. SET 系列 (绝对定位)
-   - 直接发送 odom 系绝对坐标 + 等到达
+1. SET / SETPOINT (绝对定位)
+   - SET: 直接发送 odom 系绝对坐标 + 等到达
+   - SETPOINT: 下发一次位置目标后立即完成动作，不等到达；ZIT6 继续闭环保持位置
    - 适用于已知精确目标位置的场景
 
 2. WMOVE / BMOVE 系列 (步进移动)
@@ -67,6 +68,11 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
    - 机体系瞬时速度指令，通过短租约保持有效
    - 租约未续期时自动发送零速度
    - 视觉伺服等高频控制只通过 BasicMotion Action 进入本层
+
+5. BODY_THRUST
+   - 机体系归一化开环推力 [Fx,Fy,Fz,Myaw]，范围 [-1,1]
+   - velocity_lease 为持续秒数，从首次下发开始计时，控制层负责续期和到时清零
+   - 完成后发送当前位置保持目标，不等待到点
 """
 
 from __future__ import annotations
@@ -103,13 +109,19 @@ from uv_control.line_guidance import (
     rotate_world_to_body, validate_goal,
 )
 
+# This command adds a constant only; older generated messages have the same
+# request fields and can still carry its numeric command ID.
+SETPOINT_COMMAND = getattr(BasicMotion.Goal, 'SETPOINT', 10)
+BODY_THRUST_COMMAND = getattr(BasicMotion.Goal, 'BODY_THRUST', 11)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ZIT6 control_key 常量
 # ═════════════════════════════════════════════════════════════════════════════
-# Position and body-velocity modes are the only ZIT6 modes emitted here;
-# body/增量转换在上层完成。
-CK_POS = 0          # position mode (唯一的 control_key)
+# Position, body velocity and normalized body thrust use native ZIT6 modes.
+# body/增量位置转换在上层完成。
+CK_POS = 0          # odom position mode
 CK_VEL_BODY = 0x11  # body-frame velocity mode (VEL | BODY)
+CK_THRUST_BODY = 0x12  # body-frame actuator mode (ACTUATOR | BODY)
 DEFAULT_VELOCITY_LEASE = 0.25
 VELOCITY_WATCHDOG_PERIOD = 0.05
 
@@ -173,6 +185,10 @@ class BasicMotionNode(Node):
         self._line_stop_requested = threading.Event()
         self._line_reserved = False
         self._line_feedback = None
+        self._thrust_reserved = False
+        self._thrust_stop_requested = threading.Event()
+        self._body_thrust_active = False
+        self._thrust_ends_at = 0.0
         self._twist_received_at = float('-inf')
         self._shutdown_requested = False
         self._safe_stop_latched = False
@@ -313,6 +329,7 @@ class BasicMotionNode(Node):
         """
         with self._line_output_lock:
             self._line_stop_requested.set()
+            self._thrust_stop_requested.set()
             if not self._shutdown_requested:
                 try:
                     self._publish_body_velocity()
@@ -359,9 +376,14 @@ class BasicMotionNode(Node):
     def _send_setpoint(self, control_key: int, type_mask: int,
                        x: float, y: float, z: float, yaw_rad: float):
         """Send an MCU odom target unchanged; yaw is radians on the wire."""
+        with self._line_output_lock:
+            self._send_setpoint_locked(control_key, type_mask, x, y, z, yaw_rad)
+
+    def _send_setpoint_locked(self, control_key, type_mask, x, y, z, yaw_rad):
         blockers = self._motion_block_reasons()
         if blockers:
             raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
+        self._clear_body_thrust_locked()
         # A position command supersedes any leased body-velocity command.
         with self._velocity_lock:
             self._velocity_active = False
@@ -417,6 +439,7 @@ class BasicMotionNode(Node):
             blockers = self._motion_block_reasons()
             if blockers:
                 raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
+        self._clear_body_thrust_locked()
         with self._velocity_lock:
             if is_zero:
                 self._velocity_active = False
@@ -444,17 +467,65 @@ class BasicMotionNode(Node):
                     raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
             self._publish_while_running(self.pub_setpoint, msg)
 
-    def _velocity_watchdog_cb(self):
-        """Stop a velocity command when its action lease is not renewed."""
-        with self._line_output_lock:
+    def _clear_body_thrust_locked(self):
+        """Clear the MCU's persistent thrust trim before switching modes.
+
+        A zero velocity/position command alone leaves thrust_body additive in
+        ZIT6. Send an explicit zero ACTUATOR command first, including on abort.
+        Caller holds _line_output_lock.
+        """
+        if not self._body_thrust_active:
+            return
+        msg = ZitSetpoint()
+        msg.control_key = CK_THRUST_BODY
+        msg.type_mask = 0
+        msg.x = msg.y = msg.z = msg.roll = msg.pitch = msg.yaw = 0.0
+        msg.seq = 0
+        self._publish_while_running(self.pub_setpoint, msg)
+        self._body_thrust_active = False
+        self._thrust_ends_at = 0.0
+
+    def _publish_body_thrust_locked(self, values, ends_at):
+        """Publish normalized [Fx,Fy,Fz,Myaw] with a short renewal watchdog."""
+        msg = ZitSetpoint()
+        msg.control_key = CK_THRUST_BODY
+        msg.type_mask = 0
+        msg.x, msg.y, msg.z, msg.yaw = values
+        msg.roll = msg.pitch = 0.0
+        msg.seq = 0
+        with self._state_lock:
+            blockers = self._motion_block_reasons_locked()
+            if blockers:
+                raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
+            # Keep cleanup armed even if publish raises after writing to DDS.
+            self._body_thrust_active = True
+            self._thrust_ends_at = ends_at
             with self._velocity_lock:
-                expired = (self._velocity_active
-                           and time.monotonic() >= self._velocity_deadline)
+                self._velocity_active = True
+                self._velocity_deadline = min(
+                    ends_at, time.monotonic() + DEFAULT_VELOCITY_LEASE)
+            self._publish_while_running(self.pub_setpoint, msg)
+
+    def _velocity_watchdog_cb(self):
+        """Stop velocity/thrust when its short renewal lease expires."""
+        with self._line_output_lock:
+            now = time.monotonic()
+            with self._velocity_lock:
+                expired = (self._velocity_active and now >= self._velocity_deadline)
             if expired:
                 if self._line_reserved:
                     self._line_stop_requested.set()
-                self.get_logger().warning(
-                    'BODY_VELOCITY command lease expired; sending zero velocity')
+                if self._body_thrust_active:
+                    if now < self._thrust_ends_at:
+                        self._thrust_stop_requested.set()
+                        self.get_logger().warning(
+                            'BODY_THRUST renewal stalled; clearing open-loop thrust')
+                    else:
+                        self.get_logger().info(
+                            'BODY_THRUST duration completed; clearing open-loop thrust')
+                else:
+                    self.get_logger().warning(
+                        'BODY_VELOCITY command lease expired; sending zero velocity')
                 self._publish_body_velocity()
 
     def _status_cb(self, msg: ZitStatus):
@@ -868,9 +939,10 @@ class BasicMotionNode(Node):
         """Latch motion inhibition and leave the vehicle holding safely."""
         self._safe_stop_latched = True
         try:
-            # A zero body-velocity setpoint stops any leased velocity mode;
-            # position control then remains at its last commanded hold point.
-            self._publish_body_velocity()
+            with self._line_output_lock:
+                self._thrust_stop_requested.set()
+                # This also explicitly clears any persistent actuator thrust.
+                self._publish_body_velocity()
             response.success = True
             response.message = 'safe stop latched; motion goals are inhibited'
         except Exception as exc:
@@ -1367,6 +1439,92 @@ class BasicMotionNode(Node):
                 target = (pose.x, pose.y, pose.z, pose.rz)
             if valid:
                 self._send_setpoint(CK_POS, 0, *target[:3], math.radians(target[3]))
+                return target
+            return None
+
+    @staticmethod
+    def _validate_body_thrust(req):
+        if len(req.target) != 4:
+            raise ValueError('BODY_THRUST target needs [Fx,Fy,Fz,Myaw]')
+        values = tuple(float(value) for value in req.target)
+        if any(not math.isfinite(value) or abs(value) > 1.0 for value in values):
+            raise ValueError('BODY_THRUST values must be finite and in [-1,1]')
+        duration = float(req.velocity_lease)
+        if not math.isfinite(duration) or duration <= 0.0:
+            raise ValueError('BODY_THRUST velocity_lease must be a positive duration')
+        timeout = float(req.timeout)
+        if not math.isfinite(timeout) or (timeout > 0.0 and timeout < duration):
+            raise ValueError('BODY_THRUST timeout must cover its full duration')
+        return values, duration, timeout if timeout > 0.0 else duration + 5.0
+
+    def _execute_body_thrust(self, goal_handle):
+        """Own a finite open-loop pulse, then clear thrust and hold current pose."""
+        result = BasicMotion.Result()
+        result.success = False
+        generation = None
+        try:
+            values, duration, timeout = self._validate_body_thrust(goal_handle.request)
+            deadline = time.monotonic() + timeout
+            started = None
+            last_tick = None
+            last_report = float('-inf')
+            while rclpy.ok():
+                tick = time.monotonic()
+                with self._line_output_lock:
+                    if self._is_cancelled():
+                        raise RuntimeError(self._action_abort_reason or 'BODY_THRUST cancelled')
+                    if self._thrust_stop_requested.is_set():
+                        raise RuntimeError('BODY_THRUST stopped or renewal lease expired')
+                    with self._state_lock:
+                        if generation is None:
+                            generation = self._origin_generation
+                        elif generation != self._origin_generation:
+                            raise RuntimeError('BODY_THRUST origin changed')
+                    if started is not None and tick >= started + duration:
+                        result.success = True
+                        break
+                    if tick >= deadline:
+                        raise RuntimeError('BODY_THRUST total timeout')
+                    if last_tick is not None and tick - last_tick > DEFAULT_VELOCITY_LEASE:
+                        raise RuntimeError('BODY_THRUST control loop stalled')
+                    if started is None:
+                        started = time.monotonic()
+                    self._publish_body_thrust_locked(values, started + duration)
+                    last_tick = tick
+                if tick - last_report >= 1.0:
+                    self.get_logger().info(
+                        f'BODY_THRUST Fx={values[0]:+.3f} Fy={values[1]:+.3f} '
+                        f'Fz={values[2]:+.3f} Myaw={values[3]:+.3f} '
+                        f'elapsed={max(0.0, tick-started):.2f}/{duration:.2f}s')
+                    last_report = tick
+                time.sleep(max(0.0, min(
+                    VELOCITY_WATCHDOG_PERIOD, started + duration - time.monotonic())))
+            if not result.success:
+                raise RuntimeError('BODY_THRUST interrupted by ROS shutdown')
+        except Exception as exc:
+            result.success = False
+            result.message = str(exc)
+        finally:
+            try:
+                hold_target = self._line_stop_and_hold(generation)
+                if hold_target is not None:
+                    result.final_target = [float(value) for value in hold_target]
+                elif result.success:
+                    result.success = False
+                    result.message = 'BODY_THRUST ended but current pose hold is unavailable'
+            except Exception as exc:
+                result.success = False
+                result.message += f'; BODY_THRUST cleanup failed: {exc}'
+        if result.success:
+            self.get_logger().info('BODY_THRUST 完成：推力已清零，已下发当前位置保持')
+            goal_handle.succeed()
+        else:
+            self.get_logger().error(f'BODY_THRUST failed: {result.message}')
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
+        return result
 
     def _execute_body_line(self, goal_handle):
         req = goal_handle.request
@@ -1494,6 +1652,12 @@ class BasicMotionNode(Node):
             except (ValueError, TypeError) as exc:
                 self.get_logger().warning(f'LINE goal rejected: {exc}')
                 return GoalResponse.REJECT
+        if goal_request.cmd_type == BODY_THRUST_COMMAND:
+            try:
+                self._validate_body_thrust(goal_request)
+            except (ValueError, TypeError) as exc:
+                self.get_logger().warning(f'BODY_THRUST goal rejected: {exc}')
+                return GoalResponse.REJECT
         with self._line_output_lock, self._state_lock:
             if goal_request.cmd_type == BasicMotion.Goal.START:
                 if self._start_in_progress:
@@ -1508,7 +1672,10 @@ class BasicMotionNode(Node):
                 if goal_request.cmd_type in (BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE):
                     self._line_reserved = True
                     self._line_stop_requested.clear()
-            elif self._line_reserved and any(
+                elif goal_request.cmd_type == BODY_THRUST_COMMAND:
+                    self._thrust_reserved = True
+                    self._thrust_stop_requested.clear()
+            elif (self._line_reserved or self._thrust_reserved) and any(
                     not math.isfinite(float(value)) or abs(value) > 1e-6
                     for value in goal_request.target):
                 return GoalResponse.REJECT
@@ -1526,6 +1693,8 @@ class BasicMotionNode(Node):
             with self._line_output_lock:
                 if self._line_reserved:
                     self._line_stop_requested.set()
+                if self._thrust_reserved:
+                    self._thrust_stop_requested.set()
                 self._publish_body_velocity()
         except Exception:
             if not self._shutdown_requested:
@@ -1561,6 +1730,8 @@ class BasicMotionNode(Node):
                     if req.cmd_type in (BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE):
                         self._line_reserved = False
                         self._line_feedback = None
+                    elif req.cmd_type == BODY_THRUST_COMMAND:
+                        self._thrust_reserved = False
 
     def _position_action_timeout(self, requested, start, x, y, z):
         """SET/TRAVEL: explicit total budget or max(10, 3D distance/0.18+5)."""
@@ -1575,6 +1746,8 @@ class BasicMotionNode(Node):
 
     def _execute_motion(self, goal_handle):
         req = goal_handle.request
+        if req.cmd_type == BODY_THRUST_COMMAND:
+            return self._execute_body_thrust(goal_handle)
         if req.cmd_type in (BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE):
             return self._execute_body_line(goal_handle)
         # A zero-speed stop is always accepted, including after state loss.
@@ -1585,6 +1758,8 @@ class BasicMotionNode(Node):
             with self._line_output_lock:
                 if self._line_reserved:
                     self._line_stop_requested.set()
+                if self._thrust_reserved:
+                    self._thrust_stop_requested.set()
                 self._publish_body_velocity()
             result = BasicMotion.Result()
             result.success = True
@@ -1616,8 +1791,8 @@ class BasicMotionNode(Node):
                 return result
             vx, vy, vz, yaw_rate_deg_s = req.target[:4]
             with self._line_output_lock:
-                if self._line_reserved:
-                    raise RuntimeError('LINE owns motion output')
+                if self._line_reserved or self._thrust_reserved:
+                    raise RuntimeError('LINE or BODY_THRUST owns motion output')
                 self._publish_body_velocity(
                     vx, vy, vz, yaw_rate_deg_s,
                     lease_s=(req.velocity_lease
@@ -1648,7 +1823,7 @@ class BasicMotionNode(Node):
         # ── 派发运动类型 ──────────────────────────────────────
         type_names = {
             1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
-            5: 'BTRAVEL', 7: 'BODY_VELOCITY',
+            5: 'BTRAVEL', 7: 'BODY_VELOCITY', SETPOINT_COMMAND: 'SETPOINT',
         }
         type_name = type_names.get(req.cmd_type, f'UNKNOWN({req.cmd_type})')
         context_text = (
@@ -1663,7 +1838,7 @@ class BasicMotionNode(Node):
             f'pose=[{p.x:.2f}, {p.y:.2f}, {p.z:.2f}, {p.rz:.1f}], '
             f'requested_timeout={req.timeout:.1f}s')
 
-        if req.cmd_type == BasicMotion.Goal.SET:
+        if req.cmd_type in (BasicMotion.Goal.SET, SETPOINT_COMMAND):
             axes = req.axes or 'xyzrz'
             # 未选中的轴保持“当前实测值”，而不是上一次动作的旧目标。
             # 例如 xyrz 回原点时必须保持当前深度。
@@ -1673,8 +1848,19 @@ class BasicMotionNode(Node):
             if 'z' in axes.replace('rz', ''): tz = z
             if 'rz' in axes: tyaw = yaw
             self._action_target = {'x': tx, 'y': ty, 'z': tz, 'yaw': tyaw}
-            timeout = self._position_action_timeout(req.timeout, p, tx, ty, tz)
-            success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout)
+            if req.cmd_type == SETPOINT_COMMAND:
+                if not all(math.isfinite(value) for value in (tx, ty, tz, tyaw)):
+                    raise ValueError('SETPOINT target must contain finite values')
+                if self._is_cancelled():
+                    success = False
+                else:
+                    # End the action after publishing, while the MCU continues
+                    # position control. No arrival wait or velocity servo runs.
+                    self.set_world(tx, ty, tz, tyaw)
+                    success = True
+            else:
+                timeout = self._position_action_timeout(req.timeout, p, tx, ty, tz)
+                success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout)
 
         elif req.cmd_type == BasicMotion.Goal.WMOVE:
             axes = req.axes or 'xyzrz'
@@ -1732,6 +1918,8 @@ class BasicMotionNode(Node):
         result.success = success
         if success:
             result.message = ""
+            if req.cmd_type == SETPOINT_COMMAND:
+                result.final_target = [self._action_target[key] for key in ('x', 'y', 'z', 'yaw')]
             self.get_logger().info(
                 f'Action {type_name}: SUCCESS, '
                 f'final_target=({self._action_target["x"]:.2f}, '

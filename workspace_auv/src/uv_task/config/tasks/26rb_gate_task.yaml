@@ -1,19 +1,19 @@
-# 每门: BTRAVEL + SET -> 观察/完整左右扫视 -> 固定目标对正 -> 近距 BLINE 校准 -> 穿门。
+# 首门 SET 到预设位姿；过门后原地观察下一门，没看到才 SET 到下一条预设位姿。
+# 搜索/对准 -> 近距 BLINE 校准 -> 穿门；实际门数由 gate_count 控制。
 # z 正向向下；yaw/角速度为度/度每秒；高度百分比使用单目画面高度。
 task: 26rb_gate_task
 params:
-  gate_count: 1 # 实际执行门数，范围 1–4；按顺序使用下面前 gate_count 条位姿。
+  gate_count: 4 # 实际执行门数，范围 1–4；按顺序使用下面前 gate_count 条位姿。
   timeout: 720.0 # 单门总时限，下一门重新计时。
   max_failures: 1 # 允许失败后跳到下一门的次数；最后一门失败仍返回失败。
   observation:
     # 四个门的 odom 绝对 [x,y,z,yaw]；第 2–4 门暂时沿用第 1 门，后续分别修改。
     poses:
-      - [0.5, 1.2, 0.34, 90.0] # 第 1 门
-      - [0.5, 1.2, 0.34, 90.0] # 第 2 门
-      - [0.5, 1.2, 0.34, 90.0] # 第 3 门
-      - [0.5, 1.2, 0.34, 90.0] # 第 4 门
-    travel_timeout: 60.0
-    set_timeout: 20.0
+      - [1.8, 0.3, 0.4, 60.0] # 第 1 门
+      - [1.8, 2.0, 0.18, 90.0] # 第 2 门
+      - [1.9, 2.9, 0.18, 90.0] # 第 3 门
+      - [1.7, 4.2, 0.4, 90.0] # 第 4 门
+    set_timeout: 20.0 # SET 到预设完整位姿的到点超时，单位秒。
   tracking:
     confirm_frames: 3
     max_center_distance_fraction: 0.12
@@ -70,4 +70,5 @@ params:
     distance_m: 1.6
     speed_mps: 0.2
     timeout: 20.0
-    pause_seconds: 0.5
+    next_observe_seconds: 2.0 # 过门后保持终点观察下一门；没看到才 SET 到下一条预设位姿。
+    pause_seconds: 0.5 # 最后一门通过后的停顿；门间使用上面的原地观察。

@@ -15,7 +15,7 @@ params:
 
   # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
   # 初始值需按实际场地填写；不会从定位器覆盖。
-  collection_frame_position: [0.5, 3.0, 0.65]
+  collection_frame_position: [0.9, 5.7, 0.65]
   search:
     timeout: 60.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时，重新发线不清零。
     near_radius_m: 0.5 # 到预设 [x,y] 的二维水平距离，不考虑深度差。
@@ -58,7 +58,8 @@ params:
     detection_timeout: 0.8 # 检测结果最大允许年龄，单位：秒。
     # 球和环分别配置各自的中心容差，见下方 golf/ring 配置。
   servo:
-    timeout: 30.0 # 与find/check同起点的伺服硬截止；进入过微调区则按最后世界位置盲抓一次。
+    timeout: 30.0 # 与find/check同起点，到期停止发新修正；停车确认后按条件盲抓。
+    # 最后一条速度指令仍有独立2秒应答时限，避免伺服到期被误判为通信超时。
     # 球/环各最多盲抓一次，计入各自max_attempts；未进入微调区或没有有效世界位置则跳过。
     # 首次进入当前目标的micro_servo区时平分剩余时间；前半保持原容差，后半线性放宽。
     final_tolerance_fraction: 0.10 # 球/环最终归一化容差10%；换眼、丢失、重入不重置进度。

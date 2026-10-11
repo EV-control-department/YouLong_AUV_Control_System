@@ -32,7 +32,8 @@ GROUPS = {
                  max_yaw_rate_deg_s=12.0, stereo_pair_slop=0.25,
                  stereo_max_ray_gap_m=0.15, stereo_min_angle_deg=0.1,
                  stereo_max_distance_m=30.0, distance_m=1.6,
-                 speed_mps=0.15, timeout=60.0, pause_seconds=0.5),
+                 speed_mps=0.15, timeout=60.0, pause_seconds=0.5,
+                 next_observe_seconds=2.0),
 }
 DEFAULTS = {'gate_count': 1, 'timeout': 720.0, 'max_failures': 1}
 ALIASES = {}

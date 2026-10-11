@@ -16,6 +16,10 @@ from uv_task.down_camera_servo import (
 )
 
 
+# SETPOINT only adds an action constant; its request fields match older builds.
+SETPOINT_COMMAND = getattr(BasicMotion.Goal, 'SETPOINT', 10)
+
+
 def validate_ring_release_params(params):
     for key, default in (('release_angle_deg', 90.0), ('ring_release_angle_deg', 270.0)):
         angle = params.get(key, default)
@@ -319,7 +323,7 @@ class RB26DropBallTargetRackTask:
         return self._align_claw('hairpin_claw_link', '发夹爪', self._rack_camera_pose)
 
     def _align_claw(self, frame, label, camera_pose) -> bool:
-        """Place either claw over the same rack point from a camera-centred anchor."""
+        """Submit one claw position from the rack anchor, then wait a fixed delay."""
         node = self._node
         camera = node.camera_extrinsics.get(self._aligned_camera)
         if camera is None:
@@ -364,20 +368,23 @@ class RB26DropBallTargetRackTask:
             f'{claw_body[2]:+.3f})m，'
             f'机体平移=({body_dx:+.3f},{body_dy:+.3f})m，'
             f'世界平移=({world_dx:+.3f},{world_dy:+.3f})m，'
-            f'直接SET目标=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f},{target[3]:.1f})')
+            f'直接定点目标=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f},{target[3]:.1f})；'
+            f'下发后固定等待={self._alignment_settle_seconds:.2f}s，不等待到点')
         success, message = node._send_action_goal(
-            BasicMotion.Goal.SET, target, 'xyzrz',
+            SETPOINT_COMMAND, target, 'xyzrz',
             timeout=self._alignment_timeout,
             wait_deadline=time.monotonic()+self._alignment_timeout,
+            cancel_wait_timeout=2.0,
             quiet=True, light_color=node.LIGHT_OFF,
-            task_context=f'26rb_drop_ball_target_rack：{label}外参直接对准')
+            task_context=f'26rb_drop_ball_target_rack：{label}外参直接定点（不等待到点）')
         if not success:
-            self._logger.error(f'{label}外参直接对准失败：{message}')
-            return False
-        if node.stopped or not self._sleep(self._alignment_settle_seconds):
+            self._logger.error(f'{label}定点指令下发失败：{message}')
             return False
         node._cmd_x, node._cmd_y, node._cmd_z, node._cmd_yaw = target
-        return True
+        self._logger.info(
+            f'26rb_drop_ball_target_rack：{label}定点指令已下发，'
+            f'固定等待{self._alignment_settle_seconds:.2f}s后继续释放')
+        return self._sleep(self._alignment_settle_seconds)
 
     def _release_ball(self) -> bool:
         self._logger.info(

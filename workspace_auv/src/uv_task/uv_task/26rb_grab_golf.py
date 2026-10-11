@@ -271,6 +271,9 @@ class RB26GrabGolfTask:
         return pose
 
     def _send_horizontal_velocity(self, horizontal, deadline, *, light_color=None):
+        """Bound new corrections by servo time, with a separate action reply budget."""
+        if time.monotonic() >= deadline:
+            return
         pose = self._servo_pose()
         vz = _clamp((self._servo_depth-pose[2])*self._depth_hold_gain,
                     -self._depth_hold_max_speed, self._depth_hold_max_speed)
@@ -279,10 +282,19 @@ class RB26GrabGolfTask:
         body = body_to_world_rotation(pose).T @ np.array([*horizontal, vz])
         yaw_error = 0.0 if self._servo_yaw_target is None else (self._servo_yaw_target-pose[5]+180.0) % 360.0-180.0
         yaw_rate = _clamp(yaw_error*self._servo_yaw_gain, -self._servo_max_yaw_rate, self._servo_max_yaw_rate)
+        sent_at = time.monotonic()
+        remaining = deadline-sent_at
+        if remaining <= 0.0:
+            return
+        # The visual deadline decides when to stop issuing corrections. It
+        # must not truncate DDS acceptance/result waits for the final command:
+        # that would raise a motion failure before timeout fallback can run.
+        # Shorten the final lease; the caller then sends zero velocity and
+        # confirms position hold with its own cleanup budget.
         success, message = self._node._send_body_velocity(
             *body.tolist(), yaw_rate_deg_s=yaw_rate,
-            lease_s=max(0.25, 4*self._servo_period),
-            wait_deadline=min(deadline, time.monotonic()+2.0),
+            lease_s=min(max(0.25, 4*self._servo_period), remaining),
+            wait_deadline=sent_at+2.0,
             task_context=f'{self._task_name} 定深水平速度伺服',
             light_color=light_color)
         if not success:

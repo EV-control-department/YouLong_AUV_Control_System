@@ -1071,6 +1071,7 @@ class TaskRunnerNode(Node):
         purposes = {
             BasicMotion.Goal.START: '初始化里程计原点',
             BasicMotion.Goal.SET: '执行绝对定位',
+            getattr(BasicMotion.Goal, 'SETPOINT', 10): '下发绝对位置目标',
             BasicMotion.Goal.WMOVE: '执行世界坐标步进移动',
             BasicMotion.Goal.BMOVE: '执行机体坐标步进移动',
             BasicMotion.Goal.WTRAVEL: '执行世界坐标直线移动',
@@ -1093,7 +1094,7 @@ class TaskRunnerNode(Node):
 
         Args:
             cmd_type: BasicMotion.Goal.{START,SET,WMOVE,BMOVE,WTRAVEL,BTRAVEL,
-                BODY_VELOCITY}
+                BODY_VELOCITY,SETPOINT}
             target: list of 4 floats [x, y, z, yaw] (yaw in degrees)
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
@@ -1108,6 +1109,7 @@ class TaskRunnerNode(Node):
         type_names = {
             1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
             5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY', 8: 'BLINE', 9: 'WLINE',
+            10: 'SETPOINT',
         }
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
         if cmd_type != BasicMotion.Goal.START and not light_pattern:

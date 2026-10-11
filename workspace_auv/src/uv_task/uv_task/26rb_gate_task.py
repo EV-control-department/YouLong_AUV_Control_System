@@ -120,6 +120,7 @@ class RB26GateTask:
         self._tracks = self._new_tracks()
         self._cleanup_unconfirmed = False
         self._gate_index = 0
+        self._observe_after_pass = False
         self._stage = '准备'
         self._sub = node.create_subscription(
             DetectionArray, PERCEPTION_DETECTIONS, self._detection_cb,
@@ -586,16 +587,43 @@ class RB26GateTask:
         return frame
 
     def _reach_observation(self):
-        self._stage = '初始观测位姿 BTRAVEL'
-        pose = self._pose()
+        self._stage = '预设观测位姿 SET'
         target = self._observation_pose
-        dx, dy = target[0]-pose[0], target[1]-pose[1]
-        yaw = math.radians(pose[5])
-        body = [math.cos(yaw)*dx+math.sin(yaw)*dy,
-                -math.sin(yaw)*dx+math.cos(yaw)*dy, target[2]-pose[2], 0.0]
-        self._action(BasicMotion.Goal.BTRAVEL, body, 'xyz', self._limit(self.p['observation_travel_timeout']))
-        self._stage = '初始观测位姿 SET'
-        self._action(BasicMotion.Goal.SET, target, 'xyzrz', self._limit(self.p['observation_set_timeout']))
+        self._log(f'第 {self._gate_index+1} 门：SET 到预设观测位姿 {target}')
+        self._action(BasicMotion.Goal.SET, target, 'xyzrz',
+                     self._limit(self.p['observation_set_timeout']))
+        self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, target)
+
+    def _observe_next_gate_here(self):
+        """Keep the BLINE endpoint hold and collect only new next-gate frames."""
+        self._stage = '过门后原地观察下一门'
+        seconds = self.p['pass_next_observe_seconds']
+        self._log(f'上一门已通过：在 BLINE 终点保持位置，观察下一门 {seconds:.2f}s')
+        self._light(self.node.LIGHT_YELLOW, '过门后原地观察下一门')
+        with self._lock:
+            self._capture_floor = self.node.get_clock().now().nanoseconds*1e-9
+            self._accept_frames = True
+        until = self._limit(seconds)
+        # Do not switch to BODY_VELOCITY during this window: BasicMotion is
+        # already holding the passed gate's BLINE endpoint in position mode.
+        while self._now() < until:
+            self._tick(until)
+        self._check()
+        with self._lock:
+            selected = self._tracks.highest(self._now(), fresh_only=True)
+            if selected is not None:
+                self._select_track(selected, fresh=True)
+        if selected is not None:
+            pose = self._pose()
+            self._observation_pose = [pose[0], pose[1], self.depth, pose[5]]
+            self._log(f'第 {self._gate_index+1} 门：过门后观察发现稳定门框，跳过预设位姿 SET，直接对准')
+            self._flash(self.node.LIGHT_GREEN, 1, '过门后观察发现下一门')
+            return True
+        self._log(f'第 {self._gate_index+1} 门：过门后 {seconds:.2f}s 未见稳定门框，转到预设位姿 SET')
+        # Disable detections throughout the fallback navigation. The normal
+        # search will establish another capture floor after SET completes.
+        self._reset_gate(self.depth)
+        return False
 
     def _scan(self, sign, deadline):
         previous = self._pose()[5]
@@ -834,10 +862,12 @@ class RB26GateTask:
         if target is None or len(target) != 4 or not all(math.isfinite(float(x)) for x in target):
             raise GateFailure('final_target', 'BLINE 返回的 final_target 无效')
         self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, target)
-        # BasicMotion now holds the endpoint; no velocity output during this pause.
-        until = self._limit(self.p['pass_pause_seconds'])
-        while self._now() < until:
-            self._tick()
+        # Between gates the next iteration immediately observes here while
+        # keeping this endpoint hold. Only the last gate needs the final pause.
+        if self._gate_index+1 >= self.p['gate_count']:
+            until = self._limit(self.p['pass_pause_seconds'])
+            while self._now() < until:
+                self._tick()
         return True
 
     def _park(self):
@@ -878,8 +908,10 @@ class RB26GateTask:
         return confirmed and not self._cleanup_unconfirmed
 
     def _run_gate(self):
-        self._reach_observation()
-        self._search()
+        observed_here = self._observe_after_pass and self._observe_next_gate_here()
+        if not observed_here:
+            self._reach_observation()
+            self._search()
         self._stage = '门框航向对准'
         self._align(self.p['search_align_observe_seconds'])
         self._stage = '门框近距 BLINE 校准'
@@ -896,6 +928,7 @@ class RB26GateTask:
 
     def execute(self):
         passed = skipped = 0
+        previous_passed = False
         active_poses = self.p['observation_poses'][:self.p['gate_count']]
         for index, observation_pose in enumerate(active_poses):
             self._gate_index = index
@@ -905,11 +938,14 @@ class RB26GateTask:
             self._phase_deadline = self._deadline
             self._reset_gate(observation_pose[2])
             self._observation_pose = observation_pose
+            self._observe_after_pass = previous_passed
+            previous_passed = False
             self._log(f'第 {index+1}/{self.p["gate_count"]} 个门，观测位姿 {observation_pose}，'
                       f'已通过 {passed}，已跳过 {skipped}/{self.p["max_failures"]}')
             try:
                 self._run_gate()
                 passed += 1
+                previous_passed = True
             except GateFailure as exc:
                 stopped = self._park()
                 self._log(f'第 {index+1} 门失败 [{exc.kind}] {exc}；停车确认={stopped}', True)
