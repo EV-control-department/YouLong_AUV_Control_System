@@ -9,6 +9,9 @@ params:
   # 使用 robotcup20260901.yaml 中的 canonical detector class name。
   golf_color: pink_golf # 可选 pink_golf / yellow_golf。
   collection_frame_class: collection_frame_down
+  # 可配置组合抓取顺序： [golf, ring] 或 [ring, golf]。
+  pickup:
+    order: [golf, ring]
 
   # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
   # 初始值需按实际场地填写；不会从定位器覆盖。
@@ -53,19 +56,25 @@ params:
   # frame/目标/回位连续速度修正，所有切换共用servo截止时间。
   vision:
     detection_timeout: 0.8 # 检测结果最大允许年龄，单位：秒。
-    pixel_tolerance_fraction: 0.04 # 目标中心归一化误差容差。
+    # 球和环分别配置各自的中心容差，见下方 golf/ring 配置。
   servo:
     timeout: 20.0 # 与find/check同起点；到期且曾看到目标时仍按最后观测完成抓取。
     period: 0.15 # 水平伺服周期，单位：秒。
     log_period: 0.5 # 水平伺服日志周期，单位：秒。
-    hold_seconds: 0.5 # 高尔夫球心进入容差后的保持时间，单位：秒。
+    # 球和环分别配置各自的居中保持时间，见下方 golf/ring 配置。
     projection_depth_m: 0.7 # 像素修正的固定米制尺度，不是观测出的距离。
-    gain: 1.0 # 像素误差到水平速度的增益，单位：1/秒。
+    # frame、golf、ring分别配置主伺服增益，见下方对应配置。
     max_speed_mps: 0.06 # 水平合速度上限，单位：米/秒。
     depth_gain: 0.8 # 实测深度偏差到世界垂直速度的增益，单位：1/秒。
     max_vertical_speed_mps: 0.08 # 定深修正最大垂直速度，单位：米/秒。
     depth_tolerance_m: 0.03 # 进入居中保持需同时满足的深度误差，单位：米。
     position_command_timeout: 10.0 # 停车保持和最终夹爪对准的动作执行超时，单位：秒。
+
+  frame:
+    servo_gain: 1.0 # frame水平伺服主增益。
+    yaw:
+      gain: 0.2 # frame偏航比例增益，保守设置。
+      max_rate_deg_s: 3.0 # 机头对准bbox中心时的偏航速率上限。
 
   # 夹爪舵机 1 先重复发送到 0 rad，降低单次消息丢失的影响。
   claw:
@@ -94,10 +103,22 @@ params:
   golf:
     max_attempts: 3
     grab_depth_m: 0.65 # 机器人目标Z，暂按旧0.2+0.03*8的深度；不是球自身深度。
+    pixel_tolerance_fraction: 0.04 # 球心归一化误差容差。
+    hold_seconds: 0.5 # 球心进入容差后的保持时间，单位：秒。
+    servo_gain: 1.0 # 球的主水平伺服增益。
+    micro_servo:
+      zone_fraction: 0.20 # 球心进入图像中心30%半径后切换微伺服增益。
+      gain: 0.35 # 球进入微伺服区后的水平伺服增益。
   ring:
     class: red_ring
     max_attempts: 3
     grab_depth_m: 0.58 # 机器人目标Z，可与球分别设置；不是环自身深度。
+    pixel_tolerance_fraction: 0.04 # 环中心归一化误差容差。
+    hold_seconds: 0.5 # 环中心进入容差后的保持时间，单位：秒。
+    servo_gain: 1.0 # 环的主水平伺服增益。
+    micro_servo:
+      zone_fraction: 0.20 # 环中心进入图像中心30%半径后切换微伺服增益。
+      gain: 0.25 # 环进入微伺服区后的水平伺服增益。
     # 伺服途中采集方向；方向无效时保持航向，转向和对爪同时执行。
     orientation_min_quality: 0.8
     orientation_min_samples: 3

@@ -24,6 +24,50 @@ class PickupFailure(RuntimeError):
 
 
 def validate_combined_params(params, *, complete=True):
+    pickup_order = params.get('pickup_order', ('golf', 'ring'))
+    if (not isinstance(pickup_order, (list, tuple)) or len(pickup_order) != 2
+            or any(not isinstance(kind, str) or kind not in ('golf', 'ring')
+                   for kind in pickup_order)
+            or len(set(pickup_order)) != 2):
+        raise ValueError('pickup.order 必须恰好包含 golf 和 ring 各一次')
+    for kind in ('golf', 'ring'):
+        tolerance_key = kind+'_pixel_tolerance_fraction'
+        tolerance = params.get(tolerance_key, params.get('pixel_tolerance_fraction', .02))
+        if tolerance_key in params:
+            if (isinstance(tolerance, bool) or not isinstance(tolerance, (int, float))
+                    or not math.isfinite(tolerance) or not 0.005 <= tolerance <= 0.25):
+                raise ValueError(f'{kind}.pixel_tolerance_fraction 必须在[0.005,0.25]范围内')
+        hold_key = kind+'_hold_seconds'
+        if hold_key in params:
+            value = params[hold_key]
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                raise ValueError(f'{kind}.hold_seconds 必须是有限非负数')
+        zone_key = kind+'_micro_servo_zone_fraction'
+        if zone_key in params:
+            value = params[zone_key]
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or not tolerance < value <= 1.0):
+                raise ValueError(
+                    f'{kind}.micro_servo.zone_fraction 必须大于中心容差且不超过1.0')
+        for gain_key in (kind+'_servo_gain', kind+'_micro_servo_gain'):
+            if gain_key in params:
+                value = params[gain_key]
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not math.isfinite(value) or value <= 0):
+                    raise ValueError(f'{gain_key} 必须是有限正数')
+    if 'frame_servo_gain' in params:
+        value = params['frame_servo_gain']
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            raise ValueError('frame.servo_gain 必须是有限正数')
+    for key, label in (('frame_yaw_gain', 'frame.yaw.gain'),
+                       ('frame_yaw_max_rate_deg_s', 'frame.yaw.max_rate_deg_s')):
+        if key in params:
+            value = params[key]
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value <= 0):
+                raise ValueError(f'{label} 必须是有限正数')
     depth = params.get('work_depth_m', 0.2)
     if (isinstance(depth, bool) or not isinstance(depth, (int, float))
             or not math.isfinite(depth) or depth < 0):
@@ -99,6 +143,7 @@ class RB26GrabBallRingTask:
     def __init__(self, node, params):
         validate_combined_params(params)
         self.node, self.p = node, params
+        self.pickup_order = tuple(params.get('pickup_order', ('golf', 'ring')))
         self.work_depth = float(params.get('work_depth_m', 0.2))
         self.grab_depths = {kind: float(params.get(kind+'_grab_depth_m', 0.44))
                            for kind in ('golf', 'ring')}
@@ -109,9 +154,20 @@ class RB26GrabBallRingTask:
             node.state = TaskState()
         self.state = node.state
         self.log = node.get_logger()
-        self.ball = PickupController(node, params)
+        def target_servo_params(kind):
+            target_params = dict(params)
+            if kind+'_pixel_tolerance_fraction' in params:
+                target_params['pixel_tolerance_fraction'] = params[
+                    kind+'_pixel_tolerance_fraction']
+            if kind+'_hold_seconds' in params:
+                target_params['horizontal_hold_seconds'] = params[kind+'_hold_seconds']
+            if kind+'_servo_gain' in params:
+                target_params['horizontal_servo_gain'] = params[kind+'_servo_gain']
+            return target_params
+
+        self.ball = PickupController(node, target_servo_params('golf'))
         self.ring = PickupController(
-            node, params, target_name=params.get('ring_class', 'red_ring'),
+            node, target_servo_params('ring'), target_name=params.get('ring_class', 'red_ring'),
             target_class_id=node._model_mapping.model_class_id('red_ring', required=False),
             gripper_frame='hairpin_claw_link', task_name='26rb_grab_ball_ring.ring')
         self.max_attempts = {kind: int(params.get(kind+'_max_attempts', 3)) for kind in ('golf', 'ring')}
@@ -126,6 +182,34 @@ class RB26GrabBallRingTask:
         self._first_find_started = None
         self._frame_light_indicated = False
         self.yaw_tolerance = float(params.get('ring_yaw_tolerance_deg', 3.0))
+        shared_gain = float(params.get('horizontal_servo_gain', 0.8))
+        self.frame_servo_gain = float(params.get('frame_servo_gain', shared_gain))
+        self.frame_yaw_gain = float(params.get('frame_yaw_gain', 0.2))
+        self.frame_yaw_max_rate = float(params.get('frame_yaw_max_rate_deg_s', 3.0))
+        self.target_servo_gains = {
+            kind: float(params.get(kind+'_servo_gain', shared_gain))
+            for kind in ('golf', 'ring')}
+        self.micro_servo_gains = {
+            kind: float(params.get(kind+'_micro_servo_gain',
+                                   self.target_servo_gains[kind]*0.35))
+            for kind in ('golf', 'ring')}
+        self.micro_servo_zones = {
+            kind: float(params.get(kind+'_micro_servo_zone_fraction', 0.30))
+            for kind in ('golf', 'ring')}
+
+    def _target_servo_gain(self, kind, du, dv):
+        """Use the low gain inside the configured circular image-center zone."""
+        if math.hypot(float(du), float(dv)) <= self.micro_servo_zones[kind]:
+            return self.micro_servo_gains[kind]
+        return self.target_servo_gains[kind]
+
+    @staticmethod
+    def _heading_to_xy(pose, target_xy):
+        """Yaw toward a world-horizontal target projected from its bbox centre."""
+        delta = np.asarray(target_xy, dtype=float)-np.asarray(pose[:2], dtype=float)
+        if np.linalg.norm(delta) <= 1e-6:
+            return float(pose[5])
+        return math.degrees(math.atan2(float(delta[1]), float(delta[0])))
 
     def _check(self):
         if self.node.stopped:
@@ -234,6 +318,7 @@ class RB26GrabBallRingTask:
         self.sample_cursor = None
         last_target_camera = None
         last_target_detection = None
+        last_target_error = None
         last_target_world = None
         last_target_world_camera = None
         last_target_received = float('-inf')
@@ -259,6 +344,8 @@ class RB26GrabBallRingTask:
                                    if window.mode == 'target' else None))
                 if detection is not None:
                     last_target_camera, last_target_detection = camera, detection
+                    last_target_error = normalized_image_error(
+                        self.node, camera, detection)
                     if (camera != last_target_world_camera
                             or target_received > last_target_received):
                         pose = self._pose()
@@ -334,6 +421,8 @@ class RB26GrabBallRingTask:
                 controller._servo_yaw_target = None
                 if window.mode == 'target' and detection is not None:
                     controller._aligned_camera = camera
+                    du, dv = normalized_image_error(self.node, camera, detection)
+                    controller._servo_gain = self._target_servo_gain(kind, du, dv)
                     pose, horizontal, du, dv = controller._horizontal_velocity(camera, detection)
                     if kind == 'ring':
                         self._sample_axis()
@@ -350,7 +439,13 @@ class RB26GrabBallRingTask:
                         break
                 elif window.mode == 'frame' and frame is not None:
                     controller._aligned_camera = frame_camera
+                    controller._servo_gain = self.frame_servo_gain
                     pose, horizontal, du, dv = controller._horizontal_velocity(frame_camera, frame)
+                    if last_frame_world is not None:
+                        controller._servo_yaw_target = self._heading_to_xy(
+                            pose, last_frame_world)
+                        controller._servo_yaw_gain = self.frame_yaw_gain
+                        controller._servo_max_yaw_rate = self.frame_yaw_max_rate
                     centred = abs(du) <= controller._pixel_tolerance and abs(dv) <= controller._pixel_tolerance
                     if centred:
                         horizontal[:] = 0.
@@ -366,8 +461,11 @@ class RB26GrabBallRingTask:
                         delta = np.asarray(last_target_world)-np.asarray(pose[:2])
                         tolerance = max(0.01, controller._projection_depth*controller._pixel_tolerance)
                         if np.linalg.norm(delta) > tolerance:
+                            gain = (self._target_servo_gain(kind, *last_target_error)
+                                    if last_target_error is not None
+                                    else self.target_servo_gains[kind])
                             horizontal = bounded_velocity(
-                                delta, controller._servo_gain*0.5,
+                                delta, gain*0.5,
                                 controller._max_xy_speed)
                         controller._aligned_camera = last_target_world_camera
                     stable_since = None
@@ -377,17 +475,23 @@ class RB26GrabBallRingTask:
                         pose = self._pose()
                         delta = np.asarray(last_frame_world)-np.asarray(pose[:2])
                         tolerance = max(0.01, controller._projection_depth*controller._pixel_tolerance)
+                        controller._servo_yaw_target = self._heading_to_xy(
+                            pose, last_frame_world)
+                        controller._servo_yaw_gain = self.frame_yaw_gain
+                        controller._servo_max_yaw_rate = self.frame_yaw_max_rate
                         if np.linalg.norm(delta) > tolerance:
                             horizontal = bounded_velocity(
-                                delta, controller._servo_gain*0.5,
+                                delta, self.frame_servo_gain*0.5,
                                 controller._max_xy_speed)
                         controller._aligned_camera = last_frame_camera
                     frame_stable_since = None
                 elif window.mode == 'return':
                     anchor = self._fallback_pose()
                     pose = self._pose()
-                    horizontal = bounded_velocity(np.asarray(anchor[:2])-pose[:2], controller._servo_gain, controller._max_xy_speed)
+                    horizontal = bounded_velocity(np.asarray(anchor[:2])-pose[:2], self.frame_servo_gain, controller._max_xy_speed)
                     controller._servo_yaw_target = anchor[3]
+                    controller._servo_yaw_gain = self.frame_yaw_gain
+                    controller._servo_max_yaw_rate = self.frame_yaw_max_rate
                 else:
                     stable_since = frame_stable_since = None
                 # Correction time is motion time, not an observation budget:
@@ -587,11 +691,12 @@ class RB26GrabBallRingTask:
             self._ring_servo(self.p.get('ring_close_angle_deg', 90.0), '合爪')
         return True
 
-    def _run_target(self, kind, controller):
+    def _run_target(self, kind, controller, *, started=None):
         if controller._golf_class_id is None:
             self.state.update_pickup(**{kind+'_status': 'failed'})
             return
-        started = self._first_find_started if kind == 'golf' else time.monotonic()
+        if started is None:
+            started = self._first_find_started if kind == 'golf' else time.monotonic()
         if started is None:
             started = time.monotonic()
         checking = False
@@ -646,12 +751,18 @@ class RB26GrabBallRingTask:
                 controller._servo_yaw_gain = float(self.p.get('ring_yaw_gain', 1.2))
                 controller._servo_max_yaw_rate = float(self.p.get('ring_max_yaw_rate_deg_s', 10.0))
                 controller._servo_yaw_tolerance = self.yaw_tolerance
-            self._run_target('golf', self.ball)
-            self._run_target('ring', self.ring)
+            controllers = {'golf': self.ball, 'ring': self.ring}
+            for index, kind in enumerate(self.pickup_order):
+                # The first golf stage can use the BLINE frame timestamp.
+                # Every later target gets a fresh find/check/servo window.
+                started = (self._first_find_started
+                           if index == 0 and kind == 'golf'
+                           else time.monotonic())
+                self._run_target(kind, controllers[kind], started=started)
             result = self.state.pickup
             if result.golf_status == result.ring_status == 'success':
                 return TaskOutcome.ok('球和环均抓取成功')
-            failed = [kind for kind in ('golf', 'ring') if getattr(result, kind+'_status') != 'success']
+            failed = [kind for kind in self.pickup_order if getattr(result, kind+'_status') != 'success']
             code = failed[0]+'_exhausted' if len(failed) == 1 else 'both_exhausted'
             return TaskOutcome.failed('26rb_grab_ball_ring.'+code, '未确认抓取成功：'+','.join(failed))
         except (ValueError, KeyError, RuntimeError) as error:

@@ -258,6 +258,13 @@ TASK_SCHEMAS["26rb_grab_ball_ring"] = {
        if key not in {"max_grab_retries", "search_cruise_depth_m",
                       "ascent_speed_mps", "ascent_duration_seconds", "descent_duration_seconds"}},
     "work_depth_m": float,
+    "pickup_order": (list, str),
+    "golf_pixel_tolerance_fraction": float, "golf_hold_seconds": float,
+    "ring_pixel_tolerance_fraction": float, "ring_hold_seconds": float,
+    "frame_servo_gain": float, "golf_servo_gain": float, "ring_servo_gain": float,
+    "frame_yaw_gain": float, "frame_yaw_max_rate_deg_s": float,
+    "golf_micro_servo_zone_fraction": float, "golf_micro_servo_gain": float,
+    "ring_micro_servo_zone_fraction": float, "ring_micro_servo_gain": float,
     "find_timeout": float, "check_timeout": float, "loss_timeout": float,
     "golf_grab_depth_m": float, "ring_grab_depth_m": float,
     "retry_depth_step_m": float, "descent_timeout": float,
@@ -363,6 +370,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 PARAMETER_ALIASES["26rb_grab_ball_ring"] = {
     "find.timeout": "find_timeout", "check.timeout": "check_timeout",
     "loss.timeout": "loss_timeout",
+    "pickup.order": "pickup_order",
     **{key: value for key, value in PARAMETER_ALIASES["26rb_grab_golf"].items()
        if value not in {"max_grab_retries", "ascent_speed_mps", "ascent_duration_seconds"}},
     # Legacy YAML spelling maps to the same work-depth key; specifying both
