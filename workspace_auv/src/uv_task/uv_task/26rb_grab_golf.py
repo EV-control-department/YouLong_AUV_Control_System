@@ -338,7 +338,8 @@ class RB26GrabGolfTask:
                 detection_timeout=self._detection_timeout,
                 label=f'{self._task_name} frame修正途中观察{self._golf_color}')
         self._aligned_camera = None
-        deadline = time.monotonic()+self._servo_timeout
+        started = time.monotonic()
+        deadline = started+self._servo_timeout
         hold_generation = None
         hold_since = None
         last_status_log = float('-inf')
@@ -356,7 +357,14 @@ class RB26GrabGolfTask:
                 f'{self._task_name}：开始 {label} 定深速度伺服；'
                 f'锁定深度={self._servo_depth:.3f}m，'
                 f'水平限速={self._max_xy_speed:.3f}m/s，'
-                f'深度容差={self._depth_hold_tolerance:.3f}m')
+                f'中心容差=±{self._pixel_tolerance:.4f}，'
+                f'深度容差=±{self._depth_hold_tolerance:.3f}m，'
+                f'稳定保持={self._hold_seconds:.2f}s，'
+                f'计时={self._servo_timeout:.2f}s，'
+                f'target PID Kp={self._servo_gain:.3f}，'
+                f'Ki={self._target_servo_ki:.3f}，Kd={self._target_servo_kd:.3f}，'
+                f'I限幅=±{self._target_servo_integral_limit:.3f}，'
+                'I=(0.000,0.000)')
             while not self._node.stopped and time.monotonic() < deadline:
                 if ball_priority is not None:
                     ball_camera, ball = ball_priority.update()
@@ -390,7 +398,12 @@ class RB26GrabGolfTask:
                                  if np.linalg.norm(horizontal) > 1e-6
                                  else '停止XY并继续定深')
                         self._logger.info(
-                            f'{self._task_name}：{label} 未收到有效检测，{state}')
+                            f'{self._task_name}：{label} 未收到有效检测，{state}；'
+                            f'容差=±{self._pixel_tolerance:.4f}，'
+                            f'计时 已用={max(0., now-started):.2f}s/'
+                            f'剩余={max(0., deadline-now):.2f}s，'
+                            f'I=({self._target_pid_integral[0]:+.4f},'
+                            f'{self._target_pid_integral[1]:+.4f})')
                         last_status_log = now
                 else:
                     pose, horizontal, du, dv = self._horizontal_velocity(
@@ -421,9 +434,22 @@ class RB26GrabGolfTask:
                     else:
                         hold_since = None
                     if now-last_status_log >= self._log_period:
+                        hold_elapsed = (0.0 if hold_since is None
+                                        else max(0.0, now-hold_since))
                         self._logger.info(
                             f'{self._task_name}：{label} 定深速度伺服，相机={camera_name}，'
                             f'误差=({du:+.4f},{dv:+.4f})，'
+                            f'容差=±{self._pixel_tolerance:.4f}，'
+                            f'深度误差={pose[2]-self._servo_depth:+.3f}/'
+                            f'±{self._depth_hold_tolerance:.3f}m，'
+                            f'保持={hold_elapsed:.2f}/{self._hold_seconds:.2f}s，'
+                            f'计时 已用={max(0., now-started):.2f}s/'
+                            f'剩余={max(0., deadline-now):.2f}s，'
+                            f'PID Kp={self._servo_gain:.3f}，'
+                            f'Ki={self._target_servo_ki:.3f}，'
+                            f'Kd={self._target_servo_kd:.3f}，'
+                            f'I=({self._target_pid_integral[0]:+.4f},'
+                            f'{self._target_pid_integral[1]:+.4f})，'
                             f'世界水平速度=({horizontal[0]:+.3f},{horizontal[1]:+.3f})m/s，'
                             f'深度={pose[2]:.3f}/{self._servo_depth:.3f}m')
                         last_status_log = now

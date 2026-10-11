@@ -1377,7 +1377,8 @@ class BasicMotionNode(Node):
         last_report = (None, float('-inf'))
         try:
             started = time.monotonic()
-            position_tolerance = float(req.position_tolerance)
+            # Keep running with generated BasicMotion messages from older builds.
+            position_tolerance = float(getattr(req, 'position_tolerance', 0.0))
             if not math.isfinite(position_tolerance) or position_tolerance < 0.0:
                 raise ValueError('LINE position_tolerance must be finite and nonnegative')
             if position_tolerance == 0.0:

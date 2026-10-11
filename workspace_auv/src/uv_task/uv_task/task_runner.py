@@ -1159,7 +1159,9 @@ class TaskRunnerNode(Node):
         goal.task_context = task_context
         goal.velocity_lease = float(velocity_lease)
         goal.cruise_speed = float(cruise_speed)
-        goal.position_tolerance = float(position_tolerance)
+        # Older installed uv_msgs builds may not expose this newer field yet.
+        if hasattr(goal, 'position_tolerance'):
+            goal.position_tolerance = float(position_tolerance)
 
         send_future = self._action_client.send_goal_async(goal)
         self._last_motion_cleanup_confirmed = False

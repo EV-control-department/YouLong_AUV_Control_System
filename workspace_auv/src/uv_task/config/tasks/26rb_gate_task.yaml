@@ -6,7 +6,7 @@ params:
   timeout: 720.0 # 单门总时限，下一门重新计时。
   max_failures: 1 # 允许失败后跳到下一门的次数；最后一门失败仍返回失败。
   observation:
-    poses: [[1.5, -2.0, 0.2, 0.0]] # odom 绝对 [x,y,z,yaw]；数量等于 gate_count。
+    poses: [[0.5, 1.2, 0.34, 90.0]] # odom 绝对 [x,y,z,yaw]；数量等于 gate_count。
     travel_timeout: 60.0
     set_timeout: 20.0
   tracking:
@@ -45,7 +45,7 @@ params:
   # 目标对正后沿固定射线单次正向 BLINE；框高超限时中止，或走满上限后进入穿门。
   fore_aft:
     height_limit_percent: 75.0 # 框高严格大于此值时停止校准，进入下一个 pass 阶段。
-    speed_mps: 0.30 # 近距 BLINE 正向巡航速度。
+    speed_mps: 0.25 # 近距 BLINE 正向巡航速度。
     max_distance_m: 0.50 # 近距校准累计 BLINE 行程上限。
     position_tolerance_m: 0.01 # 此次 BLINE 到点容差。
     timeout: 30.0

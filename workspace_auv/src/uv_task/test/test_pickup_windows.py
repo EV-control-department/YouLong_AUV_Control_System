@@ -58,6 +58,7 @@ def test_find_skips_after_fifteen_seconds_without_target(rig):
 
 def test_target_has_priority_without_waiting_for_frame(rig):
     node, task = rig
+    node.pose[2] = task.work_depth
     node.hook = lambda: stream(node, (7,))
     assert task._align_target('golf', task.ball, node.clock) == 'ready'
     assert node.clock < 101.
@@ -103,7 +104,8 @@ def test_timeout_keeps_visible_target_residual_for_claw_alignment(rig):
     node.hook = lambda: stream(node, (7,), error=(.15, -.1))
     start = node.clock
     assert task._align_target('golf', task.ball, start) == 'ready'
-    assert node.clock-start == pytest.approx(30.)
+    assert node.clock-start == pytest.approx(task.servo_timeout)
+    assert 'golf' in task._blind_targets
     target, pose, camera = task._targets['golf']
     centred = np.array(pose[:2])+node.camera_extrinsics[camera].translation[:2]
     assert np.linalg.norm(np.array(target)-centred) > .05

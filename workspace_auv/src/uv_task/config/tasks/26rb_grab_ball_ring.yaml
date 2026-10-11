@@ -3,7 +3,7 @@ task: 26rb_grab_ball_ring
 params:
   # 全任务作业深度：搜索、frame/球/环水平伺服、抓取前后恢复共用。
   # NED向下为正，单位米；仅抓取下沉阶段暂时离开此深度。
-  work_depth_m: 0.05
+  work_depth_m: 0.2
   depth:
     timeout: 15.0 # 进入作业深度的SET动作超时，单位：秒。
   # 使用 robotcup20260901.yaml 中的 canonical detector class name。
@@ -58,9 +58,12 @@ params:
     detection_timeout: 0.8 # 检测结果最大允许年龄，单位：秒。
     # 球和环分别配置各自的中心容差，见下方 golf/ring 配置。
   servo:
-    timeout: 20.0 # 与find/check同起点；到期且曾看到目标时仍按最后观测完成抓取。
+    timeout: 30.0 # 与find/check同起点的伺服硬截止；进入过微调区则按最后世界位置盲抓一次。
+    # 球/环各最多盲抓一次，计入各自max_attempts；未进入微调区或没有有效世界位置则跳过。
+    # 首次进入当前目标的micro_servo区时平分剩余时间；前半保持原容差，后半线性放宽。
+    final_tolerance_fraction: 0.10 # 球/环最终归一化容差10%；换眼、丢失、重入不重置进度。
     period: 0.15 # 水平伺服周期，单位：秒。
-    log_period: 0.5 # 水平伺服日志周期，单位：秒。
+    log_period: 0.5 # 固定列宽状态日志周期；含归一化残差、当前容差、剩余时间和PID积分。
     # 球和环分别配置各自的居中保持时间，见下方 golf/ring 配置。
     projection_depth_m: 0.7 # 像素修正的固定米制尺度，不是观测出的距离。
     # frame、golf、ring分别配置主伺服增益，见下方对应配置。
@@ -103,9 +106,14 @@ params:
   golf:
     max_attempts: 3
     grab_depth_m: 0.65 # 机器人目标Z，暂按旧0.2+0.03*8的深度；不是球自身深度。
-    pixel_tolerance_fraction: 0.04 # 球心归一化误差容差。
+    pixel_tolerance_fraction: 0.04 # 球心初始归一化容差；细调后半段放宽到servo.final_tolerance_fraction。
     hold_seconds: 0.5 # 球心进入容差后的保持时间，单位：秒。
-    servo_gain: 1.0 # 球的主水平伺服增益。
+    servo_gain: 1.0 # 球 target 伺服 Kp；微伺服区使用 micro_servo.gain。
+    servo:
+      pid:
+        ki: 0.05 # 球 target 伺服积分增益。
+        kd: 0.007 # 球 target 伺服微分增益。
+        integral_limit: 0.1 # 归一化像素误差积分限幅，单位：秒。
     micro_servo:
       zone_fraction: 0.30 # 球心进入图像中心30%半径后切换微伺服增益。
       gain: 0.35 # 球进入微伺服区后的水平伺服增益。
@@ -113,22 +121,25 @@ params:
     class: red_ring
     max_attempts: 3
     grab_depth_m: 0.58 # 机器人目标Z，可与球分别设置；不是环自身深度。
-    pixel_tolerance_fraction: 0.04 # 环中心归一化误差容差。
+    pixel_tolerance_fraction: 0.04 # 环中心初始归一化容差；细调后半段放宽到servo.final_tolerance_fraction。
     hold_seconds: 0.5 # 环中心进入容差后的保持时间，单位：秒。
-    servo_gain: 1.0 # 环的主水平伺服增益。
-    micro_servo:
-      zone_fraction: 0.30 # 环中心进入图像中心30%半径后切换微伺服增益。
-      gain: 0.35 # 环进入微伺服区后的水平伺服增益。
-    # 伺服途中采集方向；方向无效时保持航向，转向和对爪同时执行。
-    orientation_min_quality: 0.8
-    orientation_min_samples: 3
-    orientation_spread_deg: 5.0
-    yaw_tolerance_deg: 3.0
-    yaw_gain: 1.2
-    max_yaw_rate_deg_s: 10.0
+    servo_gain: 1.0 # 环 target 伺服 Kp；微伺服区使用 micro_servo.gain。
     servo:
+      pid:
+        ki: 0.05 # 环 target 伺服积分增益。
+        kd: 0.007 # 环 target 伺服微分增益。
+        integral_limit: 0.1 # 归一化像素误差积分限幅，单位：秒。
       open_angle_deg: 270.0 # servo_id=2，直接给角度数值。
       close_angle_deg: 80.0 # 下沉完成后合爪，再上浮。
       repeat_count: 3
       repeat_period: 0.1
       settle_seconds: 1.0
+    micro_servo:
+      zone_fraction: 0.30 # 环中心进入图像中心30%半径后切换微伺服增益。
+      gain: 0.35 # 环进入微伺服区后的水平伺服增益。
+    # 水平伺服完成并停车后采集新方向，到时立即通过外参转向并对爪。
+    orientation_timeout: 2.0 # 优先这2秒的新样本；没有则用最后有效历史方向，到时立即转向。
+    orientation_min_quality: 0.8 # 无效帧不清除已有有效方向；超时盲抓直接用最后世界轴的水平法向。
+    yaw_tolerance_deg: 3.0
+    yaw_gain: 1.2
+    max_yaw_rate_deg_s: 10.0
