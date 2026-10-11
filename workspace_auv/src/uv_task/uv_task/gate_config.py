@@ -16,15 +16,16 @@ GROUPS = {
                    lock_bearing_tolerance_deg=20.0, priority_release_seconds=2.0,
                    reacquire_timeout=10.0, align_observe_seconds=1.0,
                    align_timeout=20.0, yaw_kp=1.2, max_yaw_rate_deg_s=12.0,
+                   position_hold_kp=0.8,
+                   position_hold_max_speed_mps=0.05,
+                   position_hold_tolerance_m=0.01,
                    velocity_period=0.05, light_pulse_seconds=0.3,
                    light_gap_seconds=0.3),
     'lateral': dict(front=[0.0]*4, speed_mps=0.05, tolerance_m=0.02,
                     timeout=40.0, path_kp=0.5, max_path_speed_mps=0.03),
-    'fore_aft': dict(target_height_percent=70.0, height_tolerance_percent=1.0,
-                     height_kp=0.4, target_area_percent=80.0, area_tolerance_percent=1.0,
-                     stable_seconds=0.5, speed_mps=0.10, reverse_speed_mps=0.08,
-                     area_kp=0.4, line_kp=0.5, max_cross_speed_mps=0.03,
-                     line_tolerance_m=0.03, max_travel_m=1.2, timeout=10.0,
+    'fore_aft': dict(height_limit_percent=75.0, speed_mps=0.15,
+                     max_distance_m=0.50,
+                     position_tolerance_m=0.01, timeout=30.0,
                      observe_seconds=1.0),
     'pass': dict(yaw_servo_min_seconds=1.0, yaw_servo_max_seconds=3.0,
                  yaw_tolerance_deg=2.0, yaw_stable_seconds=0.3, yaw_kp=1.2,
@@ -109,14 +110,12 @@ def validate_gate_params(params, complete=False):
         raise ValueError('tracking.max_height_ratio 必须大于 1')
     if not 0 < values['tracking_ambiguity_margin'] < 1:
         raise ValueError('tracking.ambiguity_margin 必须在 (0,1) 内')
-    if not 0 < values['fore_aft_target_height_percent'] <= 100:
-        raise ValueError('fore_aft.target_height_percent 必须在 (0,100] 内')
-    if values['fore_aft_height_tolerance_percent'] >= values['fore_aft_target_height_percent']:
-        raise ValueError('高度容限必须小于目标高度百分比')
-    if not 0 < values['fore_aft_target_area_percent'] <= 100:
-        raise ValueError('fore_aft.target_area_percent 必须在 (0,100] 内')
-    if values['fore_aft_area_tolerance_percent'] >= values['fore_aft_target_area_percent']:
-        raise ValueError('面积容限必须小于目标面积百分比')
+    if not 0 < values['fore_aft_height_limit_percent'] <= 100:
+        raise ValueError('fore_aft.height_limit_percent 必须在 (0,100] 内')
+    if values['fore_aft_max_distance_m'] <= values['fore_aft_position_tolerance_m']:
+        raise ValueError('fore_aft.max_distance_m 必须大于 BLINE 到点位置容差')
+    if values['fore_aft_speed_mps'] >= 0.30:
+        raise ValueError('fore_aft.speed_mps 必须小于 BLINE 速度上限 0.30m/s')
     if values['pass_yaw_servo_min_seconds'] > values['pass_yaw_servo_max_seconds']:
         raise ValueError('最终 yaw 最短时限不能大于最长时限')
     if not 0 < values['search_lock_center_delta_fraction'] <= 1:

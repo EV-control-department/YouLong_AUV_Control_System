@@ -15,6 +15,7 @@ float32 timeout     # 总超时秒; ≤0: SET/TRAVEL max(10,L/0.18+5), START 10s
 string task_context # 任务上下文，例如：hit_balls task:5步骤-前往红球前1米
 float32 velocity_lease  # BODY_VELOCITY 的速度租约（秒）, ≤0=默认0.25s
 float32 cruise_speed  # BLINE/WLINE 沿线巡航速度 m/s; 0=默认0.15; 有限正请求限幅至<0.30, 合速度<0.30
+float32 position_tolerance  # BLINE/WLINE 到点位置容差 m; ≤0=使用 line.position_tolerance
 ---
 # Result
 bool success

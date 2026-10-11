@@ -192,10 +192,13 @@ class LineGuidance:
         return max(-self.config.yaw_rate_limit,
                    min(self.config.yaw_rate_limit, self.config.yaw_gain * error))
 
-    def reached(self, position, world_velocity, yaw_deg, final=False):
+    def reached(self, position, world_velocity, yaw_deg, final=False,
+                position_tolerance=None):
         target_yaw = self.final_yaw if final else self.yaw
         yaw_error = abs((target_yaw - yaw_deg + 180.0) % 360.0 - 180.0)
-        return (all(abs(b - p) <= self.config.position_tolerance
+        tolerance = (self.config.position_tolerance if position_tolerance is None
+                     else float(position_tolerance))
+        return (all(abs(b - p) <= tolerance
                     for b, p in zip(self.end, position))
                 and norm(world_velocity) <= self.config.stop_speed
                 and yaw_error <= self.config.yaw_tolerance)

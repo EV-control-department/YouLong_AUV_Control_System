@@ -17,6 +17,8 @@ Z 为深度变化；速度转换使用实时完整 RPY。巡航速度 `cruise_sp
 
 `timeout>0` 覆盖转向、跟踪和保持全过程；否则自动取
 `max(15, length/cruise_speed+10+终点转向预算)` 秒。
+`position_tolerance` 可为单个 BLINE/WLINE 目标覆盖到点位置容差（米）；0 使用
+`line.position_tolerance`。它只影响终点到达判断，不改变起点对准容差。
 速度反馈和定位、导航样本、MCU 状态都必须新鲜，并通过已有 START、
 原点代次、解锁检查。现有 real 模式临时 `force_nav_valid` 设置保持有效。
 

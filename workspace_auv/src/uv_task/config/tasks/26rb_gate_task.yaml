@@ -1,12 +1,12 @@
-# 每门: BTRAVEL + SET -> 观察/完整左右扫视 -> 固定目标对正 -> 高度伺服 -> BLINE。
+# 每门: BTRAVEL + SET -> 观察/完整左右扫视 -> 固定目标对正 -> 近距 BLINE 校准 -> 穿门。
 # z 正向向下；yaw/角速度为度/度每秒；高度百分比使用单目画面高度。
 task: 26rb_gate_task
 params:
   gate_count: 1
-  timeout: 720.0  # 单门总时限，下一门重新计时。
-  max_failures: 1  # 允许失败后跳到下一门的次数；最后一门失败仍返回失败。
+  timeout: 720.0 # 单门总时限，下一门重新计时。
+  max_failures: 1 # 允许失败后跳到下一门的次数；最后一门失败仍返回失败。
   observation:
-    poses: [[1.5, -2.0, 0.2, 0.0]]  # odom 绝对 [x,y,z,yaw]；数量等于 gate_count。
+    poses: [[1.5, -2.0, 0.2, 0.0]] # odom 绝对 [x,y,z,yaw]；数量等于 gate_count。
     travel_timeout: 60.0
     set_timeout: 20.0
   tracking:
@@ -23,8 +23,11 @@ params:
   # 观察/超时/灯光均为秒，转向角度为度，角速度为度/秒。
   search:
     observe_seconds: 2.0
-    scan_angle_deg: 90.0  # 右扫 -> SET 返回观测位姿 -> 左扫，途中见框也完成搜索。
+    scan_angle_deg: 90.0 # 右扫 -> SET 返回观测位姿 -> 左扫，途中见框也完成搜索。
     yaw_rate_deg_s: 10.0
+    position_hold_kp: 0.8 # 左右扫视时将世界XY拉回观测位姿，单位：1/秒。
+    position_hold_max_speed_mps: 0.05 # 扫视中的XY位置保持速度上限。
+    position_hold_tolerance_m: 0.01 # 观测位姿XY误差在此范围内时不修正。
     timeout: 60.0
     detection_timeout: 1.5
     min_confidence: 0.02
@@ -39,19 +42,13 @@ params:
     velocity_period: 0.05
     light_pulse_seconds: 0.3
     light_gap_seconds: 0.3
-  # 高度容限为百分点，目标 70±1%；保持本门巡游深度。
+  # 目标对正后沿固定射线单次正向 BLINE；框高超限时中止，或走满上限后进入穿门。
   fore_aft:
-    target_height_percent: 70.0
-    height_tolerance_percent: 1.0
-    stable_seconds: 0.5
-    speed_mps: 0.1
-    reverse_speed_mps: 0.08
-    height_kp: 0.4
-    line_kp: 0.5
-    max_cross_speed_mps: 0.03
-    line_tolerance_m: 0.03
-    max_travel_m: 1.2
-    timeout: 10.0
+    height_limit_percent: 75.0 # 框高严格大于此值时停止校准，进入下一个 pass 阶段。
+    speed_mps: 0.30 # 近距 BLINE 正向巡航速度。
+    max_distance_m: 0.50 # 近距校准累计 BLINE 行程上限。
+    position_tolerance_m: 0.01 # 此次 BLINE 到点容差。
+    timeout: 30.0
     observe_seconds: 1.0
   # 双目配对时间秒、射线距离米；最终 yaw 超时未稳定则失败。
   pass:

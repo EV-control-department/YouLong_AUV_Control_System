@@ -168,6 +168,7 @@ class TaskRunnerNode(Node):
         self._motion_stop_sent = False
         self._last_motion_failure_kind = ''
         self._last_motion_failure_message = ''
+        self._last_motion_cancelled_by_condition = False
         self._light_state = None
         self._light_phase_color = self.LIGHT_OFF
         self._light_lock = threading.RLock()
@@ -1083,7 +1084,8 @@ class TaskRunnerNode(Node):
                           quiet=False, task_context='', velocity_lease=0.0,
                           light_color=None, light_pattern=None,
                           light_interval=1.0, cruise_speed=0.0, wait_deadline=None,
-                          cancel_wait_timeout=0.0):
+                          cancel_wait_timeout=0.0, position_tolerance=0.0,
+                          cancel_predicate=None):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -1118,6 +1120,7 @@ class TaskRunnerNode(Node):
         self._last_motion_failure_message = ''
         self._last_motion_final_target = None
         self._last_motion_cleanup_confirmed = True
+        self._last_motion_cancelled_by_condition = False
         task_context = (str(task_context).strip() or self._format_motion_context(
             self._default_motion_purpose(cmd_type, axes)))
 
@@ -1156,6 +1159,7 @@ class TaskRunnerNode(Node):
         goal.task_context = task_context
         goal.velocity_lease = float(velocity_lease)
         goal.cruise_speed = float(cruise_speed)
+        goal.position_tolerance = float(position_tolerance)
 
         send_future = self._action_client.send_goal_async(goal)
         self._last_motion_cleanup_confirmed = False
@@ -1260,8 +1264,21 @@ class TaskRunnerNode(Node):
             self.get_logger().info('动作目标已接受，等待执行结果……')
 
         result_future = goal_handle.get_result_async()
+        cancel_requested_by_condition = False
+        cancel_predicate_error = ''
         while rclpy.ok() and not self.stopped and within_deadline() and not result_future.done():
             update_blink_light()
+            try:
+                should_cancel = cancel_predicate is not None and cancel_predicate()
+            except Exception as exc:
+                should_cancel = True
+                cancel_predicate_error = str(exc)
+            if should_cancel:
+                cancel_requested_by_condition = True
+                self._last_motion_cleanup_confirmed = cancel_and_confirm(
+                    goal_handle, result_future,
+                    time.monotonic()+cancel_wait_timeout if cancel_wait_timeout > 0 else None)
+                break
             time.sleep(0.01)
         completed_in_time = result_future.done() and (cancel_wait_timeout <= 0 or within_deadline())
         interrupted = not rclpy.ok() or self.stopped
@@ -1288,6 +1305,15 @@ class TaskRunnerNode(Node):
         result = result_future.result().result
         if result.success:
             self._last_motion_final_target = list(result.final_target)
+        if cancel_predicate_error:
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = (
+                f'动作中断条件检查失败，已请求停止：{cancel_predicate_error}')
+            return False, self._last_motion_failure_message
+        if (cancel_requested_by_condition and self._last_motion_cleanup_confirmed
+                and (result.success or 'interrupted by cancellation' in result.message.lower())):
+            self._last_motion_cancelled_by_condition = not result.success
+            return True, result.message
         if not result.success:
             t_str = ', '.join(f'{v:.2f}' for v in target)
             self.get_logger().error(

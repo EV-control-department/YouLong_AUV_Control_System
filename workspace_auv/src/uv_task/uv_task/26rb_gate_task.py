@@ -79,9 +79,6 @@ class RB26GateTask:
     def __init__(self, node, params):
         self.node = node
         self.p = validate_gate_params(params, complete=True)
-        for key in ('fore_aft_target_area_percent', 'fore_aft_area_tolerance_percent', 'fore_aft_area_kp'):
-            if key in params:
-                self._log(f'{key} 已废弃且不参与控制；请使用 fore_aft 高度参数', True)
         self._now = time.monotonic
         self._sleep = time.sleep
         self._lock = threading.RLock()
@@ -496,6 +493,19 @@ class RB26GateTask:
             self._check(deadline)
             raise GateFailure('motion', message)
 
+    def _position_hold_velocity(self, target_xy):
+        """Keep the gate-search vehicle at its observation XY while yawing."""
+        pose = self._pose()
+        error = np.asarray(target_xy, dtype=float)-np.asarray(pose[:2], dtype=float)
+        distance = float(np.linalg.norm(error))
+        if distance <= self.p['search_position_hold_tolerance_m']:
+            return (0.0, 0.0)
+        velocity = error*self.p['search_position_hold_kp']
+        speed = float(np.linalg.norm(velocity))
+        if speed > self.p['search_position_hold_max_speed_mps']:
+            velocity *= self.p['search_position_hold_max_speed_mps']/speed
+        return float(velocity[0]), float(velocity[1])
+
     def _neutral(self, wait_deadline=None):
         if self._velocity_active:
             ok, message = self.node._send_body_velocity(
@@ -589,11 +599,14 @@ class RB26GateTask:
 
     def _scan(self, sign, deadline):
         previous = self._pose()[5]
+        hold_xy = self._observation_pose[:2]
         travelled = 0.0
         self._light(self.node.LIGHT_YELLOW, '左右扫描观测')
         while travelled < self.p['search_scan_angle_deg']:
             self._check(deadline)
-            self._velocity(yaw_rate=sign*self.p['search_yaw_rate_deg_s'],
+            horizontal = self._position_hold_velocity(hold_xy)
+            self._velocity(horizontal=horizontal,
+                           yaw_rate=sign*self.p['search_yaw_rate_deg_s'],
                            color=self.node.LIGHT_YELLOW)
             self._tick(deadline)
             current = self._pose()[5]
@@ -668,6 +681,20 @@ class RB26GateTask:
             self._velocity(color=self.node.LIGHT_YELLOW)
             self._tick(deadline)
 
+    def _fresh_frame_while_holding(self, floor, deadline):
+        """Wait for a new camera frame without publishing motion during a hold."""
+        while True:
+            self._check(deadline)
+            frame = self._owner_frame()
+            if frame is not None and frame.sequence > floor:
+                return frame
+            self._tick(deadline)
+
+    def _height_limit_reached(self):
+        frame = self._owner_frame()
+        return (frame is not None
+                and frame.height_percent > self.p['fore_aft_height_limit_percent'])
+
     def _record_ray(self, frame):
         direction = frame.ray[:2].copy()
         direction /= np.linalg.norm(direction)
@@ -682,56 +709,67 @@ class RB26GateTask:
 
     def _fore_aft(self):
         deadline = self._limit(self.p['fore_aft_timeout'])
-        self._light(self.node.LIGHT_YELLOW, '前后高度对正观测')
+        self._stage = '门框近距 BLINE 校准'
+        self._light(self.node.LIGHT_YELLOW, '门框近距 BLINE 校准')
+        self._neutral()
         ray = self._recorded_ray
         start = self._fore_aft_start
-        stable_since = None
-        generation = self.generation
-        next_log = self._now()
         while True:
             self._check(deadline)
-            frame = self._owner_frame()
             pose = self._pose()
             direction = ray.direction[:2]
-            delta = np.asarray(pose[:2])-ray.origin[:2]
-            cross = delta-float(delta @ direction)*direction
-            travelled = abs(float((np.asarray(pose[:2])-start) @ direction))
-            if travelled > self.p['fore_aft_max_travel_m']:
-                raise GateFailure('height_unreachable', f'高度目标 {self.p["fore_aft_target_height_percent"]:.1f}% 未达到，当前 {frame.height_percent if frame else float("nan"):.1f}%，沿射线位移 {travelled:.2f}m 超过上限')
-            if self.generation != generation:
-                stable_since = None
-                generation = self.generation
+            travelled = max(0.0, float((np.asarray(pose[:2])-start) @ direction))
+            remaining = self.p['fore_aft_max_distance_m']-travelled
+            if remaining <= self.p['fore_aft_position_tolerance_m']:
+                self._log(f'近距 BLINE 行程达到上限 {travelled:.2f}m，进入 pass 阶段')
+                return
+
+            frame = self._owner_frame()
             if frame is None:
-                stable_since = None
-                self._velocity(color=self.node.LIGHT_YELLOW)
-            else:
-                error = self.p['fore_aft_target_height_percent']-frame.height_percent
-                if self._now() >= next_log:
-                    self._log(f'前后高度伺服: 当前 {frame.height_percent:.1f}%，'
-                              f'目标 {self.p["fore_aft_target_height_percent"]:.1f}%，位移 {travelled:.2f}m')
-                    next_log = self._now()+1.0
-                ready = (abs(error) <= self.p['fore_aft_height_tolerance_percent']
-                         and np.linalg.norm(cross) <= self.p['fore_aft_line_tolerance_m']
-                         and abs(self.depth-pose[2]) <= self.p['depth_tolerance_m'])
-                if ready:
-                    stable_since = self._now() if stable_since is None else stable_since
-                    if self._now()-stable_since >= self.p['fore_aft_stable_seconds']:
-                        self._neutral()
-                        return
-                else:
-                    stable_since = None
-                speed = 0.0 if abs(error) <= self.p['fore_aft_height_tolerance_percent'] else float(np.clip(
-                    self.p['fore_aft_height_kp']*error/100,
-                    -self.p['fore_aft_reverse_speed_mps'], self.p['fore_aft_speed_mps']))
-                correction = -self.p['fore_aft_line_kp']*cross
-                size = np.linalg.norm(correction)
-                if size > self.p['fore_aft_max_cross_speed_mps']:
-                    correction *= self.p['fore_aft_max_cross_speed_mps']/size
-                rate = float(np.clip(wrap_degrees(heading(direction)-pose[5])*self.p['search_yaw_kp'],
-                                     -self.p['search_max_yaw_rate_deg_s'], self.p['search_max_yaw_rate_deg_s']))
-                self._velocity(direction*speed+correction, rate,
-                               color=self.node.LIGHT_YELLOW)
-            self._tick(deadline)
+                floor = self.sequence
+                self._fresh_frame_while_holding(floor, deadline)
+                continue
+            if frame.height_percent > self.p['fore_aft_height_limit_percent']:
+                self._log(f'门框高度 {frame.height_percent:.1f}% 超过 '
+                          f'{self.p["fore_aft_height_limit_percent"]:.1f}%，进入 pass 阶段')
+                return
+
+            desired_yaw = heading(direction)
+            relative_yaw = wrap_degrees(desired_yaw-pose[5])
+            relative_yaw_rad = math.radians(relative_yaw)
+            body_dx = remaining*math.cos(relative_yaw_rad)
+            body_dy = remaining*math.sin(relative_yaw_rad)
+            self._log(f'近距 BLINE 前进: {remaining:.2f}m / '
+                      f'{self.p["fore_aft_max_distance_m"]:.2f}m，'
+                      f'框高 {frame.height_percent:.1f}% / '
+                      f'{self.p["fore_aft_height_limit_percent"]:.1f}%，'
+                      f'巡航 {self.p["fore_aft_speed_mps"]:.2f}m/s')
+            self._bline_active = True
+            try:
+                self._action(
+                    BasicMotion.Goal.BLINE,
+                    [body_dx, body_dy, 0.0, relative_yaw], 'xyz', deadline,
+                    cruise_speed=self.p['fore_aft_speed_mps'],
+                    position_tolerance=self.p['fore_aft_position_tolerance_m'],
+                    cancel_predicate=self._height_limit_reached)
+            finally:
+                self._bline_active = False
+            if getattr(self.node, '_last_motion_cancelled_by_condition', False):
+                pose = self._pose()
+                self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = (
+                    float(pose[0]), float(pose[1]), float(pose[2]), float(pose[5]))
+                self._log(f'前进中门框高度超过 '
+                          f'{self.p["fore_aft_height_limit_percent"]:.1f}%，'
+                          'BLINE 已停住，进入最终对准和 pass 阶段')
+                return
+            target = getattr(self.node, '_last_motion_final_target', None)
+            if target is not None and len(target) == 4 and all(
+                    math.isfinite(float(value)) for value in target):
+                self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, target)
+            pose = self._pose()
+            travelled = max(0.0, float((np.asarray(pose[:2])-start) @ direction))
+            self._log(f'近距 BLINE 到达终点，实测行程 {travelled:.2f}m，进入 pass 阶段')
+            return
 
     def _final_yaw(self):
         start = self._now()
@@ -777,14 +815,11 @@ class RB26GateTask:
             self._velocity(yaw_rate=rate)
             self._tick()
 
-    def _pass(self, require_height=True):
+    def _pass(self):
         self._neutral()
         frame = self._owner_frame()
         if frame is None:
             raise GateFailure('observation_lost', 'BLINE 交接前门框已丢失')
-        if (require_height
-                and abs(frame.height_percent-self.p['fore_aft_target_height_percent']) > self.p['fore_aft_height_tolerance_percent']):
-            return False
         pose = self._pose()
         deadline = self._limit(self.p['pass_timeout'])
         self._light(self.node.LIGHT_OFF, 'BLINE 过门')
@@ -847,46 +882,17 @@ class RB26GateTask:
         self._search()
         self._stage = '门框航向对准'
         self._align(self.p['search_align_observe_seconds'])
-        self._stage = '前后高度对正'
+        self._stage = '门框近距 BLINE 校准'
         floor = self._align(self.p['fore_aft_observe_seconds'])
         self._record_ray(self._fresh_after(floor))
-        while True:
-            self._stage = '前后高度对正'
-            height_timed_out = False
-            try:
-                self._fore_aft()
-            except GateFailure as exc:
-                # Only the elapsed height phase can relax the height threshold.
-                # Overall deadline, transport failures and unconfirmed motion
-                # cleanup retain their original failure handling.
-                if (exc.kind != 'timeout' or self._now() >= self._deadline
-                        or self._now() < self._phase_deadline or self._cleanup_unconfirmed):
-                    raise
-                self._check()
-                self._neutral()
-                self._check()
-                if self._cleanup_unconfirmed:
-                    raise
-                frame = self._owner_frame()
-                if frame is None:
-                    raise
-                height_timed_out = True
-                self._log(f'前后高度伺服超时，但固定门框 ID={self._target_id} 仍有效：'
-                          f'当前高度 {frame.height_percent:.1f}%，停止前后修正，'
-                          '最终 yaw 对准后直接 BLINE（本门不再检查高度阈值）', True)
-            else:
-                self._flash(self.node.LIGHT_GREEN, 1, '前后对正完成')
-            self._stage = '最终 yaw 对准'
-            self._final_yaw()
-            floor = self.sequence
-            frame = self._fresh_after(floor)
-            if (height_timed_out
-                    or abs(frame.height_percent-self.p['fore_aft_target_height_percent']) <= self.p['fore_aft_height_tolerance_percent']):
-                self._stage = 'BLINE 穿门'
-                passed = self._pass(require_height=False) if height_timed_out else self._pass()
-                if passed:
-                    return
-            self._log('BLINE 前高度离开容差范围，返回高度伺服')
+        self._fore_aft()
+        self._flash(self.node.LIGHT_GREEN, 1, '门框近距校准完成')
+        self._stage = '最终 yaw 对准'
+        self._final_yaw()
+        floor = self.sequence
+        self._fresh_after(floor)
+        self._stage = 'BLINE 穿门'
+        self._pass()
 
     def execute(self):
         passed = skipped = 0

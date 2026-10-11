@@ -99,7 +99,7 @@ def validate_combined_params(params, *, complete=True):
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f'{key} 必须是至少1的整数')
     for key, default in (('find_timeout', 15.0), ('check_timeout', 5.0),
-                         ('horizontal_servo_timeout', 20.0), ('loss_timeout', 5.0),
+                         ('horizontal_servo_timeout', 30.0), ('loss_timeout', 5.0),
                          ('target_loss_timeout', 5.0), ('frame_loss_timeout', 5.0),
                          ('ring_yaw_tolerance_deg', 3.0), ('ring_yaw_gain', 1.2),
                          ('ring_max_yaw_rate_deg_s', 10.0),
@@ -187,7 +187,7 @@ class RB26GrabBallRingTask:
         self.sample_cursor = None
         self.find_timeout = float(params.get('find_timeout', 15.0))
         self.check_timeout = float(params.get('check_timeout', 5.0))
-        self.servo_timeout = float(params.get('horizontal_servo_timeout', 20.0))
+        self.servo_timeout = float(params.get('horizontal_servo_timeout', 30.0))
         legacy_loss_timeout = float(params.get('loss_timeout', 5.0))
         self.target_loss_timeout = float(
             params.get('target_loss_timeout', legacy_loss_timeout))
@@ -321,6 +321,9 @@ class RB26GrabBallRingTask:
             started, self.check_timeout if checking else self.find_timeout,
             self.servo_timeout, self.target_loss_timeout, checking=checking,
             frame_loss_seconds=self.frame_loss_timeout)
+        # Unlike the observation windows, this is a hard wall-clock limit:
+        # visual corrections must not extend one target's servo indefinitely.
+        servo_deadline = started + self.servo_timeout
         controller._servo_depth = self.work_depth
         controller._servo_yaw_target = None
         controller._aligned_camera = None
@@ -410,7 +413,7 @@ class RB26GrabBallRingTask:
                     stable_since = frame_stable_since = None
                 if announced != window.mode:
                     announced = window.mode
-                    self.log.info(f'组合抓取：{kind} 进入{window.mode}，servo剩余={max(0., window.deadline-now):.1f}s')
+                    self.log.info(f'组合抓取：{kind} 进入{window.mode}，servo剩余={max(0., servo_deadline-now):.1f}s')
                 if frame is not None and not self._frame_light_indicated:
                     self._frame_light_indicated = True
                     controller._flash_green(1, '首次看到frame')
@@ -420,16 +423,16 @@ class RB26GrabBallRingTask:
                     else self.node.LIGHT_OFF)
                 self.node._set_task_phase_light(
                     phase_color, f'组合抓取：{window.mode}阶段')
-                if now >= window.deadline:
+                if now >= servo_deadline:
                     if window.seen and last_target_detection is not None:
-                        # Keep the last valid target sample for the mechanical
-                        # attempt.  A timeout may coincide with the current
-                        # frame aging out, but it must not skip the two-object
-                        # pickup sequence after a real sighting.
-                        result = self._record_target(
-                            kind, controller, last_target_camera,
-                            last_target_detection, timed_out=True,
-                            world_target=last_target_world)
+                        # A stale last sighting is not permission to descend or
+                        # actuate the gripper after the servo budget expires.
+                        pose = self._pose()
+                        self.state.update_pickup(
+                            last_servo_pose=(*pose[:2], self.work_depth, pose[5]))
+                        self.log.warning(
+                            f'组合抓取：{kind} 视觉伺服超时，跳过本次target，不执行抓取')
+                        result = 'timeout'
                     else:
                         pose = self._pose()
                         self.state.update_pickup(last_servo_pose=(*pose[:2], self.work_depth, pose[5]))
@@ -532,8 +535,8 @@ class RB26GrabBallRingTask:
                     or (window.mode == 'frame' and frame is None)
                     else self.node.LIGHT_OFF)
                 controller._send_horizontal_velocity(
-                    horizontal, window.deadline, light_color=servo_light)
-                next_deadline = window.deadline
+                    horizontal, servo_deadline, light_color=servo_light)
+                next_deadline = servo_deadline
                 if not window.seen:
                     next_deadline = min(next_deadline, window.search_deadline)
                 self._wait(min(controller._servo_period, max(0., next_deadline-time.monotonic())))

@@ -1377,6 +1377,11 @@ class BasicMotionNode(Node):
         last_report = (None, float('-inf'))
         try:
             started = time.monotonic()
+            position_tolerance = float(req.position_tolerance)
+            if not math.isfinite(position_tolerance) or position_tolerance < 0.0:
+                raise ValueError('LINE position_tolerance must be finite and nonnegative')
+            if position_tolerance == 0.0:
+                position_tolerance = self._line_config.position_tolerance
             speed = validate_goal(req.target, req.axes, req.cruise_speed,
                                   req.timeout, self._line_config,
                                   world=req.cmd_type == BasicMotion.Goal.WLINE)
@@ -1426,7 +1431,9 @@ class BasicMotionNode(Node):
                         elif tick >= align_deadline:
                             raise RuntimeError('LINE alignment timeout')
                     elif phase in ('FINAL_TURN', 'HOLD'):
-                        if guide.reached(position, world_velocity, attitude[2], final=True):
+                        if guide.reached(position, world_velocity, attitude[2],
+                                         final=True,
+                                         position_tolerance=position_tolerance):
                             phase = 'HOLD'
                             stable_since = tick if stable_since is None else stable_since
                             if tick - stable_since >= self._line_config.stable_seconds:
@@ -1440,7 +1447,8 @@ class BasicMotionNode(Node):
                         last_report = self._line_report(
                             guide, phase, sample, 0.0, last_report)
                     else:
-                        if guide.reached(position, world_velocity, attitude[2]):
+                        if guide.reached(position, world_velocity, attitude[2],
+                                         position_tolerance=position_tolerance):
                             self._publish_body_velocity()
                             self._send_setpoint(CK_POS, 0, *guide.end,
                                                 math.radians(guide.final_yaw))

@@ -50,9 +50,7 @@ params:
   check:
     timeout: 5.0 # 抓后回到本次目标下视对齐位姿时启动；新鲜双目确认目标消失。
   loss:
-    timeout: 5.0 # 旧版共用值兼容；以下两项优先，只有旧配置缺少新项时才作为回退。
-    target_timeout: 5.0 # 目标丢失后继续沿最后目标伺服，再切回frame。
-    frame_timeout: 8.0 # frame丢失后闭环回历史伺服位姿或预设位置。
+    timeout: 5.0 # 目标丢失回frame；frame丢失闭环回历史位姿或预设位置。
     sticky_seconds: 2.0 # 丢失frame/目标后，沿最后有效世界位置低增益伺服的最长时间。
 
   # frame/目标/回位连续速度修正，所有切换共用servo截止时间。
@@ -105,32 +103,22 @@ params:
   golf:
     max_attempts: 3
     grab_depth_m: 0.65 # 机器人目标Z，暂按旧0.2+0.03*8的深度；不是球自身深度。
-    pixel_tolerance_fraction: 0.02 # 球心归一化误差容差。
+    pixel_tolerance_fraction: 0.04 # 球心归一化误差容差。
     hold_seconds: 0.5 # 球心进入容差后的保持时间，单位：秒。
-    servo_gain: 1.0 # 球target PID的Kp。
-    servo:
-      pid:
-        ki: 0.05 # 球target积分增益；中心容差内或丢失时清零。
-        kd: 0.01 # 球target微分增益。
-        integral_limit: 0.2 # 归一化像素误差积分限幅，单位：秒。
+    servo_gain: 1.0 # 球的主水平伺服增益。
     micro_servo:
-      zone_fraction: 0.10 # 球心进入图像中心30%半径后切换微伺服增益。
-      gain: 0.45 # 球进入微伺服区后的水平伺服增益。
+      zone_fraction: 0.30 # 球心进入图像中心30%半径后切换微伺服增益。
+      gain: 0.35 # 球进入微伺服区后的水平伺服增益。
   ring:
     class: red_ring
     max_attempts: 3
     grab_depth_m: 0.58 # 机器人目标Z，可与球分别设置；不是环自身深度。
-    pixel_tolerance_fraction: 0.03 # 环中心归一化误差容差。
-    hold_seconds: 0.3 # 环中心进入容差后的保持时间，单位：秒。
-    servo_gain: 1.0 # 环target PID的Kp。
-    servo:
-      pid:
-        ki: 0.05 # 环target积分增益；中心容差内或丢失时清零。
-        kd: 0.01 # 环target微分增益。
-        integral_limit: 0.2 # 归一化像素误差积分限幅，单位：秒。
+    pixel_tolerance_fraction: 0.04 # 环中心归一化误差容差。
+    hold_seconds: 0.5 # 环中心进入容差后的保持时间，单位：秒。
+    servo_gain: 1.0 # 环的主水平伺服增益。
     micro_servo:
-      zone_fraction: 0.20 # 环中心进入图像中心30%半径后切换微伺服增益。
-      gain: 0.45 # 环进入微伺服区后的水平伺服增益。
+      zone_fraction: 0.30 # 环中心进入图像中心30%半径后切换微伺服增益。
+      gain: 0.35 # 环进入微伺服区后的水平伺服增益。
     # 伺服途中采集方向；方向无效时保持航向，转向和对爪同时执行。
     orientation_min_quality: 0.8
     orientation_min_samples: 3
