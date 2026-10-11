@@ -4,7 +4,9 @@ Set task depth once on entry. Later commands adjust XY/yaw only, and every
 BLINE has dz=0. Each visual yaw phase computes one world bearing and sends
 a direct yaw-only SET, preferring a valid stereo target and falling back to
 mono. Other visual failures run a bounded blind approach and finish the whole
-task; motion failures and cancellation do not start another motion.
+task. Before successful task completion, apply full reverse body thrust for
+three seconds, then clear thrust and hold the current pose. Motion failures
+and cancellation do not start another motion.
 """
 from __future__ import annotations
 
@@ -350,6 +352,35 @@ class RB26HitBallsTask:
                 return
         raise ObservationFailure('近场正前方及左右扫视均未发现当前颜色球')
 
+    def _finish_with_retreat(self, message):
+        self._check()
+        if self._bline_active:
+            raise MotionFailure('BLINE 未结束，禁止开始结束后退')
+        p = self._params
+        duration = p['retreat_duration']
+        fraction = p['retreat_thrust_fraction']
+        # The finite action starts its timer at first thrust publication, owns
+        # renewal, and clears ACTUATOR thrust before sending a current-pose hold.
+        # hw_manager forwards the native message to /zit6/cmd/setpoint unchanged.
+        budget = duration + p['motion_accept_timeout'] + p['motion_cancel_timeout'] + 1.0
+        self._node.get_logger().info(
+            f'hit_balls：结束前开环后退 {duration:.2f}s，'
+            f'control_key=18 type_mask=62 Fx={-fraction:+.3f} '
+            f'({fraction*100:.0f}% 推力)')
+        ok, detail = self._node._send_action_goal(
+            getattr(BasicMotion.Goal, 'BODY_THRUST', 11),
+            [-fraction, 0.0, 0.0, 0.0], axes='x',
+            timeout=budget, velocity_lease=duration,
+            wait_deadline=self._now()+budget,
+            cancel_wait_timeout=p['motion_cancel_timeout'],
+            light_color=self._node.LIGHT_OFF,
+            task_context=self._node._format_motion_context('撞球任务结束前开环满推力后退'))
+        if not ok:
+            raise MotionFailure(f'结束前开环后退失败：{detail}')
+        self._sync()
+        self._node.get_logger().info('hit_balls：结束后退完成，推力已清零，保持当前位置并结束任务')
+        return TaskOutcome.ok(f'{message}；已完成 {duration:.2f}s 开环后退并停止')
+
     def _fallback(self, message):
         p = self._params
         self._node.get_logger().warning(f'hit_balls：{self._name} {message}；执行预设位置兜底并结束整个撞球任务')
@@ -374,7 +405,7 @@ class RB26HitBallsTask:
         # Reaching the finite preset endpoint early never sends us beyond it.
         self._wait_until(began+p['fallback_duration'])
         self._light(self._node.LIGHT_OFF, '兜底结束，未通过视觉确认撞击')
-        return TaskOutcome.ok(f'{self._name} 兜底前往预设 XY 后结束；未通过视觉确认撞击')
+        return self._finish_with_retreat(f'{self._name} 兜底前往预设 XY 后结束；未通过视觉确认撞击')
 
     def _one_ball(self):
         p = self._params
@@ -439,7 +470,7 @@ class RB26HitBallsTask:
                     return self._fallback(str(error))
                 if index+1 < len(p['order']):
                     self._wait_until(self._now()+p['between_balls_pause'])
-            return TaskOutcome.ok('指定球的 BLINE 定时撞击流程完成')
+            return self._finish_with_retreat('指定球的 BLINE 定时撞击流程完成')
         except MotionFailure as error:
             node.get_logger().error(f'hit_balls：{error}')
             code = '26rb_hit_balls.cancelled' if node.stopped or not rclpy.ok() else '26rb_hit_balls.motion'

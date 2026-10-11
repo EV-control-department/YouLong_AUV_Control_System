@@ -16,8 +16,8 @@ mission:
       initial:
         poses:
           - command: SET
-            axes: xz
-            target: [0.5, 0.0, 0.2, 0.0] # 下潜0.2m
+            axes: xyz
+            target: [0.5, 0.5, 0.2, 0.0] # 下潜0.2m
           # - command: WTRAVEL
           #   axes: xyz
           #   target: [4.0, -1.8, 0.2, 89.9544] # 世界系绝对位置；航向先沿行进方向。
@@ -31,9 +31,9 @@ mission:
       config: ../tasks/26rb_gate_task.yaml
       initial:
         poses:
-          - command: BMOVE
-            axes: z
-            target: [0.0, 0.0, 0.0, 0.0] # 下潜0.2m
+          - command: SET
+            axes: x
+            target: [1.0, 0.2, 0.2, 0.0] # 下潜0.2m
           # - command: WTRAVEL
           #   axes: xyz
           #   target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
@@ -63,7 +63,7 @@ mission:
             target: [0.0, 0.0, 0.0, 0.0]
           # - command: SET
           #   axes: z
-          #   target: [0.5, 1.0, 0.2, 0.0] # 下潜0.2m
+          #   target: [2.0, 1.0, 0.2, 0.0] # 下潜0.2m
           # - command: WTRAVEL
           #   axes: xyz
           #   target: [1.0, -1, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
@@ -88,9 +88,19 @@ mission:
       on_failure:
         "26rb_drop_ball_target_rack.timeout": {}
 
-      # "26rb_grab_ball_ring.no_frame":
-      #   skip_next: true
-      # "26rb_grab_ball_ring.both_exhausted": {}
+        "26rb_grab_ball_ring.no_frame":
+          skip_next: true
+        "26rb_grab_ball_ring.both_exhausted": {}
+
+    - name: 26rb_drop_ball_target_rack
+      config: ../tasks/26rb_drop_ball_target_rack.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+      on_failure:
+        "26rb_drop_ball_target_rack.timeout": {}
 
     - name: return_origin
       config: ../tasks/return_origin.yaml

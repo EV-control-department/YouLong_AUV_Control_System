@@ -106,7 +106,7 @@ class RB26GrabGolfTask:
             0.0, float(params.get('light_gap_seconds', 0.25)))
 
         self._pre_descent_settle_seconds = max(
-            0.0, float(params.get('pre_descent_settle_seconds', 1.0)))
+            0.0, float(params.get('pre_descent_settle_seconds', 3.0)))
         self._descent_speed = abs(float(params.get('descent_speed_mps', 0.1)))
         self._descent_duration = max(
             0.0, float(params.get('descent_duration_seconds', 5.0)))
@@ -579,8 +579,8 @@ class RB26GrabGolfTask:
         if self._pre_descent_settle_seconds <= 0.0:
             return not self._node.stopped
         self._logger.info(
-            f'{self._task_name}：等待艇体稳定 '
-            f'{self._pre_descent_settle_seconds:.1f}s')
+            f'{self._task_name}：外参对准已到点，保持当前定位目标 '
+            f'{self._pre_descent_settle_seconds:.1f}s 后再下潜')
         deadline = time.monotonic() + self._pre_descent_settle_seconds
         while not self._node.stopped and time.monotonic() < deadline:
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))

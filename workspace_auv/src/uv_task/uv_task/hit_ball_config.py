@@ -38,6 +38,8 @@ DEFAULTS = {
     'charge_duration': 8.0,
     'charge_speed_mps': 0.24,
     'charge_timeout': 20.0,
+    'retreat_duration': 3.0,
+    'retreat_thrust_fraction': 1.0,
     'fallback_duration': 15.0,
     'fallback_speed_mps': 0.15,
     'fallback_timeout': 25.0,
@@ -78,6 +80,8 @@ def validate_hit_params(params):
                 or (value == 0 and key not in nonnegative)):
             raise ValueError(f'{key} 必须为有限正数（深度、置信度、保持和间隔可为零）')
         p[key] = float(value)
+    if p['retreat_thrust_fraction'] > 1:
+        raise ValueError('retreat.thrust_fraction 必须在 (0,1] 内，1 为满推力')
     if p['search_min_confidence'] > 1:
         raise ValueError('search.min_confidence 必须在 [0,1] 内')
     if p['observe_yaw_step_deg'] > 180:

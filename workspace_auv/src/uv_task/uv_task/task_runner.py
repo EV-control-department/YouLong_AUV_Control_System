@@ -1077,6 +1077,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.WTRAVEL: '执行世界坐标直线移动',
             BasicMotion.Goal.BTRAVEL: '执行机体坐标直线移动',
             BasicMotion.Goal.BODY_VELOCITY: '执行机体速度租约',
+            getattr(BasicMotion.Goal, 'BODY_THRUST', 11): '执行定时机体开环推力',
         }
         purpose = purposes.get(cmd_type, '执行运动指令')
         return f'{purpose}({axes or "all"})'
@@ -1094,11 +1095,12 @@ class TaskRunnerNode(Node):
 
         Args:
             cmd_type: BasicMotion.Goal.{START,SET,WMOVE,BMOVE,WTRAVEL,BTRAVEL,
-                BODY_VELOCITY,SETPOINT}
-            target: list of 4 floats [x, y, z, yaw] (yaw in degrees)
+                BODY_VELOCITY,SETPOINT,BODY_THRUST}
+            target: [x,y,z,yaw] (yaw in degrees); BODY_THRUST uses normalized
+                [Fx,Fy,Fz,Myaw], with no angular unit conversion
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
-            velocity_lease: lease duration for BODY_VELOCITY commands
+            velocity_lease: BODY_VELOCITY short lease or BODY_THRUST pulse duration
             quiet: if True, suppress per-goal INFO logs (errors still logged)
             task_context: context shown by basic_motion; empty uses the standard
                 current-task/current-step/action context.
@@ -1109,7 +1111,7 @@ class TaskRunnerNode(Node):
         type_names = {
             1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
             5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY', 8: 'BLINE', 9: 'WLINE',
-            10: 'SETPOINT',
+            10: 'SETPOINT', 11: 'BODY_THRUST',
         }
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
         if cmd_type != BasicMotion.Goal.START and not light_pattern:

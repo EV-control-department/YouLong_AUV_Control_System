@@ -9,7 +9,7 @@ uint8 BODY_VELOCITY=7  # 机体速度租约, target=[vx, vy, vz, yaw_rate_deg_s]
 uint8 BLINE=8        # 机体系相对直线, target=[dx,dy,dz,dyaw_deg]; 到点后转相对航向
 uint8 WLINE=9        # 世界系绝对直线, target=[x,y,z,yaw_deg]; 到点后转绝对航向
 uint8 SETPOINT=10    # 下发一次 odom 绝对位置目标即完成，不等待到点；target=[x,y,z,yaw_deg]
-uint8 BODY_THRUST=11 # 定时机体系开环推力，target=[Fx,Fy,Fz,Myaw]，各项 [-1,1]；结束后清零并保持当前位置
+uint8 BODY_THRUST=11 # 定时机体系开环推力，target=[Fx,Fy,Fz,Myaw]，各项 [-1,1]；axes 选择控制轴；结束后清零并保持当前位置
 uint8 cmd_type
 string axes         # 要动的轴: "x","y","z","rz" 任意组合, 空=全部
 float32[] target    # 位置/速度为 [x,y,z,yaw]；BODY_THRUST 为归一化 [Fx,Fy,Fz,Myaw]

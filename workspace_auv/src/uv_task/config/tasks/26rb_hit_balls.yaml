@@ -46,6 +46,9 @@ params:
     duration: 8.0 # 从 BLINE 正向速度反馈开始计时，到时取消并停车。
     speed_mps: 0.24 # 请求撞击速度；uv_control 按配置限幅。
     timeout: 20.0 # BLINE 整体上限，包含接受目标、启动和 8 秒撞击时长。
+  retreat:
+    duration: 3.0 # 整个撞球流程（含兜底）结束前，只执行一次后退。
+    thrust_fraction: 1.0 # 满推力：control_key=18、type_mask=62、x=-1.0；只改变机体前后轴。
   fallback:
     duration: 15.0 # 观测失败红灯一次；直接前往预设 XY，最多前进 15 秒。
     speed_mps: 0.15 # 请求兜底速度；uv_control 按配置限幅。

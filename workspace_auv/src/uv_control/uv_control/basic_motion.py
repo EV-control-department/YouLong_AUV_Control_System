@@ -188,6 +188,7 @@ class BasicMotionNode(Node):
         self._thrust_reserved = False
         self._thrust_stop_requested = threading.Event()
         self._body_thrust_active = False
+        self._body_thrust_mask = 0
         self._thrust_ends_at = 0.0
         self._twist_received_at = float('-inf')
         self._shutdown_requested = False
@@ -478,18 +479,18 @@ class BasicMotionNode(Node):
             return
         msg = ZitSetpoint()
         msg.control_key = CK_THRUST_BODY
-        msg.type_mask = 0
+        msg.type_mask = self._body_thrust_mask
         msg.x = msg.y = msg.z = msg.roll = msg.pitch = msg.yaw = 0.0
         msg.seq = 0
         self._publish_while_running(self.pub_setpoint, msg)
         self._body_thrust_active = False
         self._thrust_ends_at = 0.0
 
-    def _publish_body_thrust_locked(self, values, ends_at):
+    def _publish_body_thrust_locked(self, values, ends_at, type_mask):
         """Publish normalized [Fx,Fy,Fz,Myaw] with a short renewal watchdog."""
         msg = ZitSetpoint()
         msg.control_key = CK_THRUST_BODY
-        msg.type_mask = 0
+        msg.type_mask = type_mask
         msg.x, msg.y, msg.z, msg.yaw = values
         msg.roll = msg.pitch = 0.0
         msg.seq = 0
@@ -499,6 +500,7 @@ class BasicMotionNode(Node):
                 raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
             # Keep cleanup armed even if publish raises after writing to DDS.
             self._body_thrust_active = True
+            self._body_thrust_mask = type_mask
             self._thrust_ends_at = ends_at
             with self._velocity_lock:
                 self._velocity_active = True
@@ -1449,13 +1451,27 @@ class BasicMotionNode(Node):
         values = tuple(float(value) for value in req.target)
         if any(not math.isfinite(value) or abs(value) > 1.0 for value in values):
             raise ValueError('BODY_THRUST values must be finite and in [-1,1]')
+        axes = req.axes or 'xyzrz'
+        linear_axes = axes.replace('rz', '')
+        if (axes.count('rz') > 1 or any(axis not in 'xyz' for axis in linear_axes)
+                or any(linear_axes.count(axis) > 1 for axis in 'xyz')):
+            raise ValueError('BODY_THRUST axes must select x/y/z/rz')
+        selected = 0
+        for axis, bit, value in zip(('x', 'y', 'z', 'rz'),
+                                   (AX_X, AX_Y, AX_Z, AX_YAW), values):
+            enabled = 'rz' in axes if axis == 'rz' else axis in linear_axes
+            if enabled:
+                selected |= bit
+            elif value != 0.0:
+                raise ValueError(f'BODY_THRUST unselected axis {axis} must be zero')
         duration = float(req.velocity_lease)
         if not math.isfinite(duration) or duration <= 0.0:
             raise ValueError('BODY_THRUST velocity_lease must be a positive duration')
         timeout = float(req.timeout)
         if not math.isfinite(timeout) or (timeout > 0.0 and timeout < duration):
             raise ValueError('BODY_THRUST timeout must cover its full duration')
-        return values, duration, timeout if timeout > 0.0 else duration + 5.0
+        return (values, duration, timeout if timeout > 0.0 else duration + 5.0,
+                AX_ALL_6DOF ^ selected)
 
     def _execute_body_thrust(self, goal_handle):
         """Own a finite open-loop pulse, then clear thrust and hold current pose."""
@@ -1463,7 +1479,7 @@ class BasicMotionNode(Node):
         result.success = False
         generation = None
         try:
-            values, duration, timeout = self._validate_body_thrust(goal_handle.request)
+            values, duration, timeout, type_mask = self._validate_body_thrust(goal_handle.request)
             deadline = time.monotonic() + timeout
             started = None
             last_tick = None
@@ -1489,11 +1505,11 @@ class BasicMotionNode(Node):
                         raise RuntimeError('BODY_THRUST control loop stalled')
                     if started is None:
                         started = time.monotonic()
-                    self._publish_body_thrust_locked(values, started + duration)
+                    self._publish_body_thrust_locked(values, started + duration, type_mask)
                     last_tick = tick
                 if tick - last_report >= 1.0:
                     self.get_logger().info(
-                        f'BODY_THRUST Fx={values[0]:+.3f} Fy={values[1]:+.3f} '
+                        f'BODY_THRUST control_key=18 type_mask={type_mask} Fx={values[0]:+.3f} Fy={values[1]:+.3f} '
                         f'Fz={values[2]:+.3f} Myaw={values[3]:+.3f} '
                         f'elapsed={max(0.0, tick-started):.2f}/{duration:.2f}s')
                     last_report = tick
@@ -1515,6 +1531,9 @@ class BasicMotionNode(Node):
             except Exception as exc:
                 result.success = False
                 result.message += f'; BODY_THRUST cleanup failed: {exc}'
+        if result.success and (self._thrust_stop_requested.is_set() or self._is_cancelled()):
+            result.success = False
+            result.message = self._action_abort_reason or 'BODY_THRUST stopped during cleanup'
         if result.success:
             self.get_logger().info('BODY_THRUST 完成：推力已清零，已下发当前位置保持')
             goal_handle.succeed()
