@@ -54,11 +54,19 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "move_timeout": float, "forward_thrust": float,
         "forward_seconds": float, "lift_thrust": float, "lift_seconds": float,
     },
+    "world_waypoints": {
+        "waypoints": (list, (list, float)), "mode": str,
+        "max_step_m": float, "timeout": float, "label": str,
+        "require_nonempty": bool,
+        "end_at_next_task": bool,
+    },
     "btravelx": {"dx": float},
     "setz": {"z": float},
     "setrz": {"rz": float},
     "wtravelxyz": {"x": float, "y": float, "z": float},
     "mapping_grid": {
+        "travel_mode": str,
+        "max_world_step_m": float,
         "enable_traversal": bool,
         "enable_conclusion": bool,
         "require_complete_survey": bool,
@@ -121,6 +129,8 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "fallback_round_cells": (list, int),
     },
     "turntable": {
+        "preposition_mode": str,
+        "max_world_step_m": float,
         "mode": str,
         "timeout": float,
         "disk_class_id": int,
@@ -317,7 +327,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 # 基础动作只有少量标量参数；允许直接写在任务链里，不要求空模板文件。
-INLINE_TASKS = frozenset({"btravelx", "setz", "wtravelxyz", "setrz", "return_shore"})
+INLINE_TASKS = frozenset({"btravelx", "setz", "wtravelxyz", "setrz", "return_shore", "world_waypoints"})
 
 
 # Short names keep the YAML readable where the runtime key carries the
@@ -488,6 +498,8 @@ def _flatten_params(
 
 
 def _value_matches(value: Any, expected: Any) -> bool:
+    if isinstance(expected, tuple) and expected[0] is list:
+        return isinstance(value, list) and all(_value_matches(v, expected[1]) for v in value)
     if expected is float:
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     if expected is int:

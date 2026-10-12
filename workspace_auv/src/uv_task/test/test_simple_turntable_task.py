@@ -65,6 +65,17 @@ def test_target_loss_without_disk_center_never_guesses_motion(monkeypatch):
     assert all(c == {} for _, c in commands)
 
 
+def test_fixed_heading_preposition_uses_world_route_not_extra_wtravel(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch, disk_pose_odom=[1.,2.,.6,90.], preposition_mode='fixed_yaw')
+    task._deadline = clock.t+10.
+    routes = []
+    task.node._follow_world_waypoints = lambda *args: routes.append(args) or True
+    task.node._send_action_goal = lambda *args, **kwargs: pytest.fail('不应追加WTRAVEL转向')
+    task._preposition()
+    assert routes[0][0][0] == pytest.approx([1.,1.22,.524,90.])
+    assert routes[0][-1] == 'fixed_yaw'
+
+
 @pytest.mark.parametrize('angle', [6., -6.])
 def test_centered_box_bump_then_yaw_and_final_zero(monkeypatch, angle):
     task, clock, commands = setup_task(monkeypatch, stroke_yaw_deg=angle)

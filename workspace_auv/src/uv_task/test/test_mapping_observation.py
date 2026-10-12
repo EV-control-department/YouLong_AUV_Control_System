@@ -89,6 +89,17 @@ def test_mapping_position_loss_stops_navigation_not_camera_loss(monkeypatch):
     assert task.node.stopped
 
 
+def test_mapping_fixed_yaw_travel_uses_world_segments(monkeypatch):
+    params = load_task(Path(__file__).parents[1]/'config/tasks/mapping_grid.json')[0]['params']
+    task = MappingTask(_Node(), params)
+    monkeypatch.setattr(task, '_ready', lambda: True)
+    calls = []
+    task.node._follow_world_waypoints = lambda *args: calls.append(args) or True
+    assert task._travel_to([1.,2.], '格点测试')
+    assert calls[0][0] == [[1.,2.,params['survey_z'],params['survey_yaw_deg']]]
+    assert calls[0][-2:] == (.4, 'fixed_yaw')
+
+
 def _frame(stamp, *observations, processed=True):
     frame = MappingObservationArray()
     frame.header.stamp.sec = stamp

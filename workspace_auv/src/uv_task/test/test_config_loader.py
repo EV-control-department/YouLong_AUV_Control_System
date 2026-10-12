@@ -30,6 +30,11 @@ EXPECTED_TASKS = [
 
 def test_competition_chain_enables_survey_and_six_minute_grab():
     tasks = load_mission(CONFIG_ROOT / 'missions' / 'competition.yaml')
+    routes = [t for t in tasks if t['name'] == 'world_waypoints']
+    assert len(routes) == 4
+    assert all(t['params']['require_nonempty'] for t in routes)
+    assert all(t['params']['mode'] == 'fixed_yaw' for t in routes)
+    tasks = [t for t in tasks if t['name'] != 'world_waypoints']
     assert [t['name'] for t in tasks] == ['start', 'mapping_grid', 'turntable',
                                           'grab_sea_cucumber', 'return_shore']
     assert tasks[1]['params']['enable_traversal']
@@ -38,6 +43,13 @@ def test_competition_chain_enables_survey_and_six_minute_grab():
     assert tasks[3]['params']['total_timeout_seconds'] == 360.
     assert (tasks[4]['params']['x'], tasks[4]['params']['y']) == (1., -1.)
     assert tasks[4]['params']['forward_thrust'] == tasks[4]['params']['lift_thrust'] == 0.
+
+
+def test_world_waypoint_nested_list_types():
+    from uv_task.config_loader import _validate_params
+    assert _validate_params('world_waypoints', {'waypoints': [[1.,2.,.3,90.]]})['waypoints'] == [[1.,2.,.3,90.]]
+    with pytest.raises(ConfigError):
+        _validate_params('world_waypoints', {'waypoints': [[1.,2.,'bad',90.]]})
 
 
 def test_sea_cucumber_mission_and_nested_parameters():

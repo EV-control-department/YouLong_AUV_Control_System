@@ -26,6 +26,90 @@ class _Logger:
         pass
 
 
+def _world_route_node():
+    node = SimpleNamespace(stopped=False, _perception_lock=threading.Lock(),
+        _robot_pose=(0.,0.,.5,0.,0.,-80.), _robot_pose_received=time.monotonic(),
+        _format_motion_context=lambda s: s, get_logger=lambda: _Logger())
+    actions, stops = [], []
+    def send(command, target, axes, **kwargs):
+        actions.append((command, list(target), axes))
+        node._robot_pose = (target[0], target[1], target[2], 0., 0., target[3])
+        node._robot_pose_received = time.monotonic()
+        return True, ''
+    node._send_action_goal = send
+    node._publish_body_velocity = lambda: stops.append(True)
+    from uv_task.task_runner import TaskRunnerNode
+    node._follow_world_waypoints = lambda *args: TaskRunnerNode._follow_world_waypoints(node, *args)
+    return node, actions, stops
+
+
+def test_world_waypoints_aligns_then_translates_linearly_without_heading_switch():
+    from uv_msgs.action import BasicMotion
+    node, actions, _ = _world_route_node()
+    assert node._follow_world_waypoints([[1.2,.8,.2,90.]], '测试通道', 10., .4, 'fixed_yaw')
+    assert actions[0] == (BasicMotion.Goal.SET, [0.,0.,.2,90.], 'xyzrz')
+    previous = [0.,0.]
+    for command, target, axes in actions[1:]:
+        assert command == BasicMotion.Goal.SET and target[2:] == [.2,90.]
+        assert axes == 'xyzrz'
+        assert math.hypot(target[0]-previous[0], target[1]-previous[1]) <= .4+1e-8
+        assert target[1] == pytest.approx(target[0]*2./3.)
+        previous = target[:2]
+    assert actions[-1][1] == [1.2,.8,.2,90.]
+
+
+def test_world_waypoints_reanchors_after_rotation_drift():
+    node, actions, _ = _world_route_node()
+    original = node._send_action_goal
+    def send(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if len(actions) == 1:
+            node._robot_pose = (.1,0.,.2,0.,0.,90.)
+        return result
+    node._send_action_goal = send
+    assert node._follow_world_waypoints([[1.,0.,.2,90.]], '漂移测试', 10., .4)
+    assert actions[1][1][0] == pytest.approx(.4)  # 以转向后实测0.1为起点，共三步。
+
+
+@pytest.mark.parametrize('problem', ['empty', 'failed', 'stale', 'nan'])
+def test_required_transition_route_never_falls_back_to_straight_crossing(problem):
+    from uv_task.task_runner import TaskRunnerNode
+    node, actions, stops = _world_route_node()
+    params = {'waypoints': [[1.,0.,.2,90.]], 'require_nonempty': True}
+    if problem == 'empty':
+        params['waypoints'] = []
+    elif problem == 'failed':
+        node._send_action_goal = lambda *args, **kwargs: (False, 'timeout')
+    elif problem == 'stale':
+        node._robot_pose_received = time.monotonic()-2.
+    else:
+        params['waypoints'][0][0] = float('nan')
+    if problem == 'nan':
+        with pytest.raises(ValueError):
+            TaskRunnerNode._task_world_waypoints(node, params)
+    else:
+        assert not TaskRunnerNode._task_world_waypoints(node, params)
+    assert node.stopped and stops
+
+
+def test_world_waypoint_face_path_mode_is_explicit():
+    from uv_msgs.action import BasicMotion
+    node, actions, _ = _world_route_node()
+    assert node._follow_world_waypoints([[1.,0.,.2,90.]], '转向前进', 10., .4, 'face_path')
+    assert [a[0] for a in actions] == [BasicMotion.Goal.WTRAVEL, BasicMotion.Goal.SET]
+
+
+def test_transition_rejects_endpoint_that_would_trigger_another_long_coarse_move():
+    from uv_task.task_runner import TaskRunnerNode
+    node, actions, stops = _world_route_node()
+    node.current_index = 0
+    node.tasks = [{'name': 'world_waypoints', 'params': {}}, {'name': 'mapping_grid', 'params':
+                  {'tag_x': 0., 'tag_y': 0., 'survey_z': .2, 'survey_yaw_deg': 0.}}]
+    with pytest.raises(ValueError, match='路线终点未接到'):
+        TaskRunnerNode._task_world_waypoints(node, {'waypoints': [[3.,4.,.2,0.]], 'end_at_next_task': True})
+    assert node.stopped and not actions and stops
+
+
 @pytest.mark.parametrize('condition', ['normal', 'pending', 'motion_failed', 'stopped'])
 def test_return_shore_positions_before_timed_actuator_and_always_clears(condition):
     from uv_msgs.action import BasicMotion

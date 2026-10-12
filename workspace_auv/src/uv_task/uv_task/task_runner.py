@@ -223,6 +223,7 @@ class TaskRunnerNode(Node):
             'release_sampler': self._task_release_sampler,
             'return_origin': self._task_return_origin,
             'return_shore': self._task_return_shore,
+            'world_waypoints': self._task_world_waypoints,
             'mapping_grid': self._task_mapping_grid,
             'map_grid': self._task_mapping_grid,
             'turntable': self._task_turntable,
@@ -974,6 +975,117 @@ class TaskRunnerNode(Node):
         if success:
             self._cmd_x = self._cmd_y = self._cmd_yaw = 0.0
         return success
+
+    def _follow_world_waypoints(self, waypoints, label, timeout, max_step_m=.4, mode='fixed_yaw'):
+        """明确的odom折线路线，不计算绕障：中间航点必须由现场测量提供。
+
+        fixed_yaw：每个折点先原地调整深度/航向，再用同一yaw线性分段SET平移。
+        face_path：按原WTRAVEL转向前进，末端SET归向；不用于要求恒定航向的微移。
+        """
+        if (mode not in ('fixed_yaw', 'face_path') or not math.isfinite(timeout) or timeout <= 0
+                or not math.isfinite(max_step_m) or max_step_m <= 0):
+            raise ValueError('world路线模式/超时/步长无效')
+        points = []
+        for point in waypoints:
+            if (len(point) != 4 or not all(math.isfinite(float(v)) for v in point)
+                    or float(point[2]) < 0):
+                raise ValueError('航点必须为有限[x,y,z,yaw度]，START后odom坐标，z非负')
+            x, y, z, yaw = map(float, point)
+            points.append([x, y, z, (yaw+180.) % 360.-180.])
+        end = time.monotonic()+timeout
+        def measured_pose():
+            with self._perception_lock:
+                pose, received = self._robot_pose, self._robot_pose_received
+            if (pose is None or time.monotonic()-received > 1.
+                    or not all(math.isfinite(float(v)) for v in pose)):
+                self.get_logger().error(f'{label}：定位缺失/过期，不用指令位姿代替反馈')
+                return None
+            return pose
+        def send(command, target, purpose):
+            if self.stopped or time.monotonic() >= end:
+                return False
+            ok, message = self._send_action_goal(command, target, 'xyzrz',
+                timeout=end-time.monotonic(), quiet=True,
+                task_context=self._format_motion_context(f'{label}:{purpose}'))
+            if not ok:
+                self.get_logger().warning(f'{label}：{purpose}失败：{message}')
+                return False
+            self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = target
+            return True
+        for index, point in enumerate(points, 1):
+            pose = measured_pose()
+            if pose is None or self.stopped or time.monotonic() >= end:
+                return False
+            self.get_logger().info(f'{label}：航点{index}/{len(points)}={point}，模式={mode}')
+            if mode == 'face_path':
+                if not send(BasicMotion.Goal.WTRAVEL, point, f'航点{index}转向前进'):
+                    return False
+                if not send(BasicMotion.Goal.SET, point, f'航点{index}末端归向'):
+                    return False
+                continue
+            if not send(BasicMotion.Goal.SET, [pose[0], pose[1], point[2], point[3]],
+                        f'航点{index}原地调深归向'):
+                return False
+            pose = measured_pose()  # 转向可能伴随漂移；平移起点必须重新取实测值。
+            if pose is None:
+                return False
+            start_x, start_y = float(pose[0]), float(pose[1])
+            count = max(1, math.ceil(math.hypot(point[0]-start_x, point[1]-start_y)/max_step_m))
+            for step in range(1, count+1):
+                fraction = step/count
+                target = [start_x+(point[0]-start_x)*fraction,
+                          start_y+(point[1]-start_y)*fraction, point[2], point[3]]
+                self.get_logger().info(f'{label}：平移{step}/{count}，目标={target}；固定yaw，不按误差转向')
+                if not send(BasicMotion.Goal.SET, target, f'航点{index}线性平移{step}/{count}'):
+                    return False
+        return True
+
+    def _task_world_waypoints(self, p: dict) -> bool:
+        """任务间安全通道：未填或失败不能直接执行下一任务的直线粗定位。"""
+        points = p.get('waypoints', [])
+        ok = False
+        try:
+            if not points:
+                if not p.get('require_nonempty', True):
+                    return True
+                self.get_logger().error('任务间航点未填写：禁止跳过路线直接跨区移动')
+                return False
+            if p.get('end_at_next_task', False):
+                next_index = self.current_index+1
+                if next_index >= len(self.tasks):
+                    raise ValueError('衔接航点之后没有任务')
+                next_task = self.tasks[next_index]
+                name, q = next_task['name'], next_task['params']
+                if name == 'mapping_grid':
+                    expected = [q['tag_x'], q['tag_y'], q['survey_z'], q['survey_yaw_deg']]
+                elif name == 'turntable':
+                    disk = q.get('disk_pose_odom', [])
+                    if len(disk) != 4:
+                        raise ValueError('转盘盘心未填，无法确认安全观察位终点')
+                    x, y, z, yaw = map(float, disk)
+                    cx, cy, cz = map(float, q.get('front_camera_center_body', [.23,0.,.076]))
+                    d = float(q.get('front_standoff_m', .55))+cx
+                    angle = math.radians(yaw)
+                    expected = [x-d*math.cos(angle)+cy*math.sin(angle),
+                                y-d*math.sin(angle)-cy*math.cos(angle), z-cz, yaw]
+                elif name == 'grab_sea_cucumber':
+                    expected = q['search_pose']
+                elif name == 'return_shore':
+                    expected = [q.get('x', 1.), q.get('y', -1.), points[-1][2], q.get('yaw_deg', 0.)]
+                else:
+                    raise ValueError(f'不支持衔接任务{name}')
+                last = points[-1]
+                if (len(last) != 4 or not all(math.isfinite(float(v)) for v in last)
+                        or any(abs(float(last[i])-float(expected[i])) > .05 for i in range(3))
+                        or abs((float(last[3])-float(expected[3])+180.) % 360.-180.) > 5.):
+                    raise ValueError(f'路线终点未接到下一任务观察/出发位：需要{expected}，实际{last}')
+            ok = self._follow_world_waypoints(points, p.get('label', '任务间转移'),
+                float(p.get('timeout', 180.)), float(p.get('max_step_m', .4)), p.get('mode', 'fixed_yaw'))
+            return ok
+        finally:
+            if not ok and (points or p.get('require_nonempty', True)):
+                self.stopped = True
+                self._publish_body_velocity()
 
     # --- SET tasks (absolute positioning) ---
 

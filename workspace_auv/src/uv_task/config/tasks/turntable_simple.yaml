@@ -6,7 +6,7 @@ params:
   # 可选预输入盘心：[x米,y米,z米,yaw度]，START后odom系，z向下。
   # yaw表示正对转盘的艇体航向。留空则从当前位置直接识别。
   # 例如 disk_pose_odom: [1.0, 2.0, 0.6, 90.0]；示例不作为实际运行目标。
-  disk_pose_odom: [4.9, -2.4, 0.85, -90.0]
+  disk_pose_odom: [2.79, -2.2, 0.85, -90.0]
   # 首次识别超时/接近中目标丢失：直接按上述盘心WTRAVEL+SET兜底，不等视觉。
   # 属于接触移动，不是观察位；未填写盘心则无兜底，不猜测坐标，不验证180°旋转。
   # 先到盘前观察位，随后YOLO闭环接近；不是直接航行到盘心。
@@ -25,8 +25,8 @@ params:
   observation_timeout_s: 8.0
   approach_timeout_s: 25.0
   box_max_age_s: 0.8
-  target_lost_timeout_s: 3.0
-  center_tolerance_fraction: 0.06
+  target_lost_timeout_s: 6.0
+  center_tolerance_fraction: 0.1
   # box宽占每目宽45%后执行定时顶碰；仅为接近代理，不是真实距离/触碰反馈。
   bump_box_width_fraction: 0.45
   approach_speed_mps: 0.08 # 接近和顶碰均为body+x速度，m/s；现场试调。

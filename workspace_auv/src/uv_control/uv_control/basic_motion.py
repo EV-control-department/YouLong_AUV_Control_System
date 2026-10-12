@@ -949,7 +949,9 @@ class BasicMotionNode(Node):
         dy_w = target_y - p.y
 
         dist_xy = math.sqrt(dx_w**2 + dy_w**2)
-        if dist_xy > 0.01:
+        # 到位容差内不要根据厘米级定位噪声再计算atan2方向并大幅转向。
+        # 保留请求的最终rz；超出XY容差时仍执行原来的转向→前进流程。
+        if abs(dx_w) > TOL_X or abs(dy_w) > TOL_Y:
             target_yaw = math.degrees(math.atan2(dy_w, dx_w))
             deadline = time.monotonic() + max(0.0, timeout)
             self.get_logger().info(
@@ -1145,19 +1147,23 @@ class BasicMotionNode(Node):
             if 'y' in axes: ty = y
             if 'z' in axes.replace('rz', ''): tz = z
             if 'rz' in axes: trz = yaw
+            travel_yaw = (math.degrees(math.atan2(ty-p.y, tx-p.x))
+                          if abs(tx-p.x) > TOL_X or abs(ty-p.y) > TOL_Y else trz)
             self._action_target = {'x': tx, 'y': ty,
-                                   'z': tz, 'yaw': trz}
+                                   'z': tz, 'yaw': travel_yaw}
             self.get_logger().info(
                 f'WTRAVEL: 目标=({tx:.2f}, {ty:.2f}, {tz:.2f}), '
-                f'方向角={math.degrees(math.atan2(ty - p.y, tx - p.x)):.1f}°')
+                f'实际执行航向={travel_yaw:.1f}°，请求末端yaw={trz:.1f}°')
             success = self._travel_world(tx, ty, tz, trz, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.BTRAVEL:
             off = p.body_to_world(x, y)
             tx_w = p.x + off.x
             ty_w = p.y + off.y
             tz_w = p.z + z
+            travel_yaw = (math.degrees(math.atan2(ty_w-p.y, tx_w-p.x))
+                          if abs(tx_w-p.x) > TOL_X or abs(ty_w-p.y) > TOL_Y else p.rz)
             self._action_target = {'x': tx_w, 'y': ty_w,
-                                   'z': tz_w, 'yaw': p.rz}
+                                   'z': tz_w, 'yaw': travel_yaw}
             self.get_logger().info(
                 f'BTRAVEL: body偏移=({x:.2f}, {y:.2f}) '
                 f'→ world偏移=({off.x:.2f}, {off.y:.2f})')

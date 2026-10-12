@@ -99,14 +99,21 @@ class SimpleTurntableTask:
         if target[2] < 0:
             raise ValueError('预输入盘心换算后观察位z小于0，请检查深度基准')
         self.log.info(f'简单转盘预定位：盘心={nominal}，艇体观察目标={target}')
-        for command, label in ((BasicMotion.Goal.WTRAVEL, '预输入盘心观察位'),
-                               (BasicMotion.Goal.SET, '观察位归向')):
+        if self.params.get('preposition_mode', 'face_path') == 'fixed_yaw':
             self._check_running()
-            timeout = min(motion_timeout, self._deadline-time.monotonic())
-            ok, message = self.node._send_action_goal(command, target, 'xyzrz', timeout=timeout,
-                                                       task_context=f'turntable_simple:{label}')
-            if not ok:
-                raise RuntimeError(f'{label}失败：{message}')
+            if not self.node._follow_world_waypoints([target], '转盘观察位微调',
+                    min(motion_timeout, self._deadline-time.monotonic()),
+                    float(self.params.get('max_world_step_m', .4)), 'fixed_yaw'):
+                raise RuntimeError('固定航向转盘观察位定位失败')
+        else:
+            for command, label in ((BasicMotion.Goal.WTRAVEL, '预输入盘心观察位'),
+                                   (BasicMotion.Goal.SET, '观察位归向')):
+                self._check_running()
+                timeout = min(motion_timeout, self._deadline-time.monotonic())
+                ok, message = self.node._send_action_goal(command, target, 'xyzrz', timeout=timeout,
+                                                           task_context=f'turntable_simple:{label}')
+                if not ok:
+                    raise RuntimeError(f'{label}失败：{message}')
         # Never approach using frames captured before/during prepositioning.
         with self._lock:
             self._started_stamp = self.node.get_clock().now().nanoseconds
@@ -115,6 +122,8 @@ class SimpleTurntableTask:
 
     def _validate(self):
         p = self.params
+        if p.get('preposition_mode', 'face_path') not in ('face_path', 'fixed_yaw'):
+            raise ValueError('preposition_mode仅支持fixed_yaw或face_path')
         for key, default in (('timeout', 45.), ('observation_timeout_s', 8.),
                              ('approach_timeout_s', 25.), ('box_max_age_s', .8),
                              ('target_lost_timeout_s', 1.), ('image_width', 640),

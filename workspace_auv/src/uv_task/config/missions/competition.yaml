@@ -9,6 +9,18 @@ mission:
       params:
         skip_preparation: true
 
+    # 每行[x,y,z,yaw度]是绝对odom航点。填安全通道折点，程序自动细分直线。
+    # 四段均待现场测量；空路线停止，不自动退回跨区直走。
+    - name: world_waypoints
+      params:
+        label: 起点到标签观察位
+        end_at_next_task: true
+        waypoints: []                 # 最后一点为tag_x/tag_y、survey_z/survey_yaw。
+        mode: fixed_yaw               # 先原地调深归向，再固定yaw平移；不使用WTRAVEL追方向。
+        max_step_m: 0.4
+        timeout: 180.0
+        require_nonempty: true
+
     - name: mapping_grid
       config: ../tasks/mapping_grid.json
       params:
@@ -18,14 +30,37 @@ mission:
         # 标签位置tag_x/tag_y、深度survey_z及九宫格参数在上述任务JSON中填写。
         # 识别允许16/18；识别/分类不足采用现有任务fallback，不伪报实测结果。
 
+    - name: world_waypoints
+      params:
+        label: 标签到转盘观察位
+        end_at_next_task: true
+        waypoints: []                 # 填绕障折点；终点为盘前观察位，不是接触盘心。
+        # 观察位由disk_pose_odom、front_standoff_m和front_camera_center_body换算。
+        mode: fixed_yaw
+        max_step_m: 0.4
+        timeout: 180.0
+        require_nonempty: true
+
     - name: turntable
       config: ../tasks/turntable_simple.yaml
       params:
         mode: yolo_bump
-        # 盘心继承turntable_simple.yaml的昨日调试位姿[4.9,-2.4,0.85,-90]，不以空列表覆盖。
+        preposition_mode: fixed_yaw
+        max_world_step_m: 0.4
+        # 盘心继承turntable_simple.yaml，不以空列表覆盖；跨区路线终点须与其观察位一致。
         disk_class_id: 3              # 当前模型wheel；使用前视左目YOLO框。
         timeout: 180.0
         bump_seconds: 1.0             # 沿用已存在的简单转盘一次顶碰配置，不验证盘体转角。
+
+    - name: world_waypoints
+      params:
+        label: 转盘区到海参搜索位
+        end_at_next_task: true
+        waypoints: []                 # 填绕障折点；最后一点取海参search.pose。
+        mode: fixed_yaw
+        max_step_m: 0.4
+        timeout: 180.0
+        require_nonempty: true
 
     - name: grab_sea_cucumber
       config: ../tasks/grab_sea_cucumber.yaml
@@ -33,6 +68,16 @@ mission:
         total_timeout_seconds: 360.0   # 本阶段6分钟总预算，包含抓取/投放/返回搜索点。
         # 搜索点、投放点、爪子和开环下压参数仍使用现有海参任务文件。
         # 收集框对准失败采用任务已实现的配置点释放兜底。
+
+    - name: world_waypoints
+      params:
+        label: 海参区到靠岸准备点
+        end_at_next_task: true
+        waypoints: []                 # 最后一点XY=(1,-1)，深度、正对岸航向现场确认。
+        mode: fixed_yaw
+        max_step_m: 0.4
+        timeout: 180.0
+        require_nonempty: true
 
     - name: return_shore
       params:

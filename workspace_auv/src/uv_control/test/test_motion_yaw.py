@@ -17,7 +17,7 @@ def motion_method(name):
                   if isinstance(node, ast.FunctionDef) and node.name == name)
     scope = dict(math=math, Coordinate=Coordinate, wrap_deg=wrap_deg,
                  time=SimpleNamespace(monotonic=lambda: 0.0),
-                 rclpy=SimpleNamespace(ok=lambda: True), LATERAL_LAMBDA=1.0)
+                 rclpy=SimpleNamespace(ok=lambda: True), LATERAL_LAMBDA=1.0, TOL_X=.1, TOL_Y=.1)
     exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'), scope)
     return scope[name]
 
@@ -76,3 +76,14 @@ def test_travel_keeps_direction_across_negative_x_axis():
     assert calls[0][3] == pytest.approx(direction)
     assert calls[1][3] == pytest.approx(direction)
     assert abs(wrap_deg(direction-179.)) < 2.
+
+
+@pytest.mark.parametrize('xy', [(0.,.03), (-.09,0.), (.09,.09)])
+def test_travel_near_point_keeps_requested_yaw_instead_of_noise_bearing(xy):
+    calls = []
+    node = SimpleNamespace(get_state=lambda: (Coordinate(z=.4, rz=90.), Coordinate(), None),
+        get_logger=lambda: SimpleNamespace(info=lambda s: None, warning=lambda s: None))
+    node._step_move_world = lambda *args, **kwargs: calls.append(args) or True
+    assert motion_method('_travel_world')(node, xy[0], xy[1], .4, 90., timeout=10.)
+    assert len(calls) == 1
+    assert calls[0][3] == 90.

@@ -799,10 +799,9 @@ class MappingTask:
         return result
 
     def _travel_to(self, position, label):
-        """用 WTRAVEL 走到世界系 xy 位置。
+        """按显式模式走到world格点：fixed_yaw固定航向线性SET，face_path用WTRAVEL。
 
-        z固定为survey_z；yaw参数传survey_yaw_deg，但WTRAVEL有水平行程时
-        实际保持行进方向，不自动恢复配置航向。
+        fixed_yaw先调深归向再平移；WTRAVEL有水平行程时实际保持行进方向。
         单次超时取 move_timeout 与「任务剩余时间」的较小值，避免超出总时限。
         返回值来自 BasicMotion 的执行结果。
         """
@@ -813,12 +812,19 @@ class MappingTask:
                 self.observation_start_stamp = self.node.get_clock().now().nanoseconds * 1e-9
         timeout = min(float(self.params['move_timeout']),
                       max(1.0, self.deadline - time.monotonic()))
-        success, message = self.node._send_action_goal(
-            BasicMotion.Goal.WTRAVEL,
-            [float(position[0]), float(position[1]), float(self.params['survey_z']),
-             float(self.params['survey_yaw_deg'])],
-            'xyzrz', timeout=timeout,
-            task_context=self.node._format_motion_context(label))
+        target = [float(position[0]), float(position[1]), float(self.params['survey_z']),
+                  float(self.params['survey_yaw_deg'])]
+        mode = self.params.get('travel_mode', 'face_path')
+        if mode == 'fixed_yaw':
+            success = self.node._follow_world_waypoints([target], label, timeout,
+                float(self.params.get('max_world_step_m', .4)), mode)
+            message = '固定航向world分段平移'
+        elif mode == 'face_path':
+            success, message = self.node._send_action_goal(
+                BasicMotion.Goal.WTRAVEL, target, 'xyzrz', timeout=timeout,
+                task_context=self.node._format_motion_context(label))
+        else:
+            raise ValueError(f'未知建图travel_mode：{mode}')
         self._emit('travel_result', label=label, success=success,
                    message=message, target=list(map(float, position)))
         return success
