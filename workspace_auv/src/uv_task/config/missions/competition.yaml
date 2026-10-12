@@ -11,15 +11,15 @@ mission:
 
     # 每行[x,y,z,yaw度]是绝对odom航点。填安全通道折点，程序自动细分直线。
     # 四段均待现场测量；空路线停止，不自动退回跨区直走。
-    - name: world_waypoints
-      params:
-        label: 起点到标签观察位
-        end_at_next_task: true
-        waypoints: []                 # 最后一点为tag_x/tag_y、survey_z/survey_yaw。
-        mode: fixed_yaw               # 先原地调深归向，再固定yaw平移；不使用WTRAVEL追方向。
-        max_step_m: 0.4
-        timeout: 180.0
-        require_nonempty: true
+    # - name: world_waypoints
+    #   params:
+    #     label: 起点到标签观察位
+    #     end_at_next_task: true
+    #     waypoints: [0,0,0,0]                 # 最后一点为tag_x/tag_y、survey_z/survey_yaw。
+    #     mode: fixed_yaw               # 先原地调深归向，再固定yaw平移；不使用WTRAVEL追方向。
+    #     max_step_m: 0.4
+    #     timeout: 180.0
+    #     require_nonempty: true
 
     - name: mapping_grid
       config: ../tasks/mapping_grid.json
@@ -34,7 +34,7 @@ mission:
       params:
         label: 标签到转盘观察位
         end_at_next_task: true
-        waypoints: []                 # 填绕障折点；终点为盘前观察位，不是接触盘心。
+        waypoints: [2.7, -0.2, 0.1, 0.0]                 # 填绕障折点；终点为盘前观察位，不是接触盘心。
         # 观察位由disk_pose_odom、front_standoff_m和front_camera_center_body换算。
         mode: fixed_yaw
         max_step_m: 0.4
@@ -56,7 +56,7 @@ mission:
       params:
         label: 转盘区到海参搜索位
         end_at_next_task: true
-        waypoints: []                 # 填绕障折点；最后一点取海参search.pose。
+        waypoints: [2.7, -0.2, 0.1, 0.0]                 # 填绕障折点；最后一点取海参search.pose。
         mode: fixed_yaw
         max_step_m: 0.4
         timeout: 180.0
@@ -73,7 +73,7 @@ mission:
       params:
         label: 海参区到靠岸准备点
         end_at_next_task: true
-        waypoints: []                 # 最后一点XY=(1,-1)，深度、正对岸航向现场确认。
+        waypoints: [3.0, -1.0, 0.1, 0.0]                # 最后一点XY=(1,-1)，深度、正对岸航向现场确认。
         mode: fixed_yaw
         max_step_m: 0.4
         timeout: 180.0
