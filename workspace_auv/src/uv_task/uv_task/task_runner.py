@@ -55,6 +55,8 @@ from uv_task.mission_policy import (
     apply_failure_override,
     select_failure_override,
 )
+from uv_task.gate_config import gate_uses_vision
+from uv_task.return_origin_config import validate_return_origin_params
 from uv_task.task_outcome import TaskOutcome
 from uv_task.task_state import TaskState
 from uv_task.basic_motion_test import RosMotionTest
@@ -157,6 +159,7 @@ class TaskRunnerNode(Node):
         self._down_detection_sequence = 0
         self._down_detection_events = deque(maxlen=256)
         self._robot_pose = None      # (x, y, z, roll_deg, pitch_deg, yaw_deg)
+        self._robot_pose_received_at = None
 
         self.tasks = []
         self.current_index = 0
@@ -402,6 +405,7 @@ class TaskRunnerNode(Node):
         with self._perception_lock:
             self._robot_pose = (msg.robot_x, msg.robot_y, msg.robot_z,
                                 msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
+            self._robot_pose_received_at = time.monotonic()
 
     def _mcu_status_cb(self, msg: ZitStatus):
         self._mcu_status = msg
@@ -1187,7 +1191,7 @@ class TaskRunnerNode(Node):
         if not quiet:
             t = [f'{v:.2f}' for v in target]
             self.get_logger().info(
-                f'发送动作目标：{type_name}，目标=[{", ".join(t)}]，'
+                f'发送动作目标：{type_name}，axes={axes or "xyzrz"}，目标=[{", ".join(t)}]，'
                 f'超时={effective_timeout:.0f}s，任务上下文="{task_context}"')
 
         server_wait = 2.0 if wait_deadline is None else max(0.0, min(2.0, wait_deadline-time.monotonic()))
@@ -1344,10 +1348,39 @@ class TaskRunnerNode(Node):
             self.get_logger().info('动作目标已接受，等待执行结果……')
 
         result_future = goal_handle.get_result_async()
+        yaw_wait_started = time.monotonic()
+        last_yaw_log = float('-inf')
+
+        def log_yaw_wait():
+            nonlocal last_yaw_log
+            if quiet or cmd_type != BasicMotion.Goal.SET or axes != 'rz':
+                return
+            now = time.monotonic()
+            if now-last_yaw_log < 1.0:
+                return
+            last_yaw_log = now
+            elapsed = now-yaw_wait_started
+            remaining = max(0.0, (wait_deadline-now if wait_deadline is not None
+                                  else effective_timeout-elapsed))
+            try:
+                pose = self._latest_robot_pose(require_measured=True)
+            except (ValueError, TypeError):
+                pose = None
+            if pose is None or len(pose) != 6 or not math.isfinite(float(pose[5])):
+                self.get_logger().warning(
+                    f'[SET YAW] 实测航向不可用 elapsed_s={elapsed:7.2f} remain_s={remaining:7.2f}')
+                return
+            actual_yaw = float(pose[5])
+            yaw_error = (float(target[3])-actual_yaw+180.0) % 360.0-180.0
+            self.get_logger().info(
+                f'[SET YAW] yaw_deg={actual_yaw:+8.2f} target_deg={float(target[3]):+8.2f} '
+                f'error_deg={yaw_error:+8.2f} elapsed_s={elapsed:7.2f} remain_s={remaining:7.2f}')
+
         cancel_requested_by_condition = False
         cancel_predicate_error = ''
         while rclpy.ok() and not self.stopped and within_deadline() and not result_future.done():
             update_blink_light()
+            log_yaw_wait()
             try:
                 should_cancel = cancel_predicate is not None and cancel_predicate()
             except Exception as exc:
@@ -1522,80 +1555,68 @@ class TaskRunnerNode(Node):
         return success
 
     def _task_return_origin(self, p: dict) -> bool:
-        """开环上浮到目标 z：按起始深度和速度估算持续时间。"""
-        target_z = float(p.get('ascent_target_z_m', -0.3))
-        ascent_speed = abs(float(p.get('ascent_speed_mps', 0.05)))
-        timeout = max(0.1, float(p.get('ascent_timeout', 30.0)))
-        publish_period = max(
-            0.02, float(p.get('ascent_publish_period', 0.05)))
-        start_z = float(self._latest_robot_pose()[2])
-
-        if (not all(math.isfinite(value) for value in
-                    (target_z, ascent_speed, timeout, publish_period, start_z))
-                or ascent_speed <= 0.0):
-            self._last_motion_failure_kind = 'motion'
-            self._last_motion_failure_message = 'return_origin 上浮参数无效'
-            self.get_logger().error(self._last_motion_failure_message)
-            return False
-
-        ascent_distance = start_z - target_z
-        if ascent_distance <= 0.0:
-            self.get_logger().info(
-                f'return_origin：当前 z={start_z:.3f}m 已到达或高于目标 '
-                f'z={target_z:.3f}m，无需上浮')
-            return True
-
-        duration = ascent_distance / ascent_speed
-        if duration > timeout:
-            self._last_motion_failure_kind = 'timeout'
-            self._last_motion_failure_message = (
-                f'开环上浮预计需要 {duration:.1f}s，超过超时限制 {timeout:.1f}s')
-            self.get_logger().error(self._last_motion_failure_message)
-            return False
-
-        lease_s = max(0.25, publish_period * 4.0)
-        deadline = time.monotonic() + duration
-        self.get_logger().info(
-            f'return_origin：开环上浮 z={start_z:.3f}→{target_z:.3f}m，'
-            f'速度={ascent_speed:.3f}m/s，预计 {duration:.1f}s')
-        ascent_ok = True
-        ascent_message = ''
+        """Full thrust toward odom southwest for 3s, then upward for 10s."""
         try:
-            while not self.stopped and time.monotonic() < deadline:
-                ascent_ok, ascent_message = self._send_body_velocity(
-                    vertical_mps=-ascent_speed,
-                    lease_s=lease_s,
-                    task_context=self._format_motion_context(
-                        'return_origin 开环上浮'))
-                if not ascent_ok:
-                    break
-                remaining = deadline - time.monotonic()
-                if remaining > 0.0:
-                    time.sleep(min(publish_period, remaining))
-        finally:
-            stop_ok, stop_message = self._send_body_velocity(
-                lease_s=lease_s,
-                task_context=self._format_motion_context(
-                    'return_origin 上浮结束，发送零速度'))
-
-        if not ascent_ok:
-            self.get_logger().error(
-                f'return_origin：上浮速度指令失败：{ascent_message}')
-            return False
-        if not stop_ok:
+            p = validate_return_origin_params(p)
+            pose = self._latest_robot_pose(require_measured=True, max_age=1.0)
+            # BODY_THRUST takes body-axis forces. Rotate the fixed odom
+            # direction once at entry; this is not a velocity/position servo.
+            heading = math.radians((p['horizontal_yaw_deg']-pose[5]+180.0) % 360.0-180.0)
+            fx, fy = math.cos(heading), math.sin(heading)
+            scale = p['horizontal_thrust_fraction']/max(abs(fx), abs(fy))
+            fraction = p['horizontal_thrust_fraction']
+            horizontal = [0.0 if abs(value) < 1e-12 else max(-fraction, min(fraction, value*scale))
+                          for value in (fx, fy)]
+        except (ValueError, TypeError, IndexError) as error:
             self._last_motion_failure_kind = 'motion'
-            self._last_motion_failure_message = stop_message
-            self.get_logger().error(
-                f'return_origin：停止上浮速度失败：{stop_message}')
+            self._last_motion_failure_message = f'return_origin 推力参数或实测航向无效：{error}'
+            self.get_logger().error(self._last_motion_failure_message)
             return False
-        if self.stopped:
-            self._last_motion_failure_kind = 'motion'
-            self._last_motion_failure_message = 'return_origin 上浮被停止'
-            return False
-
-        self._cmd_z = target_z
         self.get_logger().info(
-            f'return_origin：开环上浮完成，估算目标 z={target_z:.3f}m')
+            f'return_origin：odom水平推力方向={p["horizontal_yaw_deg"]:.1f}°，'
+            f'实测yaw={pose[5]:.1f}°，机体系Fx={horizontal[0]:+.3f}，Fy={horizontal[1]:+.3f}')
+        phases = (
+            ('向odom西南侧开环推力', [*horizontal, 0.0, 0.0], 'xy',
+             p['horizontal_duration_seconds']),
+            ('开环推力上浮', [0.0, 0.0, -p['ascent_thrust_fraction'], 0.0], 'z',
+             p['ascent_duration_seconds']),
+        )
+        for label, target, axes, duration in phases:
+            if self.stopped:
+                self._last_motion_failure_kind = 'motion'
+                self._last_motion_failure_message = 'return_origin 推力流程被停止'
+                return False
+            # The controller starts the pulse timer at first publication and
+            # owns renewal, explicit thrust clearing and current-pose hold.
+            # The extra 5s is reply/cleanup margin, not extra thrust time.
+            budget = duration+5.0
+            self.get_logger().info(
+                f'return_origin：{label}，推力={target}，持续={duration:.1f}s')
+            ok, message = self._send_action_goal(
+                getattr(BasicMotion.Goal, 'BODY_THRUST', 11), target, axes=axes,
+                timeout=budget, velocity_lease=duration,
+                wait_deadline=time.monotonic()+budget, cancel_wait_timeout=2.0,
+                light_color=self.LIGHT_OFF,
+                task_context=self._format_motion_context('return_origin '+label))
+            if not getattr(self, '_last_motion_cleanup_confirmed', True):
+                self.stopped = True
+                self._last_motion_failure_kind = 'motion'
+                self._last_motion_failure_message = f'return_origin {label}结束未确认：{message}'
+                self.get_logger().error(self._last_motion_failure_message)
+                return False
+            if not ok:
+                self.get_logger().error(f'return_origin：{label}失败：{message}')
+                return False
+            final_target = self._last_motion_final_target
+            if (final_target is None or len(final_target) != 4
+                    or not all(math.isfinite(float(value)) for value in final_target)):
+                self._last_motion_failure_kind = 'motion'
+                self._last_motion_failure_message = f'return_origin {label}返回无效保持位姿'
+                self.get_logger().error(self._last_motion_failure_message)
+                return False
+            self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = map(float, final_target)
+        self.get_logger().info(
+            'return_origin：水平推力及上浮流程完成，开环推力已清零，结束任务')
         return True
 
     # --- SET tasks (absolute positioning) ---
@@ -2010,13 +2031,20 @@ class TaskRunnerNode(Node):
         """Wrap a yaw command to the controller's conventional range."""
         return (float(value) + 180.0) % 360.0 - 180.0
 
-    def _latest_robot_pose(self, require_measured=False):
-        """Return measured odom; callers may explicitly disallow command fallback."""
+    def _latest_robot_pose(self, require_measured=False, *, max_age=None):
+        """Return measured odom, optionally requiring a fresh received sample."""
         with self._perception_lock:
             pose = self._robot_pose
+            received_at = getattr(self, '_robot_pose_received_at', None)
+        if max_age is not None:
+            if not math.isfinite(max_age) or max_age < 0.0:
+                raise ValueError('odom max_age 必须为有限非负数')
+            age = None if received_at is None else time.monotonic()-received_at
+            if age is None or not 0.0 <= age <= max_age:
+                raise ValueError(f'没有接收年龄不超过{max_age:.1f}s的有效 odom 实测位姿')
         if pose is not None and all(math.isfinite(float(value)) for value in pose):
             return tuple(float(value) for value in pose)
-        if require_measured:
+        if require_measured or max_age is not None:
             raise ValueError('没有有效 odom 实测位姿')
         return (
             float(self._cmd_x), float(self._cmd_y), float(self._cmd_z),
@@ -2024,8 +2052,8 @@ class TaskRunnerNode(Node):
         )
 
     def _task_pass_gates(self, p: dict) -> TaskOutcome:
-        """仅用前视相机图像搜索、对准并连续通过多个门。"""
-        if not self._ensure_camera_extrinsics():
+        """按逐门代码执行视觉过门或预设点 BLINE 过门。"""
+        if gate_uses_vision(p) and not self._ensure_camera_extrinsics():
             return TaskOutcome.failed(
                 '26rb_pass_gates.camera_tf', '前视相机 TF 未就绪')
         gate_task = RB26GateTask(self, p)

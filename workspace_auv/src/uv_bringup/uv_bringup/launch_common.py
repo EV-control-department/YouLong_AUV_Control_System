@@ -176,8 +176,8 @@ def declare_observability_arguments():
             description="go2rtc archive format",
         ),
         DeclareLaunchArgument(
-            "record_video_fps", default_value=LaunchConfiguration("camera_stitch_fps"),
-            description="Recorded video FPS",
+            "record_video_fps", default_value="5.0",
+            description="Maximum recorded camera FPS per stream",
         ),
         DeclareLaunchArgument(
             "record_video_codec", default_value="libx264",

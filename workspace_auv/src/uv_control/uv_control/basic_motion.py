@@ -48,7 +48,7 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
 ================================================================================
 
 1. SET / SETPOINT (绝对定位)
-   - SET: 直接发送 odom 系绝对坐标 + 等到达
+   - SET: 直接发送 odom 系绝对坐标；按 axes 指定轴判断到达，其他轴仍保持位置
    - SETPOINT: 下发一次位置目标后立即完成动作，不等到达；ZIT6 继续闭环保持位置
    - 适用于已知精确目标位置的场景
 
@@ -968,8 +968,9 @@ class BasicMotionNode(Node):
         self.get_logger().warning(response.message)
         return response
 
-    def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, timeout):
-        """完成步进移动的最后一步，等待到达目标位置。"""
+    def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, timeout,
+                      *, reach_axes=None):
+        """Publish a full position hold; optionally wait only for selected axes."""
         p, _, _ = self.get_state()
         dist = math.sqrt((target_x-p.x)**2 + (target_y-p.y)**2 + (target_z-p.z)**2)
         self.get_logger().info(
@@ -977,14 +978,22 @@ class BasicMotionNode(Node):
             f'当前位置=({p.x:.2f}, {p.y:.2f}, {p.z:.2f}, {p.rz:.1f}°), '
             f'距离={dist:.2f}m')
         self.set_world(target_x, target_y, target_z, target_yaw_degree)
+        if reach_axes is not None:
+            return self._wait_reached(timeout=timeout, axes=reach_axes)
         return self._wait_reached(timeout=timeout)
     
     
     def _wait_reached(self,
                       tol_x: float = TOL_X, tol_y: float = TOL_Y,
                       tol_z: float = TOL_Z, tol_rz: float = TOL_RZ,
-                      timeout: float = 60.0) -> bool:
-        """阻塞等待 AUV 到达目标位置。"""
+                      timeout: float = 60.0, *, axes=None) -> bool:
+        """Wait for the requested SET axes; legacy callers keep body-frame checks."""
+        selected = axes or 'xyzrz'
+        linear_axes = selected.replace('rz', '')
+        checked_axes = tuple(axis for axis in ('x', 'y', 'z', 'rz')
+                             if ('rz' in selected if axis == 'rz' else axis in linear_axes))
+        if not checked_axes:
+            raise ValueError('arrival axes must select x/y/z/rz')
         start = time.monotonic()
         self._wait_count = 0
 
@@ -1000,20 +1009,16 @@ class BasicMotionNode(Node):
 
             pose, target, body_target = self._target_error_snapshot()
 
-            err_x = abs(body_target.x)
-            err_y = abs(body_target.y)
-            err_z = abs(body_target.z)
-            err_yaw = abs(wrap_deg(body_target.rz))
-
-            reached = True
-            if err_x > tol_x:
-                reached = False
-            if err_y > tol_y:
-                reached = False
-            if err_z > tol_z:
-                reached = False
-            if err_yaw > tol_rz:
-                reached = False
+            # SET axes are odom axes. Checking body X for a world-X goal can
+            # falsely succeed when the vehicle is turned by 90 degrees.
+            position_errors = ((target.x-pose.x, target.y-pose.y, target.z-pose.z)
+                               if axes is not None else
+                               (body_target.x, body_target.y, body_target.z))
+            errors = dict(zip(('x', 'y', 'z'), map(abs, position_errors)))
+            errors['rz'] = abs(wrap_deg(body_target.rz))
+            tolerances = dict(x=tol_x, y=tol_y, z=tol_z, rz=tol_rz)
+            reached = all(math.isfinite(errors[axis]) and errors[axis] <= tolerances[axis]
+                          for axis in checked_axes)
 
             # 每秒打印一次误差
             self._wait_count += 1
@@ -1026,6 +1031,9 @@ class BasicMotionNode(Node):
                     f'err_body_signed=({body_target.x:.3f}, '
                     f'{body_target.y:.3f}, {body_target.z:.3f}, '
                     f'{body_target.rz:.2f}°), '
+                    f'arrival_axes={selected}, '
+                    f'err_checked=({position_errors[0]:+.3f}, {position_errors[1]:+.3f}, '
+                    f'{position_errors[2]:+.3f}, {body_target.rz:+.2f}°), '
                     f'容差=({tol_x}, {tol_y}, {tol_z}, {tol_rz}), '
                     f'已用{elapsed:.0f}s/{timeout:.0f}s')
 
@@ -1218,9 +1226,10 @@ class BasicMotionNode(Node):
 
     def setxyzrz(self, x: float, y: float, z: float, rz: float,
                  timeout: float = 60.0) -> bool:
-        """odom 系绝对位置 + 偏航。rz 单位为度。"""
+        """odom position + yaw in degrees, with the active SET's arrival axes."""
         return self._cmd_and_wait(x, y, z, rz,
-                                  timeout=timeout)
+                                  timeout=timeout,
+                                  reach_axes=getattr(self, '_action_axes', None))
 
     def setxyz(self, x: float, y: float, z: float,
                timeout: float = 60.0) -> bool:
@@ -1879,7 +1888,13 @@ class BasicMotionNode(Node):
                     success = True
             else:
                 timeout = self._position_action_timeout(req.timeout, p, tx, ty, tz)
-                success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout)
+                # Hold unselected axes at their measured start positions,
+                # but their drift must not block a yaw-only/depth-only SET.
+                self._action_axes = axes
+                try:
+                    success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout)
+                finally:
+                    self._action_axes = None
 
         elif req.cmd_type == BasicMotion.Goal.WMOVE:
             axes = req.axes or 'xyzrz'

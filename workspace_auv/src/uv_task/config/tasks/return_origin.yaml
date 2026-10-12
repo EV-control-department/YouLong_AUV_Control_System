@@ -1,11 +1,13 @@
 task: return_origin
 
 params:
-  # 开环上浮目标 odom z（NED 约定向下为正），单位：米。
-  ascent_target_z_m: -0.3
-  # 上浮速度大小；任务向控制器发送负 z 速度，单位：米/秒。
-  ascent_speed_mps: 0.05
-  # 速度租约续发周期，单位：秒。
-  ascent_publish_period: 0.05
-  # 开环上浮动作最长持续时间，单位：秒。
-  ascent_timeout: 30.0
+  # 按入口实测yaw将odom方向换算为机体系开环推力，不先回原点或转向。
+  horizontal:
+    yaw_deg: -135.0 # odom -X/-Y方向，即西南侧。
+    thrust_fraction: 1.0 # 沿指定方向放大到至少一个水平轴满推，所有分量不超过100%。
+    duration_seconds: 3.0 # 从首次推力下发计时，持续3秒。
+  ascent:
+    thrust_fraction: 1.0 # 艇体Z轴负向100%推力上浮，NED向下为正。
+    duration_seconds: 10.0 # 固定满推10秒，不按目标深度提前停止。
+  # 两段均使用BODY_THRUST；控制层负责续发、结束清零和当前位置保持。
+  # 运动阶段不亮灯；每段动作总超时=持续时间+5秒，取消确认另有2秒预算。

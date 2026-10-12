@@ -3,8 +3,9 @@ import math
 from copy import deepcopy
 
 GROUPS = {
-    'observation': dict(poses=[[1.5, -2.0, 0.2, 0.0]], travel_timeout=60.0,
-                        set_timeout=20.0),
+    'observation': dict(poses=[[1.5, -2.0, 0.2, 0.0]], xy_radius_m=[0.6]*5,
+                        travel_timeout=60.0, set_timeout=20.0),
+    'fixed_pass': dict(code='0000'),
     # Legacy tracking/association keys remain accepted for existing mission overrides.
     # The gate task no longer uses them for selection, alignment or loss handling.
     'tracking': dict(confirm_frames=3, max_center_distance_fraction=0.12,
@@ -65,6 +66,10 @@ def validate_gate_params(params, complete=False):
 
     for key, value in values.items():
         expected = SCHEMA[key]
+        if expected is str:
+            if not isinstance(value, str):
+                raise ValueError(f'{key} 必须为字符串')
+            continue
         if isinstance(expected, tuple) and not isinstance(value, list):
             raise ValueError(f'{key} 必须是数值数组')
         if not finite_values(value):
@@ -73,6 +78,9 @@ def validate_gate_params(params, complete=False):
             raise ValueError(f'{key} 必须为整数')
     if not 1 <= values['gate_count'] <= 4:
         raise ValueError('gate_count 必须为 1–4')
+    code = values['fixed_pass_code']
+    if len(code) != 4 or any(bit not in '01' for bit in code):
+        raise ValueError('fixed_pass.code 必须为四位二进制字符串，例如 "0000" 或 "1010"')
     poses = values['observation_poses']
     # Partial mission overrides are validated before merging. Only compare an
     # explicitly supplied pair here; runtime validates the merged contract.
@@ -80,13 +88,27 @@ def validate_gate_params(params, complete=False):
     if ((complete or ('gate_count' in params and 'observation_poses' in params))
             and len(poses) < values['gate_count']):
         raise ValueError('observation.poses 数量不能少于 gate_count')
-    if not poses or len(poses) > 4 or any(not isinstance(pose, list) or len(pose) != 4 for pose in poses):
-        raise ValueError('observation.poses 每项必须为 [x,y,z,yaw]')
+    if (not poses or len(poses) > 5
+            or any(not isinstance(pose, list) or len(pose) != 4
+                   or any(not isinstance(value, (int, float)) for value in pose) for pose in poses)):
+        raise ValueError('observation.poses 必须为 1–5 条数值 [x,y,z,yaw]')
+    radii = values['observation_xy_radius_m']
+    if (not 1 <= len(radii) <= 5
+            or any(not isinstance(radius, (int, float)) or radius <= 0 for radius in radii)):
+        raise ValueError('observation.xy_radius_m 必须包含 1–5 个有限正数')
+    if ((complete or {'observation_poses', 'observation_xy_radius_m'} <= set(params))
+            and len(radii) < len(poses)):
+        raise ValueError('observation.xy_radius_m 必须覆盖每条预设位姿')
+    if complete or {'gate_count', 'fixed_pass_code', 'observation_poses'} <= set(params):
+        for index, bit in enumerate(code[:values['gate_count']]):
+            if bit == '1' and index+1 >= len(poses):
+                raise ValueError(f'第 {index+1} 门定点通过缺少第 {index+2} 条终点位姿；'
+                                 '第 4 门定点通过需配置第 5 条出口位姿')
     if any(pose[2] < 0 for pose in poses):
         raise ValueError('observation.poses 水深不能为负')
     if 'depth_front' in params and (complete or 'observation_poses' in params) and len(values['depth_front']) == 4:
         if any(abs(pose[2]-values['depth_front'][i]) > 1e-9
-               for i, pose in enumerate(poses)):
+               for i, pose in enumerate(poses[:4])):
             raise ValueError('depth.front 与 observation.poses 的 z 冲突')
     for key in ('depth_front', 'lateral_front'):
         if len(values[key]) != 4:
@@ -97,7 +119,7 @@ def validate_gate_params(params, complete=False):
     if values['max_failures'] < 0:
         raise ValueError('max_failures 必须为非负整数')
     for key, value in values.items():
-        if key in nonnegative or isinstance(value, list):
+        if key in nonnegative or isinstance(value, (list, str)):
             continue
         if value <= 0:
             raise ValueError(f'{key} 必须大于零')
@@ -125,3 +147,9 @@ def validate_gate_params(params, complete=False):
     if not 0 < values['search_lock_center_delta_fraction'] <= 1:
         raise ValueError('search.lock_center_delta_fraction 必须在 (0,1] 内')
     return values
+
+
+def gate_uses_vision(params):
+    """Only active visual stages need the gate task's camera dependencies."""
+    values = validate_gate_params(params, complete=True)
+    return '0' in values['fixed_pass_code'][:values['gate_count']]

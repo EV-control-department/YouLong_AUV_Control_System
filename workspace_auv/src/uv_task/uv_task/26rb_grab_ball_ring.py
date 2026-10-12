@@ -109,7 +109,11 @@ def validate_combined_params(params, *, complete=True):
                          ('ring_max_yaw_rate_deg_s', 10.0),
                          ('ring_orientation_spread_deg', 5.0), ('verification_timeout', 2.0),
                          ('return_timeout', 60.0), ('descent_timeout', 15.0),
-                         ('descent_speed_mps', 0.03), ('vertical_publish_period', 0.05)):
+                         ('descent_speed_mps', 0.03), ('vertical_publish_period', 0.05),
+                         ('descent_xy_hold_gain', 0.8),
+                         ('descent_xy_hold_max_speed_mps', 0.05),
+                         ('descent_yaw_hold_gain', 1.2),
+                         ('descent_yaw_hold_max_rate_deg_s', 10.0)):
         value = params.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f'{key} 必须是有限正数')
@@ -161,6 +165,13 @@ class RB26GrabBallRingTask:
                            for kind in ('golf', 'ring')}
         self.retry_depth_step = float(params.get('retry_depth_step_m', 0.05))
         self.descent_timeout = float(params.get('descent_timeout', 15.0))
+        self.descent_speed = float(params.get('descent_speed_mps', 0.03))
+        self.descent_period = float(params.get('vertical_publish_period', 0.05))
+        self.descent_xy_gain = float(params.get('descent_xy_hold_gain', 0.8))
+        self.descent_xy_max_speed = float(params.get('descent_xy_hold_max_speed_mps', 0.05))
+        self.descent_yaw_gain = float(params.get('descent_yaw_hold_gain', 1.2))
+        self.descent_yaw_max_rate = float(params.get('descent_yaw_hold_max_rate_deg_s', 10.0))
+        self._descent_anchor = None
         if not hasattr(node, 'state'):
             node.state = TaskState()
         self.state = node.state
@@ -237,9 +248,11 @@ class RB26GrabBallRingTask:
         if self.node.stopped:
             raise PickupFailure('任务已取消')
 
-    def _pose(self):
+    def _pose(self, *, max_age=None):
         # This task cannot use a stale commanded pose as a geometry measurement.
-        pose = tuple(float(x) for x in self.node._latest_robot_pose(require_measured=True))
+        freshness = {} if max_age is None else {'max_age': max_age}
+        pose = tuple(float(x) for x in self.node._latest_robot_pose(
+            require_measured=True, **freshness))
         if len(pose) != 6 or not all(math.isfinite(x) for x in pose):
             raise PickupFailure('实测位姿无效')
         return pose
@@ -261,11 +274,30 @@ class RB26GrabBallRingTask:
             raise PickupFailure(f'{label}失败：{message}')
         self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = target
 
-    def _restore_work_depth(self, label):
-        """Complete a depth-only action before permitting horizontal recovery."""
-        pose = self._pose()
-        self._set_pose([pose[0], pose[1], self.work_depth, pose[5]], label,
-                       axes='z', timeout=self.ball._command_timeout)
+    def _restore_work_depth(self, label, *, hold_xy_yaw=None):
+        """Restore depth before horizontal recovery, retaining the pickup anchor."""
+        deadline = time.monotonic()+self.ball._command_timeout
+        if hold_xy_yaw is None:
+            pose = self._pose()
+            target, axes = [pose[0], pose[1], self.work_depth, pose[5]], 'z'
+        else:
+            self._pose(max_age=1.0)
+            x, y, yaw = hold_xy_yaw
+            target, axes = [x, y, self.work_depth, yaw], 'xyzrz'
+        self._set_pose(target, label, axes=axes, timeout=self.ball._command_timeout)
+        if hold_xy_yaw is not None:
+            # SET's generic arrival tolerance may be wider than the pickup
+            # depth tolerance. Keep its full position target active until the
+            # ascent really finishes before the xyrz camera-pose return.
+            while True:
+                self._check()
+                pose = self._pose(max_age=1.0)
+                now = time.monotonic()
+                if now >= deadline:
+                    raise PickupFailure(f'{label}深度确认超时：实测={pose[2]:.3f}m')
+                if abs(pose[2]-self.work_depth) <= self.ball._depth_hold_tolerance:
+                    break
+                self._wait(min(self.descent_period, max(0.0, deadline-now)))
 
     def _return_frame(self, controller):
         """Return to this target's camera pose, without any visual servo."""
@@ -274,7 +306,9 @@ class RB26GrabBallRingTask:
         if anchor is None:
             raise PickupFailure('缺少本次目标下视对齐位姿')
         controller._servo_yaw_target = None
-        self._restore_work_depth('组合抓取：抓取后恢复作业深度')
+        self._restore_work_depth('组合抓取：抓取后恢复作业深度',
+                                 hold_xy_yaw=self._descent_anchor)
+        self._descent_anchor = None
         self._set_pose(anchor, '组合抓取：返回'+kind+'下视对齐位姿', axes='xyrz')
 
     def _fresh_detection(self, class_id, controller, *, active_camera=None):
@@ -846,66 +880,102 @@ class RB26GrabBallRingTask:
             raise PickupFailure('重试抓取目标深度无效')
         return target
 
+    def _stop_descent_velocity(self, kind):
+        """Confirm zero output with a budget independent of the descent timer."""
+        previous_confirmed = getattr(self.node, '_last_motion_cleanup_confirmed', True)
+        try:
+            ok, message = self.node._send_body_velocity(
+                lease_s=0.25, wait_deadline=time.monotonic()+2.0,
+                cancel_wait_timeout=0.0, light_color=self.node.LIGHT_OFF,
+                task_context=f'组合抓取：{kind} 结束下压，确认零速度')
+        except Exception as error:
+            self.node.stopped = True
+            raise PickupFailure(f'{kind} 下压停车失败，禁止继续运动：{error}') from error
+        # A successful zero goal must not hide an older unconfirmed goal:
+        # its late acceptance could otherwise overwrite the subsequent SET.
+        if (not previous_confirmed or not ok
+                or not getattr(self.node, '_last_motion_cleanup_confirmed', True)):
+            self.node.stopped = True
+            raise PickupFailure(f'{kind} 下压动作或停车结束未确认，禁止继续运动：{message}')
+
     def _descend_to_depth(self, kind, controller):
-        """Use one POS target, preserving the completed claw-alignment XY/yaw."""
-        self._check()
+        """Return True at depth, False on normal timeout; control faults raise."""
         target = self._grab_target_depth(kind)
         attempt = max(1, getattr(self.state.pickup, kind+'_attempts'))
-        # Retain the commanded claw-alignment point throughout descent. A
-        # z-only SET would replace XY/yaw with the measured pose on dispatch.
-        point = [float(self.node._cmd_x), float(self.node._cmd_y), target,
-                 float(self.node._cmd_yaw)]
-        if not all(math.isfinite(value) for value in point):
-            raise PickupFailure('POS下潜目标位姿无效')
-        tolerance = controller._depth_hold_tolerance
         deadline = time.monotonic()+self.descent_timeout
-        self.log.info(
-            f'组合抓取：{kind} 第{attempt}次POS下潜，基础深度={self.grab_depths[kind]:.3f}m，'
-            f'重试增量={(attempt-1)*self.retry_depth_step:.3f}m，目标深度={target:.3f}m，'
-            f'深度容差=±{tolerance:.3f}m，超时={self.descent_timeout:.1f}s，'
-            f'固定XY=({point[0]:.3f},{point[1]:.3f})m，yaw={point[3]:.1f}°')
-        ok, message = self.node._send_action_goal(
-            BasicMotion.Goal.SET, point, 'xyzrz',
-            timeout=self.descent_timeout, wait_deadline=deadline,
-            cancel_wait_timeout=2.0,
-            light_color=self.node.LIGHT_OFF,
-            task_context=f'组合抓取：{kind} POS下潜到{target:.3f}m并保持夹爪对准位置')
-        if not ok:
+        reached = False
+        try:
             self._check()
-            if not getattr(self.node, '_last_motion_cleanup_confirmed', True):
-                raise PickupFailure(f'{kind} POS下潜结束未确认，禁止继续运动：{message}')
-            self.log.warning(f'组合抓取：{kind} POS下潜失败：{message}')
-            return False
-        self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = point
-        # BasicMotion SET has a generic arrival tolerance. Keep its position
-        # target active and wait for the pickup depth tolerance before closing
-        # the ring claw or starting recovery. No velocity neutralization here:
-        # it would switch the MCU out of position hold at the grab point.
-        last_log = float('-inf')
-        while True:
-            self._check()
-            pose = self._pose()
-            now = time.monotonic()
-            error = target-pose[2]
-            if now > deadline:
-                self.log.warning(
-                    f'组合抓取：{kind} POS下潜超时，实测深度={pose[2]:.3f}m，'
-                    f'目标={target:.3f}m，残差={error:+.3f}m')
-                return False
-            if abs(error) <= tolerance:
-                self.log.info(
-                    f'组合抓取：{kind} POS已到抓取深度，实测={pose[2]:.3f}m，'
-                    f'目标={target:.3f}m，继续保持定位目标')
-                return True
-            if now-last_log >= controller._log_period:
-                self.log.info(
-                    f'[PICKUP POS] obj={kind:<4} z_m={pose[2]:7.3f} '
-                    f'target_z_m={target:7.3f} dz_m={error:+8.3f} '
-                    f'tol_m={tolerance:6.3f} remain_s={max(0.0, deadline-now):7.2f}')
-                last_log = now
-            self._wait(min(.05, max(0.0, deadline-time.monotonic())))
+            # Freeze the completed claw-alignment command, never the drifting
+            # measurement. Both recovery and ring closure reuse this anchor.
+            anchor = (float(self.node._cmd_x), float(self.node._cmd_y),
+                      float(self.node._cmd_yaw))
+            if not all(math.isfinite(value) for value in anchor):
+                raise PickupFailure('下压固定XY/yaw无效')
+            self._descent_anchor = anchor
+            self.log.info(
+                f'组合抓取：{kind} 第{attempt}次定速下压，基础深度={self.grab_depths[kind]:.3f}m，'
+                f'重试增量={(attempt-1)*self.retry_depth_step:.3f}m，目标深度={target:.3f}m，'
+                f'世界Z速度={self.descent_speed:.3f}m/s，超时={self.descent_timeout:.1f}s，'
+                f'固定XY=({anchor[0]:.3f},{anchor[1]:.3f})m，yaw={anchor[2]:.1f}°')
+            last_log = float('-inf')
+            while True:
+                self._check()
+                pose = self._pose(max_age=1.0)
+                now = time.monotonic()
+                error = target-pose[2]
+                if now >= deadline:
+                    self.log.warning(
+                        f'组合抓取：{kind} 下压超时，实测深度={pose[2]:.3f}m，'
+                        f'目标={target:.3f}m，残差={error:+.3f}m，结束本次下压后继续抓后流程')
+                    break
+                if error <= 0.0:
+                    self.log.info(
+                        f'组合抓取：{kind} 已到抓取深度，实测={pose[2]:.3f}m，目标={target:.3f}m')
+                    reached = True
+                    break
+                horizontal = bounded_velocity(
+                    np.asarray(anchor[:2])-np.asarray(pose[:2]),
+                    self.descent_xy_gain, self.descent_xy_max_speed)
+                yaw_error = wrap(anchor[2]-pose[5])
+                yaw_rate = float(np.clip(yaw_error*self.descent_yaw_gain,
+                                        -self.descent_yaw_max_rate, self.descent_yaw_max_rate))
+                body = body_to_world_rotation(pose).T @ np.array(
+                    [*horizontal, self.descent_speed])
+                if now-last_log >= controller._log_period:
+                    self.log.info(
+                        f'[PICKUP DESCENT] obj={kind:<4} z_m={pose[2]:7.3f} '
+                        f'target_z_m={target:7.3f} dz_m={error:+8.3f} '
+                        f'dx_m={anchor[0]-pose[0]:+8.3f} dy_m={anchor[1]-pose[1]:+8.3f} '
+                        f'dyaw_deg={yaw_error:+8.2f} remain_s={deadline-now:7.2f}')
+                    last_log = now
+                ok, message = self.node._send_body_velocity(
+                    *body.tolist(), yaw_rate_deg_s=yaw_rate,
+                    lease_s=min(0.25, deadline-now), wait_deadline=min(deadline, now+2.0),
+                    cancel_wait_timeout=2.0, light_color=self.node.LIGHT_OFF,
+                    task_context=f'组合抓取：{kind} 保持XY/yaw定速下压')
+                confirmed = getattr(self.node, '_last_motion_cleanup_confirmed', True)
+                if (not ok and confirmed and time.monotonic() >= deadline
+                        and getattr(self.node, '_last_motion_failure_kind', '') == 'timeout'):
+                    # The last reply can race the descent deadline. Once that
+                    # goal has a confirmed terminal result it is a normal
+                    # descent timeout, not a reason to skip ring closure.
+                    self._check()
+                    self.log.warning(f'组合抓取：{kind} 下压时限已到，动作终态已确认，继续抓后流程')
+                    break
+                if not ok or not confirmed:
+                    self._check()
+                    raise PickupFailure(f'{kind} 下压速度指令失败：{message}')
+                # Action acknowledgement time counts toward the control period
+                # and the 15s budget; do not add a full sleep after each reply.
+                self._wait(max(0.0, min(deadline, now+self.descent_period)-time.monotonic()))
+        finally:
+            self._stop_descent_velocity(kind)
+        self._check()
+        return reached
 
     def _mechanical_attempt(self, kind, controller):
+        self._descent_anchor = None
         if kind == 'golf':
             if not controller._prepare_claw():
                 raise PickupFailure('准备圆盘爪失败')
@@ -916,15 +986,16 @@ class RB26GrabBallRingTask:
         if not controller._wait_pre_descent_settle():
             raise PickupFailure('下潜前等待被取消')
         if not self._descend_to_depth(kind, controller):
-            # A completed/confirmed failed POS action consumes this attempt.
-            # Recover to work depth before the next check/retry or target.
             self.log.warning(
-                f'组合抓取：{kind} POS下潜失败，使用SET上浮到作业深度后继续任务')
-            self._restore_work_depth(
-                f'组合抓取：{kind} POS下潜失败后SET上浮到作业深度')
-            return False
+                f'组合抓取：{kind} 正常下压超时仍算一次抓取尝试，返回后由CHECK确认结果')
         if kind == 'ring':
+            pose = self._pose(max_age=1.0)
+            x, y, yaw = self._descent_anchor
+            self._set_pose([x, y, pose[2], yaw], '组合抓取：抓环合爪前保持停止深度和固定XY/yaw',
+                           timeout=controller._command_timeout)
             self._ring_servo(self.p.get('ring_close_angle_deg', 90.0), '合爪')
+        # _return_frame owns the one ascent SET and the subsequent camera-pose
+        # return. A normal timeout remains eligible for the existing CHECK.
         return True
 
     def _run_target(self, kind, controller, *, started=None):

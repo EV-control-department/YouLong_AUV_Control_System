@@ -86,7 +86,7 @@ def generate_launch_description():
             description="Default camera rate used by the recorder",
         ),
         DeclareLaunchArgument(
-            "record_video_fps", default_value=LaunchConfiguration("camera_stitch_fps")
+            "record_video_fps", default_value="5.0"
         ),
         DeclareLaunchArgument("record_video_codec", default_value="libx264"),
         DeclareLaunchArgument("record_image_topics", default_value="false"),

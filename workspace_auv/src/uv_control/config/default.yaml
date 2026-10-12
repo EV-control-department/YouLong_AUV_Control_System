@@ -9,18 +9,18 @@
     # Keep state freshness, origin, ARM, and safe-stop checks enabled.
     force_nav_valid: true
     # Aggressive BLINE values for the real controller; validate on the vehicle.
-    line.default_speed: 0.15
-    line.max_speed: 0.30
-    line.acceleration: 0.15
-    line.deceleration: 0.10
-    line.vector_acceleration: 0.15
-    line.brake_acceleration: 0.08
+    line.default_speed: 0.30
+    line.max_speed: 0.50
+    line.acceleration: 0.3
+    line.deceleration: 0.3
+    line.vector_acceleration: 0.5
+    line.brake_acceleration: 0.5
     line.cross_gain: 0.8
     line.cross_speed: 0.14
     line.capture_enter: 0.30
-    line.capture_exit: 0.15
-    line.capture_speed: 0.10
-    line.reverse_speed: 0.08
+    line.capture_exit: 0.05
+    line.capture_speed: 0.3
+    line.reverse_speed: 0.3
     line.terminal_speed: 0.10
     line.terminal_radius: 0.20
     line.position_tolerance: 0.10

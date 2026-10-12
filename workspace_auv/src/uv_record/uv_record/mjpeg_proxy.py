@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import queue
 import re
@@ -31,13 +32,27 @@ def _install_signals(stop_event: threading.Event) -> None:
     signal.signal(signal.SIGTERM, request_stop)
 
 
+def _record_filter(fps: float) -> str:
+    # select keeps the selected frame's original PTS, unlike the fps filter
+    # which retimes/duplicates frames. showinfo must follow select so its n
+    # matches the JPEG/TS output sequence used by the alignment index.
+    fps = float(fps)
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError('recording fps must be finite and positive')
+    # One nanosecond of tolerance avoids dropping an exact 200 ms boundary
+    # because FFmpeg evaluates timestamps as floating-point seconds.
+    interval = max(0.0, 1.0 / fps - 1e-9)
+    return ("select='isnan(prev_selected_t)+lt(t,prev_selected_t)"
+            f"+gte(t-prev_selected_t,{interval:.12g})',showinfo")
+
+
 def _jpeg_command(args) -> list[str]:
     return [
         args.ffmpeg,
         '-hide_banner', '-nostdin', '-loglevel', 'info', '-copyts',
         '-rw_timeout', '15000000',
         '-i', args.url,
-        '-map', '0:v:0', '-an', '-vf', 'showinfo',
+        '-map', '0:v:0', '-an', '-vf', _record_filter(args.fps),
         '-fps_mode', 'passthrough', '-q:v', '3',
         '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1',
     ]
@@ -57,7 +72,8 @@ def _ts_command(args) -> list[str]:
         '-hide_banner', '-nostdin', '-loglevel', 'info', '-copyts',
         '-rw_timeout', '15000000',
         '-i', args.url,
-        '-map', '0:v:0', '-an', '-vf', 'showinfo',
+        '-map', '0:v:0', '-an', '-vf', _record_filter(args.fps),
+        '-fps_mode', 'passthrough',
         *codec_options,
         '-pix_fmt', 'yuv420p',
         '-force_key_frames', f'expr:gte(t,n_forced*{duration})',
@@ -83,13 +99,15 @@ def _parse_args():
         default='unannotated')
     parser.add_argument('--start-number', type=int, default=0)
     parser.add_argument('--segment-duration', type=float, default=2.0)
-    parser.add_argument('--fps', type=float, default=10.0)
+    parser.add_argument('--fps', type=float, default=5.0)
     parser.add_argument(
         '--output-format', choices=('jpeg', 'ts'), default='jpeg',
         help='Store recoverable JPEG chunks or HLS MPEG-TS segments')
     parser.add_argument('--video-codec', default='libx264')
     parser.add_argument('--ffmpeg', default='ffmpeg')
     args, _ros_args = parser.parse_known_args()
+    if not math.isfinite(args.fps) or args.fps <= 0:
+        parser.error('--fps must be finite and positive')
     return args
 
 

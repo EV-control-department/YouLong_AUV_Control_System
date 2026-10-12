@@ -28,6 +28,9 @@ class Node:
         self.state = TaskState()
         self.pose = np.array([.5, 0., .2, 0., 0., 0.])
         self.clock = 100.
+        self.pose_received_at = self.clock
+        self.update_pose_stamp = True
+        self._last_motion_cleanup_confirmed = True
         self.velocity = np.zeros(4)
         self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = .5, 0., .2, 0.
         self._perception_lock = threading.RLock()
@@ -55,7 +58,9 @@ class Node:
     def get_logger(self):
         return NS(info=self.logs.append, warning=self.logs.append, error=self.logs.append)
 
-    def _latest_robot_pose(self, require_measured=False):
+    def _latest_robot_pose(self, require_measured=False, *, max_age=None):
+        if max_age is not None and not 0. <= self.clock-self.pose_received_at <= max_age:
+            raise ValueError('没有新鲜 odom 实测位姿')
         return tuple(self.pose)
 
     def _ensure_camera_extrinsics(self):
@@ -79,6 +84,7 @@ class Node:
             self.removed.add(8)
 
     def _send_body_velocity(self, *args, **kwargs):
+        self._last_motion_cleanup_confirmed = True
         self.velocity[:3] = args if args else [0., 0., kwargs.get('vertical_mps', 0.)]
         self.velocity[3] = kwargs.get('yaw_rate_deg_s', 0.)
         self.calls.append(('velocity', self.clock, self.velocity.copy(), kwargs))
@@ -102,6 +108,8 @@ class Node:
         self.pose[:3] += body_to_world_rotation(self.pose) @ self.velocity[:3]*dt
         self.pose[5] = mod.wrap(self.pose[5]+self.velocity[3]*dt)
         self.clock += dt
+        if self.update_pose_stamp:
+            self.pose_received_at = self.clock
         self.hook()
 
     def feed(self, camera, detections, stamp=None):
@@ -207,17 +215,17 @@ def test_full_combined_pickup_with_projected_cameras_and_gripper_tf(rig, monkeyp
     def down(kind, controller):
         started = node.clock
         success = descend(kind, controller)
-        assert success and node.pose[2] == pytest.approx(.44, abs=1e-6)
+        assert success and .44 <= node.pose[2] <= .44+task.descent_speed*task.descent_period+1e-9
         assert node.clock-started < 15.
         if kind == 'golf':
             node.removed.add(7)
         else:
             stages.append(('down_complete', node.clock))
         return success
-    def recover(label):
+    def recover(label, **kwargs):
         if stages and label == '组合抓取：抓取后恢复作业深度':
             stages.append(('up_start', node.clock))
-        return restore(label)
+        return restore(label, **kwargs)
     task._descend_to_depth, task._restore_work_depth = down, recover
     result = task.execute()
     assert result, result.message
@@ -236,7 +244,13 @@ def test_full_combined_pickup_with_projected_cameras_and_gripper_tf(rig, monkeyp
                      call[4].get('task_context') == '组合抓取：ring转向与夹爪对准同时执行')
     assert ring_hold[2][2] == work_depth
     assert ring_hold[2][3] == pytest.approx(60., abs=.1)
-    assert ring_hold[2][:2] == pytest.approx([.45-.08*math.cos(math.pi/3), .08-.08*math.sin(math.pi/3)], abs=.02)
+    # The pixel servo uses a fixed projection scale, not the scene's true
+    # range. Check the recorded world target and the actual URDF claw offset.
+    claw = node.camera_extrinsics_provider.lookup_transform('base_link', 'hairpin_claw_link')
+    offset = np.array([claw.translation.x, claw.translation.y, claw.translation.z])
+    hold_pose = [*node.pose[:5], ring_hold[2][3]]
+    expected_xy = np.asarray(task._targets['ring'][0])-(body_to_world_rotation(hold_pose) @ offset)[:2]
+    assert ring_hold[2][:2] == pytest.approx(expected_xy)
     assert np.allclose(node.velocity, 0.)
 
 
@@ -327,11 +341,12 @@ def test_descent_stops_at_measured_retry_depth_before_timeout(rig, kind, attempt
     node, task = rig
     # Nonzero roll/pitch must not turn vertical descent into horizontal drift.
     node.pose[3:] = [12., -8., 35.]
+    node._cmd_yaw = 35.
     before = node.pose.copy()
     task.state.update_pickup(**{kind+'_attempts': attempt})
     started = node.clock
     assert task._descend_to_depth(kind, task.ball if kind == 'golf' else task.ring)
-    assert node.pose[2] == pytest.approx(expected, abs=1e-6)
+    assert expected <= node.pose[2] <= expected+task.descent_speed*task.descent_period+1e-9
     assert node.pose[:2] == pytest.approx(before[:2], abs=1e-9)
     assert node.clock-started < 15.
     assert np.allclose(node.velocity, 0.)
@@ -373,11 +388,8 @@ def test_descent_failure_always_neutralizes_and_reports_failure(rig, failure):
         node.pose[2] = float('nan')
     else:
         node.hook = lambda: setattr(node, 'stopped', True)
-    if failure == 'pose':
-        with pytest.raises((mod.PickupFailure, ValueError)):
-            task._descend_to_depth('ring', task.ring)
-    else:
-        assert not task._descend_to_depth('ring', task.ring)
+    with pytest.raises((mod.PickupFailure, ValueError)):
+        task._descend_to_depth('ring', task.ring)
     assert node.calls[-1][0] == 'velocity'
     assert np.allclose(node.velocity, 0.)
 
@@ -407,6 +419,7 @@ def test_reaching_depth_after_the_deadline_is_not_success(rig):
         if any(abs(value) > 1e-9 for value in node.velocity[:3]):
             node.pose[2] = .44
             node.clock += 15.1
+            node.pose_received_at = node.clock
         return ok
     node._send_body_velocity = late_velocity
     assert not task._descend_to_depth('ring', task.ring)

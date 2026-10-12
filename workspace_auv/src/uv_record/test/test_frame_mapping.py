@@ -96,7 +96,7 @@ def test_raw_recorder_writes_header_timestamp_and_camera_metadata(tmp_path, monk
     for function in ('imwrite', 'imencode', 'imdecode'):
         monkeypatch.setattr(cv2, function, lambda *_a, **_k: pytest.fail('raw used a pixel codec'))
     monkeypatch.setattr(FramePacket, 'bgr', lambda *_: pytest.fail('raw decoded BGR'))
-    recorder = RawFrameRecorder(tmp_path, cameras=('front',))
+    recorder = RawFrameRecorder(tmp_path, cameras=('front',), fps=None)
     recorder.start()
     recorder.threads[0].join(timeout=2.0)
     recorder.stop()
@@ -198,7 +198,7 @@ def test_raw_discards_bad_jpeg_and_preserves_clock_reset(tmp_path, monkeypatch):
 
     reader = SimpleNamespace(read=read, close=lambda: None)
     monkeypatch.setattr('uv_record.raw_recorder.Iceoryx2Reader', lambda _: reader)
-    recorder = RawFrameRecorder(tmp_path, cameras=('front',))
+    recorder = RawFrameRecorder(tmp_path, cameras=('front',), fps=None)
     recorder.start()
     recorder.threads[0].join(timeout=2)
     assert recorder.stop()

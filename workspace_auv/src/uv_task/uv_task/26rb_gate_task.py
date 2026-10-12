@@ -1,6 +1,6 @@
-"""Fixed-depth gate sequence using the largest current front-eye bbox.
+"""Gate sequence with visual alignment or preset-point BLINE stages.
 
-Each decision selects the highest fresh bbox across both eyes. No target IDs,
+Visual decisions select the highest fresh bbox across both eyes. No target IDs,
 tracking, cross-eye association or reacquisition are required after alignment.
 """
 from __future__ import annotations
@@ -62,14 +62,16 @@ class RB26GateTask:
         self._now = time.monotonic
         self._sleep = time.sleep
         self._lock = threading.RLock()
-        config = node.camera_configs['front']
-        self.width, self.height = config.eye_resolution
-        self.k = {e: config.side(e).matrix.copy() for e in ('left', 'right')}
-        self.distortion = {e: np.asarray(config.side(e).distortion) for e in ('left', 'right')}
-        self.extrinsics = {e: node.camera_extrinsics[f'front_{e}'] for e in ('left', 'right')}
-        self.class_id = node._model_mapping.model_class_id('gate_front', required=False)
-        if self.class_id is None:
-            raise ValueError('模型映射中没有 gate_front')
+        self.uses_vision = '0' in self.p['fixed_pass_code'][:self.p['gate_count']]
+        if self.uses_vision:
+            config = node.camera_configs['front']
+            self.width, self.height = config.eye_resolution
+            self.k = {e: config.side(e).matrix.copy() for e in ('left', 'right')}
+            self.distortion = {e: np.asarray(config.side(e).distortion) for e in ('left', 'right')}
+            self.extrinsics = {e: node.camera_extrinsics[f'front_{e}'] for e in ('left', 'right')}
+            self.class_id = node._model_mapping.model_class_id('gate_front', required=False)
+            if self.class_id is None:
+                raise ValueError('模型映射中没有 gate_front')
         self.sequence = 0
         self._last_capture_id = dict(left=None, right=None)
         self._current_frames = dict(left=(), right=())
@@ -87,9 +89,11 @@ class RB26GateTask:
         self._gate_index = 0
         self._observe_after_pass = False
         self._stage = '准备'
-        self._sub = node.create_subscription(
-            DetectionArray, PERCEPTION_DETECTIONS, self._detection_cb,
-            QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self._sub = None
+        if self.uses_vision:
+            self._sub = node.create_subscription(
+                DetectionArray, PERCEPTION_DETECTIONS, self._detection_cb,
+                QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
 
     def _log(self, message, warn=False):
         logger = self.node.get_logger()
@@ -593,6 +597,128 @@ class RB26GateTask:
             confirmed = False
         return confirmed and not self._cleanup_unconfirmed
 
+    def _fixed_motion_confirmed(self):
+        if self._cleanup_unconfirmed or not getattr(self.node, '_last_motion_cleanup_confirmed', True):
+            self._cleanup_unconfirmed = True
+            raise GateFailure('handoff', '定点动作终态未确认，禁止下发下一条定位')
+
+    def _fixed_set(self, target, axes, seconds):
+        deadline = self._limit(seconds)
+        self._action(BasicMotion.Goal.SET, target, axes, deadline)
+        self._fixed_motion_confirmed()
+        self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, target)
+        return deadline
+
+    def _fixed_line(self, target_xy, depth, cancel_predicate=None, position_tolerance=None):
+        """Reach an absolute XY using one measured-yaw body-relative BLINE."""
+        pose = self._pose()
+        dx, dy = target_xy[0]-pose[0], target_xy[1]-pose[1]
+        if math.hypot(dx, dy) <= 1e-6:
+            self._log('定点 BLINE：已到终点 XY，交由最终 SET 保持完整位姿')
+            return
+        yaw = math.radians(pose[5])
+        body_target = [dx*math.cos(yaw)+dy*math.sin(yaw),
+                       -dx*math.sin(yaw)+dy*math.cos(yaw), depth-pose[2], 0.0]
+        deadline = self._limit(self.p['observation_travel_timeout'])
+        kwargs = dict(cruise_speed=self.p['pass_speed_mps'], cancel_predicate=cancel_predicate)
+        if position_tolerance is not None:
+            kwargs['position_tolerance'] = position_tolerance
+        self._log(f'定点 BLINE：终点 XY=({target_xy[0]:.3f},{target_xy[1]:.3f})m，'
+                  f'保持深度={depth:.3f}m，机体系增量=({body_target[0]:+.3f},{body_target[1]:+.3f})m，'
+                  f'速度={self.p["pass_speed_mps"]:.3f}m/s')
+        self._bline_active = True
+        try:
+            self._action(BasicMotion.Goal.BLINE, body_target, 'xyz', deadline, **kwargs)
+        finally:
+            self._bline_active = False
+        self._fixed_motion_confirmed()
+        if getattr(self.node, '_last_motion_cancelled_by_condition', False):
+            pose = self._pose()
+            target = [pose[0], pose[1], pose[2], pose[5]]
+        else:
+            target = getattr(self.node, '_last_motion_final_target', None)
+            if target is None or len(target) != 4 or not all(math.isfinite(float(x)) for x in target):
+                raise GateFailure('final_target', '定点 BLINE 返回的 final_target 无效')
+        self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = map(float, target)
+
+    def _fixed_depth(self, depth):
+        """Keep the parked XY/yaw in POS until measured depth is within tolerance."""
+        self._stage = '定点半径内调整深度 SET'
+        pose = self._pose()
+        self.depth = float(depth)
+        target = [pose[0], pose[1], self.depth, pose[5]]
+        self._log(f'已进入终点 XY 半径且 BLINE 已结束：保持停车位置，SET 深度到 {self.depth:.3f}m')
+        deadline = self._fixed_set(target, 'z', self.p['depth_set_timeout'])
+        last_log = float('-inf')
+        while True:
+            self._check(deadline)
+            pose = self._pose()
+            error = self.depth-pose[2]
+            now = self._now()
+            if now-last_log >= 0.5:
+                self._log(f'[GATE FIXED DEPTH] gate={self._gate_index+1} '
+                          f'z_m={pose[2]:7.3f} target_z_m={self.depth:7.3f} '
+                          f'dz_m={error:+8.3f} tol_m={self.p["depth_tolerance_m"]:6.3f} '
+                          f'remain_s={max(0.0, deadline-now):7.2f}')
+                last_log = now
+            if abs(error) <= self.p['depth_tolerance_m']:
+                return
+            # SET may complete using the controller's broader tolerance. Keep
+            # its position hold active; do not replace it with velocity output.
+            self._tick(deadline)
+
+    def _run_fixed_gate(self):
+        if self._gate_index == 0:
+            self._reach_observation()
+            self._fixed_motion_confirmed()
+        self.depth = self._pose()[2]
+        self._flash(self.node.LIGHT_GREEN, 1, '定点通过：瞄准下一条预设位姿')
+        self._neutral()
+        target_index = self._gate_index+1
+        target = self.p['observation_poses'][target_index]
+        radius = self.p['observation_xy_radius_m'][target_index]
+        pose = self._pose()
+        dx, dy = target[0]-pose[0], target[1]-pose[1]
+        if math.hypot(dx, dy) > 1e-6:
+            self._stage = '定点瞄准下一条预设位姿 SET yaw'
+            aim = [pose[0], pose[1], pose[2], math.degrees(math.atan2(dy, dx))]
+            self._fixed_set(aim, 'rz', self.p['search_align_timeout'])
+        self.depth = self._pose()[2]
+        entered_radius = False
+        last_log = float('-inf')
+
+        def inside_radius():
+            nonlocal entered_radius, last_log
+            self._check()
+            pose = self._pose()
+            distance = math.hypot(target[0]-pose[0], target[1]-pose[1])
+            entered_radius = entered_radius or distance <= radius
+            now = self._now()
+            if now-last_log >= 0.5 or entered_radius:
+                self._log(f'[GATE FIXED XY] gate={self._gate_index+1} pose={target_index+1} '
+                          f'dist_xy_m={distance:7.3f} radius_m={radius:6.3f} '
+                          f'z_m={pose[2]:7.3f} target_z_m={target[2]:7.3f} '
+                          f'in_radius={int(entered_radius)} '
+                          f'remain_s={max(0.0, self._phase_deadline-now):7.2f}')
+                last_log = now
+            return entered_radius
+
+        self._stage = '定点 BLINE 保持当前深度接近终点半径'
+        self._limit(self.p['observation_travel_timeout'])
+        if not inside_radius():
+            # The first BLINE's natural endpoint must also be inside the radius
+            # when the terminal result wins the race with the radius predicate.
+            self._fixed_line(target[:2], self.depth, cancel_predicate=inside_radius,
+                             position_tolerance=radius/2.0)
+            if not entered_radius and not inside_radius():
+                raise GateFailure('motion', '定点 BLINE 已结束，但实测 XY 尚未进入终点半径')
+        self._fixed_depth(target[2])
+        self._stage = '定点 BLINE 目标深度走完剩余路程'
+        self._fixed_line(target[:2], self.depth)
+        self._stage = '定点终点完整位姿 SET'
+        self._fixed_set(target, 'xyzrz', self.p['observation_set_timeout'])
+        self._log(f'第 {self._gate_index+1} 门：定点通过完成，已 SET 到第 {target_index+1} 条位姿 {target}')
+
     def _run_gate(self):
         frame = self._observe_next_gate_here() if self._observe_after_pass else None
         if frame is None:
@@ -622,10 +748,14 @@ class RB26GateTask:
             self._observation_pose = observation_pose
             self._observe_after_pass = previous_passed
             previous_passed = False
-            self._log(f'第 {index+1}/{self.p["gate_count"]} 个门，观测位姿 {observation_pose}，'
+            mode = self.p['fixed_pass_code'][index]
+            self._log(f'第 {index+1}/{self.p["gate_count"]} 个门，模式={mode}，观测位姿 {observation_pose}，'
                       f'已通过 {passed}，已跳过 {skipped}/{self.p["max_failures"]}')
             try:
-                self._run_gate()
+                if mode == '1':
+                    self._run_fixed_gate()
+                else:
+                    self._run_gate()
                 passed += 1
                 previous_passed = True
             except GateFailure as exc:
@@ -647,4 +777,5 @@ class RB26GateTask:
     def destroy(self):
         if self._velocity_active:
             self._park()
-        self.node.destroy_subscription(self._sub)
+        if self._sub is not None:
+            self.node.destroy_subscription(self._sub)

@@ -2,6 +2,10 @@
 
 `uv_record` 将 raw 原图、go2rtc 视频、非图像 rosbag、运行日志、恢复和回放放入同一个 session。
 每个 session 只选择一种图像模式，默认 `raw`。
+两种模式默认每路最多录制 **5 fps**，超过帧率的图像在写盘前丢弃，保留被选帧的原始时间戳；
+不补帧、不改变相机采集帧率。可通过 launch 参数 `record_video_fps:=5.0` 或
+录制器参数 `--video-fps 5` 设置录制上限。raw 的状态/性能记录包含
+`fps_limit` 和 `fps_skipped_frames`，用于区分主动抽帧与传输丢帧。
 
 ## raw：Iceoryx2 源帧
 

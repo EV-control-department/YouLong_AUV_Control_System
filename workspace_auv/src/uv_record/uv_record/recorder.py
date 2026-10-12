@@ -605,7 +605,7 @@ class Recorder:
             'check stream names, HTTP port, and uv_stream status')
 
     def _start_raw_recorder(self):
-        self.raw_recorder = RawFrameRecorder(self.paths.root)
+        self.raw_recorder = RawFrameRecorder(self.paths.root, fps=self.args.video_fps)
         self.raw_recorder.start()
 
     def _raw_camera_health(self):
@@ -725,6 +725,7 @@ class Recorder:
                 'directory': 'camera/raw',
                 'format': 'jpeg',
                 'frame_index': 'frames.jsonl',
+                'fps_limit': float(self.args.video_fps),
                 'timestamp_source': 'iceoryx2_frame_header',
                 'probe_version': 2,
             } if self.record_mode == 'raw' else {}),
@@ -831,7 +832,7 @@ class Recorder:
             from .mcap_export import export_session_mcap
             final_mcap = export_session_mcap(
                 self.paths.root, self.record_mode,
-                fps=float(getattr(self.args, 'video_fps', 10.0)),
+                fps=float(getattr(self.args, 'video_fps', 5.0)),
                 segment_duration=float(getattr(
                     self.args, 'segment_duration', 2.0)))
         else:
@@ -932,11 +933,10 @@ def _parse_args():
             'jpeg stores source JPEG frames and decodes on playback; '
             'ts keeps the legacy H.264 transcode path'))
     parser.add_argument(
-        '--video-fps', type=float, default=10.0,
+        '--video-fps', type=float, default=5.0,
         help=(
-            'Output cadence for the selected camera stream. Keep this equal '
-            'to the source topic rate; default matches the simulator stitch '
-            'rate'))
+            'Maximum recorded camera FPS per stream in raw and go2rtc modes '
+            '(default: 5). Extra frames are skipped without changing source timestamps'))
     parser.add_argument(
         '--go2rtc-stream-mode', choices=('unannotated', 'annotated', 'both'),
         default='unannotated',
@@ -954,6 +954,8 @@ def _parse_args():
     # executable.  This recorder is a supervised process rather than an
     # rclpy Node, so those arguments are intentionally not consumed here.
     args, _ros_args = parser.parse_known_args()
+    if not math.isfinite(args.video_fps) or args.video_fps <= 0:
+        parser.error('--video-fps must be finite and positive')
     return args
 
 

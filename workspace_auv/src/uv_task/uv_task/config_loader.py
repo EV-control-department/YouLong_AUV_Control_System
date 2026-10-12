@@ -18,6 +18,10 @@ from uv_task.drop_search_config import DROP_SEARCH_SCHEMA, validate_drop_search_
 from uv_task.hit_ball_config import SCHEMA as HIT_SCHEMA, validate_hit_params
 
 from uv_task.gate_config import SCHEMA as GATE_SCHEMA, ALIASES as GATE_ALIASES, validate_gate_params
+from uv_task.return_origin_config import (
+    SCHEMA as RETURN_ORIGIN_SCHEMA, ALIASES as RETURN_ORIGIN_ALIASES,
+    validate_return_origin_params,
+)
 
 
 
@@ -121,12 +125,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "external_battery_voltage": float,
         "max_speed_mps": float,
     },
-    "return_origin": {
-        "ascent_target_z_m": float,
-        "ascent_speed_mps": float,
-        "ascent_publish_period": float,
-        "ascent_timeout": float,
-    },
+    "return_origin": RETURN_ORIGIN_SCHEMA,
     "btravelx": {"dx": float},
     "bline": {"dx": float, "dy": float, "dz": float, "drz": float,
               "speed_mps": float, "timeout": float},
@@ -277,6 +276,8 @@ TASK_SCHEMAS["26rb_grab_ball_ring"] = {
     "target_loss_timeout": float, "frame_loss_timeout": float,
     "golf_grab_depth_m": float, "ring_grab_depth_m": float,
     "retry_depth_step_m": float, "descent_timeout": float,
+    "descent_xy_hold_gain": float, "descent_xy_hold_max_speed_mps": float,
+    "descent_yaw_hold_gain": float, "descent_yaw_hold_max_rate_deg_s": float,
     "golf_max_attempts": int, "ring_max_attempts": int, "ring_class": str,
     "ring_observe_seconds": float, "ring_orientation_timeout": float,
     "ring_orientation_min_quality": float, "ring_orientation_min_samples": int,
@@ -379,6 +380,8 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+PARAMETER_ALIASES["return_origin"] = RETURN_ORIGIN_ALIASES
+
 PARAMETER_ALIASES["26rb_grab_ball_ring"] = {
     "find.timeout": "find_timeout", "check.timeout": "check_timeout",
     "loss.timeout": "loss_timeout",
@@ -401,6 +404,10 @@ PARAMETER_ALIASES["26rb_grab_ball_ring"] = {
     "golf.grab_depth_m": "golf_grab_depth_m", "ring.grab_depth_m": "ring_grab_depth_m",
     "descent.retry_depth_step_m": "retry_depth_step_m",
     "descent.timeout": "descent_timeout",
+    "descent.xy_hold_gain": "descent_xy_hold_gain",
+    "descent.xy_hold_max_speed_mps": "descent_xy_hold_max_speed_mps",
+    "descent.yaw_hold_gain": "descent_yaw_hold_gain",
+    "descent.yaw_hold_max_rate_deg_s": "descent_yaw_hold_max_rate_deg_s",
     "descent.duration_seconds": "descent_timeout",  # Legacy spelling now means a timeout.
     "descent_duration_seconds": "descent_timeout",
     "golf.max_attempts": "golf_max_attempts", "ring.max_attempts": "ring_max_attempts",
@@ -518,6 +525,11 @@ def _validate_params(task_name: str, params: dict[str, Any],
     if task_name == "26rb_gate_task":
         try:
             validate_gate_params(flattened, complete=complete)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+    if task_name == "return_origin":
+        try:
+            validate_return_origin_params(flattened)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
     if task_name == "26rb_hit_balls":

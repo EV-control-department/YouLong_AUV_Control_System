@@ -104,16 +104,6 @@ mission:
 
     - name: return_origin
       config: ../tasks/return_origin.yaml
-      initial:
-        poses:
-          - command: WTRAVEL
-            axes: xyz
-            target: [1.0, -1.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-          - command: WTRAVEL
-            axes: xy
-            target: [0.0, 0.0, 0.2, 0.0] # 下潜0.2m
-          - command: SET
-            axes: rz
-            target: [0.0, 0.0, 0.0, 0.0] # 下潜0.2m
+      # 直接执行西南满推3秒、上浮满推10秒，不配置回原点初始路线。
       on_failure:
         "return_origin.timeout": {}

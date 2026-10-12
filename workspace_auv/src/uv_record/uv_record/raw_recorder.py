@@ -30,9 +30,14 @@ SERVICES = {
 class RawFrameRecorder:
     """Own one Iceoryx2 reader thread per selected camera."""
 
-    def __init__(self, session_dir: str | Path, cameras=('front', 'down')):
+    def __init__(self, session_dir: str | Path, cameras=('front', 'down'), fps=5.0):
         self.session_dir = Path(session_dir)
         self.root = self.session_dir / 'camera' / 'raw'
+        self.fps = float(fps) if fps is not None else None
+        if self.fps is not None and (not math.isfinite(self.fps) or self.fps <= 0):
+            raise ValueError('recording fps must be finite and positive')
+        self.frame_interval_ns = (
+            max(1, int(round(1_000_000_000 / self.fps))) if self.fps else 0)
         self.cameras = tuple(cameras)
         invalid = set(self.cameras) - set(SERVICES)
         if invalid:
@@ -42,6 +47,7 @@ class RawFrameRecorder:
         self.threads: list[threading.Thread] = []
         self.lock = threading.Lock()
         self.counts = {camera: 0 for camera in self.cameras}
+        self.skipped = {camera: 0 for camera in self.cameras}
         self.unaligned = {camera: 0 for camera in self.cameras}
         self.probes = {
             camera: {
@@ -81,6 +87,7 @@ class RawFrameRecorder:
         last_capture_id = None
         last_stereo_pair_id = None
         last_receive_monotonic_ns = None
+        last_record_clock_ns = None
         timestamp_epoch = 0
         frame_sequence = 0
         stage = 'camera_directory_create'
@@ -133,9 +140,24 @@ class RawFrameRecorder:
                     if (last_timestamp_ns is not None
                             and timestamp_ns < last_timestamp_ns):
                         timestamp_epoch += 1
+                        last_record_clock_ns = None
                     last_timestamp_ns = timestamp_ns
                     last_capture_id = capture_id
                     last_stereo_pair_id = stereo_pair_id
+                    # Sample before any JPEG/index write, preserving source
+                    # timestamps. Drain unused frames instead of sleeping and
+                    # building a transport backlog. Unstamped frames use the
+                    # monotonic receive clock; producer resets start a new epoch.
+                    record_clock_ns = (
+                        timestamp_ns if timestamp_ns > 0 else receive_monotonic_ns)
+                    if (last_record_clock_ns is not None
+                            and 0 <= record_clock_ns - last_record_clock_ns
+                            < self.frame_interval_ns):
+                        with self.lock:
+                            self.skipped[camera] += 1
+                            self.probes[camera]['active'] = None
+                        continue
+                    last_record_clock_ns = record_clock_ns
                     current_probe = {
                         'frame_sequence': frame_sequence,
                         'camera_receive_unix_ns': camera_receive_unix_ns,
@@ -306,6 +328,7 @@ class RawFrameRecorder:
     def snapshot(self) -> dict:
         with self.lock:
             counts = dict(self.counts)
+            skipped = dict(self.skipped)
             unaligned = dict(self.unaligned)
             probes = {
                 camera: {
@@ -357,6 +380,8 @@ class RawFrameRecorder:
         return {
             'directory': 'camera/raw',
             'frames': counts,
+            'fps_limit': self.fps,
+            'fps_skipped_frames': skipped,
             'unaligned_frames': unaligned,
             'probe_version': 2,
             'diagnostics': diagnostics,
