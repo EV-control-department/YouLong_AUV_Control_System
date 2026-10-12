@@ -7,6 +7,6 @@ mission:
     - name: start
       config: ../tasks/start.yaml
       params:
-        skip_preparation: true # 与建图任务链一致：跳过准备倒计时，仍执行 START。
+        skip_preparation: false # 与建图任务链一致：跳过准备倒计时，仍执行 START。
     - name: grab_sea_cucumber
       config: ../tasks/grab_sea_cucumber.yaml

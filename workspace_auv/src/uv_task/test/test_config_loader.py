@@ -28,17 +28,32 @@ EXPECTED_TASKS = [
 ]
 
 
+def test_competition_chain_enables_survey_and_six_minute_grab():
+    tasks = load_mission(CONFIG_ROOT / 'missions' / 'competition.yaml')
+    assert [t['name'] for t in tasks] == ['start', 'mapping_grid', 'turntable',
+                                          'grab_sea_cucumber', 'return_shore']
+    assert tasks[1]['params']['enable_traversal']
+    assert tasks[1]['params']['require_complete_survey']
+    assert tasks[2]['params']['mode'] == 'yolo_bump'
+    assert tasks[3]['params']['total_timeout_seconds'] == 360.
+    assert (tasks[4]['params']['x'], tasks[4]['params']['y']) == (1., -1.)
+    assert tasks[4]['params']['forward_thrust'] == tasks[4]['params']['lift_thrust'] == 0.
+
+
 def test_sea_cucumber_mission_and_nested_parameters():
+    import yaml
+    source = yaml.safe_load((CONFIG_ROOT / 'tasks' / 'grab_sea_cucumber.yaml').read_text())['params']
     tasks = load_mission(CONFIG_ROOT / 'missions' / 'grab_sea_cucumber.yaml')
     assert [t['name'] for t in tasks] == ['start', 'grab_sea_cucumber']
     params = tasks[1]['params']
-    assert params['search_pose'] == [3.0, 1.0, 0.8, 0.0]
-    assert params['drop_pose'] == [5.0, 1.0, 0.8, 0.0]
-    assert params['max_press_distance_m'] == 0.15
-    assert params['ascent_step_m'] == 0.03
-    assert params['sea_cucumber_class_id'] == 2
-    assert params['pickup_servo_angle_rad'] == 0.0
-    assert params['release_servo_angle_rad'] == pytest.approx(1.5707963267948966)
+    assert params['search_pose'] == source['search']['pose']
+    assert params['drop_pose'] == source['delivery']['pose']
+    assert 'max_press_distance_m' not in params
+    assert 'ascent_step_m' not in params
+    assert params['sea_cucumber_class_id'] == source['sea_cucumber_class_id']
+    assert params['pickup_servo_angle_deg'] == source['gripper']['pickup_angle_deg']
+    assert params['release_servo_angle_deg'] == source['gripper']['release_angle_deg']
+    assert params['collection_release_offset_body_xy'] == source['collection_release_offset_body_xy']
 
 
 def test_default_mission_preserves_order_and_values():
@@ -60,7 +75,7 @@ def test_default_mission_preserves_order_and_values():
     assert tasks[6]["params"][
         "down_epipolar_vertical_tolerance_fraction"] == 0.04
     assert tasks[6]["params"]["down_projection_depth_m"] == 0.8
-    assert tasks[6]["params"]["down_visual_servo_gain"] == 0.8
+    assert tasks[6]["params"]["down_visual_servo_gain"] == 0.4
     assert tasks[6]["params"]["down_visual_servo_max_step_m"] == 0.08
 
 
@@ -83,8 +98,8 @@ def test_default_direct_run_registers_mapping_debug(monkeypatch):
     assert default_mission_path() == MAPPING_MISSION
     tasks = load_mission(default_mission_path())
     assert [task["name"] for task in tasks] == ["start", "mapping_grid"]
-    assert tasks[0]["params"]["skip_preparation"] is True
-    assert tasks[1]["params"]["enable_traversal"] is False
+    assert tasks[0]["params"]["skip_preparation"] is False
+    assert tasks[1]["params"]["enable_traversal"] is True
     assert tasks[1]["params"]["tag_timeout"] > 0
     assert tasks[1]["params"]["tag_dictionary"] == "DICT_APRILTAG_16h5"
 

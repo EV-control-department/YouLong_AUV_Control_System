@@ -1,8 +1,8 @@
 {
   "task": "mapping_grid",
   "comments": {
-    "usage": "本文件仍是标准 JSON；comments 仅供阅读，任务加载器不会将其作为参数。真机发车前必须现场测量并修改 params 中的坐标和深度。执行 START 后才确定里程计原点，所有平面目标坐标均相对该原点。默认 mapping_grid.json 任务链包含标签识别和九宫格建图，并通过 enable_traversal=false 在建图后结束。",
-    "enable_traversal": "建图后从最后格点沿实际visit_order逆序走回所有格点，再回到首次出发的标签配置位置；不按类别排序、不计算避让圆。默认调试链覆盖false；mapping_grid_traversal.json覆盖true。",
+    "usage": "标准JSON；调试实测中心[1.20,-1.37]，所有坐标使用同一次START的odom。mapping_grid.json任务链启用反向遍历；mapping_grid_traversal.json也启用。",
+    "enable_traversal": "建图后沿visit_order逆序再走一圈并回标签点；mapping_grid.json及mapping_grid_traversal.json均启用。",
     "timeout": "整个建图及后续遍历任务的总时限，单位秒；不是单个航点的超时。",
     "move_timeout": "单次 WTRAVEL 的最大耗时，单位秒；实际调用还受任务剩余总时限约束。",
     "observe_seconds": "到达每个格点后的停留观察时限，当前12秒；停留阶段仍要求位置姿态稳定。移动阶段可通过allow_motion_observations独立接收低动态帧；延迟到达的旧阶段帧不会入图。空格也按同样时限观察。",
@@ -35,12 +35,12 @@
     "cell_gate_m": "将观测锥桶关联到理论格点中心的最大距离，单位米；应结合定位误差调节。",
     "tag_timeout": "到达标记附近后，等待确认 AprilTag 的最长时间，单位秒。",
     "fallback_tag_id": "结论接口固定采用的预设标签ID；标记识别失败时也作为地图猜测ID。当前16，现场可改18；与真实识别结果分别保留。",
-    "fallback_square_cells": "结论接口采用的两个方形格点；地图视觉不足时也用于补齐。当前[2,6]只来自仿真场景，真机需现场填写，与圆形格点不可重复。",
-    "fallback_round_cells": "结论接口采用的两个圆形格点；地图视觉不足时也用于补齐。当前[4,8]只来自仿真场景，真机需现场填写，与方形格点不可重复。",
+    "fallback_square_cells": "调试实测预输入方形格点[0,8]；结论接口以fallback为准，不宣称视觉验证。",
+    "fallback_round_cells": "调试实测预输入圆形格点[5,6]；与方形格点不可重复。",
     "camera": "相机设备、双目标定、相机外参、SGBM 和分割阈值属于 uv_camera 配置，不在本任务 JSON 中设置。",
     "conclusion": "新增/task/mapping/conclusion (std_msgs/String JSON, TRANSIENT_LOCAL)。ready=true后输出结论以fallback_square_cells、fallback_round_cells、fallback_tag_id及理论格点坐标为准；视觉证据仍保留在/task/mapping/map，结论不宣称视觉验证。",
     "enable_conclusion": "true开启/task/mapping/conclusion与地图内嵌结论；false关闭，地图conclusion=null。若本节点上次发布过结论，关闭时只发送一次enabled=false/ready=false撤销消息。任务链的覆盖值优先；修改后重启task_runner。",
-    "require_complete_survey": "默认false保持独立建图fallback调试；全流程任务链覆盖true，相机/位姿不可用导致首圈不能执行时失败，不进入下一任务。视觉分类不足仍可输出fallback，并执行反向第二圈。"
+    "require_complete_survey": "完整尝试九格的任务标记；相机不可用但定位正常仍跑完配置九格和巡检。单点移动失败继续下一个，失败航点不冒充到达。定位失效/急停停止；默认config和尝试/失败记录经地图消息提交record。"
   },
   "params": {
     "timeout": 1800.0,
@@ -54,10 +54,10 @@
     "motion_position_m": 0.15,
     "motion_angle_deg": 5.0,
     "min_observations": 3,
-    "class_vote_ratio": 0.67,
+    "class_vote_ratio": 0.8,
     "expected_cones": 4,
-    "grid_center_x": 2.0,
-    "grid_center_y": -4.0,
+    "grid_center_x": 1.2,
+    "grid_center_y": -1.37,
     "grid_side_m": 2.4,
     "grid_yaw_deg": 0.0,
     "floor_z": 1.0,
@@ -76,8 +76,8 @@
       7,
       6,
       3,
-      5,
       4,
+      5,
       2,
       1,
       0
@@ -89,14 +89,14 @@
     "tag_timeout": 30.0,
     "fallback_tag_id": 16,
     "fallback_square_cells": [
-      2,
-      6
-    ],
-    "fallback_round_cells": [
-      4,
+      0,
       8
     ],
+    "fallback_round_cells": [
+      5,
+      6
+    ],
     "enable_conclusion": true,
-    "require_complete_survey": false
+    "require_complete_survey": true
   }
 }

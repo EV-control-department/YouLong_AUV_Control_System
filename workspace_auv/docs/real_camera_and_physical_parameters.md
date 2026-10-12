@@ -68,26 +68,23 @@ export UV_MODEL_MAPPING_FILE="$PWD/src/uv_camera/weights/real_last.yaml"
 这属于几何邻近匹配，不是永久身份跟踪；目标互相重叠或DVL漂移时仍可能关联错误。
 
 每次微调顺序：`SET xyzrz` → 独立检查实测位姿 → 连续稳定 → 等待稳定后采集的新帧。
-BasicMotion原10cm容差及WTRAVEL均不修改。任务侧默认XY容差1cm，
-小步同时要求至少移动半个步长；z容差5cm、yaw容差5°，连续稳定0.3秒。
-同一采集时间戳只处理一次，不以动作返回成功代替实际位移确认。
-调试参数在`config/tasks/grab_sea_cucumber.yaml`的`servo`段：
-`target_match_radius_px`（70px）、`target_lost_wait_seconds`（2秒）、
-`position_tolerance_m`（1cm）、`motion_settle_seconds`（0.3秒）。
-到位等待受单次`position_command_timeout`和本轮`timeout`共同约束；
-参数不是硬件精度保证，实测无法稳定到1cm时应据反馈调整，不应仅增大步长。
+BasicMotion原10cm容差及WTRAVEL均不修改。任务代码默认XY容差1cm，当前YAML配置上限3cm，
+小步到位容差为min(3cm, 0.8*步长, max(1.5cm, 0.5*步长))，
+z容差5cm、yaw容差5°，连续稳定0.3秒。同一采集时间戳只处理一次，
+不以动作返回成功代替实际位移确认。参数见任务YAML的servo段：
+target_match_radius_px=70、target_lost_wait_seconds=4、position_tolerance_m=0.03、
+small_step_tolerance_m=0.015、motion_settle_seconds=0.3、timeout=60秒。
+到位等待仍受单次position_command_timeout与本轮timeout共同约束。
 
-收集框区域伺服要求实际爪子落点进入可见掩膜内部，并满足
-`collection_release_margin_m: 0.05`的边缘余量；旧收集框像素容差参数保留兼容，
-不再作为区域投放的放行条件。`collection_hold_seconds: 0.0`表示不额外等待0.5秒；
-海参抓取门限不变。通过后执行可用的完整框地标校正和释放，不重复追加夹爪偏置。
-重复帧/等待新帧不会清除居中保持，也不会被反复算作目标丢失；
-只有新的不匹配观测才能触发丢失判定。失败日志会区分视觉阶段与地标校正阶段。
+2026-10-12收集框改为下视双目bbox中心平均归一化误差的水平伺服，不要求mask。
+两目使用同一stereo_pair_id，旧消息按采集时间差≤50ms匹配；每目需恰好一个可信类别4框。
+默认collection_pixel_tolerance_fraction=0.08，collection_hold_seconds=0.5。
+通过后实际执行collection_release_offset_body_xy=[0.30,0.0]，保持z/yaw，
+实测到位后再等gripper.settle_seconds=4秒，随后释放。不再做掩膜内部/边缘距离判定或框心校正。
+视觉失败保留回delivery.pose的兜底，也执行同一偏置和稳定等待。
+该位姿是偏置前艇体目标；需现场确认偏置后的实际落点。裁切bbox会移动可见中心。
 
-收集框对准失败后采用配置点投放兜底：重新前往`delivery.pose`、恢复配置航向，
-到位后直接释放，再按原流程返回搜索点。不在视觉修正后的未知位置直接释放，
-兜底不再追加夹爪偏置，也不要求视觉确认。`delivery.pose`应填写可直接释放的艇体位姿。
-视觉阶段预留剩余可用时间的一半（不超过投放移动超时）及释放等待时间用于兜底。
+视觉阶段预留剩余可用时间的一半（不超过投放移动超时）及偏置稳定/释放等待时间用于兜底。
 兜底移动失败、外部停止或总任务超时不释放；抓前抓后数量减少仍不等于投放成功。
 
 真机 `real_default.yaml` 启用 `down_rotate_180: true`；也可在启动命令中显式传入
@@ -170,18 +167,14 @@ ros2 run uv_task task_runner --ros-args \
 - 默认离底后执行原水平回位，并打印前后XY差。无法仅据差值区分水流漂移和DVL跳变。
   `restore_pre_press_odom_xy: true` 才把离底后XY校正为下压前XY：
   **它假设压抓期间没有真实水平位移，不是测量结果**，有水流不要打开。
-- `collection_visual_align: true` 默认启用；`collection_class_id: 4`。
-  先到 `delivery.pose`，再把实际爪子落点移入类别4可见内部区域，允许框被画面裁切。
-  `collection_release_margin_m` 默认0.05m；`collection_projection_depth_m` 填相机到框平面的距离。
-  已在视觉投影中计入夹爪偏移，成功后不再追加一次 `gripper.offset_*`。
-  当前不新增大范围搜索；超时后保留返回配置投放点的兜底。
-- `collection_correct_odom_xy` 默认 **false**。开启需填固定框心的
-  `collection_center_odom_xy: [x,y]` 和实际左相机光心的 `collection_camera_body_xy: [x,y]`。
-  坐标校正在区域对准后执行，取3张独立新帧，要求完整单一类别4目标、艇体近水平且稳定。
-  裁切框跳过框心校正，但仍允许可见区域投放；不能以局部掩膜中心代替已知框心。
-  用相机平移、安装yaw、机器人yaw及残余像素反投影计算机器人XY。
-  这是已知固定地标的平面近似；框会移动、相机距离/安装位置不准时不要启用。
-  误差超过 `odom_correction_max_m` 拒绝校正；原配置投放点兜底仍受总时间预算约束。
+- `collection_visual_align: true`、`collection_class_id: 4`：先到delivery.pose，
+  再用两目bbox中心平均误差居中。collection_projection_depth_m只用于水平步长比例，
+  不用于三角测距、爪子落点判定或odom校正。
+- 居中后只追加collection_release_offset_body_xy投放偏置，不叠加海参抓取gripper.offset_*。
+  实测到位与固定稳定等待完成后释放；视觉失败回配置点兜底后也走同一流程。
+- 旧collection_release_margin_m、collection_correct_odom_xy、collection_center_odom_xy、
+  collection_camera_body_xy已从任务YAML删除；旧配置读取时告警并忽略。
+  odom_correction_max_m保留，仅控制近底下压前XY锚点恢复。
 
 完整链路、爪子偏置公式和锚点法的真实位移假设见
 [抓海参DVL与大收集框投放报告](grab_sea_cucumber_dvl_and_delivery.md)。

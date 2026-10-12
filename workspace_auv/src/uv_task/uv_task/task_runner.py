@@ -222,6 +222,7 @@ class TaskRunnerNode(Node):
             'take_water_sample': self._task_take_water_sample,
             'release_sampler': self._task_release_sampler,
             'return_origin': self._task_return_origin,
+            'return_shore': self._task_return_shore,
             'mapping_grid': self._task_mapping_grid,
             'map_grid': self._task_mapping_grid,
             'turntable': self._task_turntable,
@@ -1350,17 +1351,79 @@ class TaskRunnerNode(Node):
             0.0, 0.0, float(self._cmd_yaw),
         )
 
-    def _publish_body_thrust(self, vertical_thrust: float = 0.0):
+    def _publish_body_thrust(self, vertical_thrust: float = 0.0,
+                             forward_thrust: float = 0.0):
         """绝对机体系ACTUATOR指令；不是速度、PWM或增量推力。"""
-        if not math.isfinite(vertical_thrust):
+        if not math.isfinite(vertical_thrust) or not math.isfinite(forward_thrust):
             raise ValueError('开环推力必须为有限值')
         msg = ZitSetpoint()
         msg.control_key = 0x12
         msg.type_mask = 0  # 写入全部六轴，清除旧水平/姿态推力。
         msg.x = msg.y = msg.roll = msg.pitch = msg.yaw = 0.0
+        msg.x = float(forward_thrust)
         msg.z = float(vertical_thrust)
         msg.seq = 0
         self.pub_setpoint.publish(msg)
+
+    def _task_return_shore(self, p: dict) -> bool:
+        """保持当前深度返回靠岸准备点，再定时前推、负z推力上浮。
+
+        推力不是速度：航向必须正对岸，参数需实测。纯ACTUATOR期间无位置/
+        姿态闭环，也没有自动接岸或出水检测；到时、停止、异常均发全轴零推力。
+        """
+        x, y, yaw = (float(p.get('x', 1.)), float(p.get('y', -1.)),
+                     float(p.get('yaw_deg', 0.)))
+        move_timeout = float(p.get('move_timeout', 150.))
+        forward, forward_seconds = float(p.get('forward_thrust', 0.)), float(p.get('forward_seconds', 0.))
+        lift, lift_seconds = float(p.get('lift_thrust', 0.)), float(p.get('lift_seconds', 0.))
+        if (not all(math.isfinite(v) for v in (x, y, yaw, move_timeout, forward,
+                                               forward_seconds, lift, lift_seconds))
+                or move_timeout <= 0 or not 0 <= forward <= 1 or not -1 <= lift <= 0
+                or forward_seconds < 0 or lift_seconds < 0):
+            raise ValueError('靠岸参数无效：前推[0,1]、上浮[-1,0]，时间须为有限非负数')
+        self.set_light(self.LIGHT_YELLOW, '返航靠岸执行中')
+        success = False
+        try:
+            with self._perception_lock:
+                pose = self._robot_pose
+                age = time.monotonic()-self._robot_pose_received
+            if (pose is None or len(pose) < 6 or age > 1.
+                    or not all(math.isfinite(float(v)) for v in pose)):
+                self.get_logger().error('返航靠岸：缺少新鲜实测位姿，不盲目移动')
+                return False
+            target = [x, y, float(pose[2]), yaw]
+            end = time.monotonic()+move_timeout
+            for command, axes, label in ((BasicMotion.Goal.WTRAVEL, 'xy', '返回靠岸准备点'),
+                                          (BasicMotion.Goal.SET, 'xyrz', '恢复靠岸航向')):
+                if self.stopped or time.monotonic() >= end:
+                    return False
+                ok, message = self._send_action_goal(command, target, axes,
+                    timeout=end-time.monotonic(), task_context=self._format_motion_context(label))
+                if not ok:
+                    self.get_logger().error(f'返航靠岸：{label}失败：{message}，不盲目给推力')
+                    return False
+            self._cmd_x, self._cmd_y, self._cmd_yaw = x, y, yaw
+            if not (forward > 0 and forward_seconds > 0 and lift < 0 and lift_seconds > 0):
+                self.get_logger().warning('返航准备点已到达；靠岸/上浮推力或时间未填，跳过开环动作')
+                return False
+            for label, fx, fz, duration in (
+                    ('前推靠岸', forward, 0., forward_seconds),
+                    ('开环上浮', 0., lift, lift_seconds)):
+                self.get_logger().warning(f'返航靠岸：{label}，body推力x={fx:g}、z={fz:g}，'
+                                           f'持续{duration:g}s；不是速度，不保证实际接岸/出水')
+                pulse_end = time.monotonic()+duration
+                while not self.stopped and rclpy.ok() and time.monotonic() < pulse_end:
+                    self._publish_body_thrust(vertical_thrust=fz, forward_thrust=fx)
+                    time.sleep(min(.05, max(0., pulse_end-time.monotonic())))
+                self._publish_body_thrust()
+                if self.stopped or not rclpy.ok():
+                    return False
+            success = True
+            return True
+        finally:
+            self._publish_body_thrust()
+            self.set_light(self.LIGHT_GREEN if success else self.LIGHT_RED,
+                           '靠岸上浮指令完成' if success else '返航靠岸未完成')
 
     def _publish_body_velocity(self, forward_mps: float = 0.0,
                                lateral_mps: float = 0.0,

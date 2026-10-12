@@ -1,0 +1,49 @@
+{
+  "source": "/home/laurie/AUV_2026_Robocup/sessions/5eef4b2219664dcd493f64adee383960.jpg",
+  "opencv": "4.8.1",
+  "dictionary": "DICT_APRILTAG_16h5",
+  "original_bits": [
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      1,
+      0
+    ],
+    [
+      1,
+      1,
+      0,
+      1
+    ],
+    [
+      1,
+      1,
+      0,
+      0
+    ]
+  ],
+  "reference_checks": [
+    {
+      "id": 16,
+      "decoded": [
+        16
+      ],
+      "min_original_bit_difference": 6,
+      "file": "workspace_auv/docs/apriltag_review_20261011/apriltag_16h5_id16.png"
+    },
+    {
+      "id": 18,
+      "decoded": [
+        18
+      ],
+      "min_original_bit_difference": 4,
+      "file": "workspace_auv/docs/apriltag_review_20261011/apriltag_16h5_id18.png"
+    }
+  ]
+}

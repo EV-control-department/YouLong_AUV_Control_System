@@ -8,6 +8,10 @@ from uv_msgs.msg import DetectionArray
 from uv_msgs.action import BasicMotion
 
 
+class _TargetLost(RuntimeError):
+    """仅视觉目标丢失可转入盘心兜底；取消、导航失败等不能混用。"""
+
+
 class SimpleTurntableTask:
     def __init__(self, node, params):
         self.node, self.params = node, params
@@ -130,6 +134,32 @@ class SimpleTurntableTask:
         if int(p.get('disk_class_id', 3)) < 0:
             raise ValueError('disk_class_id必须非负')
 
+    def _fallback_to_disk_center(self):
+        """目标丢失后按已知盘心移动；不声称视觉确认或180度转动成功。"""
+        nominal = self.params.get('disk_pose_odom', [])
+        if len(nominal) != 4:
+            self.log.error('简单转盘兜底不可用：必须填写disk_pose_odom=[x,y,z,yaw度]')
+            return False
+        target = list(map(float, nominal))
+        if not all(math.isfinite(v) for v in target) or target[2] < 0:
+            self.log.error('简单转盘兜底盘心坐标无效')
+            return False
+        self.node._publish_body_velocity()
+        self.log.info(f'简单转盘目标丢失：改用盘心坐标兜底移动{target}；'
+                      '不等待视觉，不验证接触或实际转角')
+        for command, label in ((BasicMotion.Goal.WTRAVEL, '盘心兜底移动'),
+                               (BasicMotion.Goal.SET, '盘心兜底归向')):
+            self._check_running()
+            ok, message = self.node._send_action_goal(command, target, 'xyzrz',
+                timeout=min(float(self.params.get('motion_timeout_s', 90.)),
+                            self._deadline-time.monotonic()),
+                task_context=f'turntable_simple:{label}')
+            if not ok:
+                self.log.error(f'简单转盘：{label}失败：{message}')
+                return False
+        self.log.info('简单转盘兜底移动已执行，未确认180度旋转')
+        return True
+
     def execute(self):
         p = self.params
         try:
@@ -147,9 +177,9 @@ class SimpleTurntableTask:
                 if box is None:
                     self.node._publish_body_velocity()
                     if last_seen is None and now >= first_deadline:
-                        raise RuntimeError('未识别到新鲜转盘YOLO框')
+                        raise _TargetLost('未识别到新鲜转盘YOLO框')
                     if last_seen is not None and now-last_seen >= float(p.get('target_lost_timeout_s', 1.)):
-                        raise RuntimeError('接近时转盘框丢失')
+                        raise _TargetLost('接近时转盘框丢失')
                 else:
                     last_seen = now
                     if approach_deadline is None:
@@ -179,6 +209,13 @@ class SimpleTurntableTask:
             self._pulse(abs(angle)/rate, yaw=math.copysign(rate, angle))
             self.log.info('简单转盘动作完成：已执行顶碰及yaw，不验证触碰或盘体转角')
             return True
+        except _TargetLost as error:
+            self.log.info(f'简单转盘：{error}；尝试已知盘心兜底')
+            try:
+                return self._fallback_to_disk_center()
+            except (ValueError, RuntimeError, TypeError) as fallback_error:
+                self.log.error(f'简单转盘兜底停止：{fallback_error}')
+                return False
         except (ValueError, RuntimeError, TypeError) as error:
             self.log.error(f'简单转盘停止：{error}')
             return False

@@ -1,6 +1,6 @@
 """海参抓取真机联调任务；通过 config/tasks/grab_sea_cucumber.yaml 配置。
 
-必填：模型类别、实际左目尺寸、抓取区位姿（含扫描深度）、下压速度/时长/最大行程、收集区位姿、
+必填：模型类别、实际左目尺寸、抓取区位姿（含扫描深度）、下压速度/时长、收集区位姿、
 支持舵机1圆盘爪与舵机2前下方夹爪，通过gripper.servo_id选择。
 任务已注册到 task_runner，但不加入默认 robocup_26 任务链。
 """
@@ -29,7 +29,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         required = (
             'sea_cucumber_class_id', 'image_width', 'image_height',
             'descent_speed_mps', 'descent_duration_seconds',
-            'max_press_distance_m', 'drop_pose', 'search_pose')
+            'drop_pose', 'search_pose')
         if int(params.get('gripper_servo_id', 1)) == 1:
             required += ('gripper_offset_x_m', 'gripper_offset_y_m')
         missing = [key for key in required if key not in params]
@@ -118,15 +118,28 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._ascent_speed = float(params.get('ascent_speed_mps', 0.01))
         self._ascent_period = float(params.get('ascent_publish_period', 0.05))
         self._ascent_tolerance = float(params.get('ascent_tolerance_m', 0.01))
+        self._ascent_gain = float(params.get('ascent_slowdown_gain', .1))
+        self._ascent_min_speed = float(params.get('ascent_min_speed_mps', .001))
+        if (not all(math.isfinite(v) and v > 0 for v in (
+                self._ascent_speed, self._ascent_gain, self._ascent_min_speed))
+                or self._ascent_min_speed > self._ascent_speed):
+            raise ValueError('上浮速度/减速增益必须为有限正数，最低速度不得超过上限')
+        self._collection_release_offset = tuple(map(float, params.get(
+            'collection_release_offset_body_xy', (0., 0.))))
+        if (len(self._collection_release_offset) != 2
+                or not all(map(math.isfinite, self._collection_release_offset))):
+            raise ValueError('collection_release_offset_body_xy必须为有限机体系[x,y]米')
         self._max_failed_attempts = int(params.get('max_failed_attempts', 3))
         self._pixel_tolerance = float(params.get('pixel_tolerance_fraction', 0.035))
         self._target_match_px = float(params.get('target_match_radius_px', 70.0))
         self._target_lost_seconds = float(params.get('target_lost_wait_seconds', 2.0))
         self._servo_xy_tolerance = float(params.get('visual_position_tolerance_m', 0.01))
+        self._servo_xy_noise_tolerance = float(params.get('visual_small_step_tolerance_m', 0.015))
         self._servo_settle_seconds = float(params.get('visual_motion_settle_seconds', 0.3))
         if (not all(math.isfinite(v) and v > 0 for v in (
                 self._target_match_px, self._target_lost_seconds,
-                self._servo_xy_tolerance, self._servo_settle_seconds))):
+                self._servo_xy_tolerance, self._servo_xy_noise_tolerance,
+                self._servo_settle_seconds))):
             raise ValueError('视觉匹配、丢失等待、微调容差和稳定时间必须为有限正数')
         width = float(params.get('image_width', 640.0))
         height = float(params.get('image_height', 480.0))
@@ -138,13 +151,14 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             raise ValueError('抓海参视觉、计数或超时参数无效')
         # 真机左目像素伺服必须使用与当前采集模式一致的实测 K，不再沿用
         # 抓球任务由名义 HFOV 推算的焦距。
-        cal_width, cal_height, left_k, _, _, _, _, _ = \
+        cal_width, cal_height, left_k, _, right_k, _, _, _ = \
             load_real_down_json(real_down_calibration_path())
         if (width, height) != (cal_width, cal_height):
             raise ValueError(
                 f'抓海参图像应为每目 {cal_width}x{cal_height}，收到 {width}x{height}')
         self._FX, self._FY = float(left_k[0, 0]), float(left_k[1, 1])
         self._CX, self._CY = float(left_k[0, 2]), float(left_k[1, 2])
+        self._right_intrinsics = tuple(float(right_k[i, j]) for i, j in ((0, 0), (1, 1), (0, 2), (1, 2)))
         # camera发布的掩膜恢复到原始标定像素，不是监控窗口旋转后的像素。
         # 下视整体物理绕机体yaw倒装180°，原像素误差对应的body x/y均须反向。
         self._camera_mount_yaw = float(params.get('down_camera_mount_yaw_deg', 180.0))
@@ -171,18 +185,12 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._collection_depth = float(params.get('collection_projection_depth_m', self._projection_depth))
         self._collection_pixel_tolerance = float(params.get('collection_pixel_tolerance_fraction', .08))
         self._collection_hold_seconds = float(params.get('collection_hold_seconds', 0.0))
-        self._collection_region_mode = False
-        self._collection_margin = float(params.get('collection_release_margin_m', .05))
-        if not math.isfinite(self._collection_margin) or self._collection_margin <= 0:
-            raise ValueError('collection_release_margin_m 必须是有限正数')
+        self._collection_stereo_mode = False
         if (not math.isfinite(self._collection_pixel_tolerance)
                 or not 0 < self._collection_pixel_tolerance <= .3
                 or not math.isfinite(self._collection_hold_seconds)
                 or self._collection_hold_seconds < 0):
             raise ValueError('收集框居中容差或保持时间无效')
-        self._collection_correct = bool(params.get('collection_correct_odom_xy', False))
-        self._collection_center = tuple(params.get('collection_center_odom_xy', ()))
-        self._collection_camera_xy = tuple(params.get('collection_camera_body_xy', ()))
         self._correction_max = float(params.get('odom_correction_max_m', 1.0))
         if self._near_floor_enabled and (not all(map(math.isfinite, (
                 self._floor_z, self._bottom_offset, self._force_clearance,
@@ -194,20 +202,17 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         if (self._collection_class < 0 or not math.isfinite(self._collection_depth)
                 or self._collection_depth <= 0 or not math.isfinite(self._correction_max)
                 or self._correction_max <= 0):
-            raise ValueError('收集框类别、投影距离或校正最大偏移无效')
-        if self._collection_correct and (not self._collection_align
-                or len(self._collection_center) != 2 or len(self._collection_camera_xy) != 2
-                or not all(math.isfinite(float(v)) for v in
-                           self._collection_center + self._collection_camera_xy)):
-            raise ValueError('启用收集框坐标校正须启用视觉对准，并填写框心odom XY、左相机机体XY')
+            raise ValueError('收集框类别、伺服参考距离或校正最大偏移无效')
+        obsolete = ('collection_release_margin_m', 'collection_correct_odom_xy',
+                    'collection_center_odom_xy', 'collection_camera_body_xy',
+                    'max_press_distance_m', 'ascent_step_m', 'ascent_step_timeout_seconds',
+                    'ascent_pause_seconds')
+        for key in obsolete:
+            if key in params:
+                self._logger.warning(f'抓海参：旧参数{key}不再使用，请从配置删除')
 
     def _horizontal_step(self, detection):
         """像素 → 名义机体水平修正 → 安装yaw补偿 → odom修正。"""
-        if getattr(self, '_collection_region_mode', False):
-            # 对准实际夹爪落点；成功后不能再追加一次夹爪补偿。
-            u, v = self._collection_release_pixel()
-            detection = SimpleNamespace(pixel_x=self._CX+detection.pixel_x-u,
-                                        pixel_y=self._CY+detection.pixel_y-v)
         pose, dx, dy, _, _, du, dv = super()._horizontal_step(detection)
         body_dx, body_dy = self._body_to_world(dx, dy, self._camera_mount_yaw)
         world_dx, world_dy = self._body_to_world(body_dx, body_dy, pose[5])
@@ -308,7 +313,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             if detection is None:
                 reason = getattr(self, '_detection_reject_reason', '新帧无匹配目标')
                 # 等待/重复/旧采集帧不是一次新的反证，不能清除已居中状态。
-                missing = reason in ('新帧无匹配目标', '匹配距离超过门限')
+                missing = reason in ('新帧无匹配目标', '匹配距离超过门限', '等待同一双目对')
                 if missing:
                     hold_since = None
                     lost_since = now if lost_since is None else lost_since
@@ -330,19 +335,13 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                         f'世界步长=({wx:+.3f},{wy:+.3f})m')
                     last_log = now
                 centered = abs(du) <= self._pixel_tolerance and abs(dv) <= self._pixel_tolerance
-                if getattr(self, '_collection_region_mode', False):
-                    centered = detection.release_inside
                 if centered:
                     hold_since = now if hold_since is None else hold_since
                     if now-hold_since >= self._hold_seconds:
                         measured = self._measured_pose()
                         if measured is not None:
-                            if getattr(self, '_collection_region_mode', False):
-                                self._logger.info('抓海参：夹爪落点已进入收集框可见内部区域，'
-                                                  f'边缘余量≥{self._collection_margin:.3f}m')
-                            else:
-                                self._logger.info(f'抓海参：{self._color}视觉居中通过，误差='
-                                                  f'({du:+.4f},{dv:+.4f})，容差={self._pixel_tolerance:g}')
+                            self._logger.info(f'抓海参：{self._color}视觉居中通过，误差='
+                                              f'({du:+.4f},{dv:+.4f})，容差={self._pixel_tolerance:g}')
                             return [measured[0], measured[1], measured[2], measured[5]]
                 else:
                     hold_since = None
@@ -356,8 +355,11 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                         self._logger.warning(f'抓海参：视觉微调动作失败：{message}')
                         return None
                     self._node._cmd_x, self._node._cmd_y, self._node._cmd_z, self._node._cmd_yaw = target
-                    # 小于1cm的微移也不能直接成功：至少走完一半该步距离。
-                    tolerance = min(self._servo_xy_tolerance, math.hypot(wx, wy)*.5)
+                    # 小步不再一律收紧到半步：允许厘米级反馈噪声。
+                    # 仍限制为步长的80%，静止在出发点不能通过；最终抓取由新帧视觉确认。
+                    step = math.hypot(wx, wy)
+                    tolerance = min(self._servo_xy_tolerance, step*.8,
+                                    max(getattr(self, '_servo_xy_noise_tolerance', .015), step*.5))
                     if not self._wait_visual_motion(target, deadline, max(1e-5, tolerance)):
                         return None
             time.sleep(min(self._servo_period, max(0., deadline-time.monotonic())))
@@ -394,6 +396,8 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
 
     def _best_left_detection(self):
         """选择最大可信掩膜，并用掩膜中心而非 bbox 中心压准目标。"""
+        if getattr(self, '_collection_stereo_mode', False):
+            return self._collection_stereo_detection()
         self._detection_reject_reason = '等待新帧'
         with self._node._perception_lock:
             entry = self._node._down_detections.get('down_left')
@@ -426,8 +430,6 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         if not candidates:
             self._detection_reject_reason = '新帧无匹配目标'
             return None
-        if getattr(self, '_collection_region_mode', False):
-            return self._collection_region_detection(candidates, stamp_ns)
         locked = getattr(self, '_locked_pixel', None)
         if getattr(self, '_association_active', False) and locked is not None:
             # 用实际艇体位移预测目标的新像素，避免较大微移后仍围绕旧像素匹配。
@@ -462,73 +464,105 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             stamp_ns=stamp_ns,
         )
 
-    def _collection_release_pixel(self):
-        # offset是艇体从相机对准到爪子对准的位移，因此camera→gripper=-offset。
-        bx, by = self._body_to_world(-self._gripper_offset_x, -self._gripper_offset_y,
-                                    -self._camera_mount_yaw)
-        return (self._CX+by/self._projection_depth*self._FX,
-                self._CY-bx/self._projection_depth*self._FY)
+    def _collection_stereo_detection(self):
+        """同一对双目框中心的平均归一化误差；不读取掩膜或推算爪子落点。"""
+        self._detection_reject_reason = '新帧无匹配目标'
+        with self._node._perception_lock:
+            entries = [self._node._down_detections.get(side)
+                       for side in ('down_left', 'down_right')]
+        now = time.monotonic()
+        stamps, pair_ids, centers = [], [], []
+        for entry in entries:
+            if entry is None or not 0 <= now-entry[0] <= self._detection_timeout:
+                return self._collection_single_eye_detection()
+            if entry[0] <= (getattr(self, '_scan_received_after', None) or float('-inf')):
+                self._detection_reject_reason = '等待动作稳定后收到的新帧'
+                return self._collection_single_eye_detection()
+            msg = entry[1]
+            stamp = msg.header.stamp
+            stamp_ns = int(stamp.sec)*1_000_000_000 + int(stamp.nanosec)
+            if stamp_ns <= (getattr(self, '_scan_capture_after_ns', None) or 0):
+                self._detection_reject_reason = '采集时间早于动作稳定时间'
+                return self._collection_single_eye_detection()
+            age = (self._node.get_clock().now().nanoseconds-stamp_ns)/1e9
+            if not 0 <= age <= self._detection_timeout:
+                return self._collection_single_eye_detection()
+            candidates = []
+            for d in msg.detections:
+                if int(d.class_id) != self._class_id:
+                    continue
+                values = tuple(float(v) for v in
+                               (d.bbox_x1, d.bbox_y1, d.bbox_x2, d.bbox_y2, d.confidence))
+                if not all(map(math.isfinite, values)):
+                    continue
+                x1, y1, x2, y2, confidence = values
+                if (confidence >= self._min_confidence and
+                        0 <= x1 < x2 <= self._IMAGE_WIDTH and
+                        0 <= y1 < y2 <= self._IMAGE_HEIGHT):
+                    candidates.append(((x1+x2)/2., (y1+y2)/2.))
+            # 现场预期一个收集框，歧义时不混配两个不同框。
+            if len(candidates) != 1:
+                return self._collection_single_eye_detection()
+            centers.append(candidates[0])
+            stamps.append(stamp_ns)
+            pair_ids.append(int(getattr(msg, 'stereo_pair_id', 0)))
+        if any(pair_ids):
+            if not pair_ids[0] or pair_ids[0] != pair_ids[1]:
+                self._detection_reject_reason = '等待同一双目对'
+                return self._collection_single_eye_detection()
+        elif abs(stamps[0]-stamps[1]) > 50_000_000:
+            self._detection_reject_reason = '等待同一双目对'
+            return self._collection_single_eye_detection()
+        # 两目都必须是动作稳定后的新采集帧，不能复用右目配后续左目。
+        if min(stamps) <= getattr(self, '_collection_last_stamp_ns', -1):
+            self._detection_reject_reason = '重复采集帧'
+            return self._collection_single_eye_detection()
+        self._collection_last_stamp_ns = max(stamps)
+        fx, fy, cx, cy = self._right_intrinsics
+        du = ((centers[0][0]-self._CX)/self._FX + (centers[1][0]-cx)/fx)/2.
+        dv = ((centers[0][1]-self._CY)/self._FY + (centers[1][1]-cy)/fy)/2.
+        # 转成等效左目像素以复用已标定的水平步进、安装yaw和实测到位等待。
+        return SimpleNamespace(pixel_x=self._CX+du*self._FX, pixel_y=self._CY+dv*self._FY,
+                               stamp_ns=max(stamps))
 
-    @staticmethod
-    def _polygon_clearance(point, polygon):
-        """简单多边形内部到边界的最短距离；外部返回负值。"""
-        px, py = point
-        inside, distance = False, float('inf')
-        for i, (ax, ay) in enumerate(polygon):
-            bx, by = polygon[i-1]
-            if (ay > py) != (by > py) and px < (bx-ax)*(py-ay)/(by-ay)+ax:
-                inside = not inside
-            vx, vy = bx-ax, by-ay
-            length = vx*vx+vy*vy
-            t = max(0., min(1., ((px-ax)*vx+(py-ay)*vy)/length)) if length else 0.
-            distance = min(distance, math.hypot(px-ax-t*vx, py-ay-t*vy))
-        return distance if inside else -distance
-
-    def _collection_region_detection(self, candidates, stamp_ns):
-        """裁切框只使用可见内部区域，不推测不可见框心。"""
-        # 预期只有一个收集框，多个框无法可靠关联时等待下一张独立帧。
-        if len(candidates) != 1:
-            self._detection_reject_reason = '新帧无匹配目标'
-            return None
-        target = candidates[0]
-        pixels = list(zip(map(float, target.mask_x), map(float, target.mask_y)))
-        if not all(math.isfinite(u) and math.isfinite(v) for u, v in pixels):
-            self._detection_reject_reason = '新帧无匹配目标'
-            return None
-        width, height = self._IMAGE_WIDTH, self._IMAGE_HEIGHT
-        depth, margin = self._projection_depth, self._collection_margin
-        polygon = [(u/self._FX*depth, v/self._FY*depth) for u, v in pixels]
-        release = self._collection_release_pixel()
-        def valid(point, extra=0.):
-            u, v = point
-            edge = min(u/self._FX, (width-1-u)/self._FX,
-                       v/self._FY, (height-1-v)/self._FY)*depth
-            return (edge >= margin+extra and self._polygon_clearance(
-                (u/self._FX*depth, v/self._FY*depth), polygon) >= margin+extra)
-        inside = valid(release)
-        point = release
-        if not inside:
-            # 搜索离爪子落点最近的安全内部点；增加1cm余量避免渐近卡在边界。
-            options = [(float(u), float(v))
-                       for u in range(0, int(width), 8) for v in range(0, int(height), 8)]
-            options.sort(key=lambda p: (p[0]-release[0])**2+(p[1]-release[1])**2)
-            point = next((p for p in options if valid(p, .01)), None)
-            if point is None:
-                self._detection_reject_reason = '新帧无匹配目标'
-                return None
-        # 完整轮廓才提供几何框心给地标校正；多边形面积中心不受顶点密度影响。
-        cross = [pixels[i-1][0]*v-u*pixels[i-1][1] for i, (u, v) in enumerate(pixels)]
-        area2 = sum(cross)
-        if abs(area2) < 1e-6:
-            return None
-        center = tuple(sum((pixels[i-1][axis]+p[axis])*cross[i]
-                           for i, p in enumerate(pixels))/(3.*area2) for axis in (0, 1))
-        complete = all(2. < u < width-3. and 2. < v < height-3. for u, v in pixels)
-        self._locked_pixel, self._locked_pose = point, self._measured_pose()
-        return SimpleNamespace(pixel_x=point[0], pixel_y=point[1],
-                               release_inside=inside, complete=complete,
-                               landmark_pixel=center, confidence=target.confidence,
-                               stamp_ns=stamp_ns)
+    def _collection_single_eye_detection(self):
+        """双目不完整/不匹配时用一目新鲜框；多框选靠近光心的可信框，不混配。"""
+        with self._node._perception_lock:
+            entries = [self._node._down_detections.get(s) for s in ('down_left', 'down_right')]
+        now, ros_ns = time.monotonic(), self._node.get_clock().now().nanoseconds
+        for side, entry in enumerate(entries):
+            if entry is None or not 0 <= now-entry[0] <= self._detection_timeout:
+                continue
+            if entry[0] <= (getattr(self, '_scan_received_after', None) or float('-inf')):
+                continue
+            msg = entry[1]
+            stamp = int(msg.header.stamp.sec)*1_000_000_000+int(msg.header.stamp.nanosec)
+            if (stamp <= max(getattr(self, '_scan_capture_after_ns', 0) or 0,
+                             getattr(self, '_collection_last_stamp_ns', -1))
+                    or not 0 <= (ros_ns-stamp)/1e9 <= self._detection_timeout):
+                continue
+            fx, fy, cx, cy = ((self._FX, self._FY, self._CX, self._CY) if side == 0
+                              else self._right_intrinsics)
+            candidates = []
+            for d in msg.detections:
+                values = (d.bbox_x1, d.bbox_y1, d.bbox_x2, d.bbox_y2, d.confidence)
+                if int(d.class_id) != self._class_id or not all(map(math.isfinite, values)):
+                    continue
+                x1, y1, x2, y2, confidence = values
+                if (confidence >= self._min_confidence and 0 <= x1 < x2 <= self._IMAGE_WIDTH
+                        and 0 <= y1 < y2 <= self._IMAGE_HEIGHT):
+                    du, dv = ((x1+x2)/2-cx)/fx, ((y1+y2)/2-cy)/fy
+                    candidates.append((math.hypot(du, dv), -confidence, du, dv))
+            if candidates:
+                _, _, du, dv = min(candidates)
+                self._collection_last_stamp_ns = stamp
+                self._logger.warning(f'收集框降级：使用{"左" if side == 0 else "右"}目新鲜框，'
+                                     f'候选={len(candidates)}，不要求双目配对')
+                return SimpleNamespace(pixel_x=self._CX+du*self._FX, pixel_y=self._CY+dv*self._FY,
+                                       stamp_ns=stamp)
+        if getattr(self, '_detection_reject_reason', '') != '重复采集帧':
+            self._detection_reject_reason = '等待新鲜单目收集框'
+        return None
 
     def _count_visible(self, since: float, capture_after_ns: int,
                        deadline: float, conservative: str):
@@ -566,7 +600,12 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
 
     def _retry_perception(self, reason, failures, deadline):
         """视觉失败只结束本轮，不立刻结束整项任务；仍受重试与总超时约束。"""
-        if self._node.stopped or time.monotonic() >= deadline:
+        if self._node.stopped:
+            self._logger.warning(f'抓海参：{reason}；节点已停止，无法重试')
+            return False
+        if time.monotonic() >= deadline:
+            self._logger.error(f'抓海参：{reason}；整项任务总预算已耗尽，无法重试'
+                               '（单轮视觉超时与总预算独立）')
             return False
         if failures > self._max_failed_attempts:
             self._logger.error(f'抓海参：{reason}；连续视觉失败已超过重试上限{self._max_failed_attempts}')
@@ -581,17 +620,23 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
 
     def _travel(self, pose, label, deadline, timeout):
         motion_deadline = min(deadline, time.monotonic() + timeout)
+        self._logger.info(f'抓海参：{label}时间预算：局部上限={timeout:.1f}s，'
+                          f'剩余总预算={max(0., deadline-time.monotonic()):.1f}s，'
+                          f'本段有效预算={max(0., motion_deadline-time.monotonic()):.1f}s')
         measured = self._measured_pose()
         if measured is None:
             self._logger.error(f'抓海参：{label}缺少实测位姿，拒绝移动')
             return False
         target = list(pose)
+        # 深目标必须真的下沉到位；浅目标沿用速度上浮，不下发向下纠偏。
+        descending = float(target[2]) > measured[2]
         if float(target[2]) < measured[2] - self._ascent_tolerance:
             if not self._ascend_to_depth(float(target[2]), motion_deadline):
                 return False
             measured = self._measured_pose()
             if measured is None:
                 return False
+            target[2] = measured[2]  # 上浮过冲也不让WTRAVEL再下沉回补。
         if float(target[2]) < measured[2]:
             # WTRAVEL 不再发出向上的 z 目标；保留上浮后实测深度。
             target[2] = measured[2]
@@ -611,11 +656,13 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         measured = self._measured_pose()
         if remaining <= 0 or measured is None or self._node.stopped:
             return False
-        target[2] = measured[2]  # 不用位置环拉升可能携带海参的机器人。
+        if not descending:
+            target[2] = measured[2]  # 不用位置环拉升或纠正速度上浮的过冲。
         self._logger.info(f'抓海参：{label}运输到位，开始水平定位及归向：'
-                          f'x={target[0]:.3f}，y={target[1]:.3f}，yaw={target[3]:.1f}°')
+                          f'x={target[0]:.3f}，y={target[1]:.3f}，z={target[2]:.3f}m，'
+                          f'yaw={target[3]:.1f}°')
         success, message = self._node._send_action_goal(
-            BasicMotion.Goal.SET, target, 'xyrz', timeout=remaining,
+            BasicMotion.Goal.SET, target, 'xyzrz', timeout=remaining,
             task_context=self._node._format_motion_context(label + '到位归向'))
         if not success:
             self._logger.error(f'抓海参：{label}到位归向失败：{message}')
@@ -626,14 +673,16 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             if measured is not None:
                 yaw_error = abs((measured[5] - target[3] + 180.0) % 360.0 - 180.0)
                 if (abs(measured[0] - target[0]) <= 0.1
-                        and abs(measured[1] - target[1]) <= 0.1 and yaw_error <= 5.0):
+                        and abs(measured[1] - target[1]) <= 0.1
+                        and abs(measured[2] - target[2]) <= min(self._ascent_tolerance, .05)
+                        and yaw_error <= 5.0):
                     break
             time.sleep(0.05)
         else:
-            self._logger.error(f'抓海参：{label}实测位置/航向未归位，禁止释放或重新扫描')
+            self._logger.error(f'抓海参：{label}实测位置/深度/航向未归位，禁止释放或重新扫描')
             return False
         self._node._cmd_x, self._node._cmd_y, self._node._cmd_z, self._node._cmd_yaw = target
-        self._logger.info(f'抓海参：{label}位置及航向已确认')
+        self._logger.info(f'抓海参：{label}位置、深度及航向已确认，实测z={measured[2]:.3f}m')
         return True
 
     def _measured_pose(self):
@@ -684,7 +733,9 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                     force_mode = False
                     self._logger.info('抓海参：离地超过开环高度+3cm，恢复慢速上浮速度环')
                 # 距目标越近，指令越缓；不突然从下压切到大幅上浮速度。
-                speed = min(self._ascent_speed, max(0.001, remaining * 0.1))
+                speed = min(self._ascent_speed, max(
+                    getattr(self, '_ascent_min_speed', .001),
+                    remaining * getattr(self, '_ascent_gain', .1)))
                 self._node._publish_body_velocity(vertical_mps=-speed)
                 if time.monotonic() - last_log >= 1.0:
                     last_log = time.monotonic()
@@ -788,35 +839,45 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
     def _deliver(self, search_pose, deadline, return_to_search):
         if not self._travel(self._drop_pose, '海参运往收集区', deadline, self._drop_timeout):
             return False
+        aligned = False
+        position_confirmed = True
         if getattr(self, '_collection_align', False):
             # 视觉阶段不能用尽总预算：留出部分时间回到配置投放点并释放。
             remaining = max(0., deadline-time.monotonic())
-            reserve = min(self._drop_timeout, max(0., remaining-self._release_wait)*.5)
-            align_deadline = deadline-reserve-self._release_wait
+            release_budget = self._release_wait + self._pre_descent_settle_seconds
+            reserve = min(self._drop_timeout, max(0., remaining-release_budget)*.5)
+            align_deadline = deadline-reserve-release_budget
             aligned = (align_deadline > time.monotonic()
                        and self._align_collection(align_deadline))
             if not aligned:
-                if self._node.stopped or time.monotonic() >= deadline:
-                    self._logger.warning('抓海参：对准失败且已停止/总超时，不执行投放兜底')
+                if self._node.stopped:
+                    self._logger.warning('抓海参：对准失败且外部停止，不执行释放')
                     return False
                 self._logger.warning(
                     f'抓海参：收集框对准失败，启用投放兜底；重新前往配置位姿'
-                    f'{self._drop_pose}并恢复航向，到位后直接释放，不再等待视觉')
+                    f'{self._drop_pose}并恢复航向，到位后执行释放前偏置再释放，不再等待视觉')
                 # 对准可能已使艇体偏离，不能在当前位置直接张爪。
-                if not self._travel(self._drop_pose, '收集框对准失败：配置投放点兜底',
-                                    deadline, self._drop_timeout):
-                    self._logger.error('抓海参：兜底投放移动失败，不释放')
-                    return False
-        if self._node.stopped or time.monotonic() >= deadline:
+                if (time.monotonic() >= deadline or not self._travel(
+                        self._drop_pose, '收集框对准失败：配置投放点兜底', deadline, self._drop_timeout)):
+                    position_confirmed = False
+                    self._logger.warning('抓海参：兜底投放移动失败或总预算耗尽，仍尝试释放；'
+                                         '当前释放区域未确认，不计为有效投放证明')
+        # 视觉只做相机居中；所有投放路径统一追加一次偏置并等待稳定。
+        if position_confirmed and not self._move_collection_release_offset(deadline):
+            self._logger.warning('抓海参：释放前偏置/稳定未到位，仍尝试释放；位置未精确确认')
+        if self._node.stopped:
             return False
         self._command_gripper(self._release_angle, '海参收集区释放')
+        self.delivery_commands += 1  # 已发释放指令，不能因后续超时丢掉这条记录。
         end = min(deadline, time.monotonic() + self._release_wait)
         while not self._node.stopped and time.monotonic() < end:
             time.sleep(min(0.05, end - time.monotonic()))
         if self._node.stopped or time.monotonic() >= deadline:
             return False
-        self.delivery_commands += 1
         self._logger.info('抓海参：已发释放指令；实际投放仍须靠视觉/现场验证')
+        self._logger.info(f'抓海参：释放等待完成，开始上浮至搜索深度z={search_pose[2]:.3f}m')
+        if not self._ascend_to_depth(float(search_pose[2]), deadline):
+            return False
         if not return_to_search:
             return True
         self._logger.info('抓海参：投放结束，返回配置扫描点；返回成功前不启动扫描')
@@ -865,78 +926,58 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             time.sleep(0.02)
         return False
 
+    def _move_collection_release_offset(self, deadline):
+        offset = getattr(self, '_collection_release_offset', (0., 0.))
+        pose = self._measured_pose()
+        if pose is None or self._node.stopped or time.monotonic() >= deadline:
+            return False
+        wx, wy = self._body_to_world(*offset, pose[5])
+        target = [pose[0]+wx, pose[1]+wy, pose[2], pose[5]]
+        if math.hypot(*offset) >= 1e-9:
+            self._logger.info(f'抓海参：收集框释放前爪子偏置body={offset}m，保持深度与航向')
+            ok, message = self._node._send_action_goal(
+                BasicMotion.Goal.SET, target, 'xyzrz',
+                timeout=min(self._command_timeout, deadline-time.monotonic()),
+                task_context=self._node._format_motion_context('收集框释放前爪子偏置'))
+            if not ok:
+                self._logger.error(f'抓海参：收集框爪子偏置失败，不释放：{message}')
+                return False
+            self._node._cmd_x, self._node._cmd_y, self._node._cmd_z, self._node._cmd_yaw = target
+        if not self._wait_visual_motion(target, deadline):
+            return False
+        settle = self._pre_descent_settle_seconds
+        self._logger.info(f'抓海参：收集框偏置实测到位，稳定等待{settle:g}s后释放')
+        end = time.monotonic()+settle
+        while not self._node.stopped and time.monotonic() < min(end, deadline):
+            time.sleep(min(.05, max(0., min(end, deadline)-time.monotonic())))
+        return not self._node.stopped and time.monotonic() >= end and time.monotonic() < deadline
+
     def _align_collection(self, deadline):
-        """把爪子落点移入可见投放区域，完整框可额外做地标校正。"""
+        """下视双目框中心伺服；偏置和释放由deliver统一执行。"""
         previous = (self._class_id, self._color, self._projection_depth, self._servo_timeout,
                     self._pixel_tolerance, self._hold_seconds)
-        previous_region = getattr(self, '_collection_region_mode', False)
+        previous_stereo = getattr(self, '_collection_stereo_mode', False)
         try:
-            self._collection_region_mode = True
-            self._class_id, self._color = self._collection_class, '收集框'
+            self._collection_stereo_mode = True
+            self._collection_last_stamp_ns = -1
+            self._class_id, self._color = self._collection_class, '收集框双目'
             self._projection_depth = self._collection_depth
             self._pixel_tolerance = getattr(self, '_collection_pixel_tolerance', .08)
             self._hold_seconds = getattr(self, '_collection_hold_seconds', 0.0)
-            self._logger.info('抓海参：收集框使用可见内部区域伺服，直接验证夹爪落点；'
-                              '允许框被裁切，不追加夹爪偏置')
+            self._logger.info('抓海参：收集框使用下视双目检测框中心水平伺服；'
+                              '居中后追加爪子偏置、稳定后释放')
             self._servo_timeout = min(self._servo_timeout, max(0., deadline-time.monotonic()))
             self._scan_received_after = time.monotonic()
             self._scan_capture_after_ns = self._node.get_clock().now().nanoseconds
             aligned = self._servo_horizontally()
             if aligned is None or self._node.stopped or time.monotonic() >= deadline:
-                self._logger.warning('抓海参：收集框阶段失败：视觉未通过、停止或任务总预算已耗尽')
+                self._logger.warning('抓海参：收集框阶段失败：双目视觉未通过、停止或预算耗尽')
                 return False
-            if self._collection_correct:
-                self._collection_landmark_partial = False
-                robot_xy = self._collection_landmark_xy(deadline)
-                if robot_xy is None and self._collection_landmark_partial:
-                    self._logger.warning('抓海参：框被裁切，仅按可见区域投放；跳过框心odom校正')
-                elif robot_xy is None or not self._correct_xy(robot_xy, deadline, '收集框地标'):
-                    self._logger.warning('抓海参：收集框视觉已通过，但地标采样或odom校正失败')
-                    return False
-            return not self._node.stopped and time.monotonic() < deadline
+            return True
         finally:
-            self._collection_region_mode = previous_region
+            self._collection_stereo_mode = previous_stereo
             (self._class_id, self._color, self._projection_depth, self._servo_timeout,
              self._pixel_tolerance, self._hold_seconds) = previous
-
-    def _collection_landmark_xy(self, deadline):
-        """静止、近水平时取3张独立新帧，避免把旧图/移动残差写入全局坐标。"""
-        self._scan_received_after = time.monotonic()
-        self._scan_capture_after_ns = self._node.get_clock().now().nanoseconds
-        samples, seen = [], set()
-        anchor = self._measured_pose()
-        end = min(deadline, time.monotonic()+self._count_timeout)
-        while anchor and not self._node.stopped and time.monotonic() < end:
-            detection, pose = self._best_left_detection(), self._measured_pose()
-            with self._node._perception_lock:
-                entry = self._node._down_detections.get('down_left')
-            unique_target = entry is not None and len(self._segmented_detections(entry[1])) == 1
-            if detection and pose and unique_target and detection.stamp_ns not in seen:
-                if not detection.complete:
-                    self._collection_landmark_partial = True
-                    return None
-                age = (self._node.get_clock().now().nanoseconds-detection.stamp_ns)/1e9
-                if (not 0 <= age <= self._detection_timeout or max(abs(pose[3]), abs(pose[4])) > 5
-                        or math.hypot(pose[0]-anchor[0], pose[1]-anchor[1]) > 0.02
-                        or abs((pose[5]-anchor[5]+180)%360-180) > 2):
-                    self._logger.error('抓海参：地标校正要求新鲜帧、近水平且静止，暂不修改odom')
-                    return None
-                if not detection.release_inside:
-                    return None
-                u, v = detection.landmark_pixel
-                du, dv = (u-self._CX)/self._FX, (v-self._CY)/self._FY
-                # 几何反投影不能带servo增益/步长限幅；相机安装平移不再旋转180°。
-                dx, dy = self._body_to_world(-dv*self._collection_depth, du*self._collection_depth,
-                                             self._camera_mount_yaw)
-                wx, wy = self._body_to_world(dx+self._collection_camera_xy[0],
-                                             dy+self._collection_camera_xy[1], pose[5])
-                samples.append((self._collection_center[0]-wx, self._collection_center[1]-wy))
-                seen.add(detection.stamp_ns)
-                if len(samples) == 3:
-                    return tuple(statistics.median(p[i] for p in samples) for i in (0, 1))
-            time.sleep(0.05)
-        self._logger.error('抓海参：收集框地标校正未取得3张独立有效帧')
-        return None
 
     def _command_gripper(self, angle, label):
         """所有海参抓放统一路由至选定舵机；内部弧度，线协议度。"""

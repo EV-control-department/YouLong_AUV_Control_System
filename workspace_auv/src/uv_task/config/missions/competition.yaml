@@ -1,0 +1,48 @@
+# 比赛任务链：只START一次，后续所有坐标沿用同一odom系；不加入仿真默认任务树。
+# 普通阶段失败后继续下一阶段；START失败或外部停止则不继续。
+# 发车前核对：建图标签/九宫格坐标、转盘盘心、海参搜索/投放点、最后靠岸航向与推力。
+mission:
+  name: competition_mapping_bump_trepang_shore
+  tasks:
+    - name: start
+      config: ../tasks/start.yaml
+      params:
+        skip_preparation: true
+
+    - name: mapping_grid
+      config: ../tasks/mapping_grid.json
+      params:
+        enable_traversal: true         # 建图后执行当前实现的反向格点巡检，再回标签点。
+        require_complete_survey: true  # 完整尝试九格；单点失败仍继续，分别记录到达和失败。
+        enable_conclusion: true
+        # 标签位置tag_x/tag_y、深度survey_z及九宫格参数在上述任务JSON中填写。
+        # 识别允许16/18；识别/分类不足采用现有任务fallback，不伪报实测结果。
+
+    - name: turntable
+      config: ../tasks/turntable_simple.yaml
+      params:
+        mode: yolo_bump
+        # 盘心继承turntable_simple.yaml的昨日调试位姿[4.9,-2.4,0.85,-90]，不以空列表覆盖。
+        disk_class_id: 3              # 当前模型wheel；使用前视左目YOLO框。
+        timeout: 180.0
+        bump_seconds: 1.0             # 沿用已存在的简单转盘一次顶碰配置，不验证盘体转角。
+
+    - name: grab_sea_cucumber
+      config: ../tasks/grab_sea_cucumber.yaml
+      params:
+        total_timeout_seconds: 360.0   # 本阶段6分钟总预算，包含抓取/投放/返回搜索点。
+        # 搜索点、投放点、爪子和开环下压参数仍使用现有海参任务文件。
+        # 收集框对准失败采用任务已实现的配置点释放兜底。
+
+    - name: return_shore
+      params:
+        x: 1.0                        # START后odom坐标，不是当前位姿的增量。
+        y: -1.0
+        yaw_deg: 0.0                  # 待现场核对：此航向必须正对岸；保持当前深度返回。
+        move_timeout: 150.0           # 返回及归向共用预算；失败不执行盲目前推。
+        forward_thrust: 0.0           # 待填(0,1]：body+x归一化开环推力，不是m/s。
+        forward_seconds: 0.0          # 待填：前推秒数，无自动接岸检测。
+        lift_thrust: 0.0              # 待填[-1,0)：z向下为正，负推力才是上浮。
+        lift_seconds: 0.0             # 待填：上浮秒数，无自动出水检测。
+        # 0是待填占位：仍尝试返回(1,-1)，但不执行开环推力，不能声称完整靠岸。
+        # 依次前推、上浮，20Hz刷新ACTUATOR；完成/停止/异常时全轴推力清零。

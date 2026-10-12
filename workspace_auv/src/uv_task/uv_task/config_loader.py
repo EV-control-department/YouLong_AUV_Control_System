@@ -49,6 +49,11 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "state_settle_time": float,
         "timeout": float,
     },
+    "return_shore": {
+        "x": float, "y": float, "yaw_deg": float,
+        "move_timeout": float, "forward_thrust": float,
+        "forward_seconds": float, "lift_thrust": float, "lift_seconds": float,
+    },
     "btravelx": {"dx": float},
     "setz": {"z": float},
     "setrz": {"rz": float},
@@ -214,7 +219,9 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "press_thrust_seconds": float,
         "restore_pre_press_odom_xy": bool,
         "collection_visual_align": bool,
+        # Legacy keys are parsed only so GrabSeaCucumberTask can warn and ignore them.
         "collection_release_margin_m": float,
+        "collection_release_offset_body_xy": (list, float),
         "collection_class_id": int,
         "collection_pixel_tolerance_fraction": float,
         "collection_hold_seconds": float,
@@ -227,6 +234,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "target_match_radius_px": float,
         "target_lost_wait_seconds": float,
         "visual_position_tolerance_m": float,
+        "visual_small_step_tolerance_m": float,
         "visual_motion_settle_seconds": float,
         "down_camera_mount_yaw_deg": float,
         "image_width": int,
@@ -252,6 +260,8 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "release_wait_seconds": float,
         "ascent_step_m": float,
         "ascent_speed_mps": float,
+        "ascent_slowdown_gain": float,
+        "ascent_min_speed_mps": float,
         "ascent_publish_period": float,
         "ascent_step_timeout_seconds": float,
         "ascent_pause_seconds": float,
@@ -307,7 +317,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 # 基础动作只有少量标量参数；允许直接写在任务链里，不要求空模板文件。
-INLINE_TASKS = frozenset({"btravelx", "setz", "wtravelxyz", "setrz"})
+INLINE_TASKS = frozenset({"btravelx", "setz", "wtravelxyz", "setrz", "return_shore"})
 
 
 # Short names keep the YAML readable where the runtime key carries the
@@ -336,6 +346,7 @@ PARAMETER_ALIASES = {
         "servo.target_match_radius_px": "target_match_radius_px",
         "servo.target_lost_wait_seconds": "target_lost_wait_seconds",
         "servo.position_tolerance_m": "visual_position_tolerance_m",
+        "servo.small_step_tolerance_m": "visual_small_step_tolerance_m",
         "servo.motion_settle_seconds": "visual_motion_settle_seconds",
         "gripper.servo_id": "gripper_servo_id",
         "gripper.contact_body_xyz": "gripper_contact_body_xyz",
@@ -361,6 +372,8 @@ PARAMETER_ALIASES = {
         "gripper.pickup_angle_deg": "pickup_servo_angle_deg",
         "gripper.release_angle_deg": "release_servo_angle_deg",
         "ascent.speed_mps": "ascent_speed_mps",
+        "ascent.slowdown_gain": "ascent_slowdown_gain",
+        "ascent.min_speed_mps": "ascent_min_speed_mps",
         "ascent.publish_period": "ascent_publish_period",
         "descent.speed_mps": "descent_speed_mps",
         "descent.duration_seconds": "descent_duration_seconds",

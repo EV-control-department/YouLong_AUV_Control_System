@@ -118,6 +118,22 @@ def test_final_map_transition_bypasses_snapshot_rate_limit(tmp_path):
     assert calls == [('observe_cell', 0), ('observe_cell', 1), ('complete', 0)]
 
 
+def test_record_keeps_default_config_and_failed_waypoint_evidence(tmp_path):
+    recorder = TelemetryRecorder(tmp_path)
+    written = []
+    recorder._write = lambda kind, value, rate: written.append(value)
+    config = {'fallback_tag_id': 16, 'fallback_square_cells': [2,6],
+              'fallback_round_cells': [4,8], 'grid_side_m': 2.4}
+    recorder._map(SimpleNamespace(data=json.dumps({
+        'state': 'complete_with_failures', 'cells': [], 'config_fallback_mode': True,
+        'submitted_config': config, 'verified_complete': False,
+        'attempted_visit_order': list(range(9)), 'visit_order': [0,1,3],
+        'travel_failures': [{'cell': 2, 'label': 'mapping:travel_to_cell_2'}]})))
+    assert written[0]['submitted_config'] == config
+    assert written[0]['travel_failures'][0]['cell'] == 2
+    assert not written[0]['verified_complete']
+
+
 def test_readable_indexes_accept_actual_ros_observation_and_task_schema(tmp_path):
     messages = pytest.importorskip('uv_msgs.msg')
     pytest.importorskip('rosidl_runtime_py.convert')

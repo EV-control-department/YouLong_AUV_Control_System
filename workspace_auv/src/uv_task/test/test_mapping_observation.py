@@ -45,6 +45,50 @@ class _Node:
                                error=lambda *_: None)
 
 
+@pytest.mark.parametrize('failed_label', [None, 'mapping:travel_to_cell_4',
+                                         'mapping:travel_to_cell_0', 'mapping:reverse_cell_5'])
+def test_dead_camera_with_healthy_position_attempts_complete_route_and_records_defaults(monkeypatch, failed_label):
+    from uv_task import mapping_task as module
+    clock = [0.]
+    monkeypatch.setattr(module, 'time', SimpleNamespace(monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0]+seconds)))
+    monkeypatch.setattr(module.rclpy, 'ok', lambda: True)
+    params = load_task(Path(__file__).parents[1]/'config/tasks/mapping_grid.json')[0]['params']
+    params.update(require_complete_survey=True, enable_traversal=True)
+    node = _Node()
+    node.stopped = False
+    task = MappingTask(node, params)
+    monkeypatch.setattr(task, '_position_ready', lambda: True)
+    travels = []
+    monkeypatch.setattr(task, '_travel_to', lambda xy, label: travels.append(label) or label != failed_label)
+    monkeypatch.setattr(task, '_observe_cones', lambda: pytest.fail('无摄像头不等待视觉'))
+    assert task.execute()
+    assert not node.stopped
+    assert task.attempted_visit_order == params['visit_order']
+    assert task.attempted_traversal_order == list(reversed(params['visit_order']))
+    assert 'mapping:reverse_return_to_april_tag' in travels
+    payload = json.loads(task.map_pub.messages[-1].data)
+    assert payload['config_fallback_mode'] and not payload['verified_complete']
+    assert payload['submitted_config'] == params
+    assert payload['conclusion']['source'] == 'fallback'
+    assert len(payload['conclusion']['assignment']) == 4
+    if failed_label:
+        assert task.travel_failures[0]['label'] == failed_label
+        if 'travel_to_cell' in failed_label:
+            cell = int(failed_label.rsplit('_', 1)[1])
+            assert cell not in task.visit_order
+
+
+def test_mapping_position_loss_stops_navigation_not_camera_loss(monkeypatch):
+    from uv_task import mapping_task as module
+    monkeypatch.setattr(module.rclpy, 'ok', lambda: True)
+    task = MappingTask(_Node(), load_task(Path(__file__).parents[1]/'config/tasks/mapping_grid.json')[0]['params'])
+    task.node.stopped = False
+    with pytest.raises(RuntimeError, match='定位数据失效'):
+        task._continue_navigation()
+    assert task.node.stopped
+
+
 def _frame(stamp, *observations, processed=True):
     frame = MappingObservationArray()
     frame.header.stamp.sec = stamp
@@ -170,13 +214,13 @@ def test_unverified_fallback_keeps_visual_cells_and_marks_guesses():
     task.final_assignment = task._fill_fallback_assignment({4: 1})
     task.publish_map()
 
-    assert task.final_assignment == {4: 1, 2: 0, 6: 0, 8: 1}
-    assert task.fallback_cells == {2, 6, 8}
+    assert task.final_assignment == {4: 1, 0: 0, 8: 0, 5: 1}
+    assert task.fallback_cells == {0, 8, 5}
     payload = json.loads(task.map_pub.messages[-1].data)
     assert payload['fallback_used'] is True
     assert payload['tag']['id'] == 16
     assert payload['tag']['source'] == 'fallback'
-    assert payload['cells'][2]['source'] == 'fallback'
+    assert payload['cells'][0]['source'] == 'fallback'
     assert payload['cells'][4]['source'] == 'none'
 
 
@@ -189,6 +233,8 @@ def test_fallback_map_retraces_survey_without_vision_positions(monkeypatch, enab
     task.perception_stats['processed_frames'] = 1
     task.camera_ready = True
     task.pose_history.append(object())
+    monkeypatch.setattr(task, '_position_ready', lambda: True)
+    monkeypatch.setattr(task, '_camera_available', lambda: True)
     monkeypatch.setattr('uv_task.mapping_task.rclpy.ok', lambda: True)
     travels = []
     monkeypatch.setattr(task, '_travel_to',
@@ -222,7 +268,7 @@ def test_conclusion_uses_fallback_even_when_visual_assignment_disagrees():
     task.publish_map()
     conclusion = json.loads(task.conclusion_pub.messages[-1].data)
     assert conclusion['ready'] is True
-    assert conclusion['assignment'] == {'2': 0, '6': 0, '4': 1, '8': 1}
+    assert conclusion['assignment'] == {'0': 0, '8': 0, '5': 1, '6': 1}
     assert conclusion['tag']['id'] == 16
     assert conclusion['verified'] is False
     assert conclusion['source'] == 'fallback'
@@ -244,17 +290,19 @@ def test_invalid_conclusion_does_not_publish_ready_assignment():
     assert conclusion['assignment'] == {}
 
 
-def test_reverse_traversal_stops_after_failed_waypoint(monkeypatch):
+def test_reverse_traversal_continues_after_failed_waypoint(monkeypatch):
     path = Path(__file__).parents[1] / 'config/tasks/mapping_grid.json'
     task = MappingTask(_Node(), load_task(path)[0]['params'])
     task.visit_order = list(task.params['visit_order'])
     monkeypatch.setattr(task, '_ready', lambda: True)
+    monkeypatch.setattr(task, '_position_ready', lambda: True)
     travels = []
     monkeypatch.setattr(task, '_travel_to',
                         lambda position, label: travels.append(label) or False)
-    with pytest.raises(RuntimeError, match='反向遍历格点'):
-        task._traverse_cones()
-    assert len(travels) == 1
+    task._traverse_cones()
+    assert len(travels) == 9
+    assert len(task.travel_failures) == 9
+    assert task.attempted_traversal_order == list(reversed(task.visit_order))
     assert task.traversal_order == [task.visit_order[-1]]
 
 
@@ -269,7 +317,7 @@ def test_reverse_traversal_requires_completed_first_lap():
 def test_traversal_mission_explicitly_enables_second_lap():
     from uv_task.config_loader import load_mission
     root = Path(__file__).parents[1] / 'config/missions'
-    assert load_mission(root/'mapping_grid.json')[-1]['params']['enable_traversal'] is False
+    assert load_mission(root/'mapping_grid.json')[-1]['params']['enable_traversal'] is True
     assert load_mission(root/'mapping_grid_traversal.json')[-1]['params']['enable_traversal'] is True
 
 
@@ -293,9 +341,9 @@ def test_no_camera_does_not_move_without_a_completed_survey(monkeypatch):
     monkeypatch.setattr(task, '_ready', lambda: False)
     monkeypatch.setattr('uv_task.mapping_task.rclpy.ok', lambda: True)
     monkeypatch.setattr(task, '_travel_to', lambda *_: pytest.fail('未完成首圈不能遍历'))
-    assert task.execute()
+    assert not task.execute()
     assert task.visit_order == task.traversal_order == []
-    assert json.loads(task.conclusion_pub.messages[-1].data)['ready']
+    assert not json.loads(task.conclusion_pub.messages[-1].data)['ready']
 
 
 def test_disabled_conclusion_keeps_map_without_creating_result_publisher():
@@ -338,7 +386,7 @@ def test_full_flow_requires_survey_instead_of_skipping_to_next_task(monkeypatch)
     monkeypatch.setattr(task, '_ready', lambda: False)
     monkeypatch.setattr('uv_task.mapping_task.rclpy.ok', lambda: True)
     assert not task.execute()
-    assert task.node.stopped
+    assert not task.node.stopped  # 普通阶段结束不再无条件杀死整条链。
     assert task.state == 'failed'
     assert not json.loads(task.conclusion_pub.messages[-1].data)['ready']
 

@@ -26,6 +26,49 @@ class _Logger:
         pass
 
 
+@pytest.mark.parametrize('condition', ['normal', 'pending', 'motion_failed', 'stopped'])
+def test_return_shore_positions_before_timed_actuator_and_always_clears(condition):
+    from uv_msgs.action import BasicMotion
+    from zit6_interfaces.msg import ZitSetpoint
+    source = Path(__file__).parents[1] / 'uv_task' / 'task_runner.py'
+    cls = next(n for n in ast.parse(source.read_text()).body
+               if isinstance(n, ast.ClassDef) and n.name == 'TaskRunnerNode')
+    methods = [n for n in cls.body if isinstance(n, ast.FunctionDef)
+               and n.name in ('_task_return_shore', '_publish_body_thrust')]
+    clock, packets, actions = [0.], [], []
+    timer = SimpleNamespace(monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    scope = dict(math=math, time=timer, rclpy=SimpleNamespace(ok=lambda: True),
+                 BasicMotion=BasicMotion, ZitSetpoint=ZitSetpoint)
+    exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), scope)
+    node = SimpleNamespace(stopped=False, _perception_lock=threading.Lock(),
+        _robot_pose=(0.,0.,.6,0.,0.,0.), _robot_pose_received=0.,
+        get_logger=lambda: _Logger(), LIGHT_YELLOW=3, LIGHT_GREEN=2, LIGHT_RED=1,
+        set_light=lambda *args: None, _format_motion_context=lambda s: s)
+    node._send_action_goal = lambda *args, **kwargs: actions.append(args) or (condition != 'motion_failed', '')
+    def publish(msg):
+        packets.append(msg)
+        if condition == 'stopped' and msg.x > 0:
+            node.stopped = True
+    node.pub_setpoint = SimpleNamespace(publish=publish)
+    node._publish_body_thrust = lambda *args, **kwargs: scope['_publish_body_thrust'](node, *args, **kwargs)
+    params = dict(x=1., y=-1., yaw_deg=90., move_timeout=10., forward_thrust=.1,
+                  forward_seconds=.1, lift_thrust=-.05, lift_seconds=.1)
+    if condition == 'pending':
+        params['forward_thrust'] = 0.
+    result = scope['_task_return_shore'](node, params)
+    assert result is (condition == 'normal')
+    assert all(p.control_key == 0x12 and p.y == p.roll == p.pitch == p.yaw == 0. for p in packets)
+    assert packets[-1].x == packets[-1].z == 0.
+    if condition == 'normal':
+        assert [a[2] for a in actions] == ['xy', 'xyrz']
+        assert actions[-1][1] == [1., -1., .6, 90.]
+        assert any(p.x == pytest.approx(.1) for p in packets)
+        assert any(p.z == pytest.approx(-.05) for p in packets)
+    elif condition in ('pending', 'motion_failed'):
+        assert all(p.x == p.z == 0. for p in packets)
+
+
 def test_sea_horizontal_hold_activates_position_even_when_already_centered(monkeypatch):
     task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
     calls = []
@@ -220,6 +263,39 @@ def test_locked_loop_does_not_command_twice_from_same_frame(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize('residual,passes', [(.010, True), (.016, False), (.018, False)])
+def test_small_visual_step_accepts_cm_feedback_but_requires_movement(monkeypatch, residual, passes):
+    # 复现日志：18mm指令、10mm残差。旧半步阈值9mm会卡住；未移动仍不能通过。
+    clock, calls, frames = [0.], [], [0]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._logger, task._color = _Logger(), '海参'
+    task._servo_xy_tolerance, task._servo_xy_noise_tolerance = .03, .015
+    task._servo_settle_seconds, task._command_timeout = .3, 1.
+    task._servo_period, task._hold_seconds, task._log_period = .1, 0., .5
+    task._pixel_tolerance, task._horizontal_hold_z_yaw = .04, (.4, 0.)
+    task._node = SimpleNamespace(stopped=False,
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=int(clock[0]*1e9))),
+        _send_action_goal=lambda *a, **kw: calls.append(a) or (True, ''),
+        _format_motion_context=lambda s: s)
+    def detection():
+        frames[0] += 1
+        return SimpleNamespace(stamp_ns=frames[0], pixel_x=370., pixel_y=256.)
+    task._best_left_detection = detection
+    task._measured_pose = lambda: (.018-residual if calls else 0., 0., .4, 0., 0., 0.)
+    task._horizontal_step = lambda d: (task._measured_pose(), .018, 0., .018, 0.,
+                                       .0525 if d.stamp_ns == 1 else 0., 0.)
+    result = task._locked_visual_loop(2.)
+    assert (result is not None) is passes
+    assert len(calls) == 1
+    if passes:
+        assert frames[0] == 2  # 实测稳定后仍必须取得下一张视觉帧，位置到位不等于抓取通过。
+        assert task._scan_capture_after_ns >= 300_000_000
+    else:
+        assert frames[0] == 1
+
+
 def test_locked_target_loss_waits_without_switching_or_commanding(monkeypatch):
     clock = [0.]
     monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
@@ -234,6 +310,17 @@ def test_locked_target_loss_waits_without_switching_or_commanding(monkeypatch):
     assert task._locked_pixel == (260., 240.)
 
 
+@pytest.mark.parametrize('stopped,expected', [(False, '总预算已耗尽'), (True, '节点已停止')])
+def test_visual_retry_reports_why_task_cannot_continue(monkeypatch, stopped, expected):
+    monkeypatch.setattr(time, 'monotonic', lambda: 10.)
+    messages = []
+    task = GrabSeaCucumberTask.__new__(GrabSeaCucumberTask)
+    task._node = SimpleNamespace(stopped=stopped)
+    task._logger = SimpleNamespace(warning=messages.append, error=messages.append)
+    assert not task._retry_perception('水平对准本轮未完成', 1, 10.)
+    assert any(expected in message for message in messages)
+
+
 def test_visual_tracking_parameters_load_from_nested_servo_config():
     import yaml
     from uv_task.config_loader import load_task
@@ -243,6 +330,7 @@ def test_visual_tracking_parameters_load_from_nested_servo_config():
     for nested, flat in [('target_match_radius_px', 'target_match_radius_px'),
                          ('target_lost_wait_seconds', 'target_lost_wait_seconds'),
                          ('position_tolerance_m', 'visual_position_tolerance_m'),
+                         ('small_step_tolerance_m', 'visual_small_step_tolerance_m'),
                          ('motion_settle_seconds', 'visual_motion_settle_seconds')]:
         assert params[flat] == servo[nested]
 
@@ -358,139 +446,119 @@ def test_duplicate_empty_frame_is_not_repeated_target_loss():
     assert task._detection_reject_reason == '重复采集帧'
 
 
-def _collection_region_task():
+def _stereo_collection_task(monkeypatch):
+    monkeypatch.setattr(time, 'monotonic', lambda: 1.1)
     task = _locked_detection_task()
-    task._collection_region_mode = True
-    task._collection_margin = .05
-    task._class_id = 4
-    task._gripper_offset_x, task._gripper_offset_y = .30, .10
+    task._logger = _Logger()
+    task._class_id, task._collection_stereo_mode = 4, True
+    task._right_intrinsics = (400., 400., 300., 220.)
+    task._node.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=1_100_000_000))
+    for side, center in [('down_left', (370.,265.)), ('down_right', (300.,220.))]:
+        x,y = center
+        box = SimpleNamespace(class_id=4, confidence=.9, bbox_x1=x-50., bbox_x2=x+50.,
+                              bbox_y1=y-40., bbox_y2=y+40., mask_x=[], mask_y=[])
+        msg = SimpleNamespace(stereo_pair_id=42,
+                              header=SimpleNamespace(stamp=SimpleNamespace(sec=1, nanosec=1)),
+                              detections=[box])
+        task._node._down_detections[side] = (1.05, msg)
     return task
 
 
-def _collection_polygon(points):
-    return SimpleNamespace(mask_x=[p[0] for p in points], mask_y=[p[1] for p in points],
-                           class_id=4, confidence=.9)
+def test_collection_stereo_averages_centers_without_masks(monkeypatch):
+    task = _stereo_collection_task(monkeypatch)
+    d = task._best_left_detection()
+    assert (d.pixel_x, d.pixel_y) == pytest.approx((345.,252.5))
+    # 使用两目的实际K归一化，而不是直接平均不同相机原始像素。
+    assert not hasattr(d, 'release_inside')
+    assert task._best_left_detection() is None
+    assert task._detection_reject_reason == '重复采集帧'
 
 
-def test_cropped_collection_accepts_gripper_inside_without_needing_frame_center():
-    task = _collection_region_task()
-    # 倒装相机，夹爪实际落点=(382.5,52.5)，而相机主点=(320,240)。
-    polygon = _collection_polygon([(0,0), (639,0), (639,200), (0,200)])
-    detection = task._collection_region_detection([polygon], 1)
-    assert detection.release_inside and not detection.complete
-    assert (detection.pixel_x, detection.pixel_y) == pytest.approx((382.5,52.5))
-    task._node._latest_robot_pose = task._measured_pose
-    task._servo_gain, task._max_xy_step = .5, .08
-    assert task._horizontal_step(detection)[1:] == pytest.approx((0.,)*6)
-
-
-def test_collection_moves_gripper_into_mask_with_edge_margin():
-    task = _collection_region_task()
-    polygon = _collection_polygon([(100,100), (500,100), (500,400), (100,400)])
-    detection = task._collection_region_detection([polygon], 1)
-    assert not detection.release_inside and detection.complete
-    assert detection.pixel_y >= 137.5  # 5cm+1cm余量 / .8m * 500px。
-    task._node._latest_robot_pose = task._measured_pose
-    task._servo_gain, task._max_xy_step = .5, .08
-    step = task._horizontal_step(detection)
-    assert step[1] > 0.  # 不是再移动一次完整的0.3m爪子偏移。
-    assert math.hypot(step[1], step[2]) <= .08
-
-
-def test_collection_concave_polygon_does_not_accept_bounding_box_interior():
-    task = _collection_region_task()
-    task._gripper_offset_x = task._gripper_offset_y = 0.
-    # 主点落在L形多边形缺口内，bbox包含它，但不能释放。
-    polygon = _collection_polygon([(40,40), (600,40), (600,140),
-                                   (200,140), (200,440), (40,440)])
-    detection = task._collection_region_detection([polygon], 1)
-    assert not detection.release_inside
-    assert detection.pixel_y < 140 or detection.pixel_x < 200
-
-
-def test_collection_rejects_region_too_narrow_for_release_margin():
-    task = _collection_region_task()
-    polygon = _collection_polygon([(0,0), (639,0), (639,30), (0,30)])
-    assert task._collection_region_detection([polygon], 1) is None
-
-
-def test_collection_loop_requires_interior_even_within_old_pixel_tolerance(monkeypatch):
-    task = _collection_region_task()
-    task._logger, task._color = _Logger(), '收集框'
-    task._pixel_tolerance, task._hold_seconds = .08, 0.
-    task._log_period, task._servo_period, task._command_timeout = .5, .1, 1.
-    task._servo_xy_tolerance, task._horizontal_hold_z_yaw = .03, (.4, 0.)
-    clock, commands, frame = [0.], [], [0]
-    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(time, 'sleep', lambda dt: clock.__setitem__(0, clock[0]+dt))
-    task._node.stopped = False
-    task._node._format_motion_context = lambda s: s
-    task._node._send_action_goal = lambda *args, **kwargs: (commands.append(args) or True, '')
-    def detect():
-        frame[0] += 1
-        return SimpleNamespace(stamp_ns=frame[0], pixel_x=382.5, pixel_y=62.5,
-                               release_inside=frame[0] > 1)
-    task._best_left_detection = detect
-    task._horizontal_step = lambda d: (task._measured_pose(), .008,0.,.008,0.,0.,.02)
-    task._wait_visual_motion = lambda *a: True
-    assert task._locked_visual_loop(1.) is not None
-    assert len(commands) == 1
-
-
-def test_partial_collection_skips_landmark_but_does_not_apply_offset_twice():
-    task = _sea_flow_fake()
-    task._class_id, task._color, task._projection_depth = 2, '海参', .8
-    task._collection_class, task._collection_depth, task._collection_correct = 4, .8, True
-    task._pixel_tolerance, task._hold_seconds = .04, .5
-    task._apply_gripper_offset = lambda: pytest.fail('collection offset applied twice')
-    task._correct_xy = lambda *args: pytest.fail('partial frame corrected odom')
-    def landmark(deadline):
-        task._collection_landmark_partial = True
-        return None
-    task._collection_landmark_xy = landmark
-    assert task._align_collection(time.monotonic()+1)
-    assert not task._collection_region_mode and task._class_id == 2
-
-
-@pytest.mark.parametrize('partial', [False, True])
-def test_collection_landmark_uses_full_center_instead_of_gripper_aim_point(monkeypatch, partial):
-    task = _collection_region_task()
-    task._count_timeout, task._collection_depth = 1., .8
-    task._node.stopped = False
-    task._collection_center, task._collection_camera_xy = (4.,5.), (-.13,.03)
-    task._collection_landmark_partial = False
-    clock, stamp = [0.], [1]
-    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
-    def sleep(seconds):
-        clock[0] += seconds
-    monkeypatch.setattr(time, 'sleep', sleep)
-    task._node.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(
-        nanoseconds=int(clock[0]*1e9)+10))
-    task._node._down_detections['down_left'] = (0., SimpleNamespace(
-        detections=[_collection_polygon([(0,0),(639,0),(639,200),(0,200)])]))
-    def detect():
-        stamp[0] = int(clock[0]*1e9)+1
-        return SimpleNamespace(stamp_ns=stamp[0], release_inside=True, complete=not partial,
-            pixel_x=382.5, pixel_y=52.5, landmark_pixel=(400.,200.))
-    task._best_left_detection = detect
-    result = task._collection_landmark_xy(1.)
-    if partial:
-        assert result is None and task._collection_landmark_partial
+@pytest.mark.parametrize('problem', ['missing_right', 'empty_right', 'different_pair',
+                                   'stale_right', 'old_capture', 'multiple', 'nan_box'])
+def test_collection_stereo_downgrades_incomplete_or_ambiguous_pair(monkeypatch, problem):
+    task = _stereo_collection_task(monkeypatch)
+    received, msg = task._node._down_detections['down_right']
+    if problem == 'missing_right':
+        del task._node._down_detections['down_right']
+    elif problem == 'empty_right':
+        msg.detections = []
+    elif problem == 'different_pair':
+        msg.stereo_pair_id = 43
+    elif problem == 'stale_right':
+        task._node._down_detections['down_right'] = (-1., msg)
+    elif problem == 'old_capture':
+        task._scan_capture_after_ns = 1_000_000_002
+    elif problem == 'multiple':
+        msg.detections *= 2
+    elif problem == 'nan_box':
+        msg.detections[0].bbox_x1 = float('nan')
+    result = task._best_left_detection()
+    if problem == 'old_capture':
+        assert result is None
     else:
-        # 完整框心到相机的body向量=(-.064,-.128)；加相机安装位置。
-        assert result == pytest.approx((4.-(-.064-.13), 5.-(-.128+.03)))
-        assert clock[0] >= .1  # 必须是三张独立帧。
+        assert (result.pixel_x, result.pixel_y) == pytest.approx((370.,265.))
 
 
-def test_gripper_contact_and_collection_margin_load_from_config():
+def test_collection_accepts_clipped_bbox_without_area_or_margin_checks(monkeypatch):
+    task = _stereo_collection_task(monkeypatch)
+    for _, msg in task._node._down_detections.values():
+        d = msg.detections[0]
+        d.bbox_x1, d.bbox_y1, d.bbox_x2, d.bbox_y2 = 0., 0., 639., 30.
+    assert task._best_left_detection() is not None
+
+
+def test_collection_legacy_timestamps_require_synchronized_eyes(monkeypatch):
+    task = _stereo_collection_task(monkeypatch)
+    for _, msg in task._node._down_detections.values():
+        msg.stereo_pair_id = 0
+    right = task._node._down_detections['down_right'][1]
+    right.header.stamp.nanosec = 80_000_000
+    assert task._best_left_detection() is not None
+    right.header.stamp.nanosec = 20_000_000
+    assert task._best_left_detection() is not None
+
+
+def test_missing_pair_can_be_completed_without_consuming_left_frame(monkeypatch):
+    task = _stereo_collection_task(monkeypatch)
+    right = task._node._down_detections.pop('down_right')
+    assert task._best_left_detection() is not None
+    task._node._down_detections['down_right'] = right
+    assert task._best_left_detection() is None  # 同一采集帧已通过单目消费。
+    # 后续左目不能继续配旧右目，即使未提供pair id。
+    for _, msg in task._node._down_detections.values():
+        msg.stereo_pair_id = 0
+    task._node._down_detections['down_left'][1].header.stamp.nanosec = 20_000_000
+    assert task._best_left_detection() is not None  # 新左目可以继续单目降级。
+
+
+def test_removed_collection_settings_are_warned_and_ignored():
+    from uv_task.config_loader import load_task
+    params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
+    params.update(collection_release_margin_m=0., collection_correct_odom_xy=True,
+                  collection_center_odom_xy=[], collection_camera_body_xy=[], max_press_distance_m=0.)
+    messages = []
+    logger = SimpleNamespace(info=lambda m: None, warning=messages.append)
+    task = GrabSeaCucumberTask(SimpleNamespace(get_logger=lambda: logger), params)
+    assert not hasattr(task, '_collection_correct')
+    assert any('collection_release_margin_m' in m for m in messages)
+    assert any('collection_correct_odom_xy' in m for m in messages)
+    assert any('max_press_distance_m' in m for m in messages)
+
+
+def test_gripper_and_simplified_collection_params_load_from_config():
     from uv_task.config_loader import load_task
     params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
     assert params['gripper_contact_body_xyz'] == [-.43,0.,.29]
-    assert params['collection_release_margin_m'] == .05
+    assert params['collection_release_offset_body_xy'] == [.30, 0.]
+    assert params['collection_hold_seconds'] == .5
+    assert 'collection_release_margin_m' not in params
+    assert 'collection_correct_odom_xy' not in params
+    assert 'max_press_distance_m' not in params
 
 
 def test_floor_clearance_uses_disk_contact_not_only_dvl_offset():
-    task = _collection_region_task()
+    task = _locked_detection_task()
     task._floor_z, task._bottom_offset = 1.2, .1
     task._contact_body_xyz = (-.43, 0., .29)
     assert task._floor_clearance((0,0,.71,0,0,0)) == pytest.approx(.20)
@@ -553,11 +621,12 @@ def test_open_loop_requires_calibration_not_velocity_as_force():
         GrabSeaCucumberTask(SimpleNamespace(get_logger=lambda: _Logger()), params)
     params.update(floor_z_m=1.4, press_thrust=.1, lift_thrust=-.03)
     task = GrabSeaCucumberTask(SimpleNamespace(get_logger=lambda: _Logger()), params)
-    assert task._near_floor_enabled and not task._collection_correct
+    assert task._near_floor_enabled and not task._collection_stereo_mode
 
 
 def test_near_floor_ascent_clears_force_before_velocity():
     task = _sea_flow_fake()
+    task.__dict__.pop('_ascend_to_depth', None)  # 检查真实上浮实现，而非流程替身。
     task._near_floor_enabled = True
     task._floor_z, task._bottom_offset, task._force_clearance = 1., 0., .2
     task._lift_thrust = -.03
@@ -680,7 +749,97 @@ def _sea_flow_fake():
     task._apply_gripper_offset = task._wait_pre_descent_settle = task._descend = lambda: True
     task._return_to_recorded_pose = lambda p: True
     task._retry_perception = lambda reason, failures, deadline: failures <= 3
+    task._wait_visual_motion = lambda *args: True
+    task._pre_descent_settle_seconds = 0.
+    task._ascent_speed, task._ascent_period, task._ascent_tolerance = .08, .05, .05
+    task._node._publish_body_velocity = lambda **kwargs: None
     return task
+
+
+def test_collection_alignment_only_centers_and_restores_sea_mode():
+    task = _sea_flow_fake()
+    task._class_id, task._color, task._projection_depth = 2, '海参', .8
+    task._collection_class, task._collection_depth = 4, .8
+    task._pixel_tolerance, task._hold_seconds = .04, .5
+    events = []
+    task._servo_horizontally = lambda: events.append(('visual', task._collection_stereo_mode)) or (0,0,.8,0)
+    task._move_collection_release_offset = lambda deadline: pytest.fail('alignment should only center')
+    assert task._align_collection(time.monotonic()+2.)
+    assert events == [('visual', True)]
+    assert not task._collection_stereo_mode and task._class_id == 2
+
+
+@pytest.mark.parametrize('aligned', [True, False])
+def test_collection_delivery_applies_offset_exactly_once_after_visual_or_fallback(aligned):
+    task = _sea_flow_fake()
+    task._collection_align = True
+    task._drop_pose, task._drop_timeout = (0,0,.5,0), 10.
+    task._release_angle, task._release_wait = math.pi/2, 0.
+    events = []
+    task._travel = lambda *a: events.append('travel') or True
+    task._align_collection = lambda deadline: events.append('visual') or aligned
+    task._move_collection_release_offset = lambda deadline: events.append('offset and settle') or True
+    task._command_gripper = lambda *a: events.append('release')
+    assert task._deliver(task._search_pose, time.monotonic()+20., False)
+    assert events == ['travel', 'visual'] + ([] if aligned else ['travel']) + ['offset and settle', 'release']
+
+
+@pytest.mark.parametrize('budget,passes', [(5., True), (2., False)])
+def test_collection_offset_waits_full_settle_and_aborts_when_budget_expires(monkeypatch, budget, passes):
+    clock = [0.]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda dt: clock.__setitem__(0, clock[0]+dt))
+    task = _sea_flow_fake()
+    task._collection_release_offset = (.3, 0.)
+    task._pre_descent_settle_seconds, task._command_timeout = 4., 30.
+    task._node._format_motion_context = lambda s: s
+    task._node._send_action_goal = lambda *a, **kw: (True, '')
+    assert task._move_collection_release_offset(budget) is passes
+    assert clock[0] == pytest.approx(4. if passes else budget)
+
+
+@pytest.mark.parametrize('converged', [True, False])
+def test_collection_30cm_offset_uses_body_x_and_waits_for_arrival(converged):
+    task = _sea_flow_fake()
+    task._collection_release_offset = (.30, 0.)
+    task._command_timeout = 30.
+    task._measured_pose = lambda: (1.,2.,.8,0.,0.,90.)
+    calls = []
+    task._node._format_motion_context = lambda s: s
+    task._node._send_action_goal = lambda cmd, target, axes, **kwargs: calls.append((target,axes)) or (True,'ok')
+    task._wait_visual_motion = lambda target, deadline: converged
+    assert task._move_collection_release_offset(time.monotonic()+2.) is converged
+    assert calls[0][0] == pytest.approx([1.,2.3,.8,90.])
+    assert calls[0][1] == 'xyzrz'
+
+
+@pytest.mark.parametrize('offset_ok', [True, False])
+def test_configured_delivery_offsets_before_release_and_releases_on_failure(offset_ok):
+    task = _sea_flow_fake()
+    task._drop_pose, task._drop_timeout = (5.,0.,.2,0.), 180.
+    task._release_wait, task._release_angle = 0., 1.57
+    events = []
+    task._move_collection_release_offset = lambda deadline: events.append('offset') or offset_ok
+    task._command_gripper = lambda *args: events.append('release')
+    assert task._deliver(task._search_pose, time.monotonic()+2., False)
+    assert events == ['offset','release']
+
+
+def test_ascent_uses_configurable_gain_with_speed_cap():
+    task = _sea_flow_fake()
+    task.__dict__.pop('_ascend_to_depth', None)
+    pose = [.5]
+    task._measured_pose = lambda: (0.,0.,pose[0],0.,0.,0.)
+    task._ascent_speed, task._ascent_gain, task._ascent_min_speed = .08, .2, .003
+    task._ascent_tolerance, task._ascent_period = .01, .001
+    commands = []
+    def publish(vertical_mps=0.):
+        commands.append(vertical_mps)
+        if vertical_mps < 0:
+            pose[0] -= .2
+    task._node._publish_body_velocity = publish
+    assert task._ascend_to_depth(.1, time.monotonic()+2.)
+    assert commands == pytest.approx([-.08, -.04, 0.])
 
 
 @pytest.mark.parametrize('failure', ['alignment', 'count_missing', 'count_zero'])
@@ -991,8 +1150,10 @@ def test_sea_cucumber_delivery_ascent_precedes_horizontal_travel():
     assert len(commands) == 2
     assert velocities and velocities[-1] == 0.
     assert commands[0][0] == _grab.BasicMotion.Goal.WTRAVEL
+    # 模拟速度上浮越过目标：运输不得把z从实测浅深度再往下补回配置值。
+    assert commands[0][1][2] == pytest.approx(node._robot_pose[2])
     assert commands[-1][0] == _grab.BasicMotion.Goal.SET
-    assert commands[-1][2] == 'xyrz'
+    assert commands[-1][2] == 'xyzrz'
     assert commands[-1][1][3] == 10.0
     assert commands[-1][1][2] >= node._robot_pose[2]
 
@@ -1037,13 +1198,10 @@ def test_collection_alignment_failure_travels_back_before_release(fallback_succe
         return fallback_success if '兜底' in label else True
     task._travel = travel
     task._command_gripper = lambda *args: events.append('release')
-    assert task._deliver(task._search_pose, deadline, True) is fallback_success
+    assert task._deliver(task._search_pose, deadline, True)
     assert events[:3] == [('travel', task._drop_pose), 'align failed', ('travel', task._drop_pose)]
-    if fallback_success:
-        assert events[3:] == ['release', ('travel', task._search_pose)]
-        assert task.delivery_commands == 1
-    else:
-        assert 'release' not in events and task.delivery_commands == 0
+    assert events[3:] == ['release', ('travel', task._search_pose)]
+    assert task.delivery_commands == 1
 
 
 @pytest.mark.parametrize('stopped', [True, False])
@@ -1062,7 +1220,7 @@ def test_collection_fallback_does_not_release_on_stop_or_total_timeout(monkeypat
         return False
     task._align_collection = align
     assert not task._deliver(task._search_pose, 10., True)
-    assert events == ['travel']
+    assert events == (['travel'] if stopped else ['travel', 'release'])
 
 
 def test_sea_travel_does_not_trust_success_when_measured_pose_is_wrong():
@@ -1074,3 +1232,44 @@ def test_sea_travel_does_not_trust_success_when_measured_pose_is_wrong():
     # 动作声称成功，但遥测一直在原地：不能在投放区继续扫描。
     assert not task._travel((3., 4., .8, 90.), '返回搜索区',
                             time.monotonic() + .06, .06)
+
+
+@pytest.mark.parametrize('depth_arrived', [True, False])
+@pytest.mark.parametrize('return_to_search', [True, False])
+def test_delivery_descends_before_release_and_ascends_after_even_on_final_round(
+        monkeypatch, depth_arrived, return_to_search):
+    clock, events = [0.], []
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda dt: clock.__setitem__(0, clock[0]+dt))
+    task = _sea_flow_fake()
+    del task._travel  # 真实运输逻辑：WTRAVEL成功仍可能没到深度。
+    task._search_pose, task._drop_pose = (4.,-2.,.1,0.), (5.7,-.7,.2,0.)
+    task._drop_timeout, task._release_wait, task._release_angle = 2., 0., 1.57
+    task._collection_align = False
+    current = [4.,-2.,.1,0.,0.,0.]
+    task._measured_pose = lambda: tuple(current)
+    task._node._format_motion_context = lambda s: s
+    def action(command, target, axes, **kw):
+        events.append(('motion', axes, target[2]))
+        current[0], current[1], current[5] = target[0], target[1], target[3]
+        if command == _grab.BasicMotion.Goal.SET and 'z' in axes and depth_arrived:
+            current[2] = target[2]
+        return True, 'ok'
+    task._node._send_action_goal = action
+    def release(*args):
+        assert current[2] == pytest.approx(.2)
+        events.append(('release', current[2]))
+    task._command_gripper = release
+    def ascend(target, deadline):
+        assert any(e[0] == 'release' for e in events)
+        events.append(('ascend', target))
+        current[2] = target
+        return True
+    task._ascend_to_depth = ascend
+    assert task._deliver(task._search_pose, 10., return_to_search) is depth_arrived
+    if depth_arrived:
+        release_index = next(i for i,e in enumerate(events) if e[0] == 'release')
+        assert ('motion', 'xyzrz', .2) in events[:release_index]
+        assert events[release_index+1] == ('ascend', .1)
+    else:
+        assert all(e[0] not in ('release', 'ascend') for e in events)

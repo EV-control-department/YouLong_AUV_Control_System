@@ -177,6 +177,12 @@ class MappingTask:
         self.last_observation_stamp = -1.0
         self.observation_start_stamp = float('inf')
         self.camera_ready = False
+        self._camera_received = float('-inf')
+        self._pose_received = float('-inf')
+        self.attempted_visit_order = []
+        self.attempted_traversal_order = []
+        self.travel_failures = []
+        self.config_fallback_mode = False
         self.last_stability_log = float('-inf')
         self.filters = {}                            # 格点索引 -> StaticPositionFilter
         self.class_votes = {}                        # 格点索引 -> [方形票, 圆形票]
@@ -266,6 +272,7 @@ class MappingTask:
     def _pose_cb(self, message):
         with self.lock:
             self.pose_history.append(message)
+            self._pose_received = time.monotonic()
 
     def _observation_cb(self, message):
         # Acquisition time, not callback arrival time, determines admission.
@@ -277,6 +284,7 @@ class MappingTask:
             # Otherwise initializing -> waiting for processed frames deadlocks.
             if message.processed:
                 self.camera_ready = True
+                self._camera_received = time.monotonic()
             motion_allowed = (bool(self.params.get('allow_motion_observations', False))
                               and self.state in ('travel_to_tag', 'travel_to_cell'))
             if self.state not in ('reading_tag', 'observe_cell') and not motion_allowed:
@@ -555,12 +563,17 @@ class MappingTask:
                 'fallback_reason': self.fallback_reason,
                 'verified_complete': (len(getattr(self, 'final_assignment', {})) == 4
                                       and not self.fallback_cells
-                                      and self.fallback_tag is None),
+                                      and self.fallback_tag is None and not self.travel_failures),
                 'cells': cells,
                 'visit_order': list(self.visit_order),
                 'traversal_order': list(self.traversal_order),
                 'traversal_path': getattr(self, 'traversal_path', []),
                 'observation_failures': list(self.observation_failures),
+                'attempted_visit_order': list(self.attempted_visit_order),
+                'attempted_traversal_order': list(self.attempted_traversal_order),
+                'travel_failures': list(self.travel_failures),
+                'config_fallback_mode': self.config_fallback_mode,
+                'submitted_config': dict(self.params),
                 'all_cells_visited': len(self.visit_order) == len(self.grid_centers),
                 'measurement_count': sum(
                     len(points) for points in self.measurement_points.values()),
@@ -624,6 +637,37 @@ class MappingTask:
     def _ready(self):
         """任务是否应继续：ROS 正常 + 未被停止 + 未超过总时限。"""
         return rclpy.ok() and not self.node.stopped and time.monotonic() < self.deadline
+
+    def _position_ready(self):
+        """相机可降级，但移动必须使用最近1秒内收到的有限定位值。"""
+        with self.lock:
+            pose = self.pose_history[-1] if self.pose_history else None
+            return (pose is not None and time.monotonic()-self._pose_received <= 1.
+                    and all(math.isfinite(float(getattr(pose, field))) for field in
+                            ('robot_x', 'robot_y', 'robot_z', 'robot_roll', 'robot_pitch', 'robot_yaw')))
+
+    def _camera_available(self):
+        with self.lock:
+            return self.camera_ready and time.monotonic()-self._camera_received <= 3.
+
+    def _continue_navigation(self):
+        if not self._ready():
+            raise RuntimeError('建图移动被停止或总超时')
+        if not self._position_ready():
+            # 定位失效是真正的全局移动禁令，不与摄像头故障混淆。
+            self.node.stopped = True
+            raise RuntimeError('定位数据失效，停止后续导航')
+
+    def _try_waypoint(self, position, label):
+        self._continue_navigation()
+        ok = self._travel_to(position, label)
+        if not ok:
+            self.travel_failures.append({'cell': self.current_cell, 'label': label,
+                                         'target': list(map(float, position))})
+            self._emit('waypoint_failed_continue', label=label, target=list(map(float, position)))
+            self.node.get_logger().warning(f'建图航点失败：{label}；定位仍有效时继续下一航点')
+            self._continue_navigation()
+        return ok
 
 
     def _record_observation_frame(self):
@@ -789,8 +833,7 @@ class MappingTask:
           4. 按 visit_order 逐格：WTRAVEL 到理论格点中心 -> 等待观察时间 ->
              记录该格点观测统计。单格点观测不足只记警告并继续（空格是允许的）；
           5. 九格走完冻结地图；启用遍历时沿实际巡检路线反向走一圈回标签；
-          6. 结论接口以配置fallback为准；视觉不足不阻止反向遍历，运动失败或
-             未预期异常仍安全中止整条任务链；
+          6. 视觉不足使用配置fallback；单航点失败继续后续点，定位失效/急停停止；
           7. finally 中再发布一次最终地图。
         """
         self._emit('started', model='best.pt', class_map={0: 'square_cone', 1: 'round_cone'},
@@ -802,41 +845,44 @@ class MappingTask:
             ready = False
             while self._ready() and time.monotonic() < ready_end:
                 with self.lock:
-                    ready = (self.camera_ready
-                             and bool(self.pose_history))
+                    ready = self._camera_available() and self._position_ready()
                 if ready:
                     break
                 time.sleep(0.05)
             if not ready:
                 if self.node.stopped or not rclpy.ok():
                     raise RuntimeError('任务被停止')
-                if self.params.get('require_complete_survey', False):
-                    raise RuntimeError('全流程要求完整巡检，但相机建图观测或位姿不可用')
-                self._assume_tag('相机建图观测或位姿不可用')
-                self.final_assignment = self._fill_fallback_assignment({})
-                self.state = 'fallback'
-                self._emit('completed_with_fallback',
-                           reason=self.fallback_reason,
-                           assignment=self.final_assignment)
-                self._emit('traversal_skipped', reason='首圈巡检未执行，无法反向走原路线')
-                return True
-            self._emit('calibration_ready', source='uv_camera')
+                self._continue_navigation()
+                self.config_fallback_mode = True
+                self._assume_tag('摄像头不可用；定位正常，继续完整检索和巡检')
+                self._emit('camera_fallback_continue', submitted_config=dict(self.params))
+            self._emit('calibration_ready' if ready else 'navigation_ready',
+                       source='uv_camera' if ready else 'config_fallback')
             self.state = 'travel_to_tag'
-            if not self._travel_to(
-                    [self.params['tag_x'], self.params['tag_y']], 'mapping:travel_to_april_tag'):
-                raise RuntimeError('WTRAVEL to tag failed')
-            if not self._read_tag():
-                raise RuntimeError('AprilTag/ArUco trigger was not confirmed')
+            tag_reached = self._try_waypoint(
+                [self.params['tag_x'], self.params['tag_y']], 'mapping:travel_to_april_tag')
+            if not tag_reached or not self._camera_available():
+                self.config_fallback_mode = True
+                self._assume_tag('标签航点未到达或相机不可用，使用配置标签继续')
+            elif not self._read_tag():
+                self._continue_navigation()
+                self._assume_tag('标签未确认，使用配置继续')
             # 按配置顺序访问九个格点
             for cell in tuple(self.params['visit_order']):
                 self.current_cell = int(cell)
                 self.state = 'travel_to_cell'
                 center = self.grid_centers[self.current_cell]
-                if not self._travel_to(center[:2], f'mapping:travel_to_cell_{cell}'):
-                    # 运动失败会危及安全，直接中止任务（与观测失败区别对待）
-                    raise RuntimeError(f'WTRAVEL to cell {cell} failed')
-                observation_ok = self._observe_cones()
-                self.visit_order.append(self.current_cell)
+                self.attempted_visit_order.append(self.current_cell)
+                reached = self._try_waypoint(center[:2], f'mapping:travel_to_cell_{cell}')
+                if reached:
+                    self.visit_order.append(self.current_cell)
+                camera_available = self._camera_available()
+                if not camera_available:
+                    self.config_fallback_mode = True
+                    self._assume_tag('摄像头数据中断，提交默认配置地图并继续巡检')
+                observation_ok = reached and camera_available and self._observe_cones()
+                if not self._camera_available():
+                    self.config_fallback_mode = True
                 observation = self.cell_observations.get(self.current_cell, {})
                 if not observation_ok:
                     # 观测不足只记录并继续：九宫格里的空格本就应没有锥桶
@@ -855,35 +901,36 @@ class MappingTask:
                 # 每格完成后立刻刷新地图，便于现场实时观察进度
                 self.publish_map()
             self.final_assignment = self._fill_fallback_assignment(
-                self._select_final_assignment())
+                {} if self.config_fallback_mode else self._select_final_assignment())
             confirmed = sorted(self.final_assignment)
             self.state = 'mapping_complete'
             self._emit('mapping_completed', confirmed_cells=confirmed,
                        assignment=self.final_assignment,
                        result_complete=(len(confirmed) == 4
                                         and not self.fallback_cells
-                                        and self.fallback_tag is None))
+                                        and self.fallback_tag is None and not self.travel_failures))
             self.publish_map()
             if self.params.get('enable_traversal', True):
                 self._traverse_cones()
             else:
                 self.node.get_logger().info('建图独立调试完成：不执行锥桶遍历')
                 self._emit('traversal_skipped', reason='独立建图调试配置')
-            self.state = ('complete_with_fallback' if self.fallback_tag or self.fallback_cells
-                          else 'complete')
+            self.state = ('complete_with_failures' if self.travel_failures else
+                          'complete_with_fallback' if self.fallback_tag or self.fallback_cells else 'complete')
             self._emit('completed', confirmed_cells=confirmed,
                        assignment=self.final_assignment,
                        traversal_order=list(self.traversal_order),
                        result_complete=(len(confirmed) == 4
                                         and not self.fallback_cells
-                                        and self.fallback_tag is None))
+                                        and self.fallback_tag is None and not self.travel_failures))
             return True
         except Exception as error:
-            # 失败时区分「被外部停止」和「真实失败」，并停止整条任务链
+            # 普通建图异常/总超时只结束本阶段；定位失效/外部停止已单独置stopped。
             self.state = 'stopped' if self.node.stopped else 'failed'
             self._emit('failed', reason=str(error))
             self.node.get_logger().error(f'mapping task failed: {error}')
-            self.node.stopped = True
+            if self.config_fallback_mode and not hasattr(self, 'final_assignment'):
+                self.final_assignment = self._fill_fallback_assignment({})
             return False
         finally:
             # camera 的感知线程与任务生命周期独立；这里只发布最终地图。
@@ -891,7 +938,7 @@ class MappingTask:
 
     def _traverse_cones(self):
         """Retrace the completed survey in reverse, ending at its starting tag."""
-        route = list(reversed(self.visit_order))
+        route = list(reversed(self.attempted_visit_order or self.visit_order))
         if (len(route) != len(self.grid_centers)
                 or set(route) != set(self.grid_centers)):
             raise RuntimeError('巡检路线未完整走完，不能开始反向遍历')
@@ -904,25 +951,26 @@ class MappingTask:
         self.node.get_logger().info(f'建图结束：沿巡检反方向遍历{route}，最后返回标签起点')
         self.publish_map()
         for index, cell in enumerate(route):
-            if not self._ready():
-                raise RuntimeError('反向遍历被停止或超时')
+            self._continue_navigation()
             self.current_cell = cell
             # The last survey cell is already reached; do not issue another
             # zero-distance WTRAVEL that could unnecessarily change heading.
-            if index and not self._travel_to(
-                    self.grid_centers[cell][:2], f'mapping:reverse_cell_{cell}'):
-                raise RuntimeError(f'反向遍历格点{cell}失败，停止后续移动')
-            self.traversal_order.append(cell)
+            already_at_start = (index == 0 and bool(self.visit_order) and self.visit_order[-1] == cell)
+            self.attempted_traversal_order.append(cell)
+            reached = already_at_start or self._try_waypoint(
+                self.grid_centers[cell][:2], f'mapping:reverse_cell_{cell}')
+            if reached:
+                self.traversal_order.append(cell)
             self._emit('cell_traversed', cell=cell,
-                       already_at_start=(index == 0),
+                       already_at_start=already_at_start, reached=reached,
                        traversal_order=list(self.traversal_order))
             self.publish_map()
         self.current_cell = None
         self.state = 'return_to_tag'
-        if not self._travel_to(tag_position, 'mapping:reverse_return_to_april_tag'):
-            raise RuntimeError('反向遍历返回标签起点失败')
+        self._try_waypoint(tag_position, 'mapping:reverse_return_to_april_tag')
         self._emit('traversal_completed', traversal_order=list(self.traversal_order),
-                   direction='reverse_survey', result_complete=True)
+                   direction='reverse_survey', result_complete=(len(self.traversal_order) == 9
+                                                               and not self.travel_failures))
 
     def _select_final_assignment(self):
         """在有类别观测支持的格点中联合选择两方两圆，不补造无观测目标。"""

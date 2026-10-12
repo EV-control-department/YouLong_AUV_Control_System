@@ -26,6 +26,9 @@ def setup_task(monkeypatch, **overrides):
         _publish_body_velocity=lambda **kwargs: commands.append((clock.t, kwargs)))
     path = Path(__file__).parents[1]/'config/tasks/turntable_simple.yaml'
     params = load_task(path)[0]['params']
+    # Unit scenarios have no nominal disk unless explicitly requested; field
+    # calibration must not silently enable the preposition/fallback branch.
+    params.update(disk_pose_odom=[], front_standoff_m=.55, target_lost_timeout_s=1.)
     params.update(overrides)
     return SimpleTurntableTask(node, params), clock, commands
 
@@ -40,6 +43,26 @@ def box(task, clock, cx=.5, cy=.5, width=.5, class_id=3, stamp=None):
     d.bbox_y1, d.bbox_y2 = (cy-.1)*480, (cy+.1)*480
     msg.detections = [d]
     task._on_boxes(msg)
+
+
+@pytest.mark.parametrize('seen_before_loss', [False, True])
+def test_target_loss_moves_to_configured_disk_center(monkeypatch, seen_before_loss):
+    task, clock, commands = setup_task(monkeypatch, disk_pose_odom=[1.,2.,.6,90.])
+    actions = []
+    task.node._send_action_goal = lambda *args, **kwargs: actions.append(args) or (True, '')
+    if seen_before_loss:
+        clock.on_sleep = lambda: box(task, clock, width=.2) if clock.t < 1.5 else None
+    assert task.execute()
+    assert len(actions) == 4  # 观察位预定位两步 + 盘心兜底两步。
+    assert all(a[1] == [1.,2.,.6,90.] and a[2] == 'xyzrz' for a in actions[-2:])
+    assert commands[-1][1] == {}
+
+
+def test_target_loss_without_disk_center_never_guesses_motion(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch, disk_pose_odom=[])
+    task.node._send_action_goal = lambda *args, **kwargs: pytest.fail('未填盘心不能猜测')
+    assert not task.execute()
+    assert all(c == {} for _, c in commands)
 
 
 @pytest.mark.parametrize('angle', [6., -6.])

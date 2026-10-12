@@ -1,7 +1,7 @@
 # 全流程联调任务树：一次START建立公共odom，后续阶段不再次重置原点。
 # 配置数值沿用各任务文件；按本次START原点实测区域、盘心、收集框坐标。
 # [P0-核对] mapping类别0/1、转盘3、海参2/框4须对应实际权重；本链不自动切换YOLO模型。
-# 任一步失败/停止会终止后续任务；return_origin是正常完成后的返回步骤。
+# 普通阶段失败后当前runner继续后续阶段；START失败、停止或定位失效停止后续移动。
 mission:
   name: full_flow_mapping_turntable_trepang_return
   tasks:
@@ -24,7 +24,7 @@ mission:
 
     - name: grab_sea_cucumber
       config: ../tasks/grab_sea_cucumber.yaml
-      # search.pose、delivery.pose、collection_center_odom_xy也使用同一次START坐标。
+      # search.pose、delivery.pose也使用同一次START坐标。
       # 抓取、复检、运输和投放按任务自身参数执行，正常结束后返回起点。
 
     - name: return_origin
