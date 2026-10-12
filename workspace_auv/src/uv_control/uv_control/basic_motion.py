@@ -97,6 +97,56 @@ AX_XY = AX_X | AX_Y
 AX_XYZ = AX_X | AX_Y | AX_Z
 AX_ALL = AX_X | AX_Y | AX_Z | AX_RZ
 
+
+def cmd_type_names() -> dict:
+    """``cmd_type`` 值 -> 名字，**从 action 定义自动反查**。
+
+    The mapping used to be hand-written here *and* again in ``uv_task``'s
+    ``task_runner.py`` (plus once in the docs), kept in sync by memory -- adding
+    a ``cmd_type`` meant editing three places or silently getting
+    ``UNKNOWN(7)`` in the logs.  ``uv_task`` cannot import from ``uv_control``
+    (they are sibling packages; see ``docs/architecture/node_dependency.md``),
+    so the shared truth is the generated action class itself: every
+    ``uint8 NAME = value`` constant in the ``.action`` file becomes an ``int``
+    attribute of ``BasicMotion.Goal``.  Derived here, so a new command appears
+    in the logs of both packages for free.
+
+    ``SLOT_TYPES`` (a tuple of field descriptors) is skipped by the ``int``
+    filter.
+    """
+    return {
+        value: name
+        for name in dir(BasicMotion.Goal)
+        if name.isupper() and isinstance((value := getattr(BasicMotion.Goal, name)), int)
+    }
+
+
+def fuse_target_axes(axes: str, value, previous) -> tuple:
+    """``axes`` 里列出的轴取 ``value``，其余轴沿用 ``previous``（目标融合）。
+
+    This is the whole meaning of the ``axes`` field for SET / WMOVE / WTRAVEL,
+    and it was copy-pasted three times in the dispatch -- three chances to fix
+    one and forget the others.  ``previous`` is the *last commanded target*, not
+    the current pose: with ``axes="x"`` a command is "move x to the new value and
+    leave the other axes where they were already going", which is what makes
+    single-axis nudges composable.
+
+    ``'z' in axes.replace('rz', '')`` because ``"rz"`` contains a ``z``; without
+    the strip, ``axes="rz"`` would also (wrongly) set the depth.
+    """
+    ax = axes or 'xyzrz'
+    out = [float(previous[0]), float(previous[1]),
+           float(previous[2]), float(previous[3])]
+    if 'x' in ax:
+        out[0] = float(value[0])
+    if 'y' in ax:
+        out[1] = float(value[1])
+    if 'z' in ax.replace('rz', ''):
+        out[2] = float(value[2])
+    if 'rz' in ax:
+        out[3] = float(value[3])
+    return tuple(out)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 默认容差
 # ═════════════════════════════════════════════════════════════════════════════
@@ -128,7 +178,8 @@ class BasicMotionNode(Node):
         self._origin = None             # odom 原点 (map 系 Coordinate)，start() 时设置
         self._origin_warned = False     # 防止 _pos_cb 重复打印警告
         self._state_lock = threading.Lock()
-        self.vel_body = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}   # 机体速度                     # 世界速度
+        self.vel_body = {'x': 0.0, 'y': 0.0, 'z': 0.0,
+                         'rx': 0.0, 'ry': 0.0, 'rz': 0.0}   # 机体速度 (m/s, 角速度 rad/s)
         self._pose_stamp = self.get_clock().now().to_msg()            # 位姿测量时间（_pos_cb 接收时刻）
 
         # ─────────────────────────────────────────────────────────
@@ -827,8 +878,7 @@ class BasicMotionNode(Node):
         p, t, _ = self.get_state()
 
         # ── 派发运动类型 ──────────────────────────────────────
-        type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL'}
-        type_name = type_names.get(req.cmd_type, f'UNKNOWN({req.cmd_type})')
+        type_name = cmd_type_names().get(req.cmd_type, f'UNKNOWN({req.cmd_type})')
         self.get_logger().info("============================="f'动作 {type_name}: axes="{req.axes}"开始'"=============================")
         self.get_logger().info(
             f'Action {type_name}: axes="{req.axes}", '
@@ -837,22 +887,14 @@ class BasicMotionNode(Node):
             f'timeout={timeout:.1f}s')
 
         if req.cmd_type == BasicMotion.Goal.SET:
-            axes = req.axes or 'xyzrz'
-            tx, ty, tz, tyaw = t.x, t.y, t.z, t.rz
-            if 'x' in axes: tx = x
-            if 'y' in axes: ty = y
-            if 'z' in axes.replace('rz', ''): tz = z
-            if 'rz' in axes: tyaw = yaw
+            tx, ty, tz, tyaw = fuse_target_axes(
+                req.axes, (x, y, z, yaw), (t.x, t.y, t.z, t.rz))
             self._action_target = {'x': tx, 'y': ty, 'z': tz, 'yaw': tyaw}
             success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout)
 
         elif req.cmd_type == BasicMotion.Goal.WMOVE:
-            axes = req.axes or 'xyzrz'
-            tx, ty, tz, trz = t.x, t.y, t.z, t.rz
-            if 'x' in axes: tx = x
-            if 'y' in axes: ty = y
-            if 'z' in axes.replace('rz', ''): tz = z
-            if 'rz' in axes: trz = yaw
+            tx, ty, tz, trz = fuse_target_axes(
+                req.axes, (x, y, z, yaw), (t.x, t.y, t.z, t.rz))
             self._action_target = {'x': tx, 'y': ty, 'z': tz, 'yaw': trz}
             success = self.wmovexyzrz(tx, ty, tz, trz, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.BMOVE:
@@ -865,12 +907,8 @@ class BasicMotionNode(Node):
                 f'当前yaw={p.rz:.1f}°')
             success = self.bmovexyzrz(x, y, z, yaw, timeout=timeout)
         elif req.cmd_type == BasicMotion.Goal.WTRAVEL:
-            axes = req.axes or 'xyzrz'
-            tx, ty, tz, trz = t.x, t.y, t.z, t.rz
-            if 'x' in axes: tx = x
-            if 'y' in axes: ty = y
-            if 'z' in axes.replace('rz', ''): tz = z
-            if 'rz' in axes: trz = yaw
+            tx, ty, tz, trz = fuse_target_axes(
+                req.axes, (x, y, z, yaw), (t.x, t.y, t.z, t.rz))
             self._action_target = {'x': tx, 'y': ty,
                                    'z': tz, 'yaw': trz}
             self.get_logger().info(

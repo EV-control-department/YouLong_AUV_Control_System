@@ -148,7 +148,7 @@ goal.target = [2.0, 1.0, 0.0, 0.0]     # 世界系：向北 2m，向东 1m
 
 - **世界系步进**：从当前位置加上偏移量为目标
 - 使用动态步进算法：长距离拆成小段，每步根据横向误差动态调整步长
-- 步进参数：STEP_X=0.6m, STEP_Y=0.2m（椭圆模型），STEP_PERIOD=0.3s
+- 步进参数：STEP_X=0.6m, STEP_Y=0.4m（椭圆模型），STEP_PERIOD=0.2s（2026-10-12 与 `basic_motion.py` 常量对拍更正；此前写 0.2/0.3 是错的）
 - 收敛判据：预估剩余时间 ≤ 0.15s，或前向误差 < 步长×0.3
 
 #### BMOVE 命令
@@ -452,11 +452,20 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- **Tests**: only `uv_sim` has them so far (**134 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
+- **Tests**: two suites. `uv_sim` (**163 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
   contract, odometry frame conventions (now via `nav_sim`/`mcu_sim`), PID-config single-source + fallback
   structure, entry-point integrity (derived from `setup.py`), frame/beam geometry, scene↔YAML↔doc
   contract, camera-offset (N1), TF (B18), documentation-contract (T3a), launch-contract / layering (T4),
   and since T5: the thrust golden regression (`test_mcu_control.py`), the node set + topic-contract
   immutability + I2 ownership (`test_node_split.py`), `nav_sim` role switch (`test_nav_sim.py`),
-  DVL beams/validity (`test_dvl_sim.py`) and stitching (`test_camera_relay.py`)).
-  Run with `python3 -m pytest workspace_sim/src/uv_sim/test/ -q` after sourcing both workspaces; keep it green.
+  DVL beams/validity (`test_dvl_sim.py`), stitching (`test_camera_relay.py`), the line laser
+  (`test_laser_sim.py`) and the PID-config path walk (`test_pid_config.py`)), and since 2026-10-12
+  `uv_control` (**12 cases**: `workspace_auv/src/uv_control/test/` — `cmd_type` names derived from
+  `BasicMotion.action`, the `axes` target-fusion rule, and the step constants vs their doc table).
+  The `uv_control` suite exists because that package had **no tests at all**, which is how a
+  `STEP_Y`/`STEP_PERIOD` doc drift and a triplicated `cmd_type` name map went unnoticed.
+  Run after sourcing both workspaces; keep both green:
+  ```bash
+  python3 -m pytest workspace_sim/src/uv_sim/test/ -q
+  python3 -m pytest workspace_auv/src/uv_control/test/ -q
+  ```

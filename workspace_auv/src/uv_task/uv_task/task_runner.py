@@ -37,6 +37,23 @@ from uv_task.arrow_surfacer import ArrowSurfacer
 from uv_task.line_follower import LineFollower, _apply_body_delta
 
 
+def _cmd_type_names() -> dict:
+    """``cmd_type`` 值 -> 名字，**从 action 定义自动反查**。
+
+    Same helper as ``uv_control.basic_motion.cmd_type_names`` (kept local because
+    ``uv_task`` does not depend on ``uv_control`` -- they are sibling packages,
+    see ``docs/architecture/node_dependency.md``).  Both derive the mapping from
+    the generated ``BasicMotion.Goal`` constants, so adding a command to
+    ``BasicMotion.action`` needs no edit here; a hand-written map in this file
+    used to be a second place to forget (logs said ``UNKNOWN(7)``).
+    """
+    return {
+        value: name
+        for name in dir(BasicMotion.Goal)
+        if name.isupper() and isinstance((value := getattr(BasicMotion.Goal, name)), int)
+    }
+
+
 class TaskRunnerNode(Node):
     """Task runner: JSON task loader and sequential executor."""
 
@@ -516,8 +533,7 @@ class TaskRunnerNode(Node):
         Returns:
             (success: bool, message: str)
         """
-        type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL', 6: 'START'}
-        type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
+        type_name = _cmd_type_names().get(cmd_type, f'UNKNOWN({cmd_type})')
 
         # Debug mode timeout override
         effective_timeout = timeout

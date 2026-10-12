@@ -81,6 +81,7 @@
    python3 workspace_sim/tools/derive_extrinsics.py --check
    python3 workspace_sim/tools/check_dvl_geometry.py
    python3 -m pytest workspace_sim/src/uv_sim/test/ -q
+   python3 -m pytest workspace_auv/src/uv_control/test/ -q
    ```
 
 3. **标记含义**（各文档通用）：

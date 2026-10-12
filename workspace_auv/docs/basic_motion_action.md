@@ -113,9 +113,12 @@ target:   [dx, dy, dz, dyaw]    # 世界系偏移量
 | 参数           | 值   | 说明                 |
 | -------------- | ---- | -------------------- |
 | STEP_X         | 0.6m | X 方向椭圆半轴       |
-| STEP_Y         | 0.2m | Y 方向椭圆半轴       |
-| STEP_PERIOD    | 0.3s | 收敛时间阈值         |
+| STEP_Y         | 0.4m | Y 方向椭圆半轴       |
+| STEP_PERIOD    | 0.2s | 收敛时间阈值         |
 | LATERAL_LAMBDA | 2.0  | 横向误差指数衰减系数 |
+
+> 上表与 `basic_motion.py` 的 `STEP_X/STEP_Y/STEP_PERIOD/LATERAL_LAMBDA` 常量对拍。
+> 2026-10-12 更正：此前本表写 `STEP_Y=0.2m` / `STEP_PERIOD=0.3s`，与代码（`0.4` / `0.2`）不符。
 
 **示例：**
 
