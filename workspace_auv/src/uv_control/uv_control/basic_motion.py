@@ -206,6 +206,25 @@ class BasicMotionNode(Node):
         self._action_axes = None         # 当前 action 的生效轴，用于反馈
         self.create_timer(0.5, self._action_feedback_cb)
 
+        # ── 命令串行化 + 抢占 ───────────────────────────────────
+        # 2026-10-12 实测：ActionServer 的 execute_callback 由 executor.create_task
+        # 驱动，**并发 goal 会真的同时执行** —— 长 SET 执行中再发一条 SET，后者
+        # 0.02 s 内被接受并开始执行，于是两条命令同写 /zit6/cmd/setpoint，
+        # 且 _action_goal_handle / _action_target 被覆盖（前者失去取消与反馈能力）。
+        # 这与 B19 是同一类错误：一个话题两个写者。
+        #
+        # `_exec_lock` 把命令串行化：一次只有一个 execute_callback 在跑，也就只有
+        # 一个写者。
+        #
+        # 用**单调递增的代号**而不是布尔标志表示抢占：正在执行的命令记住自己是第几
+        # 代，来一条新 goal 就把代号 +1，于是它在下一次 poll 看到代号变了并让位。
+        # 布尔标志在三代同堂时会丢抢占（A 在跑、B/C 同时到，B 拿到锁后把标志清掉，
+        # C 的抢占就没了，只能排队等 B 跑完）——代号不会。
+        self._exec_lock = threading.RLock()
+        self._goal_lock = threading.RLock()
+        self._goal_generation = 0        # 每来一个 goal +1
+        self._my_generation = None       # 正在执行的命令是第几代（None = 无命令）
+
         # ── PoseInfo Publisher ─────────────────────────────────
         self.pub_pose = self.create_publisher(PoseInfo, '/basic_motion/pose_info', 10)
         # 这个定时器用自己的回调组（B20 调查的一部分）。默认回调组是互斥的，
@@ -424,10 +443,46 @@ class BasicMotionNode(Node):
     # 内部工具： 等待到达
     # ═════════════════════════════════════════════════════════════════════════
 
-    def _is_cancelled(self) -> bool:
-        """检查当前 action goal 是否被取消（线程安全）。"""
-        gh = self._action_goal_handle
+    def _is_interrupted(self) -> bool:
+        """当前命令是否应当让位：被 cancel（客户端）或被抢占（更新的 goal 到来）。
+
+        Both must be checked.  ``is_cancel_requested`` only covers an explicit
+        ``cancel_goal``; requirement "watch while moving, then act on what you
+        saw" sends a *new* goal instead, which has to stop the old one.
+
+        Preemption is detected by generation: ``_goal_callback`` bumps
+        ``_goal_generation`` and the running command remembers the generation it
+        started in.  Comparing generations (rather than a boolean flag) is what
+        keeps the *newest* goal winning when several arrive while one is still
+        winding down.
+        """
+        with self._goal_lock:
+            my_gen = self._my_generation
+            if my_gen is not None and self._goal_generation != my_gen:
+                return True
+            gh = self._action_goal_handle
         return gh is not None and gh.is_cancel_requested
+
+    def _hold_current_position(self) -> None:
+        """把目标设成**当前位姿**并下发（打断收尾，也是 STAY 的基础）。
+
+        Requirement: "when an action is interrupted it should use position".
+        A velocity or force command that is merely *stopped* would leave whatever
+        the MCU was last told to do still in force; a position setpoint at the
+        current pose actively brakes and holds instead.
+
+        Call only while holding :attr:`_exec_lock` -- this is an ordinary
+        setpoint write and relies on that lock for single-writer ordering, so it
+        lands *before* the winning command's own target (the new command cannot
+        take the lock until this one returns).
+        """
+        with self._state_lock:
+            p = Coordinate(x=self.pose.x, y=self.pose.y, z=self.pose.z,
+                           rz=self.pose.rz)
+        self.get_logger().info(
+            f'打断收尾: 目标设为当前位置 '
+            f'({p.x:.2f}, {p.y:.2f}, {p.z:.2f}, {p.rz:.1f}°)')
+        self.set_map(p.x, p.y, p.z, p.rz)
 
     def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, timeout):
         """完成步进移动的最后一步，等待到达目标位置。"""
@@ -450,8 +505,8 @@ class BasicMotionNode(Node):
         self._wait_count = 0
 
         while rclpy.ok():
-            if self._is_cancelled():
-                self.get_logger().info('等待到达: 被取消')
+            if self._is_interrupted():
+                self.get_logger().info('等待到达: 被让位（cancel 或新 goal 抢占）')
                 return False
             elapsed = time.monotonic() - start
             if elapsed > timeout:
@@ -524,7 +579,7 @@ class BasicMotionNode(Node):
         sa = math.sin(move_angle)
 
         while rclpy.ok():
-            if self._is_cancelled():
+            if self._is_interrupted():
                 self.get_logger().info('_wait_step_convergence: action cancelled')
                 return False
             elapsed = time.monotonic() - start
@@ -581,8 +636,8 @@ class BasicMotionNode(Node):
             if remaining <= 0:
                 self.get_logger().warning(f'步进超时: 已用{time.monotonic()-start:.0f}s')
                 return False
-            if self._is_cancelled():
-                self.get_logger().info('步进被取消')
+            if self._is_interrupted():
+                self.get_logger().info('步进被让位（cancel 或新 goal 抢占）')
                 return False
 
             target_world = Coordinate(x=target_x, y=target_y, z=target_z)
@@ -825,8 +880,15 @@ class BasicMotionNode(Node):
     # ═════════════════════════════════════════════════════════════════════════
 
     def _action_goal_cb(self, goal_request):
+        # 代号 +1 => 正在执行的命令会在下一次 poll 看到并让位。这里**不**拒绝
+        # 新 goal：需求是"新命令赢"（边走边看，看到目标就换命令），拒绝会让旧命令
+        # 继续跑完。
+        with self._goal_lock:
+            self._goal_generation += 1
+            generation = self._goal_generation
         self.get_logger().info(
-            f'Action goal received: cmd_type={goal_request.cmd_type}, '
+            f'Action goal received (gen {generation}): '
+            f'cmd_type={goal_request.cmd_type}, '
             f'axes="{goal_request.axes}", target={list(goal_request.target)}, '
             f'timeout={goal_request.timeout:.1f}s')
         return GoalResponse.ACCEPT
@@ -836,8 +898,50 @@ class BasicMotionNode(Node):
         return CancelResponse.ACCEPT
 
     def _action_execute_cb(self, goal_handle):
+        """串行化入口：同一时刻只有一个命令在执行（= 只有一个 setpoint 写者）。
+
+        拿锁的等待很短：正在执行的命令会在下一次 poll（``_wait_reached`` /
+        ``_wait_step_convergence`` 里，≤100 ms）看到代号变了并收尾让位（见
+        :meth:`_is_interrupted`）。因此新命令最多等一个 poll 周期，而不是等旧命令
+        跑完 —— 这是"抢占"，不是"排队"。
+
+        等待期间若又来了更新的 goal，本命令**直接让位**（不执行），保证最新命令赢。
+        """
+        with self._goal_lock:
+            my_gen = self._goal_generation
+
+        with self._exec_lock:
+            with self._goal_lock:
+                superseded_while_waiting = self._goal_generation != my_gen
+                if not superseded_while_waiting:
+                    self._my_generation = my_gen
+                    self._action_goal_handle = goal_handle
+
+            if superseded_while_waiting:
+                # 等锁期间被更新：本命令一次都没执行过，不需要收尾（上一条命令
+                # 在让位时已经 hold，抢占它的那条会下发自己的目标）。
+                self.get_logger().info(
+                    f'Action: SUPERSEDED while waiting for the executor lock '
+                    f'(gen {my_gen} -> {self._goal_generation}); yielding without '
+                    f'executing')
+                goal_handle.abort()
+                result = BasicMotion.Result()
+                result.success = False
+                result.message = "superseded"
+                return result
+
+            try:
+                return self._execute_command(goal_handle)
+            finally:
+                # 退出前把共享状态清干净；持锁期间不会有别的命令读到这里
+                with self._goal_lock:
+                    self._my_generation = None
+                    self._action_goal_handle = None
+                    self._action_target = None
+
+    def _execute_command(self, goal_handle):
+        """执行一条命令（已持有 :attr:`_exec_lock`）。"""
         req = goal_handle.request
-        self._action_goal_handle = goal_handle
 
         # START: 初始化 odom 原点，不需要任何前置校验
         if req.cmd_type == BasicMotion.Goal.START:
@@ -847,7 +951,6 @@ class BasicMotionNode(Node):
             result.success = True
             result.message = "odom origin set"
             goal_handle.succeed()
-            self._action_goal_handle = None
             self.get_logger().info('Action START: done')
             return result
 
@@ -860,7 +963,6 @@ class BasicMotionNode(Node):
             result.success = False
             result.message = f"target needs 4 values [x, y, z, yaw], got {len(req.target)}"
             goal_handle.abort()
-            self._action_goal_handle = None
             return result
 
         if self._origin is None:
@@ -870,7 +972,6 @@ class BasicMotionNode(Node):
             result.success = False
             result.message = "odom origin not set, call start() first"
             goal_handle.abort()
-            self._action_goal_handle = None
             return result
 
         x, y, z, yaw = req.target
@@ -932,7 +1033,6 @@ class BasicMotionNode(Node):
             result.success = False
             result.message = f"unknown cmd_type: {req.cmd_type}"
             goal_handle.abort()
-            self._action_goal_handle = None
             return result
 
         result = BasicMotion.Result()
@@ -946,29 +1046,47 @@ class BasicMotionNode(Node):
                 f'{self._action_target["z"]:.2f}, '
                 f'{self._action_target["yaw"]:.1f})')
             goal_handle.succeed()
-        elif goal_handle.is_cancel_requested:
-            result.message = "cancelled"
-            self.get_logger().info(f'Action {type_name}: CANCELLED')
-            goal_handle.canceled()
+        elif self._is_interrupted():
+            # 被打断 —— 显式 cancel 或 被新 goal 抢占。需求："动作被打断的时候
+            # 就应该用 position"：把目标设成当前位姿，主动刹住并在原地保持，
+            # 而不是让 MCU 继续执行上一条（速度/推力命令下这尤其重要）。
+            #
+            # 这里仍在 _exec_lock 内，所以这条 hold 一定**先于**抢占它的新命令
+            # 的目标下发（新命令拿不到锁），顺序是对的。
+            self._hold_current_position()
+            if goal_handle.is_cancel_requested:
+                result.message = "cancelled"
+                self.get_logger().info(f'Action {type_name}: CANCELLED (已收尾为原地保持)')
+                goal_handle.canceled()
+            else:
+                result.message = "superseded"
+                self.get_logger().info(
+                    f'Action {type_name}: SUPERSEDED by a newer goal '
+                    f'(已收尾为原地保持)')
+                goal_handle.abort()
         else:
+            # 超时不是"被打断"：不主动 hold，沿用既有语义（MCU 会继续走向原目标，
+            # 位置模式下达标前一直有效）。改这一点会动到 task_runner 的既有超时行为。
             result.message = "motion timeout"
             self.get_logger().error(f'Action {type_name}: TIMEOUT')
             goal_handle.abort()
-        self._action_goal_handle = None
-        self._action_target = None
         return result
 
     def _action_feedback_cb(self):
-        if self._action_goal_handle is None or self._action_target is None:
+        # 一次持锁读两个字段：`_execute_command` 退出时会一起清空，分开读可能拿到
+        # "handle 非空但 target 已清" 的中间态。
+        with self._goal_lock:
+            gh = self._action_goal_handle
+            t = self._action_target
+        if gh is None or t is None:
             return
-        t = self._action_target
         with self._state_lock:
             dx = t['x'] - self.pose.x
             dy = t['y'] - self.pose.y
             dz = t['z'] - self.pose.z
         feedback = BasicMotion.Feedback()
         feedback.distance_remaining = float(math.sqrt(dx**2 + dy**2 + dz**2))
-        self._action_goal_handle.publish_feedback(feedback)
+        gh.publish_feedback(feedback)
 
 
     def _publish_pose_info(self):

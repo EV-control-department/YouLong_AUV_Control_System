@@ -39,8 +39,19 @@
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
-| `success` | `bool` | `True`=到位；`False`=超时/被取消/被拒绝 |
-| `message` | `string` | 空字符串=成功；`"cancelled"`；`"motion timeout"`；未初始化原点时 `"odom origin not set, call start() first"` |
+| `success` | `bool` | `True`=到位；`False`=超时/被取消/被抢占/被拒绝 |
+| `message` | `string` | 空字符串=成功；`"cancelled"`；`"superseded"`（被更新的 goal 抢占）；`"motion timeout"`；未初始化原点时 `"odom origin not set, call start() first"` |
+
+**打断语义（2026-10-12 新增）**：一条命令被 **cancel** 或被**更新的 goal 抢占**时，都会
+**先把目标设成当前位姿（原地保持）再返回**，然后才轮到新命令下发自己的目标。原因：仅仅
+「停止下发」会让 MCU 继续执行上一条指令（速度/推力模式下尤其危险）。
+`"cancelled"` 与 `"superseded"` 的区别在于是谁发起的：前者是客户端 `cancel_goal`，后者是新 goal 抢占。
+**超时不算打断**，不主动 hold（沿用既有行为，MCU 会继续走向原目标）。
+
+**抢占不是排队**：新 goal 立刻被接受（`goal_callback` 不拒绝），正在执行的命令在下一次
+轮询（≤100 ms，`_wait_reached` 的 sleep 周期）让位。实测：长 SET 执行中发第二条 SET，
+前者 0.05 s 内以 `"superseded"` 结束、并先发出一条「目标=当前位姿」的位置 setpoint，
+后者随后正常完成。
 
 **Feedback**
 

@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import threading
 from pathlib import Path
 
 import pytest
+import rclpy
 
 from uv_msgs.action import BasicMotion
 
@@ -124,3 +126,236 @@ def test_step_constants_match_the_action_document() -> None:
     assert module.STEP_Y == pytest.approx(documented("STEP_Y"))
     assert module.STEP_PERIOD == pytest.approx(documented("STEP_PERIOD"))
     assert module.LATERAL_LAMBDA == pytest.approx(documented("LATERAL_LAMBDA"))
+
+
+# --------------------------------------------------------------------------- #
+# Command serialisation and preemption (bug found 2026-10-12)
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def ros_context():
+    rclpy.init()
+    yield
+    rclpy.shutdown()
+
+
+class _Recorder:
+    """Stand-in for the setpoint publisher."""
+
+    def __init__(self) -> None:
+        self.messages: list = []
+
+    def publish(self, msg) -> None:
+        self.messages.append(msg)
+
+
+class _FakeGoalHandle:
+    """Minimal stand-in for an rclpy ServerGoalHandle (no action server needed)."""
+
+    def __init__(self, goal) -> None:
+        self.request = goal
+        self.is_cancel_requested = False
+        self.succeeded = False
+        self.aborted = False
+        self.canceled_flag = False
+        self.feedbacks: list = []
+
+    def succeed(self) -> None:
+        self.succeeded = True
+
+    def abort(self) -> None:
+        self.aborted = True
+
+    def canceled(self) -> None:
+        self.canceled_flag = True
+
+    def publish_feedback(self, feedback) -> None:
+        self.feedbacks.append(feedback)
+
+
+def _set_goal(target, timeout: float = 60.0):
+    goal = BasicMotion.Goal()
+    goal.cmd_type = BasicMotion.Goal.SET
+    goal.target = list(target)
+    goal.timeout = float(timeout)
+    return goal
+
+
+def _wait_until(predicate, timeout: float = 2.0, tick: float = 0.02) -> bool:
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if predicate():
+            return True
+        _time.sleep(tick)
+    return predicate()
+
+
+def _node():
+    from uv_control.basic_motion import BasicMotionNode
+
+    node = BasicMotionNode()
+    node.pub_setpoint = _Recorder()
+    return node
+
+
+def test_new_goal_bumps_the_generation(ros_context) -> None:
+    """Preemption is driven by a monotonic generation, not a boolean.
+
+    A boolean flag loses the preemption when three commands meet (A running,
+    B and C arriving: B clears the flag on taking the lock and C's request is
+    gone, so C can only queue behind B).  The generation is what makes the
+    *newest* goal win.
+    """
+    node = _node()
+    try:
+        assert node._goal_generation == 0
+        node._action_goal_cb(BasicMotion.Goal())
+        first = node._goal_generation
+        node._action_goal_cb(BasicMotion.Goal())
+        assert node._goal_generation == first + 1
+    finally:
+        node.destroy_node()
+
+
+def test_running_command_is_interrupted_when_a_newer_goal_arrives(ros_context) -> None:
+    node = _node()
+    try:
+        node._my_generation = node._goal_generation          # 我是当前这一代
+        assert node._is_interrupted() is False, (
+            "a command must not treat its own generation as an interruption"
+        )
+        node._action_goal_cb(BasicMotion.Goal())             # 来了更新的 goal
+        assert node._is_interrupted() is True, (
+            "a newer goal must mark the running command as interrupted"
+        )
+    finally:
+        node.destroy_node()
+
+
+def test_no_active_command_is_never_interrupted(ros_context) -> None:
+    """``_my_generation is None`` means nothing is executing."""
+    node = _node()
+    try:
+        node._action_goal_cb(BasicMotion.Goal())
+        assert node._is_interrupted() is False
+    finally:
+        node.destroy_node()
+
+
+def test_execute_holds_the_exec_lock_for_the_whole_command(ros_context) -> None:
+    """``_exec_lock`` must be held *by execute_callback*, not merely to exist.
+
+    Regression for the observed bug: two goals executed concurrently, so both
+    wrote ``/zit6/cmd/setpoint`` and ``_action_goal_handle`` was clobbered.  The
+    lock is what removes the second writer, so an idle lock that nothing takes
+    would not fix anything.
+    """
+    node = _node()
+    try:
+        assert node._exec_lock.acquire(blocking=False) is True, "lock must be free at rest"
+        node._exec_lock.release()
+
+        node.start()
+        handle = _FakeGoalHandle(_set_goal((10.0, 0.0, 0.0, 0.0), timeout=5.0))
+        worker = threading.Thread(
+            target=lambda: node._action_execute_cb(handle), daemon=True)
+        worker.start()
+        try:
+            assert _wait_until(lambda: node._exec_lock.acquire(blocking=False) is False,
+                               timeout=2.0), (
+                "execute_callback did not take _exec_lock, so a second goal could "
+                "run concurrently and write the setpoint topic"
+            )
+        finally:
+            node._action_goal_cb(BasicMotion.Goal())   # 打断它，别等 5 s
+            worker.join(timeout=5.0)
+            assert not worker.is_alive()
+        # 命令退出后锁必须释放
+        assert node._exec_lock.acquire(blocking=False) is True
+        node._exec_lock.release()
+    finally:
+        node.destroy_node()
+
+
+def test_interrupted_command_settles_on_a_position_hold(ros_context) -> None:
+    """End-to-end: interrupt a running command, the last setpoint is a hold.
+
+    Requirement: "when an action is interrupted it should use position".  Not
+    merely "stop writing" -- dropping a command would leave the MCU still
+    executing whatever it was last told (fatal for velocity/force in phase 4).
+    The interrupted command must leave a position setpoint at the current pose.
+    """
+    from uv_control.coordinate import Coordinate
+
+    node = _node()
+    try:
+        node.start()
+        # 位姿钉死不动 => SET 永远到不了，命令会一直等到被打断
+        node.pose = Coordinate(x=1.5, y=-2.5, z=3.25, rz=42.0)
+
+        handle = _FakeGoalHandle(_set_goal((10.0, 0.0, 0.0, 0.0), timeout=8.0))
+        worker = threading.Thread(
+            target=lambda: node._action_execute_cb(handle), daemon=True)
+        worker.start()
+        # 等命令真的发出第一条目标
+        assert _wait_until(lambda: len(node.pub_setpoint.messages) >= 1), (
+            "the command never wrote a setpoint"
+        )
+        first = node.pub_setpoint.messages[0]
+        assert node._target.x == pytest.approx(10.0, abs=1e-6), (
+            "the first setpoint should be the commanded target"
+        )
+
+        # 抢占：新一代 goal 到来
+        node._action_goal_cb(BasicMotion.Goal())
+        worker.join(timeout=6.0)
+        assert not worker.is_alive(), "the command did not yield to the newer goal"
+
+        # 收尾必须是一条 position setpoint，目标 = 当前位姿
+        assert len(node.pub_setpoint.messages) >= 2, (
+            "the interrupted command published no hold setpoint"
+        )
+        hold = node.pub_setpoint.messages[-1]
+        assert hold.control_key == 0, "the hold must be a position setpoint"
+        assert hold.type_mask == 0, "the hold must command every axis"
+        assert node._target.x == pytest.approx(1.5, abs=1e-6)
+        assert node._target.y == pytest.approx(-2.5, abs=1e-6)
+        assert node._target.z == pytest.approx(3.25, abs=1e-6)
+        assert node._target.rz == pytest.approx(42.0, abs=1e-6)
+
+        assert handle.aborted is True, "a superseded goal must abort, not succeed"
+        assert first is not hold
+    finally:
+        node.destroy_node()
+
+
+def test_cancel_also_settles_on_a_hold(ros_context) -> None:
+    """An explicit ``cancel_goal`` takes the same path as preemption."""
+    from uv_control.coordinate import Coordinate
+
+    node = _node()
+    try:
+        node.start()
+        node.pose = Coordinate(x=0.5, y=0.5, z=1.0, rz=10.0)
+
+        handle = _FakeGoalHandle(_set_goal((10.0, 0.0, 0.0, 0.0), timeout=8.0))
+        worker = threading.Thread(
+            target=lambda: node._action_execute_cb(handle), daemon=True)
+        worker.start()
+        assert _wait_until(lambda: len(node.pub_setpoint.messages) >= 1)
+        handle.is_cancel_requested = True
+        worker.join(timeout=6.0)
+        assert not worker.is_alive()
+        assert len(node.pub_setpoint.messages) >= 2, "cancel published no hold"
+        assert node._target.x == pytest.approx(0.5, abs=1e-6)
+        assert handle.canceled_flag is True
+    finally:
+        node.destroy_node()
+
+
+def test_hold_is_the_shared_primitive_for_stay_and_interrupts() -> None:
+    """One implementation, so STAY (phase 3) and interrupts cannot diverge."""
+    text = BASIC_MOTION_PY.read_text(encoding="utf-8")
+    assert text.count("def _hold_current_position") == 1
+    assert "_hold_current_position()" in text, "the interrupt path must call it"
