@@ -293,3 +293,108 @@ def test_normal_arm_waits_for_the_ins() -> None:
 def test_heartbeat_sequence_increments() -> None:
     controller = _controller_from_defaults()
     assert [controller.next_heartbeat_seq() for _ in range(3)] == [1, 2, 3]
+
+
+# --------------------------------------------------------------------------- #
+# World-frame velocity / force honour the frame bit (fixed 2026-10-12)
+# --------------------------------------------------------------------------- #
+# 为什么上面那些 golden 用例抓不到这个 bug：`test_setpoint_cases_*` 在调用
+# `apply_setpoint` 之前把状态清零（``controller.pos.update(ZERO_POSE)``，三个角
+# 都是 0），level 姿态下 R^T = I，世界系与机体系**数值相同** —— 于是"仿真忽略
+# frame 位"这件事完全不可见。下面这些用例显式给一个**非水平、带偏航**的姿态，
+# 才能真正区分两种坐标系。
+#
+# 对照的是真实 MCU 的实现：`SetpointRouter` 对 VELOCITY 用 `applyRotationToBody`、
+# 对 ACTUATOR(推力) 用 `applyWrenchToBody`，两者都取 R_ZYX(roll,pitch,yaw)^T
+# （`third_party/AUV_zit6_cmake/UserApp/Algorithm/MathUtils.hpp`）。
+
+def _tilted_controller(golden: dict, roll_deg: float, pitch_deg: float, yaw_deg: float):
+    controller = _controller(golden)
+    controller.pos.update({
+        "x": 0.0, "y": 0.0, "z": 0.0,
+        "rx": roll_deg, "ry": pitch_deg, "rz": yaw_deg,
+    })
+    return controller
+
+
+@pytest.mark.parametrize("yaw_deg", [0.0, 90.0, -45.0, 180.0])
+def test_world_velocity_is_rotated_into_the_body_frame(golden, yaw_deg) -> None:
+    """``control_key`` 0x01 (world) must differ from 0x11 (body) when yawed."""
+    world_v = (1.0, 0.0, 0.0)
+    body_ctrl = _tilted_controller(golden, 0.0, 0.0, yaw_deg)
+    world_ctrl = _tilted_controller(golden, 0.0, 0.0, yaw_deg)
+
+    body_ctrl.apply_setpoint(0x11, 0, *world_v, 0.0, 0.0)
+    world_ctrl.apply_setpoint(0x01, 0, *world_v, 0.0, 0.0)
+
+    # 机体系命令：原样进 target_vel
+    assert body_ctrl.target_vel["x"] == pytest.approx(1.0)
+    assert body_ctrl.target_vel["y"] == pytest.approx(0.0)
+
+    # 世界系命令：转到机体系 —— 期望 R_z(yaw)^T @ [1,0,0] = [cos, -sin, 0]
+    expected = (
+        math.cos(math.radians(yaw_deg)),
+        -math.sin(math.radians(yaw_deg)),
+    )
+    assert world_ctrl.target_vel["x"] == pytest.approx(expected[0], abs=1e-9)
+    assert world_ctrl.target_vel["y"] == pytest.approx(expected[1], abs=1e-9)
+    if yaw_deg not in (0.0,):
+        assert world_ctrl.target_vel["x"] != pytest.approx(body_ctrl.target_vel["x"]), (
+            "world-frame velocity behaved like body-frame: the frame bit is ignored"
+        )
+
+
+def test_world_velocity_matches_the_geometry_rotation(golden) -> None:
+    """Pin the conversion to ``geometry.euler_rpy_to_matrix`` (= firmware R_ZYX^T)."""
+    from uv_sim.geometry import euler_rpy_to_matrix
+
+    roll, pitch, yaw = math.radians(10.0), math.radians(-7.0), math.radians(35.0)
+    controller = _tilted_controller(golden, 10.0, -7.0, 35.0)
+    world = (0.4, -0.3, 0.2)
+
+    got = controller.world_to_body_vector(*world)
+    rotation = euler_rpy_to_matrix(roll, pitch, yaw)
+    expected = tuple(
+        sum(rotation[j][i] * world[j] for j in range(3)) for i in range(3)
+    )
+    assert got == pytest.approx(expected, abs=1e-12)
+
+
+def test_body_frame_velocity_is_never_rotated(golden) -> None:
+    controller = _tilted_controller(golden, 12.0, -8.0, 130.0)
+    controller.apply_setpoint(0x11, 0, 0.4, -0.3, 0.2, 0.0, 0.0)
+    assert controller.target_vel["x"] == pytest.approx(0.4)
+    assert controller.target_vel["y"] == pytest.approx(-0.3)
+    assert controller.target_vel["z"] == pytest.approx(0.2)
+
+
+def test_world_force_is_rotated_into_the_body_frame(golden) -> None:
+    """``control_key`` 0x02 (world) vs 0x12 (body), same mask semantics."""
+    body_ctrl = _tilted_controller(golden, 0.0, 0.0, 90.0)
+    world_ctrl = _tilted_controller(golden, 0.0, 0.0, 90.0)
+
+    body_force = body_ctrl.apply_setpoint(0x12, 0, 100.0, 0.0, 0.0, 0.0, 0.0)
+    world_force = world_ctrl.apply_setpoint(0x02, 0, 100.0, 0.0, 0.0, 0.0, 0.0)
+
+    assert body_force[0] == pytest.approx(100.0), "body force must pass through"
+    assert body_force[1] == pytest.approx(0.0)
+    # 世界系 +x 在 yaw=90° 下是机体的 -y
+    assert world_force[0] == pytest.approx(0.0, abs=1e-9)
+    assert world_force[1] == pytest.approx(-100.0, abs=1e-9)
+
+
+def test_world_commands_are_masked_after_the_rotation(golden) -> None:
+    """Firmware converts first, then applies the per-axis mask.
+
+    Masking *before* rotating would let one world axis leak into a body axis the
+    caller asked to leave alone.
+    """
+    controller = _tilted_controller(golden, 0.0, 0.0, 90.0)
+    controller.target_vel.update({"x": 7.0, "y": 7.0, "z": 7.0, "rz": 7.0})
+    # mask 0x02 => 忽略 y，只应用 x/z/rz（世界系）
+    controller.apply_setpoint(0x01, 0x02, 1.0, 0.0, 0.5, 0.0, 0.0)
+
+    # 世界系 (1,0,0.5) 在 yaw=90° 下 -> 机体 (0, -1, 0.5)
+    assert controller.target_vel["x"] == pytest.approx(0.0, abs=1e-9), "x 被 y 的旋转漏进来了"
+    assert controller.target_vel["y"] == pytest.approx(7.0), "mask 说忽略 y，必须保留旧值"
+    assert controller.target_vel["z"] == pytest.approx(0.5)

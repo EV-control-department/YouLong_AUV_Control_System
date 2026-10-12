@@ -29,6 +29,7 @@ from typing import Optional
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
 
+from uv_sim.geometry import euler_rpy_to_matrix
 from uv_sim.mathutil import clamp, wrap_angle_deg
 from uv_sim.odometry import apply_imu_to_state, apply_odometry_to_state
 from uv_sim.pid import Pid
@@ -107,6 +108,41 @@ class McuController:
 
     # ── setpoint state machine ──────────────────────────────────────────────
 
+    def world_to_body_vector(self, wx: float, wy: float, wz: float) -> tuple:
+        """世界系向量 -> 机体系，用当前姿态的 ``R_ZYX^T``。
+
+        Mirrors the real MCU's ``SetpointRouter`` for the world-frame velocity and
+        force paths (``applyRotationToBody`` / ``applyWrenchToBody`` in
+        ``third_party/AUV_zit6_cmake/UserApp/Algorithm/MathUtils.hpp``).  Both of
+        those use the **rotation** block ``R_ZYX(roll, pitch, yaw)^T``; the
+        firmware only additionally couples the angular part through the
+        Euler-rate matrix ``T(roll, pitch)^{-1}`` for *velocity*, and only the
+        linear part of the command is rotated here.
+
+        The simulator used to ignore the frame bit for velocity and force
+        entirely (it was read from ``control_key`` and only consulted in the
+        position branch), so world-frame commands behaved as body-frame ones --
+        a silent SIL/real divergence: exactly the kind of mismatch this stack
+        exists to catch.  ``yaw``/``Mz`` are left untouched by the caller:
+        the control stack is 4-DOF, the message carries no roll/pitch rates, and
+        ``T(roll,pitch)^{-1}`` is the identity at level attitude.
+
+        The rpy composition comes from :func:`uv_sim.geometry.euler_rpy_to_matrix`
+        rather than being spelled out here, because that function is the single
+        definition of the ``Rz(yaw)Ry(pitch)Rx(roll)`` convention in this repo.
+        """
+        rotation = euler_rpy_to_matrix(
+            math.radians(self.pos['rx']),
+            math.radians(self.pos['ry']),
+            math.radians(self.pos['rz']),
+        )
+        # 向量按列主序取 R^T 的每一行：body_i = sum_j R[j][i] * world_j
+        return (
+            float(rotation[0][0] * wx + rotation[1][0] * wy + rotation[2][0] * wz),
+            float(rotation[0][1] * wx + rotation[1][1] * wy + rotation[2][1] * wz),
+            float(rotation[0][2] * wx + rotation[1][2] * wy + rotation[2][2] * wz),
+        )
+
     def apply_setpoint(
         self,
         control_key: int,
@@ -133,10 +169,15 @@ class McuController:
             self.position_ctrl_enabled = False
             self.vel_ctrl_enabled = False
             self.current_mode = MODE_FORCE
+            # 世界系推力先转到机体系（mask 在**转换之后**逐轴生效，与固件
+            # SetpointRouter 的顺序一致）
+            fx, fy, fz = (x, y, z)
+            if not frame:
+                fx, fy, fz = self.world_to_body_vector(x, y, z)
             self.force_4dof = [
-                self.force_4dof[0] if (type_mask & 0x01) else x,
-                self.force_4dof[1] if (type_mask & 0x02) else y,
-                self.force_4dof[2] if (type_mask & 0x04) else z,
+                self.force_4dof[0] if (type_mask & 0x01) else fx,
+                self.force_4dof[1] if (type_mask & 0x02) else fy,
+                self.force_4dof[2] if (type_mask & 0x04) else fz,
                 self.force_4dof[3] if (type_mask & 0x08) else yaw,
             ]
             return list(self.force_4dof)
@@ -146,12 +187,16 @@ class McuController:
             self.position_ctrl_enabled = False
             self.vel_ctrl_enabled = True
             self.current_mode = MODE_VELOCITY
+            # 世界系速度先转到机体系（同上）
+            vx, vy, vz = (x, y, z)
+            if not frame:
+                vx, vy, vz = self.world_to_body_vector(x, y, z)
             if not (type_mask & 0x01):
-                self.target_vel['x'] = x
+                self.target_vel['x'] = vx
             if not (type_mask & 0x02):
-                self.target_vel['y'] = y
+                self.target_vel['y'] = vy
             if not (type_mask & 0x04):
-                self.target_vel['z'] = z
+                self.target_vel['z'] = vz
             if not (type_mask & 0x08):
                 self.target_vel['rz'] = math.degrees(yaw)
             self.last_pid_time = now
