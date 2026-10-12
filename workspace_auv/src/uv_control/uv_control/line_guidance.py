@@ -75,9 +75,6 @@ class LineConfig:
             raise ValueError('BLINE parameters must be finite and positive')
         if self.capture_exit >= self.capture_enter:
             raise ValueError('invalid BLINE capture hysteresis')
-        if self.brake_acceleration > min(self.deceleration,
-                                         self.vector_acceleration):
-            raise ValueError('BLINE brake acceleration exceeds command limits')
 
 
 def validate_goal(target, axes, cruise_speed, timeout, config, world=False):
