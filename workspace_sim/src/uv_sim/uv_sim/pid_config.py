@@ -71,16 +71,39 @@ def resolve_pid_config_path(explicit: str = "") -> Optional[Path]:
 
     The **source tree wins** in a development checkout so that editing
     ``src/uv_sim/config/sim_pid.yaml`` takes effect on the next node start
-    without a rebuild (the file installed under ``share/`` is a copy, not a
-    symlink).  An installed deployment without the source tree falls back to
-    the packaged copy.
+    without a rebuild.  An installed deployment without the source tree falls
+    back to the packaged copy.
+
+    Finding the source tree needs care, and the obvious spelling is wrong.  The
+    first version used ``Path(__file__).resolve().parent.parent``, which only
+    works when the module was imported *from the source tree*::
+
+        src/uv_sim/uv_sim/pid_config.py   -> src/uv_sim/config/sim_pid.yaml   OK
+        site-packages/uv_sim/pid_config.py -> site-packages/config/...        absent!
+
+    After a plain ``colcon build`` (no ``--symlink-install``) the package is a
+    **copy** under ``lib/python3.12/site-packages/``, so that candidate does not
+    exist and the function silently fell through to the ``share/`` copy.  The
+    documented behaviour ("edit the source file, restart, done") was therefore
+    the opposite of what happened: edits to the source file did nothing until
+    someone rebuilt.  This walks *up* from the module instead, looking for the
+    package directory that actually owns ``config/sim_pid.yaml``, so it is
+    correct in both layouts:
+
+    * source tree / ``--symlink-install`` -> ``<repo>/workspace_sim/src/uv_sim/
+      config/sim_pid.yaml``
+    * plain ``colcon build`` (no source tree reachable) -> the ``share/`` copy
     """
     if explicit:
         return Path(explicit).expanduser()
 
-    source = Path(__file__).resolve().parent.parent / 'config' / 'sim_pid.yaml'
-    if source.is_file():
-        return source
+    # Walk up from the module file looking for a package dir holding the config.
+    # ``resolve()`` follows symlinks, so a ``--symlink-install`` layout lands in
+    # the source tree here -- which is exactly the intent.
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / 'config' / 'sim_pid.yaml'
+        if parent.name == 'uv_sim' and candidate.is_file():
+            return candidate
 
     try:
         from ament_index_python.packages import get_package_share_directory

@@ -49,6 +49,69 @@ def _packaged_config() -> Path:
     return path
 
 
+# --------------------------------------------------------------------------- #
+# Resolution: the source tree must win whenever it is reachable
+# --------------------------------------------------------------------------- #
+def test_resolution_walks_up_from_a_copy_install_layout(tmp_path, monkeypatch) -> None:
+    """The algorithm must find the config from a ``site-packages`` copy.
+
+    This is the layout that broke.  It is built synthetically because a real
+    checkout can only be in one build mode at a time, and the bug only appears
+    when the module sits in a *copy* (``colcon build`` without
+    ``--symlink-install``)::
+
+        <root>/lib/python3.12/site-packages/uv_sim/pid_config.py   (module)
+        <root>/lib/python3.12/site-packages/uv_sim/config/sim_pid.yaml
+
+    The old ``Path(__file__).resolve().parent.parent / 'config'`` spelling
+    produced ``<root>/lib/python3.12/site-packages/config/...`` here, which does
+    not exist, so it silently fell through to the ``share/`` copy.  Re-running
+    the function with ``__file__`` pointed at this fake tree is what makes the
+    regression observable.
+    """
+    import uv_sim.pid_config as module
+
+    # A copy-install tree: site-packages/uv_sim/{pid_config.py, config/sim_pid.yaml}
+    package_dir = tmp_path / 'lib' / 'python3.12' / 'site-packages' / 'uv_sim'
+    (package_dir / 'config').mkdir(parents=True)
+    module_file = package_dir / 'pid_config.py'
+    module_file.write_text('# fake module for the path walk\n', encoding='utf-8')
+    expected = package_dir / 'config' / 'sim_pid.yaml'
+    expected.write_text(
+        'chassis.pid.vel.x: {kp: 1.0, ki: 0.0, kd: 0.0, i_limit: 1.0}\n',
+        encoding='utf-8',
+    )
+    # A sibling 'config' dir one level up must NOT be picked (that was the bug).
+    (tmp_path / 'lib' / 'python3.12' / 'site-packages' / 'config').mkdir()
+
+    monkeypatch.setattr(module, '__file__', str(module_file))
+    assert module.resolve_pid_config_path() == expected, (
+        "resolve_pid_config_path could not walk up to the package-local config "
+        "in a copy-install layout; it would silently fall back to the share/ "
+        "copy and ignore edits to the source file"
+    )
+
+
+def test_resolution_prefers_the_source_tree_when_the_module_lives_there() -> None:
+    """Walk-up must find ``<...>/uv_sim/config/sim_pid.yaml`` beside the module.
+
+    In the real (symlink-install / source) checkout this is the documented
+    promise: editing the source yaml is picked up without a rebuild.
+    """
+    import uv_sim.pid_config as module
+
+    for parent in Path(module.__file__).resolve().parents:
+        candidate = parent / 'config' / 'sim_pid.yaml'
+        if parent.name == 'uv_sim' and candidate.is_file():
+            assert module.resolve_pid_config_path() == candidate, (
+                "the source tree is reachable but resolve_pid_config_path did "
+                "not pick it"
+            )
+            return
+    pytest.skip("running from a copy-install without a reachable source tree")
+
+
+
 def test_packaged_config_exists_and_covers_every_channel() -> None:
     raw = yaml.safe_load(_packaged_config().read_text(encoding="utf-8"))
 

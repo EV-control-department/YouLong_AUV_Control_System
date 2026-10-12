@@ -250,7 +250,7 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `hil_mode` | bool | `false` | `true`: **只做推力转发**（订阅 `/zit6/state/thr` → 混控 → `/auv/thrusters_cmd`），不算 PID、不发任何 `/zit6/state/*`、不提供服务；`false`: 完整仿真 MCU |
-| `pid_config_file` | string | `''` | PID 增益文件路径。留空 = 自动解析（源码树 `src/uv_sim/config/sim_pid.yaml` 优先，其次包内 `share/uv_sim/config/sim_pid.yaml`）；可指向 `/tmp` 下的调参副本，无需重编译。`hil_mode:=true` 时不读（不跑 PID） |
+| `pid_config_file` | string | `''` | PID 增益文件路径。留空 = 自动解析（**能走到源码树时**优先 `src/uv_sim/config/sim_pid.yaml`，否则包内 `share/uv_sim/config/sim_pid.yaml`；要前者生效必须 `--symlink-install` 构建，见下方注）；可指向 `/tmp` 下的调参副本，此时与构建方式无关、无需重编译。`hil_mode:=true` 时不读（不跑 PID） |
 
 ### camera_relay 节点参数
 
@@ -264,6 +264,23 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 （`uv_sim/mcu_control.McuController`），二者不会再漂移；`/zit6/update_params` 只改运行时、不写回文件。
 启动日志会打印实际加载路径。此前 `uv_hm/config/pid_params.yaml`（已删除，无人读取且数值已落后）
 与单体 `sim_bridge._init_full()` 内的硬编码副本均已废弃。
+
+> **必须用 `colcon build --symlink-install` 构建**（2026-10-12 更正）。文档一直写「改源码树 yaml
+> 无需重编译」，但**普通 `colcon build` 下这句话是假的**：包被**拷贝**进
+> `install/.../site-packages/`，`pid_config.resolve_pid_config_path()` 用 `__file__` 反推出的源码树
+> 候选（`site-packages/config/sim_pid.yaml`）**不存在**，于是静默回退到 `share/` 那份旧拷贝 ——
+> 改源码树 yaml 完全没用，直到有人重新 build。
+> 现已修成**从模块位置向上找**含 `config/sim_pid.yaml` 的 `uv_sim` 目录，并有回归测试
+> （`test_pid_config.py::test_resolution_walks_up_from_a_copy_install_layout`，它会用合成目录树
+> 复现拷贝布局，旧算法下必然失败）。配上 `--symlink-install`（`share/` 与 `build/` 都是软链）
+> 后，`resolve()` 会跟着软链落回源码树：
+>
+> ```
+> share/uv_sim/config/sim_pid.yaml -> build/uv_sim/config/sim_pid.yaml -> src/uv_sim/config/sim_pid.yaml
+> ```
+>
+> 实测：改 `src/.../sim_pid.yaml` 后**不重新 build**，下一次节点启动即读到新值。
+> 想确认当前读到哪一份，看 `mcu_sim` 启动日志的 `PID gains loaded from ...`。
 
 ---
 
