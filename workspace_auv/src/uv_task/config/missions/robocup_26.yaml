@@ -92,16 +92,6 @@ mission:
           skip_next: true
         "26rb_grab_ball_ring.both_exhausted": {}
 
-    - name: 26rb_drop_ball_target_rack
-      config: ../tasks/26rb_drop_ball_target_rack.yaml
-      initial:
-        pose:
-          command: BMOVE
-          axes: xyzrz
-          target: [0.0, 0.0, 0.0, 0.0]
-      on_failure:
-        "26rb_drop_ball_target_rack.timeout": {}
-
     - name: return_origin
       config: ../tasks/return_origin.yaml
       # 直接执行西南满推3秒、上浮满推10秒，不配置回原点初始路线。
