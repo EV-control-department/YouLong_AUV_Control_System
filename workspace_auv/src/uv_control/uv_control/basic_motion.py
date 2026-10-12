@@ -65,10 +65,13 @@ basic_motion.py — 运动控制节点（合并 ZIT6 底层 + 高级运动 API�
 """
 
 import math
+import os
+import signal
 import threading
 import time
 
 import rclpy
+import rclpy.signals
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -83,8 +86,23 @@ from uv_control.coordinate import Coordinate, wrap_deg, wrap_rad
 # ═════════════════════════════════════════════════════════════════════════════
 # ZIT6 control_key 常量
 # ═════════════════════════════════════════════════════════════════════════════
-# 只走 0x00 位置模式，body/增量转换在上层完成
-CK_POS = 0          # position mode (唯一的 control_key)
+# control_key 位域：低 2 位 = 模式（0=位置 1=速度 2=推力），0x10 = 机体系。
+# 世界系/机体系的转换**不由这里做**：固件与仿真都在 MCU 侧按 frame 位转换
+# （SetpointRouter 的 applyRotationToBody / applyWrenchToBody，见 mcu_control
+# 的 world_to_body_vector），所以这里只要把 frame 位填对即可。
+#
+# 位置类沿用 0x00（世界系）+ 上层自己把 body 偏移转成 world（BMOVE/BTRAVEL），
+# 这是历史行为，不改。
+CK_POS = 0x00            # 位置 + 世界系
+CK_VEL_WORLD = 0x01      # 速度 + 世界系
+CK_VEL_BODY = 0x11       # 速度 + 机体系
+CK_FORCE_WORLD = 0x02    # 推力 + 世界系
+CK_FORCE_BODY = 0x12     # 推力 + 机体系
+
+#: 速度/推力命令在 duration 与 timeout 都没给时的默认保持时长 [s]。
+#: 速度命令**必须**有界：MCU 会一直执行最后一条速度目标，不设上限就等于
+#: "一旦发出去就永远往前走"。
+DEFAULT_DURATION = 10.0
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 轴掩码
@@ -204,6 +222,12 @@ class BasicMotionNode(Node):
         self._action_goal_handle = None
         self._action_target = None       # 绝对目标 {x, y, z, yaw}，用于反馈
         self._action_axes = None         # 当前 action 的生效轴，用于反馈
+        # 速度/推力命令的"上一目标"，供 `axes` 目标融合使用（与位置类的
+        # self._target 同理，但两者量纲不同，不能共用）。也用于反馈里的
+        # velocity_target。
+        self._velocity_target = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
+        self._force_target = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'rz': 0.0}
+        self._action_continuous = False  # 当前命令是否速度/推力类（反馈用）
         self.create_timer(0.5, self._action_feedback_cb)
 
         # ── 命令串行化 + 抢占 ───────────────────────────────────
@@ -251,25 +275,102 @@ class BasicMotionNode(Node):
     # Layer 1: ZIT6 底层 (map 坐标系)
     # ═════════════════════════════════════════════════════════════════════════
 
-    def _send_setpoint(self, control_key: int, type_mask: int,
-                       x: float, y: float, z: float, yaw_rad: float):
-        """发送 ZitSetpoint。坐标是 map 系，yaw 是弧度，只走 CK_POS 位置模式。"""
+    def _encode_setpoint(self, control_key: int, type_mask: int,
+                         x: float, y: float, z: float, yaw: float) -> ZitSetpoint:
+        """组一条 ZitSetpoint（唯一构造点，四个出口共用）。"""
         msg = ZitSetpoint()
         msg.control_key = control_key
         msg.type_mask = type_mask
         msg.x = float(x)
         msg.y = float(y)
         msg.z = float(z)
-        msg.yaw = float(yaw_rad)
+        msg.yaw = float(yaw)
         msg.roll = 0.0         # roll/pitch 未使用，控制栈保持 4-DOF
         msg.pitch = 0.0
         msg.seq = 0
-        self._target = self._map_to_odom(Coordinate(x=x, y=y, z=z, rz=math.degrees(yaw_rad)))
+        return msg
+
+    def _send_setpoint(self, control_key: int, type_mask: int,
+                       x: float, y: float, z: float, yaw_rad: float):
+        """位置 setpoint 出口。坐标是 map 系，yaw 是弧度。
+
+        只有这条出口会更新 ``self._target`` —— 它是"位置目标"，被 ``PoseInfo``
+        与 ``_wait_reached`` 使用。速度/推力命令没有位置目标，走别的出口，
+        绝不碰 ``_target``（否则地图上的目标点会跳到速度值上）。
+        """
+        msg = self._encode_setpoint(control_key, type_mask, x, y, z, yaw_rad)
         self.pub_setpoint.publish(msg)
+        self._target = self._map_to_odom(Coordinate(x=x, y=y, z=z, rz=math.degrees(yaw_rad)))
         odom_t = self._target
         self.get_logger().info(
             f'发往ZIT6: map=({x:.2f}, {y:.2f}, {z:.2f}, {math.degrees(yaw_rad):.1f}°), '
             f'对应odom=({odom_t.x:.2f}, {odom_t.y:.2f}, {odom_t.z:.2f}, {odom_t.rz:.1f}°)')
+
+    def _send_velocity(self, world: bool, vx: float, vy: float, vz: float,
+                       vyaw_rate_deg: float):
+        """速度出口。``target`` 是 m/s 与**度/秒**；协议里 yaw 是弧度/秒。
+
+        世界系/机体系由控制字的 frame 位表达，转换在 MCU 侧按当前姿态做
+        （B21：仿真与固件都支持，见 ``mcu_control.world_to_body_vector``）。
+        """
+        control_key = CK_VEL_WORLD if world else CK_VEL_BODY
+        msg = self._encode_setpoint(
+            control_key, 0, vx, vy, vz, math.radians(vyaw_rate_deg))
+        self.pub_setpoint.publish(msg)
+        self.get_logger().info(
+            f'发往ZIT6[{"世界系" if world else "机体系"}速度]: '
+            f'v=({vx:.3f}, {vy:.3f}, {vz:.3f}) m/s, '
+            f'vyaw={vyaw_rate_deg:.1f}°/s')
+
+    def _send_force(self, world: bool, fx: float, fy: float, fz: float, mz: float):
+        """推力出口。``mz`` 与 ``force_4dof[3]`` 同量纲，不做单位换算。"""
+        control_key = CK_FORCE_WORLD if world else CK_FORCE_BODY
+        msg = self._encode_setpoint(control_key, 0, fx, fy, fz, mz)
+        self.pub_setpoint.publish(msg)
+        self.get_logger().info(
+            f'发往ZIT6[{"世界系" if world else "机体系"}推力]: '
+            f'F=({fx:.1f}, {fy:.1f}, {fz:.1f}), Mz={mz:.1f}')
+
+    def request_shutdown(self, timeout: float = 3.0) -> bool:
+        """让正在执行的命令立刻让位，并等它退出。返回是否已确认让位。
+
+        **为什么必须在 ``executor.shutdown()`` 之前调用**：``executor.shutdown()``
+        会等正在跑的回调返回，而一条速度命令的 ``_wait_duration`` 最多会等满
+        ``duration``（默认上限 10 s，客户端还可能给 60 s）。不打断它，Ctrl+C 之后
+        进程要等命令自己跑完才退 —— 2026-10-12 实测：带一条 60 s 速度命令时，收到
+        信号后 15 s 仍未退出，最后被 SIGKILL（``exit code=-9``）。
+
+        做法是把代号 +1（正在执行的命令下一次轮询即看到 ``_is_interrupted()``），
+        再抢一下 ``_exec_lock``：抢到就说明对方已经收尾并让出写权。
+        """
+        with self._goal_lock:
+            self._goal_generation += 1
+        acquired = self._exec_lock.acquire(timeout=timeout)
+        if acquired:
+            self._exec_lock.release()
+            return True
+        self.get_logger().warning(
+            f'退出时仍有命令在执行，{timeout:.1f}s 内未让位；仍继续收尾')
+        return False
+
+    def emergency_stop(self):
+        """推力归零（``control_key=0x12`` 全 0）。
+
+        节点退出时调用（Ctrl+C / SIGTERM）。为什么是**推力归零**而不是
+        "原地保持"：进程马上要消失了，此刻发一条位置目标要靠 MCU 之后继续
+        闭环，而推力归零是一个明确的"停止驱动"状态；而且这也是唯一不依赖
+        任何后续输入的动作。
+
+        注意语义：推力 0 = **漂航**（无主动控制，靠正浮力上浮），不是"原地不动"。
+        """
+        try:
+            msg = self._encode_setpoint(CK_FORCE_BODY, 0, 0.0, 0.0, 0.0, 0.0)
+            for _ in range(3):          # 多打两遍：DDS 上偶发丢包不值得赌
+                self.pub_setpoint.publish(msg)
+                time.sleep(0.02)
+            self.get_logger().warning('退出收尾: 已发推力归零 (control_key=0x12)')
+        except Exception as exc:        # 退出路径不能再抛
+            self.get_logger().error(f'退出收尾失败: {exc}')
 
     def _status_cb(self, msg: ZitStatus):
         with self._state_lock:
@@ -483,6 +584,36 @@ class BasicMotionNode(Node):
             f'打断收尾: 目标设为当前位置 '
             f'({p.x:.2f}, {p.y:.2f}, {p.z:.2f}, {p.rz:.1f}°)')
         self.set_map(p.x, p.y, p.z, p.rz)
+
+    def effective_duration(self, duration: float, timeout: float) -> float:
+        """速度/推力命令的保持时长：``duration`` > ``timeout`` > ``DEFAULT_DURATION``。
+
+        ``duration`` is the field this feature adds; ``timeout`` is accepted as a
+        fallback so an existing client that only knows ``timeout`` still gets a
+        bounded command.  Both <= 0 falls back to :data:`DEFAULT_DURATION` --
+        a speed command **must** be bounded, because the MCU keeps executing the
+        last velocity target indefinitely.
+        """
+        if duration > 0:
+            return float(duration)
+        if timeout > 0:
+            return float(timeout)
+        return float(DEFAULT_DURATION)
+
+    def _wait_duration(self, duration: float) -> bool:
+        """限时保持：到时返回 True，被打断返回 False。
+
+        Polls :meth:`_is_interrupted` on a 50 ms tick so preemption/cancel is
+        noticed as quickly as in :meth:`_wait_reached` (which sleeps 100 ms).
+        """
+        start = time.monotonic()
+        while rclpy.ok():
+            if self._is_interrupted():
+                return False
+            if time.monotonic() - start >= duration:
+                return True
+            time.sleep(0.05)
+        return False
 
     def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, timeout):
         """完成步进移动的最后一步，等待到达目标位置。"""
@@ -938,6 +1069,7 @@ class BasicMotionNode(Node):
                     self._my_generation = None
                     self._action_goal_handle = None
                     self._action_target = None
+                    self._action_continuous = False
 
     def _execute_command(self, goal_handle):
         """执行一条命令（已持有 :attr:`_exec_lock`）。"""
@@ -977,6 +1109,20 @@ class BasicMotionNode(Node):
         x, y, z, yaw = req.target
         timeout = req.timeout if req.timeout > 0 else 60.0
         p, t, _ = self.get_state()
+
+        # 速度/推力类：到期需要"收尾为原地保持"，否则 MCU 会一直执行最后一条
+        # 速度/推力目标；位置类没有这个概念。
+        continuous = req.cmd_type in (
+            BasicMotion.Goal.WVELOCITY, BasicMotion.Goal.BVELOCITY,
+            BasicMotion.Goal.WFORCE, BasicMotion.Goal.BFORCE,
+        )
+        hold_on_success = False
+        self._action_continuous = continuous
+        if req.duration > 0 and not continuous:
+            self.get_logger().warning(
+                f'Action {cmd_type_names().get(req.cmd_type, req.cmd_type)}: '
+                f'duration={req.duration:.1f}s 被忽略（只有速度/推力类使用；'
+                f'位置类请用 timeout）')
 
         # ── 派发运动类型 ──────────────────────────────────────
         type_name = cmd_type_names().get(req.cmd_type, f'UNKNOWN({req.cmd_type})')
@@ -1027,6 +1173,53 @@ class BasicMotionNode(Node):
                 f'BTRAVEL: body偏移=({x:.2f}, {y:.2f}) '
                 f'→ world偏移=({off.x:.2f}, {off.y:.2f})')
             success = self._travel_world(tx_w, ty_w, tz_w, p.rz, timeout=timeout)
+        elif req.cmd_type in (BasicMotion.Goal.WVELOCITY,
+                              BasicMotion.Goal.BVELOCITY):
+            world = req.cmd_type == BasicMotion.Goal.WVELOCITY
+            prev = (self._velocity_target['x'], self._velocity_target['y'],
+                    self._velocity_target['z'], self._velocity_target['rz'])
+            vx, vy, vz, vyaw_rate = fuse_target_axes(req.axes, (x, y, z, yaw), prev)
+            self._velocity_target = {'x': vx, 'y': vy, 'z': vz, 'rz': vyaw_rate}
+            duration = self.effective_duration(req.duration, req.timeout)
+            self.get_logger().info(
+                f'动作 {type_name}（{"世界系" if world else "机体系"}）: '
+                f'v=({vx:.3f}, {vy:.3f}, {vz:.3f}) m/s, vyaw={vyaw_rate:.1f}°/s, '
+                f'保持 {duration:.1f}s')
+            if req.axes and req.axes != 'xyzrz':
+                # D10=A（沿用上一目标）：没列出的轴会继续吃到上一条命令的值。
+                # 静默沿用很容易让人以为"只改了 x"，这里把沿用的值打出来。
+                self.get_logger().info(
+                    f'  沿用上条速度目标: ({prev[0]:.3f}, {prev[1]:.3f}, '
+                    f'{prev[2]:.3f}) m/s, vyaw={prev[3]:.1f}°/s')
+            self._send_velocity(world, vx, vy, vz, vyaw_rate)
+            success = self._wait_duration(duration)
+            hold_on_success = success
+
+        elif req.cmd_type in (BasicMotion.Goal.WFORCE, BasicMotion.Goal.BFORCE):
+            world = req.cmd_type == BasicMotion.Goal.WFORCE
+            prev = (self._force_target['x'], self._force_target['y'],
+                    self._force_target['z'], self._force_target['rz'])
+            fx, fy, fz, mz = fuse_target_axes(req.axes, (x, y, z, yaw), prev)
+            self._force_target = {'x': fx, 'y': fy, 'z': fz, 'rz': mz}
+            duration = self.effective_duration(req.duration, req.timeout)
+            self.get_logger().info(
+                f'动作 {type_name}（{"世界系" if world else "机体系"}）: '
+                f'F=({fx:.1f}, {fy:.1f}, {fz:.1f}), Mz={mz:.1f}, '
+                f'保持 {duration:.1f}s')
+            self._send_force(world, fx, fy, fz, mz)
+            success = self._wait_duration(duration)
+            hold_on_success = success
+
+        elif req.cmd_type == BasicMotion.Goal.STAY:
+            # 纯 latch：把目标设成当前位姿后**立即**返回，不阻塞、不吃 duration。
+            self._hold_current_position()
+            p_now, _, _ = self.get_state()
+            self._action_target = {'x': p_now.x, 'y': p_now.y,
+                                   'z': p_now.z, 'yaw': p_now.rz}
+            success = True
+            self.get_logger().info(
+                f'动作 STAY: 已在 ({p_now.x:.2f}, {p_now.y:.2f}, {p_now.z:.2f}, '
+                f'{p_now.rz:.1f}°) 锁住')
         else:
             self.get_logger().error(f'Action rejected: unknown cmd_type={req.cmd_type}')
             result = BasicMotion.Result()
@@ -1038,13 +1231,21 @@ class BasicMotionNode(Node):
         result = BasicMotion.Result()
         result.success = success
         if success:
-            result.message = ""
-            self.get_logger().info(
-                f'Action {type_name}: SUCCESS, '
-                f'final_target=({self._action_target["x"]:.2f}, '
-                f'{self._action_target["y"]:.2f}, '
-                f'{self._action_target["z"]:.2f}, '
-                f'{self._action_target["yaw"]:.1f})')
+            if hold_on_success:
+                # 速度/推力**正常到期**也要收尾：MCU 不会自己忘掉最后一条速度目标，
+                # 不收尾就等于"命令结束了但船还在走"。
+                self._hold_current_position()
+                result.message = "duration elapsed"
+                self.get_logger().info(
+                    f'Action {type_name}: DONE (到时收尾为原地保持)')
+            else:
+                result.message = ""
+                self.get_logger().info(
+                    f'Action {type_name}: SUCCESS, '
+                    f'final_target=({self._action_target["x"]:.2f}, '
+                    f'{self._action_target["y"]:.2f}, '
+                    f'{self._action_target["z"]:.2f}, '
+                    f'{self._action_target["yaw"]:.1f})')
             goal_handle.succeed()
         elif self._is_interrupted():
             # 被打断 —— 显式 cancel 或 被新 goal 抢占。需求："动作被打断的时候
@@ -1073,19 +1274,40 @@ class BasicMotionNode(Node):
         return result
 
     def _action_feedback_cb(self):
-        # 一次持锁读两个字段：`_execute_command` 退出时会一起清空，分开读可能拿到
+        # 一次持锁读这几个字段：`_execute_command` 退出时会一起清空，分开读可能拿到
         # "handle 非空但 target 已清" 的中间态。
         with self._goal_lock:
             gh = self._action_goal_handle
             t = self._action_target
-        if gh is None or t is None:
+            continuous = self._action_continuous
+            vt = dict(self._velocity_target)
+        if gh is None:
             return
-        with self._state_lock:
-            dx = t['x'] - self.pose.x
-            dy = t['y'] - self.pose.y
-            dz = t['z'] - self.pose.z
         feedback = BasicMotion.Feedback()
-        feedback.distance_remaining = float(math.sqrt(dx**2 + dy**2 + dz**2))
+        with self._state_lock:
+            if t is not None:
+                dx = t['x'] - self.pose.x
+                dy = t['y'] - self.pose.y
+                dz = t['z'] - self.pose.z
+                feedback.distance_remaining = float(
+                    math.sqrt(dx**2 + dy**2 + dz**2))
+            else:
+                # 速度/推力命令没有位置目标，"剩余距离"无意义 —— 报 0 而不是
+                # 拿上一次位置目标充数（那会让客户端以为还在跑定位）。
+                feedback.distance_remaining = 0.0
+            # 机体实测速度：linear 是 m/s，`vel_body['rz']` 是 **rad/s**，
+            # 转成 **度/秒** 以与 target 的约定一致（见 action 文件里的单位说明）。
+            feedback.velocity_current = [
+                float(self.vel_body.get('x', 0.0)),
+                float(self.vel_body.get('y', 0.0)),
+                float(self.vel_body.get('z', 0.0)),
+                math.degrees(float(self.vel_body.get('rz', 0.0))),
+            ]
+            feedback.control_level = int(getattr(self.status, 'control_level', 0))
+        # 速度目标只在速度命令下有意义；其它命令报全 0（不是"沿用"）。
+        feedback.velocity_target = [
+            float(vt['x']), float(vt['y']), float(vt['z']), float(vt['rz']),
+        ] if continuous else [0.0, 0.0, 0.0, 0.0]
         gh.publish_feedback(feedback)
 
 
@@ -1117,11 +1339,49 @@ def main(args=None):
     node = BasicMotionNode()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
+
+    # ── 信号处理（为什么不能直接用 rclpy 默认的）────────────────────────────
+    # `rclpy.init()` 默认会装它自己的 SIGINT 处理器，而那个处理器在 `spin()` 返回
+    # **之前**就把上下文 shutdown 了。于是 `finally` 里的 `emergency_stop()` 面对
+    # 的是一个已死的上下文：publish 直接抛异常。
+    # 2026-10-12 实测就是这样：订阅 `/zit6/cmd/setpoint` 在退出期间收到 **0 条**
+    # 新消息，进程 `exit code 1`。等于"以为发了推力归零，其实一条都没发出去"。
+    #
+    # 所以先撤掉 rclpy 的处理器，换成只抛 `KeyboardInterrupt` 的：shutdown 留给
+    # `finally`，收尾就能在上下文还活着的时候完成。
+    try:
+        rclpy.signals.uninstall_signal_handlers()
+    except Exception as exc:
+        node.get_logger().warning(f'无法撤销 rclpy 信号处理器: {exc}')
+
+    interrupt_count = [0]
+
+    def _on_signal(signum, _frame):
+        # 第二次信号 = 用户不耐烦了。恢复默认处置再发一次，让它硬退出 ——
+        # 否则收尾卡住（例如 DDS 卡死）时连 Ctrl+C 都杀不掉。
+        interrupt_count[0] += 1
+        if interrupt_count[0] > 1:
+            node.get_logger().warning('再次收到中断信号，强制退出')
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+            return
+        raise KeyboardInterrupt
+
+    for _sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(_sig, _on_signal)
+        except ValueError:
+            pass          # 不在主线程时装不上，忽略（正常启动不会走到这里）
+
     try:
         executor.spin()
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info('收到中断信号，开始收尾')
     finally:
+        # 顺序很重要：先让正在执行的命令让位（否则 executor.shutdown() 要等它
+        # 跑满 duration），再发推力归零，最后才关 executor。
+        node.request_shutdown()
+        node.emergency_stop()
         executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()

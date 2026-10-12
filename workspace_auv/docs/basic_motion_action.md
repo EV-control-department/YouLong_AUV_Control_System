@@ -20,18 +20,27 @@ uint8 SET=3         # 绝对定位, target=[x, y, z, yaw]
 uint8 WTRAVEL=4     # 世界系直线, target=[dx, dy, dz]
 uint8 BTRAVEL=5     # 机体系直线, target=[dx, dy, dz]
 uint8 START=6       # 初始化里程计原点
+uint8 WVELOCITY=7   # 世界系速度, target=[vx, vy, vz, vyaw_rate(度/秒)]   (2026-10-12 新增)
+uint8 BVELOCITY=8   # 机体系速度, target=[vx, vy, vz, vyaw_rate(度/秒)]   (2026-10-12 新增)
+uint8 WFORCE=9      # 世界系推力, target=[Fx, Fy, Fz, Mz]                 (2026-10-12 新增)
+uint8 BFORCE=10     # 机体系推力, target=[Fx, Fy, Fz, Mz]                 (2026-10-12 新增)
+uint8 STAY=11       # 原地保持：目标=当前位姿，立即返回                    (2026-10-12 新增)
 ---
 uint8 cmd_type
 string axes         # 生效轴: "x"/"y"/"z"/"rz" 任意组合, 空=全部
-float32[] target    # [x, y, z, yaw]
-float32 timeout     # 秒, ≤0=默认60s
+float32[] target    # 4 元素；含义随 cmd_type，yaw 一律**度**（速度为度/秒）
+float32 timeout     # 秒, ≤0=默认60s。位置类=到位等待上限
+float32 duration    # 秒, 仅速度/推力类：保持这么久后自动收尾为原地保持
 ---
 # Result
 bool success
-string message
+string message      # ""/"cancelled"/"superseded"/"motion timeout"/"duration elapsed"
 ---
 # Feedback
-float32 distance_remaining   # 到目标的 3D 欧氏距离
+float32 distance_remaining   # 位置类：到目标的 3D 欧氏距离；速度/推力类恒 0
+float32[] velocity_current   # 机体实测 [vx, vy, vz, vyaw_rate]，m/s 与 度/秒
+float32[] velocity_target    # 机体目标，同上；非速度命令为全 0
+uint8 control_level          # 回读 MCU 层级 0=NONE 1=POS 2=VEL 3=FORCE
 ```
 
 ---
@@ -200,6 +209,67 @@ goal.target = [3.0, 0.0, 0.0, 0.0]
 | WTRAVEL | odom   | 偏移量   | 转向 + 直线        | 过门、直线轨迹   |
 | BTRAVEL | body   | 偏移量   | 旋转 + 转向 + 直线 | 沿当前方向直线   |
 | START   | —     | —       | 初始化原点         | 开始作业         |
+| WVELOCITY | **world** | 速度 | 世界系速度闭环 | 沿岸/沿画面前进 |
+| BVELOCITY | **body**  | 速度 | 机体系速度闭环 | 巡线、边走边搜 |
+| WFORCE  | **world** | 力/力矩 | 直接推力       | 手动遥控、顶流 |
+| BFORCE  | **body**  | 力/力矩 | 直接推力       | 手动遥控、顶流 |
+| STAY    | —     | —       | 原地保持       | 停下等待、收尾 |
+
+---
+
+## 速度 / 推力 / STAY（2026-10-12 新增）
+
+### WVELOCITY / BVELOCITY — 速度闭环
+
+```python
+goal = BasicMotion.Goal()
+goal.cmd_type = BasicMotion.Goal.BVELOCITY   # 机体系；WVELOCITY 是世界系
+goal.target = [0.4, 0.0, 0.0, 0.0]           # 前进 0.4 m/s，不转
+goal.duration = 3.0                          # 保持 3 秒
+```
+
+- **不阻塞到某一点**，而是"保持这个速度 `duration` 秒"
+- `target = [vx, vy, vz, vyaw_rate]`：m/s 与**度/秒**（正=顺时针，NED 约定）
+- 到时（或被打断）**自动收尾为原地保持** —— MCU 不会自己忘掉最后一条速度目标，
+  不收尾就是"命令结束了但船还在走"
+- `duration ≤ 0` 时依次回退 `timeout`、`DEFAULT_DURATION`(10 s)。速度命令**必须有界**
+- 世界系 vs 机体系：`BVELOCITY` 的 `vx` 永远指艇头方向；`WVELOCITY` 的 `vx` 指北，
+  **不随艇头转**。转换在 MCU 侧按当前姿态做（`R_ZYX^T`），`basic_motion` 只填 frame 位
+
+### WFORCE / BFORCE — 直接推力
+
+```python
+goal.cmd_type = BasicMotion.Goal.BFORCE
+goal.target = [300.0, -150.0, 420.0, 90.0]   # [Fx, Fy, Fz, Mz]
+goal.duration = 2.0
+```
+
+- 绕过位置/速度环，直接给 4-DOF 推力（`mcu_sim` 的 `force_4dof`），量纲是"调好增益下的单位"
+- 同样有 `duration`、到期收尾；GUI 的遥控面板走的就是 `control_key=0x12`
+- 世界系/机体系同上
+
+### STAY — 原地保持
+
+```python
+goal.cmd_type = BasicMotion.Goal.STAY
+# target / duration 均忽略
+```
+
+- 把位置目标设为**当前位姿**后**立即返回**（不阻塞、无 duration），成功态
+- 它就是"打断收尾"用的同一个动作（`_hold_current_position`），所以语义完全一致
+
+### 打断语义（速度/推力尤其重要）
+
+任何命令被 **cancel** 或被**更新的 goal 抢占**时，都会**先把目标设成当前位姿
+（原地保持）再返回**，然后才轮到新命令下发自己的目标。所以"边走边看、看到就换命令"
+是安全的：旧的速度命令不会在你切走之后继续推着船跑。
+
+`message` 区分三种非成功终态：`"cancelled"`（客户端取消）、`"superseded"`（被新 goal
+抢占）、`"motion timeout"`（位置类超时；**超时不主动 hold**，沿用既有行为）。
+抢占**不是排队**：新 goal 立刻被接受，旧命令在下一次轮询（≤100 ms）让位。
+
+> ⚠️ `control_level` 回读**分不出**世界系与机体系（WVELOCITY/BVELOCITY 都报 `2`）。
+> 判断 frame 位是否生效只能看船实际往哪个方向动。
 
 ---
 
@@ -224,24 +294,29 @@ float32 target_x/y/z/yaw         # 当前运动目标 odom 系位姿 (yaw: 度)
 
 | 字段        | 类型   | 说明                                                                |
 | ----------- | ------ | ------------------------------------------------------------------- |
-| `success` | bool   | True = 成功到达目标                                                 |
-| `message` | string | 空 = 成功, "motion timeout" = 超时, "cancelled" = 取消, 其他 = 错误 |
+| `success` | bool   | True = 成功到达目标（速度/推力类=跑满 duration）                    |
+| `message` | string | 空 = 成功, "duration elapsed" = 速度/推力到时收尾, "motion timeout" = 超时, "cancelled" = 取消, "superseded" = 被新 goal 抢占, 其他 = 错误 |
 
-三种终态：
+终态（第 3 项为 2026-10-12 新增）：
 
-| 状态 | success | message          | goal_handle    |
-| ---- | ------- | ---------------- | -------------- |
-| 成功 | True    | ""               | `succeed()`  |
-| 超时 | False   | "motion timeout" | `abort()`    |
-| 取消 | False   | "cancelled"      | `canceled()` |
+| 状态 | success | message          | goal_handle    | 收尾 |
+| ---- | ------- | ---------------- | -------------- | ---- |
+| 成功（位置） | True | "" | `succeed()` | 已在目标点 |
+| 成功（速度/推力） | True | "duration elapsed" | `succeed()` | **原地保持** |
+| 超时 | False   | "motion timeout" | `abort()`    | 不动（位置模式继续走向原目标） |
+| 取消 | False   | "cancelled"      | `canceled()` | **原地保持** |
+| 被抢占 | False   | "superseded"     | `abort()`    | **原地保持** |
 
 ### Feedback
 
 | 字段                   | 类型    | 频率  | 说明                                  |
 | ---------------------- | ------- | ----- | ------------------------------------- |
-| `distance_remaining` | float32 | 0.5Hz | 到目标的 3D 欧氏距离（不计 yaw 误差） |
+| `distance_remaining` | float32 | 0.5Hz | 位置类：到目标的 3D 欧氏距离（不计 yaw）；速度/推力类恒 0 |
+| `velocity_current` | float32[] | 0.5Hz | 机体实测 `[vx, vy, vz, vyaw_rate]`，m/s 与度/秒 |
+| `velocity_target` | float32[] | 0.5Hz | 机体目标速度，单位同上；非速度命令为全 0 |
+| `control_level` | uint8 | 0.5Hz | 回读 MCU 层级 0=NONE 1=POS 2=VEL 3=FORCE |
 
-仅在运动进行中有反馈值，空闲时不发。
+仅在命令执行中有反馈值，空闲时不发。
 
 ---
 

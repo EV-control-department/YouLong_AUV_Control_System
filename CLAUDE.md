@@ -79,17 +79,22 @@ This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater
 
 ```
 # Goal
-uint8 cmd_type      # SET=3, WMOVE=1, BMOVE=2, WTRAVEL=4, BTRAVEL=5, START=6
+uint8 cmd_type      # WMOVE=1 BMOVE=2 SET=3 WTRAVEL=4 BTRAVEL=5 START=6
+                    # WVELOCITY=7 BVELOCITY=8 WFORCE=9 BFORCE=10 STAY=11 (2026-10-12 扩充)
 string axes          # 生效轴 "x"/"y"/"z"/"rz" 任意组合，空=全部
-float32[] target     # [x, y, z, yaw] — 含义取决于 cmd_type
+float32[] target     # [x, y, z, yaw] — 含义取决于 cmd_type；速度命令 yaw=度/秒
 float32 timeout      # 超时秒数，≤0 默认 60s
+float32 duration      # 秒，仅速度/推力类：保持这么久后自动收尾为原地保持
 ---
 # Result
 bool success
 string message
 ---
 # Feedback
-float32 distance_remaining   # 3D 欧氏距离
+float32 distance_remaining   # 3D 欧氏距离（位置类；速度/推力类恒 0）
+float32[] velocity_current   # 机体实测 [vx,vy,vz,vyaw_rate]，m/s 与 度/秒
+float32[] velocity_target    # 机体目标速度；非速度命令为全 0
+uint8 control_level          # 回读 MCU 层级 0=NONE 1=POS 2=VEL 3=FORCE
 ```
 
 #### 坐标系约定
@@ -101,7 +106,7 @@ float32 distance_remaining   # 3D 欧氏距离
 - **yaw 单位**：度（°），NED 系顺时针为正
 - **NED 轴**：x=北(N), y=东(E), z=下(D, 正数更深)
 
-#### 6 种命令类型
+#### 11 种命令类型
 
 | 命令 | 值 | target 含义 | 运动模式 | 行为 |
 |---|---|---|---|---|
@@ -111,6 +116,18 @@ float32 distance_remaining   # 3D 欧氏距离
 | **BMOVE** | 2 | 机体系偏移 `[dx, dy, dz, dyaw]` | `body_to_world` + `step_move_world` | 先将 body 偏移旋转到世界系，再走 WMOVE |
 | **WTRAVEL** | 4 | 世界系偏移 `[dx, dy, dz]` | 转向 + 直线 step_move | 先转向目标方向 (atan2)，再沿 body-X 前进 |
 | **BTRAVEL** | 5 | 机体系偏移 `[dx, dy, dz]` | `body_to_world` + WTRAVEL | 先转 body→world，再走 WTRAVEL |
+| **WVELOCITY** | 7 | 世界系速度 `[vx,vy,vz,vyaw(度/秒)]` | 速度闭环（MCU） | 保持 `duration` 秒后**自动收尾为原地保持** |
+| **BVELOCITY** | 8 | 机体系速度 | 速度闭环（MCU） | 同上；`vx` 恒指艇头方向 |
+| **WFORCE** | 9 | 世界系推力 `[Fx,Fy,Fz,Mz]` | 直接推力（MCU） | 同上 |
+| **BFORCE** | 10 | 机体系推力 | 直接推力（MCU） | 同上 |
+| **STAY** | 11 | 忽略 | 位置（目标=当前位姿） | 锁住当前位置，**立即返回**（纯 latch，无 duration） |
+
+**速度/推力的两条硬规则**（2026-10-12）：
+- **世界系/机体系由 `control_key` 的 frame 位表达，转换在 MCU 侧做**（固件与仿真都按
+  `R_ZYX^T`）。`basic_motion` 只填位，自己不算。位置类是历史例外（`BMOVE`/`BTRAVEL` 在
+  `basic_motion` 内转世界后统一走 `0x00`）。
+- **必须收尾**：MCU 不会忘记最后一条速度/推力目标。到时、被 cancel、被抢占，三条路径
+  都会先发一条「目标=当前位姿」再返回；节点退出（Ctrl+C/SIGTERM）发推力归零。
 
 #### START 命令
 
@@ -190,12 +207,20 @@ goal.target = [3.0, 0.0, 0.0, 0.0]     # 机体系：向前直线 3m
 
 ```python
 # Result
-result.success    # True=成功, False=超时/拒绝/取消
-result.message    # 空="成功", "cancelled", "motion timeout", 或其他错误
+result.success    # True=成功, False=超时/被取消/被抢占/被拒绝
+result.message    # 空="成功"; "duration elapsed"=速度/推力到时收尾;
+                  # "cancelled"; "superseded"=被新 goal 抢占; "motion timeout"
 
-# Feedback (0.5Hz, 仅运动中有值)
-feedback.distance_remaining   # 到目标的 3D 欧氏距离（不含 yaw 误差）
+# Feedback (0.5Hz, 仅命令执行中有值)
+feedback.distance_remaining   # 位置类：3D 欧氏距离（不含 yaw）；速度/推力类恒 0
+feedback.velocity_current     # 机体实测 [vx,vy,vz,vyaw_rate]，m/s 与 度/秒
+feedback.velocity_target      # 机体目标速度；非速度命令为全 0
+feedback.control_level        # 回读 MCU 层级 0=NONE 1=POS 2=VEL 3=FORCE
 ```
+
+**打断语义**（2026-10-12）：任何命令被 cancel 或被更新的 goal **抢占**时，都先发一条
+「目标=当前位姿」的位置 setpoint 再返回 —— 只"停止下发"会让 MCU 继续执行上一条
+（速度/推力下尤其危险）。抢占**不是排队**：新 goal 立即被接受，旧命令在 ≤100 ms 内让位。
 
 #### 使用示例
 
@@ -241,11 +266,18 @@ print('SET:', result.success, result.message)
 2. **target 必须 4 元素**：就算 WTRAVEL/BTRAVEL 忽略 yaw，也必须传 4 个值。否则 server abort
 3. **timeout ≤ 0** 自动用 60s
 4. **`axes` 会真正生效**（2026-10-10 实测更正：此前写"仅用于日志"是错的）。
-   对 **SET / WMOVE / WTRAVEL**，只有列在 `axes` 里的轴更新为目标里的新值，其余轴**沿用上一目标**
-   （`axes = req.axes or 'xyzrz'`，逐个 `if 'x' in axes: …`；空 = 全轴）；
-   对 **BMOVE / BTRAVEL / START** 完全不参与。极性与 `ZitSetpoint.type_mask` **相反**（那里 1=忽略）。
-   详见 `workspace_auv/docs/basic_motion_action.md` 与 `docs/interfaces/service_action_contract.md`
+   对 **SET/WMOVE/WTRAVEL/WVELOCITY/BVELOCITY/WFORCE/BFORCE**，只有列在 `axes` 里的轴更新为
+   目标里的新值，其余轴**沿用上一目标**（速度/推力类沿用**上一条速度/推力目标**，与位置目标
+   不是同一份状态）；对 **BMOVE/BTRAVEL/START/STAY** 完全不参与。
+   极性与 `ZitSetpoint.type_mask` **相反**（那里 1=忽略）。
+   实现是 `fuse_target_axes()`（2026-10-12 抽出，此前在派发里复制三份）
 5. **MultiThreadedExecutor**：basic_motion 内部使用多线程执行器，action 回调在独立线程运行，不阻塞主循环
+6. **并发命令会被抢占，不会排队**（2026-10-12）：ActionServer 的 execute_callback 由
+   `executor.create_task` 驱动，**并发 goal 会真的同时执行**（实测两条 SET 同写
+   `/zit6/cmd/setpoint`）。现在用 `_exec_lock` 串行化 + 单调递增代号抢占：新 goal 赢，
+   旧命令收尾让位。
+7. **必须收尾**：MCU 不会忘记最后一条速度/推力目标。到时/被 cancel/被抢占都会先发原地保持；
+   节点退出（Ctrl+C 或 SIGTERM）发推力归零（`control_key=0x12` 全 0）。
 
 ### task_runner (`uv_task`)
 
@@ -253,7 +285,7 @@ print('SET:', result.success, result.message)
 
 **Key behaviors:**
 - **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them (no service call needed)
-- **Task map**: JSON `name` field maps to a method via the `task_map` dict in `task_runner.py`. Beyond the SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL axis variants (e.g. `setxyzrz`, `bmovexy`, `wtravelx`), plus `start`, `navigate`, `wait`, it exposes competition-specific actions: `follow_line`, `arrow_surface`, `drop_beacon`, `take_water_sample`, `get_sample`, `release_sampler`. **`task_runner.py`'s `task_map` is the authoritative list**; `docs/debug_guide.md` lags behind it.
+- **Task map**: JSON `name` field maps to a method via the `task_map` dict in `task_runner.py`. Beyond the SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL axis variants (e.g. `setxyzrz`, `bmovexy`, `wtravelx`), plus `start`, `navigate`, `wait`, and since 2026-10-12 the velocity/force latch tasks `bvelocity`/`wvelocity`/`bforce`/`wforce`/`stay` (params carry `duration`; they deliberately do **not** update `_cmd_x/_cmd_y/_cmd_z/_cmd_yaw`, so do not mix them with position tasks that rely on that tracking), it exposes competition-specific actions: `follow_line`, `arrow_surface`, `drop_beacon`, `take_water_sample`, `get_sample`, `release_sampler`. **`task_runner.py`'s `task_map` is the authoritative list**; `docs/debug_guide.md` lags behind it.
 - **ROS parameters**: `debug_mode`, `down_image_width`, `down_image_height`, `align_ema_alpha` (see `docs/node_parameters.md`)
 - **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
 - **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
@@ -452,7 +484,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- **Tests**: two suites. `uv_sim` (**163 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
+- **Tests**: two suites. `uv_sim` (**171 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
   contract, odometry frame conventions (now via `nav_sim`/`mcu_sim`), PID-config single-source + fallback
   structure, entry-point integrity (derived from `setup.py`), frame/beam geometry, scene↔YAML↔doc
   contract, camera-offset (N1), TF (B18), documentation-contract (T3a), launch-contract / layering (T4),
@@ -460,8 +492,10 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
   immutability + I2 ownership (`test_node_split.py`), `nav_sim` role switch (`test_nav_sim.py`),
   DVL beams/validity (`test_dvl_sim.py`), stitching (`test_camera_relay.py`), the line laser
   (`test_laser_sim.py`) and the PID-config path walk (`test_pid_config.py`)), and since 2026-10-12
-  `uv_control` (**12 cases**: `workspace_auv/src/uv_control/test/` — `cmd_type` names derived from
-  `BasicMotion.action`, the `axes` target-fusion rule, and the step constants vs their doc table).
+  `uv_control` (**31 cases**: `workspace_auv/src/uv_control/test/` — `cmd_type` names derived from
+  `BasicMotion.action`, the `axes` target-fusion rule, the step constants vs their doc table, command
+  serialisation + preemption + interrupt-to-position-hold, and the velocity/force/STAY/duration/feedback
+  behaviour added 2026-10-12).
   The `uv_control` suite exists because that package had **no tests at all**, which is how a
   `STEP_Y`/`STEP_PERIOD` doc drift and a triplicated `cmd_type` name map went unnoticed.
   Run after sourcing both workspaces; keep both green:

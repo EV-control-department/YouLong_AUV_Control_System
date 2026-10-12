@@ -145,6 +145,13 @@ class TaskRunnerNode(Node):
             'btravelz': self._task_btravelz,
             'btravelxy': self._task_btravelxy,
             'btravelxyz': self._task_btravelxyz,
+            # 速度 / 推力 / STAY（2026-10-12）。这些命令既不阻塞到某一点，也不
+            # 更新 `_cmd_*` 位置跟踪（见各自的 docstring）。
+            'bvelocity': self._task_bvelocity,
+            'wvelocity': self._task_wvelocity,
+            'bforce': self._task_bforce,
+            'wforce': self._task_wforce,
+            'stay': self._task_stay,
             'navigate': self._task_navigate,
             'wait': self._task_wait,
             'follow_line': self._task_follow_line,
@@ -517,18 +524,23 @@ class TaskRunnerNode(Node):
     # ========================================================================
 
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
-                          quiet=False):
+                          quiet=False, duration=0.0):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
         the main thread's SingleThreadedExecutor processes DDS events.
 
         Args:
-            cmd_type: BasicMotion.Goal.{START,SET,WMOVE,BMOVE,WTRAVEL,BTRAVEL}
-            target: list of 4 floats [x, y, z, yaw] (yaw in degrees)
+            cmd_type: BasicMotion.Goal.{START,SET,WMOVE,BMOVE,WTRAVEL,BTRAVEL,
+                WVELOCITY,BVELOCITY,WFORCE,BFORCE,STAY}
+            target: list of 4 floats [x, y, z, yaw] (yaw in degrees; for the
+                velocity commands it is **deg/s** and for force it is ``Mz``)
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
             quiet: if True, suppress per-goal INFO logs (errors still logged)
+            duration: seconds to hold a velocity/force command before the server
+                settles back to a position hold (0 = fall back to ``timeout``,
+                then to the server's DEFAULT_DURATION).  Ignored elsewhere.
 
         Returns:
             (success: bool, message: str)
@@ -542,8 +554,10 @@ class TaskRunnerNode(Node):
 
         if not quiet:
             t = [f'{v:.2f}' for v in target]
+            extra = f' duration={duration:.1f}s' if duration > 0 else ''
             self.get_logger().info(
-                f'Send goal: {type_name} target=[{", ".join(t)}] timeout={effective_timeout:.0f}s')
+                f'Send goal: {type_name} target=[{", ".join(t)}] '
+                f'timeout={effective_timeout:.0f}s{extra}')
 
         if not self._action_client.wait_for_server(timeout_sec=2.0):
             self.get_logger().error('Action server not available')
@@ -554,6 +568,7 @@ class TaskRunnerNode(Node):
         goal.axes = axes
         goal.target = target
         goal.timeout = float(effective_timeout)
+        goal.duration = float(duration)
 
         send_future = self._action_client.send_goal_async(goal)
         while rclpy.ok() and not self.stopped and not send_future.done():
@@ -962,6 +977,69 @@ class TaskRunnerNode(Node):
             self._cmd_x += cy * p['dx'] - sy * p['dy']
             self._cmd_y += sy * p['dx'] + cy * p['dy']
             self._cmd_z += p['dz']
+        return success
+
+    # --- 速度 / 推力 / STAY tasks (2026-10-12) ---
+    #
+    # 这几种命令**不更新 `_cmd_x/_cmd_y/_cmd_z/_cmd_yaw`**：task_runner 的位置
+    # 跟踪是"按命令累加"而不是按里程计，而速度/推力命令产生的位移取决于实际
+    # 持续时间与水流/姿态，累加不出来。**因此不要在一条任务列表里把速度命令和
+    # 依赖 `_cmd_*` 的 BMOVE/BTRAVEL 混用** —— 混用会让后者用到过时的起点。
+    # 位置跟踪是既有的有意设计（见 task_runner 顶部注释：实机不发布 AuvState）。
+
+    def _continuous_goal(self, cmd_type, values, p, label):
+        """速度/推力任务的共同外壳：duration 与 timeout 一起给，保证有界。"""
+        duration = float(p.get('duration', p.get('time_out', 0.0)))
+        success, msg = self._send_action_goal(
+            cmd_type, values, p.get('axes', ''),
+            timeout=duration if duration > 0 else 60.0, duration=duration)
+        self.get_logger().info(f'{label}: {msg}')
+        return success
+
+    def _task_bvelocity(self, p: dict) -> bool:
+        """机体系速度保持。params: vx, vy, vz, vyaw(度/秒), duration, axes?
+
+        命令在 ``duration`` 秒后自动收尾为原地保持；被打断（抢占/cancel）也会
+        立刻收尾。所以"前进 3 秒"就是一条任务，不需要拿 SET 微步去凑。
+        """
+        return self._continuous_goal(
+            BasicMotion.Goal.BVELOCITY,
+            [float(p.get('vx', 0.0)), float(p.get('vy', 0.0)),
+             float(p.get('vz', 0.0)), float(p.get('vyaw', 0.0))],
+            p, 'bvelocity')
+
+    def _task_wvelocity(self, p: dict) -> bool:
+        """世界系速度保持（同 ``bvelocity``，但方向不随艇头转）。"""
+        return self._continuous_goal(
+            BasicMotion.Goal.WVELOCITY,
+            [float(p.get('vx', 0.0)), float(p.get('vy', 0.0)),
+             float(p.get('vz', 0.0)), float(p.get('vyaw', 0.0))],
+            p, 'wvelocity')
+
+    def _task_bforce(self, p: dict) -> bool:
+        """机体系推力保持。params: fx, fy, fz, mz, duration, axes?
+
+        力/力矩是"调好增益下的单位"，量纲见 docs/interfaces/service_action_contract.md。
+        """
+        return self._continuous_goal(
+            BasicMotion.Goal.BFORCE,
+            [float(p.get('fx', 0.0)), float(p.get('fy', 0.0)),
+             float(p.get('fz', 0.0)), float(p.get('mz', 0.0))],
+            p, 'bforce')
+
+    def _task_wforce(self, p: dict) -> bool:
+        """世界系推力保持（参数同上）。"""
+        return self._continuous_goal(
+            BasicMotion.Goal.WFORCE,
+            [float(p.get('fx', 0.0)), float(p.get('fy', 0.0)),
+             float(p.get('fz', 0.0)), float(p.get('mz', 0.0))],
+            p, 'wforce')
+
+    def _task_stay(self, p: dict) -> bool:
+        """原地保持：把目标设为当前位姿后立即返回（无 duration，纯 latch）。"""
+        success, msg = self._send_action_goal(
+            BasicMotion.Goal.STAY, [0.0, 0.0, 0.0, 0.0])
+        self.get_logger().info(f'stay: {msg}')
         return success
 
     # --- Special tasks ---

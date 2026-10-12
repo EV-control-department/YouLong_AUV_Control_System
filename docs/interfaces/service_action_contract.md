@@ -30,10 +30,30 @@
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
-| `cmd_type` | `uint8` | 命令类型常量：`WMOVE=1`、`BMOVE=2`、`SET=3`、`WTRAVEL=4`、`BTRAVEL=5`、`START=6` |
-| `axes` | `string` | 生效轴：`"x"`/`"y"`/`"z"`/`"rz"` 任意组合，空=全部。**对 SET/WMOVE/WTRAVEL 真正生效**（2026-10-10 实测更正：此前多处文档写"仅用于日志"）：只更新列出的轴，其余轴**沿用上一目标**；**对 BMOVE/BTRAVEL/START 完全不参与**。极性与 `ZitSetpoint.type_mask` **相反**（那里 1=忽略） |
-| `target` | `float32[]` | `[x, y, z, yaw]`，含义随 `cmd_type` 变（见 `basic_motion_action.md`）。**必须 4 个元素**，即使 WTRAVEL/BTRAVEL 忽略 yaw |
-| `timeout` | `float32` | 秒；`≤0` ⇒ 默认 60 s |
+| `cmd_type` | `uint8` | 命令类型常量：位置类 `WMOVE=1`、`BMOVE=2`、`SET=3`、`WTRAVEL=4`、`BTRAVEL=5`、`START=6`；速度类 `WVELOCITY=7`、`BVELOCITY=8`；推力类 `WFORCE=9`、`BFORCE=10`；`STAY=11`（2026-10-12 扩充，此前只有 1–6） |
+| `axes` | `string` | 生效轴：`"x"`/`"y"`/`"z"`/`"rz"` 任意组合，空=全部。**对 SET/WMOVE/WTRAVEL/WVELOCITY/BVELOCITY/WFORCE/BFORCE 真正生效**（2026-10-10 实测更正：此前多处文档写"仅用于日志"）：只更新列出的轴，其余轴**沿用上一目标**（速度/推力类沿用**上一条速度/推力目标**，与位置目标不是同一份状态）；**对 BMOVE/BTRAVEL/START/STAY 完全不参与**。极性与 `ZitSetpoint.type_mask` **相反**（那里 1=忽略） |
+| `target` | `float32[]` | 含义随 `cmd_type` 变（见下表）。**必须 ≥4 个元素**，即使 WTRAVEL/BTRAVEL 忽略 yaw。**yaw 一律是度**（速度为**度/秒**；推力是 `Mz`，不作单位换算） |
+| `timeout` | `float32` | 秒；`≤0` ⇒ 默认 60 s。位置类=到位等待上限 |
+| `duration` | `float32` | 秒；**只有速度/推力类使用**：保持这么久后自动收尾为原地保持。取值为 `duration > timeout > DEFAULT_DURATION(10 s)`。其它 `cmd_type` 传非 0 会被**忽略并告警**（不静默） |
+
+**`target` 的含义（按 `cmd_type`）**
+
+| cmd_type | `target` | 坐标系 |
+|---|---|---|
+| `SET` / `WMOVE` / `WTRAVEL` | `[x, y, z, yaw]` / `[dx, dy, dz, dyaw]` | odom（世界）系，米与度 |
+| `BMOVE` / `BTRAVEL` | `[dx, dy, dz, dyaw]` | 机体系；`basic_motion` 内转世界系 |
+| `WVELOCITY` / `BVELOCITY` | `[vx, vy, vz, vyaw_rate]` | m/s 与**度/秒**；世界/机体由 `cmd_type` 决定 |
+| `WFORCE` / `BFORCE` | `[Fx, Fy, Fz, Mz]` | 与 `force_4dof` 同量纲（调好增益下的单位）；世界/机体由 `cmd_type` 决定 |
+| `STAY` | 忽略 | 目标 = **当前位姿** |
+
+**世界系与机体系在哪转换**：**在 MCU 侧**，由 `control_key` 的 frame 位（`0x10`）表达，
+固件与仿真都按当前姿态的 `R_ZYX^T` 转（`SetpointRouter` / `mcu_control.world_to_body_vector`，
+见 `docs/roadmap.md` B21）。`basic_motion` 只填 frame 位，自己不做转换 —— 位置类例外（历史行为：
+`BMOVE`/`BTRAVEL` 在 `basic_motion` 内转世界后统一走 `0x00`）。
+
+> ⚠️ **mask/axes 指机体轴**：世界系命令是**先转换、再按机体轴套 mask**（与固件顺序一致）。
+> 所以在 `ZitSetpoint` 层面，"世界系北向速度 + 忽略机体 y"= 什么都不动。`basic_motion`
+> 的 `axes` 走的是目标融合而非 mask，不受这条影响，但直接用 `ZitSetpoint` 时要注意。
 
 **Result**
 
@@ -57,7 +77,13 @@
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
-| `distance_remaining` | `float32` | 目标的三维欧氏距离（**不含 yaw 误差**），0.5 Hz，**仅运动中有值** |
+| `distance_remaining` | `float32` | 位置类：目标的三维欧氏距离（**不含 yaw 误差**）。速度/推力类**恒为 0**（没有位置目标，不拿上一次目标充数）。0.5 Hz，**仅命令执行中有值** |
+| `velocity_current` | `float32[]` | 机体**实测**速度 `[vx, vy, vz, vyaw_rate]`，m/s 与**度/秒**（来自 `/zit6/state/vel`；那里角速度是 rad/s，这里已换算，以与 `target` 的约定一致）。无数据时为空数组 |
+| `velocity_target` | `float32[]` | 机体**目标**速度，单位同上；仅速度命令有意义，其它命令为全 0（不是"沿用上一条"） |
+| `control_level` | `uint8` | 回读 MCU 控制层级：`0=NONE 1=POSITION 2=VELOCITY 3=FORCE`（来自 `/zit6/state/status`） |
+
+> `control_level` **无法区分世界系与机体系**（WVELOCITY 与 BVELOCITY 都报 `2`）。要判断
+> frame 位是否生效，只能看船实际往哪个方向动 —— 测试就是这么做的（见 `docs/roadmap.md` B21）。
 
 **拒绝与边界**（代码锚点 `workspace_auv/src/uv_control/uv_control/basic_motion.py`）
 

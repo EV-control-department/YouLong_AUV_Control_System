@@ -1,18 +1,37 @@
 # Request (Goal)
-uint8 WMOVE=1       # 世界系步进, target=[dx, dy, dz, dyaw]
-uint8 BMOVE=2       # 机体系步进, target=[dx, dy, dz, dyaw]
-uint8 SET=3         # 绝对定位, target=[x, y, z, yaw]
-uint8 WTRAVEL=4     # 世界系直线, target=[dx, dy, dz]
-uint8 BTRAVEL=5     # 机体系直线, target=[dx, dy, dz]
-uint8 START=6       # 初始化里程计原点（无视 axes/target/timeout）
+# ── 位置类（阻塞到到位；world = odom/map 系；body 命令在 basic_motion 内转换）──
+uint8 WMOVE=1        # 世界系步进, target=[dx, dy, dz, dyaw(度)]
+uint8 BMOVE=2        # 机体系步进, target=[dx, dy, dz, dyaw(度)]
+uint8 SET=3          # 绝对定位,   target=[x, y, z, yaw(度)]
+uint8 WTRAVEL=4      # 世界系直线, target=[dx, dy, dz, (yaw 忽略)]
+uint8 BTRAVEL=5      # 机体系直线, target=[dx, dy, dz, (yaw 忽略)]
+uint8 START=6        # 初始化里程计原点（无视 axes/target/timeout/duration）
+# ── 速度类（限时 duration，到时自动收尾为原地保持）──
+uint8 WVELOCITY=7    # 世界系速度, target=[vx, vy, vz, vyaw_rate(度/秒)]
+uint8 BVELOCITY=8    # 机体系速度, target=[vx, vy, vz, vyaw_rate(度/秒)]
+# ── 推力类（限时 duration，到时自动收尾为原地保持）──
+uint8 WFORCE=9       # 世界系推力, target=[Fx, Fy, Fz, Mz]
+uint8 BFORCE=10      # 机体系推力, target=[Fx, Fy, Fz, Mz]
+# ── 原地保持 ──
+uint8 STAY=11        # 把目标设为**当前位姿**后立即返回（latch，无 duration）
+
 uint8 cmd_type
-string axes         # 要动的轴: "x","y","z","rz" 任意组合, 空=全部
-float32[] target    # [x, y, z, yaw]
-float32 timeout     # 秒, ≤0=默认60s
+string axes          # 生效轴: "x","y","z","rz" 任意组合, 空=全部。
+                     # 对 SET/WMOVE/WTRAVEL/WVELOCITY/BVELOCITY/WFORCE/BFORCE 真生效：
+                     # 列出的轴取 target 新值，其余轴**沿用上一目标**。
+                     # 对 BMOVE/BTRAVEL/START/STAY 不参与。
+float32[] target     # 长度必须 >= 4；含义随 cmd_type 变（见上），yaw 一律**度**（速度为度/秒）
+float32 timeout      # 秒，≤0=默认 60s。位置类：到位等待上限
+float32 duration     # 秒，仅速度/推力类使用：>0 保持该命令这么久后自动收尾。
+                     # ≤0 时回退 timeout（再 ≤0 则用 DEFAULT_DURATION=10s）。
+                     # 其它 cmd_type 传入非 0 会被忽略并告警。
 ---
 # Result
 bool success
-string message
+string message       # ""=成功; "cancelled"; "superseded"; "motion timeout"; "duration elapsed"...
 ---
 # Feedback
-float32 distance_remaining
+float32 distance_remaining   # 位置类：到目标的 3D 欧氏距离；速度/推力类恒为 0
+float32[] velocity_current   # 机体实测 [vx, vy, vz, vyaw_rate]，m/s 与 **度/秒**；无数据时为空
+float32[] velocity_target    # 机体目标 [vx, vy, vz, vyaw_rate]，同上；非速度命令为全 0
+uint8 control_level          # 回读 MCU 控制层级：0=NONE 1=POS 2=VEL 3=FORCE
