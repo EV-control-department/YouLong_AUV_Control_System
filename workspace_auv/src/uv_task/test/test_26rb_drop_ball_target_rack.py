@@ -215,9 +215,10 @@ def test_full_drop_sequence_holds_depth_through_release(rig, monkeypatch):
     assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 90.)]*3+[(2, 270.)]*3
     holds = [call for call in rig.calls if call[0] == 'action']
     assert len(holds) == 3
-    # Ball commands follow disc positioning; ring commands follow hairpin positioning.
+    # The ball command follows successful arrival of both claws.
     events = [call[0] for call in rig.calls if call[0] in ('action', 'servo')]
-    assert events == ['action', 'action', 'servo', 'servo', 'servo', 'action', 'servo', 'servo', 'servo']
+    assert events == ['action', 'action', 'action', 'servo', 'servo', 'servo',
+                      'servo', 'servo', 'servo']
     assert all(call[3] == 'xyzrz' and call[2][2] == .2 for call in holds)
 
 
@@ -284,12 +285,13 @@ def test_failed_ring_alignment_or_cancellation_prevents_further_release(rig, mon
             return lookup(base, child)
         rig.node.camera_extrinsics_provider.lookup_transform = missing
     elif failure == 'alignment_motion':
-        velocity = rig.node._send_body_velocity
+        action = rig.node._send_action_goal
         def fail_hairpin(*args, **kwargs):
-            if any(msg.servo_id == 1 for msg in rig.messages) and args:
+            completed_actions = sum(call[0] == 'action' for call in rig.calls)
+            if completed_actions >= 2:
                 return False, '模拟发夹爪定位失败'
-            return velocity(*args, **kwargs)
-        rig.node._send_body_velocity = fail_hairpin
+            return action(*args, **kwargs)
+        rig.node._send_action_goal = fail_hairpin
     else:
         servo_id = 1 if failure == 'cancel_ball' else 2
         def cancel_on_servo():
@@ -300,7 +302,7 @@ def test_failed_ring_alignment_or_cancellation_prevents_further_release(rig, mon
     assert not result
     if failure in ('missing_tf', 'alignment_motion'):
         assert result.failure_code.endswith('.ring_alignment')
-        assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 90.)]*3
+        assert rig.messages == []
     elif failure == 'cancel_ball':
         assert [msg.servo_id for msg in rig.messages] == [1]
     else:

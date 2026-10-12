@@ -1,4 +1,4 @@
-"""前视寻找rack，下视伺服后依次对准圆盘爪和发夹爪，释放球与环。"""
+"""前视寻找rack，下视伺服后等待两只爪子到位（超时仍继续）再释放。"""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from uv_task.down_camera_servo import (
 )
 
 
-# SETPOINT only adds an action constant; its request fields match older builds.
-SETPOINT_COMMAND = getattr(BasicMotion.Goal, 'SETPOINT', 10)
+# SET waits for the requested position to be reached before reporting success.
+SET_COMMAND = BasicMotion.Goal.SET
 
 
 def validate_ring_release_params(params):
@@ -79,6 +79,7 @@ class RB26DropBallTargetRackTask:
             0.2, float(params.get('alignment_timeout', 10.0)))
         self._alignment_settle_seconds = max(
             0.0, float(params.get('alignment_settle_seconds', 0.5)))
+        self._alignment_timed_out = False
         self._release_angle_deg = float(params.get('release_angle_deg', 90.0))
         if (not math.isfinite(self._release_angle_deg)
                 or not 0 <= self._release_angle_deg <= 270.0):
@@ -323,7 +324,7 @@ class RB26DropBallTargetRackTask:
         return self._align_claw('hairpin_claw_link', '发夹爪', self._rack_camera_pose)
 
     def _align_claw(self, frame, label, camera_pose) -> bool:
-        """Submit one claw position from the rack anchor, then wait a fixed delay."""
+        """Move one claw to the rack target and wait for confirmed arrival."""
         node = self._node
         camera = node.camera_extrinsics.get(self._aligned_camera)
         if camera is None:
@@ -368,22 +369,28 @@ class RB26DropBallTargetRackTask:
             f'{claw_body[2]:+.3f})m，'
             f'机体平移=({body_dx:+.3f},{body_dy:+.3f})m，'
             f'世界平移=({world_dx:+.3f},{world_dy:+.3f})m，'
-            f'直接定点目标=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f},{target[3]:.1f})；'
-            f'下发后固定等待={self._alignment_settle_seconds:.2f}s，不等待到点')
+            f'定位目标=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f},{target[3]:.1f})；'
+            f'等待到点超时={self._alignment_timeout:.2f}s')
         success, message = node._send_action_goal(
-            SETPOINT_COMMAND, target, 'xyzrz',
+            SET_COMMAND, target, 'xyzrz',
             timeout=self._alignment_timeout,
             wait_deadline=time.monotonic()+self._alignment_timeout,
             cancel_wait_timeout=2.0,
             quiet=True, light_color=node.LIGHT_OFF,
-            task_context=f'26rb_drop_ball_target_rack：{label}外参直接定点（不等待到点）')
+            task_context=f'26rb_drop_ball_target_rack：{label}外参定位并等待到点')
         if not success:
-            self._logger.error(f'{label}定点指令下发失败：{message}')
+            if (getattr(node, '_last_motion_failure_kind', '') == 'timeout'
+                    and not node.stopped):
+                self._alignment_timed_out = True
+                self._logger.warning(
+                    f'{label}到点等待超时；继续下一步，并在两只爪子都尝试后放球')
+                return True
+            self._logger.error(f'{label}定位未到点或失败：{message}')
             return False
         node._cmd_x, node._cmd_y, node._cmd_z, node._cmd_yaw = target
         self._logger.info(
-            f'26rb_drop_ball_target_rack：{label}定点指令已下发，'
-            f'固定等待{self._alignment_settle_seconds:.2f}s后继续释放')
+            f'26rb_drop_ball_target_rack：{label}已到达rack目标，'
+            f'再稳定{self._alignment_settle_seconds:.2f}s')
         return self._sleep(self._alignment_settle_seconds)
 
     def _release_ball(self) -> bool:
@@ -420,6 +427,7 @@ class RB26DropBallTargetRackTask:
     def execute(self) -> TaskOutcome:
         self._servo_depth = None
         self._rack_camera_pose = None
+        self._alignment_timed_out = False
         completion_flash_pending = False
         node = self._node
         node._set_task_phase_light(node.LIGHT_YELLOW, 'rack观测与放球放环阶段')
@@ -449,16 +457,20 @@ class RB26DropBallTargetRackTask:
                     '26rb_drop_ball_target_rack.stopped', '伺服成功提示被中止')
             if not self._align_disc_claw():
                 return node._fallback_failure_outcome(
-                    '26rb_drop_ball_target_rack', 'alignment', '圆盘爪对准rack失败')
+                    '26rb_drop_ball_target_rack', 'alignment', '圆盘爪未到达rack目标')
+            if not self._align_hairpin_claw():
+                return node._fallback_failure_outcome(
+                    '26rb_drop_ball_target_rack', 'ring_alignment', '发夹爪未到达rack目标')
+            if self._alignment_timed_out:
+                self._logger.warning('爪子定位曾发生到点超时，仍按要求发送放球指令')
+            else:
+                self._logger.info('两只爪子均已到达rack目标，发送放球指令')
             if not self._release_ball():
                 return TaskOutcome.failed(
                     '26rb_drop_ball_target_rack.stopped', '发送释放球指令被中止')
             if not self._flash_green(1, '放球完成'):
                 return TaskOutcome.failed(
                     '26rb_drop_ball_target_rack.stopped', '放球提示被中止')
-            if not self._align_hairpin_claw():
-                return node._fallback_failure_outcome(
-                    '26rb_drop_ball_target_rack', 'ring_alignment', '发夹爪对准rack失败')
             if not self._release_ring():
                 return TaskOutcome.failed(
                     '26rb_drop_ball_target_rack.stopped', '发送释放环指令被中止')
