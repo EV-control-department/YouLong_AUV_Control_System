@@ -51,11 +51,14 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 | `position` | `uv_perception` | workspace_auv | `uv_perception/position.py` | 3D 目标定位 |
 | `navigator` | `uv_nav` | workspace_auv | `uv_nav/navigator.py` | A* 路径规划 + 避障 |
 | `task_runner` | `uv_task` | workspace_auv | `uv_task/task_runner.py` | JSON 任务执行器 |
+| `laser_map` | `uv_mapping` | workspace_auv | `uv_mapping/laser_map.py` | 线激光建图：记录期 QA（`monitor`）/ 实时地图（`live`，未验收）|
+| `map_replay` | `uv_mapping` | workspace_auv | `uv_mapping/replay.py` | **离线**回放：rosbag2 → 2.5D 海床网格 + metrics.json（不需要 ROS 图）|
 
 注意 `uv_sim` 只存在于 `workspace_sim/src/`，不在 `workspace_auv/src/` 中。
 
-> ✅ 已与各包 `setup.py` 的 `console_scripts` 核对：Python 入口 **13 个**（上面除两个仿真器外的 13 行：
-> `uv_sim` 7 个 + `workspace_auv` 6 个）。T5 之前是 7 个（`uv_sim` 只有单体 `sim_bridge`）。
+> ✅ 已与各包 `setup.py` 的 `console_scripts` 核对：Python 入口 **15 个**（上面除两个仿真器外的 15 行：
+> `uv_sim` 7 个 + `workspace_auv` 8 个）。T5 之前是 7 个（`uv_sim` 只有单体 `sim_bridge`）；
+> 2026-10-13 加 `uv_mapping` 的 2 个。
 > `uv_bringup` 与 `uv_sim_bringup` 自身没有 entry point，只有 launch 文件；
 > **谁启动谁**属 launch 层，入口清单见 `interfaces/launch_entries.md`。
 
@@ -313,6 +316,38 @@ T3a 只做**不随 T4/T5 变化**的部分；涉及 launch 结构与 `sim_bridge
 
 ---
 
+## uv_mapping 节点参数 ✅（2026-10-13）
+
+线激光建图分两半：**`laser_map` 节点**（记录期 QA / 实时地图）和 **`map_replay` CLI**
+（离线重建）。设计、误差预算与实测数据见 `workspace_auv/docs/laser_mapping.md`。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `map_mode` | string | `monitor` | `monitor`：只订阅并打印记录期 QA，**不发布任何东西**；`live`：再累积地图并发布 `/mapping/bathymetry`（**未验收**，精度结论都来自离线路径）。非法值启动即报错 |
+| `map_leaf_size` | double | `0.05` | 网格边长 [m]。实测意义：5 cm 时每格约 5 条条纹，平地上条纹间一致度的噪声地板 ≈ 0.34 cm |
+| `map_publish_period` | double | `2.0` | `live` 模式下发布地图点云的周期 [s] |
+| `map_window_strips` | int | `600` | **`live` 模式专用**：地图只保留最近这么多条条纹（滚动窗口）。重建网格是 O(已累积点数)，不封顶会越跑越慢 —— 实测无界时条纹速率从 30.0 Hz 掉到 13.9 Hz、位姿间隔涨到 3.74 s，而 `monitor` 模式（不算网格）全程稳在 30.0 Hz / 44 ms。离线 `map_replay` **无界**（它没有实时性约束）|
+| `pose_interpolate` | bool | `true` | `true`：把位姿插值（位置线性 + 姿态 SLERP）到条纹自己的时间戳；`false`：贴最近的位姿采样。**贴最近会产生梳齿状量化误差**，留这个开关是为了让差别可复现，不是生产选项 |
+| `qa_period` | double | `10.0` | 打印 QA 行的周期 [s] |
+| `max_pose_gap` | float | `0.25` | 条纹时间戳与所用位姿时间戳之差超过它 [s] 就计入异常并告警 |
+| `extrinsics_file` | string | `''` | 覆盖 `uv_mapping/config/laser_extrinsics.yaml`；留空 = 先源码树、再包 share |
+| `output_dir` | string | `''` | 退出时写 `map_qa_<时间戳>.json` 的目录；留空只打日志 |
+
+> **位姿源固定为 `/zit6/state/pos`**，不是 `/basic_motion/pose_info`。实测后者
+> 21~25 Hz、间隔 p95 101~121 ms、最大 475~649 ms（B20），关联误差把地图自洽度
+> 从 0.34 cm 拉到 1.53 cm；`/zit6/state/pos` 是 29.94 Hz、最大间隔 36 ms，实机也有。
+> 它**没有 header**，所以按接收时刻打戳 —— 这正是 `basic_motion` 对
+> `PoseInfo.stamp` 已有的口径（`basic_motion.py:402`）。
+
+> **原始录制不归这个节点管**：`ros2 bag record` 已经能存下充分统计量（激光系条纹 +
+> 位姿流），有现成工具可读；节点自己发明落盘格式只会让原始数据更难被后来者解读，
+> 而且会把"用哪个位姿"这个可以事后重选的决定焊死。离线重建见 `map_replay`。
+
+> **`laser_map` 不在任何 bringup 里**。测绘记录器是"要做测绘时起一次"的东西，
+> 不是常驻车辆栈的一部分；离线那一半更是纯 CLI。
+
+---
+
 ## 启动文件 Launch Arguments ✅（T4 重排后）
 
 > 入口的分工与新旧映射见 `docs/interfaces/launch_entries.md`。本节只列**参数**。
@@ -362,6 +397,26 @@ ros2 launch uv_hm hm_launch.py enable_agent:=false     # 只跑 hw_manager
 ### control_launch.py（包 `uv_control`）
 
 声明 `basic_motion`，**无 launch 参数**（起不起由预设的 `enable_motion` 决定）。
+
+### map_launch.py（包 `uv_mapping`）
+
+声明 `laser_map`，**不被任何预设 include**（见上文 uv_mapping 一节的说明：记录器
+是"要做测绘时起一次"的东西，离线那一半是纯 CLI）。三个参数都是节点选项的直通。
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `map_mode` | `monitor` | 透传给 `laser_map.map_mode` |
+| `map_leaf_size` | `0.05` | 透传给 `laser_map.map_leaf_size` |
+| `output_dir` | `''` | 透传给 `laser_map.output_dir`（退出时写 QA summary JSON） |
+
+**用法：**
+```bash
+# 记录期 QA（另开一个终端 ros2 bag record 原始话题）
+ros2 launch uv_mapping map_launch.py map_mode:=monitor output_dir:=/tmp/survey
+# 离线重建（不需要 ROS 图，但需要 source 工作区才能找到包）
+ros2 run uv_mapping map_replay --bag /tmp/survey/bag --out /tmp/survey/map \
+    --pose state_pos --figure
+```
 
 ### perception_launch.py（包 `uv_perception`）
 

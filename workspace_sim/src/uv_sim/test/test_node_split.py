@@ -43,6 +43,14 @@ EXPECTED_NODES = {
 }
 
 #: A5-2: the only endpoints the split may add -- the owned sensor namespace.
+#: Endpoints that did not exist before the T5 split.  The invariant (I1) is that
+#: the split **moved owners without changing the surface**, so this set is a
+#: deliberate allow-list: anything new must be added here on purpose, together
+#: with the contract row that documents it.
+#:
+#: It is not literally "only the sensor namespace" -- the line laser and T8's
+#: mapper were added later -- which is why the test is named after the property
+#: (additions are deliberate) rather than after the namespace.
 EXPECTED_ADDED_ENDPOINTS = {    ("/sim/sensor/odom", "发布", "nav_msgs.msg.Odometry"),
     ("/sim/sensor/odom", "订阅", "nav_msgs.msg.Odometry"),
     ("/sim/sensor/imu", "发布", "sensor_msgs.msg.Imu"),
@@ -52,6 +60,13 @@ EXPECTED_ADDED_ENDPOINTS = {    ("/sim/sensor/odom", "发布", "nav_msgs.msg.Odo
     # The line laser (added after T5): one engine topic in, one owned topic out.
     ("/auv/laser_scan", "订阅", "sensor_msgs.msg.LaserScan"),
     ("/sim/sensor/laser_points", "发布", "sensor_msgs.msg.PointCloud2"),
+    # T8 (2026-10-13, `uv_mapping`): the mapper consumes the stripe and, in
+    # `live` mode only, publishes its own map.  Neither is a `/sim/sensor/*`
+    # topic, and both are registered in docs/interfaces/topic_contract.md
+    # (sections 1.1 and 1.2) -- an addition to this set is exactly the
+    # "deliberate edit" the assertion message asks for.
+    ("/sim/sensor/laser_points", "订阅", "sensor_msgs.msg.PointCloud2"),
+    ("/mapping/bathymetry", "发布", "sensor_msgs.msg.PointCloud2"),
 }
 
 #: The only launch arguments of ``bridge_launch.py`` that switch modes.  A second
@@ -194,7 +209,15 @@ def _before_split_endpoints() -> set[tuple[str, str, str]]:
             for entry in payload["endpoints"]}
 
 
-def test_topic_contract_only_gained_the_sensor_namespace() -> None:
+def test_topic_contract_additions_are_deliberate() -> None:
+    """I1: nothing may disappear, and every addition must be listed on purpose.
+
+    Scoped to the *whole* tree (the fixture predates the split), so a new package
+    that adds a topic will fail here.  That is intended -- it is the only place
+    that notices a topic appearing without a contract row -- but it means the
+    fix for a legitimate addition is to extend ``EXPECTED_ADDED_ENDPOINTS`` and
+    the contract together, not to loosen the assertion.
+    """
     before = _before_split_endpoints()
     after = _current_endpoints()
 
@@ -205,8 +228,10 @@ def test_topic_contract_only_gained_the_sensor_namespace() -> None:
     )
     added = after - before
     assert added == EXPECTED_ADDED_ENDPOINTS, (
-        "the split added unexpected endpoints; update the contract *and* this list "
-        f"deliberately. added={sorted(added)}"
+        "an endpoint appeared (or vanished) that is not in the deliberate list; "
+        "update docs/interfaces/topic_contract.md *and* EXPECTED_ADDED_ENDPOINTS "
+        f"together. added={sorted(added - EXPECTED_ADDED_ENDPOINTS)} "
+        f"missing={sorted(EXPECTED_ADDED_ENDPOINTS - added)}"
     )
 
 

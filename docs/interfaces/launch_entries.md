@@ -23,6 +23,7 @@
 | `uv_perception/launch/perception_launch.py` | workspace_auv | 全部 | `vision` + `position` | `sim_mode`、`model_path`、`enable_gortc` |
 | `uv_nav/launch/nav_launch.py` | workspace_auv | 全部 | `navigator` | — |
 | `uv_task/launch/task_launch.py` | workspace_auv | 全部 | `task_runner` | — |
+| `uv_mapping/launch/map_launch.py` | workspace_auv | SIL | `laser_map`（**不被任何预设 include**：测绘记录器按需手起；离线那一半 `map_replay` 是纯 CLI，不需要 ROS 图） | `map_mode`、`map_leaf_size`、`output_dir` |
 | `uv_sim/launch/bridge_launch.py` | workspace_sim | SIL / HIL | SIL：`odom_sim`+`imu_sim`+`dvl_sim`+`pressure_sim`+`nav_sim`+`mcu_sim`+`camera_relay`+`laser_sim`（8 个）<br>HIL：去掉 `dvl_sim`/`pressure_sim`，`nav_sim`/`mcu_sim` 换角色（6 个） | `hil_mode`、`pid_config_file` |
 | `stonefish_ros2/launch/stonefish_simulator{,_nogpu}.launch.py` | workspace_sim | SIL / HIL | Stonefish 引擎（**引擎自带的 launch，被 include**） | 6 个 / 3 个引擎参数（见 `workspace_sim/stonefish_notes.md`） |
 

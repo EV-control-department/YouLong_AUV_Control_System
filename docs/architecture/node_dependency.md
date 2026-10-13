@@ -25,6 +25,10 @@
    （仿真预设）        uv_task, stonefish_ros2
    uv_sim ──▶ stonefish_ros2, zit6_interfaces, uv_msgs
    stonefish_ros2 ──▶（tf2, pcl, image_transport, …）
+
+   uv_mapping ──▶（rclpy, sensor_msgs, std_msgs, rosbag2_py, rosidl_runtime_py,
+                   ament_index_python, numpy, scipy, yaml, matplotlib）
+                  **不依赖任何工作区包**（也不被任何预设 include：见 §3）
 ```
 
 | 包 | 声明的依赖（package.xml，已剔除 ament/rosidl/test） | 工作区 |
@@ -36,6 +40,7 @@
 | `uv_nav` | `rclpy`, `std_msgs`, `uv_msgs` | workspace_auv |
 | `uv_perception` | `rclpy`, `std_msgs`, `sensor_msgs`, `uv_msgs`, `cv_bridge` | workspace_auv |
 | `uv_task` | `rclpy`, `std_msgs`, `uv_msgs`, `zit6_interfaces` | workspace_auv |
+| `uv_mapping` | `rclpy`, `ament_index_python`, `rosidl_runtime_py`, `sensor_msgs`, `sensor_msgs_py`, `std_msgs`, `rosbag2_py`, `python3-numpy`, `python3-scipy`, `python3-yaml`, `python3-matplotlib` | workspace_auv |
 | `uv_bringup` | `uv_hm`, `uv_control`, `uv_perception`, `uv_nav`, `uv_task`, `ros2launch` | workspace_auv |
 | `uv_sim` | `rclpy`, `sensor_msgs`, `nav_msgs`, `std_msgs`, `cv_bridge`, `stonefish_ros2`, `zit6_interfaces`, `uv_msgs`, `python3-numpy`, `python3-yaml` | workspace_sim |
 | `uv_sim_bringup` | `uv_bringup`, `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_sim`, `stonefish_ros2`, `ros2launch` | workspace_sim |
@@ -75,6 +80,7 @@
 | 9 | `task_runner`（`enable_task`） | BasicMotion action server | `main()` 里等 action server 最多 15 s；随后按 `debug_mode` 决定是否自动跑 `config/tasks.json`（**非 debug 模式启动即跑**） |
 | — | `camera_relay` | Stonefish 的 `/sim/*_cam/*` | 无输入也能起（100 Hz 定时器空转），有图才开始拼接 |
 | — | `laser_sim` | Stonefish 的 `/auv/laser_scan` | 无输入也能起；收到扫描就发一帧 `/sim/sensor/laser_points`（未命中的射线直接丢弃） |
+| — | `laser_map`（`uv_mapping`，**不在任何预设里**，用手起） | `/sim/sensor/laser_points` + `/zit6/state/pos` | 无位姿时仍计数并告警；`live` 模式要求位姿与条纹时间戳之差 ≤ `max_pose_gap`（超了就不放进地图）。默认 `monitor` 只打印记录期 QA，不发布任何话题 |
 | — | `hw_manager` ⏸ | 真实 MCU（`/zit6/state/zithbt`） | SIL 不启动（`sim_bringup` 不含它）；HIL/REAL 经 `uv_hm/hm_launch.py` 启动，心跳超时进 `DEGRADED` |
 
 **`basic_motion` 是单点**：它是唯一动作入口，也是唯一的 `PoseInfo` 发布者。
@@ -93,7 +99,8 @@
 | `nav_sim` | 无 `/zit6/state/{pos,vel}`，`basic_motion` 拿不到位姿；HIL 下无 `sim/nav` 注入 | `dvl_sim` 转发、相机链路、静态检查 |
 | `mcu_sim` | 无 `/auv/thrusters_cmd`、无 `/zit6/state/{status,thr,zithbt}`、无参数服务 | `nav_sim` 的状态话题仍可观测（但没人被驱动） |
 | `camera_relay` | 无 `/auv/*_cam/*` ⇒ `vision`（`sim_mode`）采不到图 | 控制闭环、导航（无目标时） |
-| `laser_sim` | 无 `/sim/sensor/laser_points`（当前无消费者；控制/感知链路完全不受影响） | 其余全部 |
+| `laser_sim` | 无 `/sim/sensor/laser_points` ⇒ `laser_map` 收不到数据（也只是它自己的 QA 停摆）；控制/感知链路完全不受影响 | 其余全部 |
+| `laser_map` | 无 `/mapping/bathymetry`（仅 `live` 模式有）；`monitor` 模式下它挂掉对整栈零影响 | 其余全部（建图是旁路，不在控制回路里） |
 | `basic_motion` | `position`/`navigator`/`task_runner` 全部失能；`/zit6/cmd/setpoint` 无发布者 | `vision` 仍能发检测（`/perception/detection/*` 照常） |
 | `vision` | 无检测 ⇒ `position` 无输入 ⇒ 无 `/perception/objects` | 控制闭环、导航（无目标时） |
 | `position` | 无 `/perception/objects` ⇒ `navigator`/`task_runner` 的物体相关任务失能 | 控制闭环、巡线（`line_follower` 直接订阅检测） |

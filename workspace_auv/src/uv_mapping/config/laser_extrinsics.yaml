@@ -1,0 +1,41 @@
+# Line laser mount: T_b_line_laser, the only copy `workspace_auv` reads.
+#
+# Value authority: docs/frames/extrinsics_reference.md section "T_b_line_laser".
+# That value is *generated* from the scene by
+#   workspace_sim/tools/derive_extrinsics.py --check
+# (the scene side is workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn,
+#  sensor name `line_laser`, <origin rpy="0 -1.5708 0" xyz="0.05 0 0.19"/>).
+#
+# This file exists because `workspace_auv` must not depend on `workspace_sim`:
+# the mapper runs on the real vehicle too, where the sim's generated YAML is not
+# installed.  test/test_extrinsics.py pins these numbers against the doc's
+# machine-readable block, so the two cannot drift apart unnoticed.
+#
+# Frames:
+#   b          = Vehicle/base_link, FRD   (x forward, y starboard, z down)
+#   line_laser = the laser plane frame    (x = beam at zero fan angle, z = plane normal)
+#
+# T_b_line_laser maps a point from the laser frame into the body frame:
+#   p_b = R @ p_s + t,  t = (0.05, 0, 0.19) m
+#
+# Rotation: R = Rz(0) Ry(-1.5708) Rx(0), so it maps
+#   x_s (down the beam)  -> +z_b  (down)
+#   y_s (fan direction)  -> +y_b  (starboard)
+#   z_s (plane normal)   -> -x_b  (aft)
+# A stripe point has z_s == 0 by construction (laser_sim publishes the fan in its
+# own xy plane), so its body position is (0.05, y_s, 0.19 + x_s).
+#
+# !! The 3.673e-06 terms are the engine's own yaw residual, not noise to round
+#    away: `derive_extrinsics.py --check` compares element-wise.
+
+platform: xunyun
+source_scene: workspace_sim/src/stonefish_ros2/Data/xunyun_fixed.scn
+sensor: line_laser
+convention: >-
+  T_<a>_<b> maps a point from frame b into frame a; b = Vehicle/base_link (FRD)
+
+T_b_line_laser:
+  - [-3.673e-06, 0.0, -1.0, 0.05]
+  - [0.0, 1.0, 0.0, 0.0]
+  - [1.0, 0.0, -3.673e-06, 0.19]
+  - [0.0, 0.0, 0.0, 1.0]

@@ -70,6 +70,7 @@ This is a **ROS 2 Jazzy** project for the **YouLong AUV** (autonomous underwater
 | 3 | `uv_perception` | 4 通道双目 YOLO 检测 + 多帧单目射线交会 3D 定位。sim/real 模式切换，发布 PoseInfo 位姿源 |
 | 4 | `uv_nav` | A* pathfinding + obstacle avoidance waypoint following |
 | 5 | `uv_task` | JSON-based competition task runner |
+| 6 | `uv_mapping` | Line-laser bathymetry: `laser_map` (record-time QA / rolling live map) + `map_replay` (offline 2.5-D reconstruction). Not in any bringup — a survey recorder is started per survey; the offline half is a plain CLI. Design + measured error budget: `workspace_auv/docs/laser_mapping.md` |
 
 ### Action Server — `basic_motion` (`/basic_motion`)
 
@@ -479,7 +480,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 
 ## Package Types
 
-- **ament_python**: `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_bringup`, `uv_sim`, `uv_sim_bringup`
+- **ament_python**: `uv_control`, `uv_hm`, `uv_nav`, `uv_perception`, `uv_task`, `uv_mapping`, `uv_bringup`, `uv_sim`, `uv_sim_bringup`
 - **ament_cmake**: `uv_msgs`, `zit6_interfaces`, `stonefish_ros2` (define custom `.msg`/`.srv` files)
 
 ## Key Files
@@ -517,7 +518,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- **Tests**: three suites. `uv_sim` (**171 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
+- **Tests**: four suites. `uv_sim` (**171 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
   contract, odometry frame conventions (now via `nav_sim`/`mcu_sim`), PID-config single-source + fallback
   structure, entry-point integrity (derived from `setup.py`), frame/beam geometry, scene↔YAML↔doc
   contract, camera-offset (N1), TF (B18), documentation-contract (T3a), launch-contract / layering (T4),
@@ -533,7 +534,16 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
   task-list validation (typo'd names, malformed JSON/root/params), the cancel-API shape, and the
   indicator state machine: the pure pattern table `indicator_pattern()`, the two mutually exclusive
   emitter modes (`OCCUPIED` passthrough vs the 20 Hz timer), warn-once for dropped `set_light()`
-  calls, the 3 s `SKIPPED` hand-back, and the per-task `OCCUPIED` reset).
+  calls, the 3 s `SKIPPED` hand-back, and the per-task `OCCUPIED` reset), and since 2026-10-13
+  `uv_mapping` (**91 cases**: `workspace_auv/src/uv_mapping/test/` — the NED/FRD sign conventions and
+  the `Rz·Ry·Rx` composition order, `T_b_line_laser` pinned against `docs/frames/extrinsics_reference.md`
+  *and* re-derived from the documented `xyz`/`rpy_rad` (plus the "rotation only" counter-example the GUI
+  code would produce), padded/truncated `PointCloud2` decoding, the terrain error mechanisms measured
+  one by one (a vertical pose error enters the depth 1:1; a horizontal one does not enter it at all on
+  flat ground; roll jitter scales with the across offset and is zero at nadir; pitch is ~30x smaller;
+  yaw is exactly zero), the noise-floor prediction `2.33σ`, the live rolling window, and two
+  end-to-end suites: `map_replay` writing/reading a real mcap bag, and the `laser_map` node's pose
+  interpolation, stale-pose drop and QA summary).
   The `uv_control` suite exists because that package had **no tests at all**, which is how a
   `STEP_Y`/`STEP_PERIOD` doc drift and a triplicated `cmd_type` name map went unnoticed.
   Run after sourcing both workspaces; keep them green:
@@ -541,4 +551,5 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
   python3 -m pytest workspace_sim/src/uv_sim/test/ -q
   python3 -m pytest workspace_auv/src/uv_control/test/ -q
   python3 -m pytest workspace_auv/src/uv_task/test/ -q
+  python3 -m pytest workspace_auv/src/uv_mapping/test/ -q
   ```

@@ -14,6 +14,7 @@
 |---|---|
 | 新人 / AI agent 接手 | 本文件 → `roadmap.md`（要做什么）→ `architecture/system_architecture.md`（长什么样）→ `interfaces/topic_contract.md`（怎么通信） |
 | 改控制逻辑 | `frames/frame_convention.md`（坐标系与单位）→ `node_parameters.md`（参数）→ `workspace_auv/docs/basic_motion_action.md`（动作语义） |
+| 改线激光/建图 | `workspace_auv/docs/laser_mapping.md`（误差预算与已决口径）→ `frames/extrinsics_reference.md`（`T_b_line_laser`）→ `node_parameters.md`（`uv_mapping`） |
 | 改仿真 | `workspace_sim/stonefish_notes.md`（引擎行为与坑）→ `frames/extrinsics_reference.md`（外参）→ `architecture/node_dependency.md`（启动顺序） |
 | 动 launch / 入口 | `interfaces/launch_entries.md`（入口清单与编排规则）→ `node_parameters.md`（参数） |
 | 查一个话题/类型 | `interfaces/topic_contract.md`（唯一权威） |
@@ -62,6 +63,7 @@
 | `workspace_auv/docs/perception.md` | 感知架构与数据流 |
 | `workspace_auv/docs/debug_guide.md` | 调试手册（ros2 CLI、动作测试、仿真） |
 | `workspace_auv/docs/coordinate-design.md` | `Coordinate` 类设计 |
+| `workspace_auv/docs/laser_mapping.md` | 线激光建图（`uv_mapping`）设计与**实测误差预算** |
 | `workspace_sim/stonefish_notes.md` | Stonefish 引擎行为、场景结构、已知坑 |
 
 ## 维护规则

@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uv_mapping</name>
+  <version>0.1.0</version>
+  <description>Line-laser bathymetry for YouLong AUV: record-time QA, offline
+  2.5-D seabed reconstruction (dead reckoning), and a live map publisher</description>
+  <maintainer email="origin@example.com">origin</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
+
+  <!-- Not rosdep-resolvable on this image; installed from apt/pip directly.
+       Same convention as uv_sim/package.xml.  matplotlib is only imported by
+       the map_replay figure option, scipy only by the sparse-grid slope fill.
+       (No double hyphen inside an XML comment: it is illegal and the parse
+       failure shows up as ten bogus "import is not declared" errors.) -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
