@@ -291,10 +291,24 @@ print('SET:', result.success, result.message)
 `workspace_auv/src/uv_task/uv_task/task_runner.py` is the competition task executor. It reads a JSON task list (`config/tasks.json`) and executes tasks sequentially using BasicMotion ActionClient.
 
 **Key behaviors:**
-- **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them (no service call needed)
+- **Auto-start**: on launch, if `tasks.json` has entries, a daemon thread immediately starts executing them
+  (no service call needed). **`debug_mode:=true` skips auto-start** so `/task/exec` owns the vehicle
+- **Task-list validation** (2026-10-12): `load_tasks` both parses and validates — JSON syntax, root shape,
+  every `name` present in `task_map`, `params` is an object. Failure ⇒ returns `[]` **and refuses to start**,
+  logging each problem. Never raises: it is called from a service callback, where an exception would mean
+  the client gets no response at all. Rationale: `run_task_list` deliberately does **not** abort on a failed
+  task, so a typo'd name used to be one `warn` and then the AUV silently skipped a step with every later
+  command running from a stale `_cmd_*` estimate
+- **Shutdown** (2026-10-12): `main()` mirrors `basic_motion` — uninstalls rclpy's signal handlers, installs
+  its own SIGINT/SIGTERM handler, and `request_shutdown()` in `finally` cancels the active goal and waits
+  (≤3 s) for it to end. It deliberately does **not** publish a thrust-zero: `/zit6/cmd/setpoint` has exactly
+  one writer (`basic_motion`), which zeroes thrust on its own exit
 - **Task map**: JSON `name` field maps to a method via the `task_map` dict in `task_runner.py`. Beyond the SET/WMOVE/BMOVE/WTRAVEL/BTRAVEL axis variants (e.g. `setxyzrz`, `bmovexy`, `wtravelx`), plus `start`, `navigate`, `wait`, and since 2026-10-12 the velocity/force latch tasks `bvelocity`/`wvelocity`/`bforce`/`wforce`/`stay` (params carry `duration`; they deliberately do **not** update `_cmd_x/_cmd_y/_cmd_z/_cmd_yaw`, so do not mix them with position tasks that rely on that tracking), it exposes competition-specific actions: `follow_line`, `arrow_surface`, `drop_beacon`, `take_water_sample`, `get_sample`, `release_sampler`. **`task_runner.py`'s `task_map` is the authoritative list**; `docs/debug_guide.md` lags behind it.
 - **ROS parameters**: `debug_mode`, `down_image_width`, `down_image_height`, `align_ema_alpha` (see `docs/node_parameters.md`)
-- **Stop service** (`/task/stop`): sets `self.stopped = True` to interrupt the current goal and abort the task list
+- **Stop service** (`/task/stop`): sets `self.stopped = True` **and cancels the running action goal**
+  (2026-10-12 修 B23：此前调 `ActionClient.async_cancel_goal` —— rclpy 的 `ActionClient`
+  **没有**取消方法，取消只能在 goal handle 上 `cancel_goal_async()`；`AttributeError` 被
+  服务回调吞掉，所以它一直是「停列表但不停船」)
 - **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
 
 **ActionClient pattern (SingleThreadedExecutor + daemon thread):**
@@ -491,7 +505,7 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
 - **Architecture**: thin ROS nodes that import core logic from sibling modules. Each `package/__init__.py` is empty; actual code is in `package/module.py`.
 - `.pt` YOLO weights under `src/datas/` are **gitignored** — models must be provided separately
 - `stonefish_ros2` depends on external https://github.com/patrykcieslak/stonefish library
-- **Tests**: two suites. `uv_sim` (**171 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
+- **Tests**: three suites. `uv_sim` (**171 cases**: `workspace_sim/src/uv_sim/test/` — scene sensor
   contract, odometry frame conventions (now via `nav_sim`/`mcu_sim`), PID-config single-source + fallback
   structure, entry-point integrity (derived from `setup.py`), frame/beam geometry, scene↔YAML↔doc
   contract, camera-offset (N1), TF (B18), documentation-contract (T3a), launch-contract / layering (T4),
@@ -499,14 +513,17 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
   immutability + I2 ownership (`test_node_split.py`), `nav_sim` role switch (`test_nav_sim.py`),
   DVL beams/validity (`test_dvl_sim.py`), stitching (`test_camera_relay.py`), the line laser
   (`test_laser_sim.py`) and the PID-config path walk (`test_pid_config.py`)), and since 2026-10-12
-  `uv_control` (**31 cases**: `workspace_auv/src/uv_control/test/` — `cmd_type` names derived from
+  `uv_control` (**37 cases**: `workspace_auv/src/uv_control/test/` — `cmd_type` names derived from
   `BasicMotion.action`, the `axes` target-fusion rule, the step constants vs their doc table, command
-  serialisation + preemption + interrupt-to-position-hold, and the velocity/force/STAY/duration/feedback
-  behaviour added 2026-10-12).
+  serialisation + preemption + interrupt-to-position-hold, the velocity/force/STAY/duration/feedback
+  behaviour added 2026-10-12, and the **non-zero-origin** coordinate checks that the zero-origin tests
+  could not make), and since 2026-10-12 `uv_task` (**13 cases**: `workspace_auv/src/uv_task/test/` —
+  task-list validation (typo'd names, malformed JSON/root/params) and the cancel-API shape).
   The `uv_control` suite exists because that package had **no tests at all**, which is how a
   `STEP_Y`/`STEP_PERIOD` doc drift and a triplicated `cmd_type` name map went unnoticed.
-  Run after sourcing both workspaces; keep both green:
+  Run after sourcing both workspaces; keep them green:
   ```bash
   python3 -m pytest workspace_sim/src/uv_sim/test/ -q
   python3 -m pytest workspace_auv/src/uv_control/test/ -q
+  python3 -m pytest workspace_auv/src/uv_task/test/ -q
   ```

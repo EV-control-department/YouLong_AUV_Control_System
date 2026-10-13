@@ -182,7 +182,17 @@
 ## 7. 服务 `/task/stop`（`std_srvs/srv/Trigger`）
 
 无请求字段。响应 `success=true`、`message='Tasks stopped'`（`std_srvs/Trigger` 的固定形状）。
-效果：置内部 `stopped` 标志 → 中断当前 goal 并中止任务列表；不改变 `tasks.json`。
+效果：置内部 `stopped` 标志（列表不再发新命令）**并取消当前正在执行的 action goal**；不改变 `tasks.json`。
+
+**2026-10-12 修**：此前取消用的是 `self._action_client.async_cancel_goal(handle)`，而 rclpy
+Jazzy 的 `ActionClient` **没有这个方法**（客户端侧根本没有取消 API，取消只能在 **goal handle**
+上调 `cancel_goal_async()`）。`AttributeError` 被服务回调吞掉，所以 `/task/stop` 一直是
+**「停列表但不停船」**：`stopped=True` 让列表不再发新命令，可当前那条 goal 会继续跑到目标。
+现在实测能停：`basic_motion` 日志出现 `Action cancel requested, accepting` →
+`等待到达: 被让位` → `打断收尾: 目标设为当前位置`。
+
+**另注**：`stopped` 标志会被 `/task/run`（`run_task_list` 开头）与 `/task/exec`
+（`_debug_exec_single` 开头）重置，所以 `/task/stop` 之后仍可继续手动发单条任务。
 
 ## 8. 服务 `/task/exec`（`uv_msgs/srv/ExecTask`）
 

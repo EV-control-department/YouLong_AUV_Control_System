@@ -10,12 +10,16 @@ import glob
 import json
 import math
 import os
+import select
+import signal
+import sys
 import threading
 import time
 from collections import deque
 
 import numpy as np
 import rclpy
+import rclpy.signals
 from ament_index_python.packages import get_package_share_directory
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -458,17 +462,89 @@ class TaskRunnerNode(Node):
     # Task loading
     # ========================================================================
 
+    def validate_tasks(self, tasks, source: str) -> list:
+        """Check a loaded task list; return a list of human-readable problems.
+
+        Called at startup and before every `/task/run`, so a typo'd task name is
+        caught **on the bench** rather than mid-run.  Why it matters: an unknown
+        ``name`` used to be a single ``warn`` at execution time and then the list
+        kept going (a failed task does not abort the list -- that is deliberate,
+        see ``run_task_list``), so the AUV would silently skip a step and every
+        later command would run from a stale ``_cmd_*`` estimate.
+
+        Only the cheap, unambiguous checks live here.  Per-task required params
+        are *not* checked: each handler reads its own keys and a missing one is
+        already caught by ``run_task_list``'s ``except`` (logged as an exception
+        and the list continues).
+        """
+        problems = []
+        if not isinstance(tasks, list):
+            problems.append(f'{source}: "tasks" 必须是数组，实际是 {type(tasks).__name__}')
+            return problems
+
+        for i, task in enumerate(tasks):
+            where = f'{source}: tasks[{i}]'
+            if not isinstance(task, dict):
+                problems.append(f'{where} 不是对象（{type(task).__name__}）')
+                continue
+            name = task.get('name')
+            if not isinstance(name, str) or not name:
+                problems.append(f'{where} 缺少非空字符串 "name"')
+                continue
+            if name not in self.task_map:
+                valid = ', '.join(sorted(self.task_map))
+                problems.append(
+                    f'{where}: 未知任务 "{name}"。可用: {valid}')
+            params = task.get('params', {})
+            if params is not None and not isinstance(params, dict):
+                problems.append(
+                    f'{where} ("{name}") 的 "params" 必须是对象，'
+                    f'实际是 {type(params).__name__}')
+        return problems
+
     def load_tasks(self, path: str) -> list:
-        """Load task list from JSON file."""
-        if not os.path.exists(path):
+        """Load and **validate** a task list. Never raises; returns [] on any problem.
+
+        Returning ``[]`` instead of raising is deliberate: this is called from
+        ``main()`` and from the ``/task/run`` service callback, and an exception
+        in a service callback means the client never gets a response (it hangs
+        until its own timeout) with no useful error.  A malformed file now
+        produces an actionable log line and ``success=False`` with the reason.
+        """
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+        except FileNotFoundError:
             self.get_logger().error(f'Task file not found: {path}')
             return []
+        except json.JSONDecodeError as e:
+            self.get_logger().error(
+                f'Task file is not valid JSON: {path}\n'
+                f'  {e.msg} (line {e.lineno}, column {e.colno})')
+            return []
+        except OSError as e:
+            self.get_logger().error(f'Cannot read task file {path}: {e}')
+            return []
 
-        with open(path, 'r') as f:
-            data = json.load(f)
+        if not isinstance(data, dict):
+            self.get_logger().error(
+                f'Task file {path}: 根节点必须是对象 {{"tasks": [...]}}，'
+                f'实际是 {type(data).__name__}')
+            return []
+        if 'tasks' not in data:
+            self.get_logger().error(f'Task file {path}: 缺少 "tasks" 键')
+            return []
 
-        tasks = data.get('tasks', [])
-        self.get_logger().info(f'Loaded {len(tasks)} tasks from {path}')
+        tasks = data['tasks']
+        problems = self.validate_tasks(tasks, path)
+        if problems:
+            self.get_logger().error(
+                f'Task file {path} 校验未通过（{len(problems)} 处），拒绝加载：')
+            for p in problems:
+                self.get_logger().error(f'  · {p}')
+            return []
+
+        self.get_logger().info(f'Loaded {len(tasks)} tasks from {path} (validated)')
         return tasks
 
     # ========================================================================
@@ -628,23 +704,59 @@ class TaskRunnerNode(Node):
             time.sleep(min(0.1, deadline - time.time()))
         return skip.is_set()
 
+    def _listen_skip(self, skip: threading.Event, done: threading.Event) -> None:
+        """后台监听 stdin 的 Enter，用来跳过启动前准备。
+
+        **为什么不用 `input()`**：`input()` 在一个永不返回的守护线程里会一直
+        持有 stdout/stdin 的 `BufferedReader` 锁，解释器退出时 CPython 拿不到
+        那把锁，直接
+        ``Fatal Python error: _enter_buffered_busy: could not acquire lock for
+        <_io.BufferedReader name='<stdin>'> at interpreter shutdown``
+        → **SIGABRT（exit code -6）**。2026-10-12 实测：只要跑过一次 `start`
+        任务，之后任何一次 Ctrl+C 都是崩溃退出而不是干净退出。
+        改用 `select` + `os.read`：不碰缓冲对象、可超时轮询、`done` 置位即返回。
+        """
+        try:
+            fd = sys.stdin.fileno()
+        except (AttributeError, ValueError, OSError):
+            return          # 没有可用的 stdin（例如 launch 里 stdin 被关闭）
+        while not done.is_set() and not skip.is_set():
+            try:
+                ready, _, _ = select.select([fd], [], [], 0.2)
+            except (OSError, ValueError):
+                return
+            if not ready:
+                continue
+            try:
+                data = os.read(fd, 1024)
+            except OSError:
+                return
+            if not data:
+                return      # stdin 到 EOF
+            if b'\n' in data or b'\r' in data:
+                skip.set()
+                return
+
     def _task_start(self, p: dict) -> bool:
         # ── 后台监听 Enter 键跳过准备 ──
         skip = threading.Event()
+        done = threading.Event()
 
-        def _listen_skip():
-            try:
-                self.get_logger().info('按 回车 跳过检查和准备，直接发车')
-                input()
-                skip.set()
-                self.get_logger().warn('⚠ 跳过准备，直接发车!')
-            except EOFError:
-                pass
-
-        listener = threading.Thread(target=_listen_skip, daemon=True)
+        listener = threading.Thread(
+            target=self._listen_skip, args=(skip, done), daemon=True)
+        self.get_logger().info('按 回车 跳过检查和准备，直接发车')
         listener.start()
+        try:
+            result = self._start_sequence(skip)
+            if skip.is_set():
+                self.get_logger().warn('⚠ 跳过准备，直接发车!')
+            return result
+        finally:
+            done.set()      # 让监听线程尽快退出（否则它会一直等到进程结束）
 
-        self.get_logger().info(f'YouLong_AUV_Control_System 准备启动，请做好拔缆准备')
+    def _start_sequence(self, skip: threading.Event) -> bool:
+        """灯光/等待序列；`skip` 被置位时立刻发车。"""
+        self.get_logger().info('YouLong_AUV_Control_System 准备启动，请做好拔缆准备')
         self.set_light(3, 'LED')
         if self._sleep_or_skip(1, skip):
             return self._do_start()
@@ -1220,10 +1332,19 @@ class TaskRunnerNode(Node):
     def _stop_task_cb(self, request, response):
         self.get_logger().warn('Service /task/stop: emergency stop')
         self.stopped = True
-        if self._active_goal_handle is not None:
+        handle = self._active_goal_handle
+        if handle is not None:
             self.get_logger().info('Cancelling active action goal')
-            cancel_future = self._action_client.async_cancel_goal(
-                self._active_goal_handle)
+            # 修 2026-10-12：原代码是 `self._action_client.async_cancel_goal(handle)`，
+            # 而 rclpy Jazzy 的 `ActionClient` **根本没有这个方法**（也没有
+            # `cancel_goal_async`）—— 取消只能在 goal handle 上做。原写法每次都抛
+            # AttributeError，在这个服务回调里被 rclpy 记一条日志就吞了，于是
+            # `/task/stop` 一直是"停列表但不停船"：`stopped=True` 让列表不再发新
+            # 命令，可**当前那条 action goal 继续跑到底**。
+            try:
+                handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().error(f'取消 action goal 失败: {exc}')
             self._active_goal_handle = None
         response.success = True
         response.message = 'Tasks stopped'
@@ -1308,6 +1429,53 @@ class TaskRunnerNode(Node):
             self.running = False
             self._debug_timeout = -1.0
 
+    def request_shutdown(self, timeout: float = 3.0) -> None:
+        """退出收尾：停下列表，并**取消正在执行的 action goal**。
+
+        Same signal path as ``basic_motion`` (own SIGINT/SIGTERM handler, cleanup
+        in ``finally``), but it deliberately does **not** publish a thrust-zero:
+
+        ``/zit6/cmd/setpoint`` has exactly one writer -- ``basic_motion`` -- and
+        adding a second one here is precisely the class of bug this repo has
+        already paid for twice (B19: ``/zit6/state/vel`` with two writers;
+        P7/2026-10-12: two action goals writing the setpoint topic).  On Ctrl+C
+        ``basic_motion`` runs its own ``request_shutdown`` + ``emergency_stop``,
+        which first cancels the goal (the AUV brakes to a position hold) and then
+        zeroes thrust.  task_runner's job is only to stop asking for motion.
+
+        Cancelling matters even though ``ros2 launch`` kills both processes
+        together: during debugging task_runner is often restarted **alone**, and
+        without this the AUV would keep driving to its last target.
+        """
+        # 先抓句柄再置 stopped：`_send_action_goal` 一看到 stopped 就会往下走并
+        # 清空 `_active_goal_handle`，先置位会让这里读到 None 而漏掉取消。
+        goal_handle = self._active_goal_handle
+        self.stopped = True
+
+        if goal_handle is None:
+            self.get_logger().info('退出收尾: 没有正在执行的 action goal')
+            return
+
+        self.get_logger().info('退出收尾: 取消正在执行的 action goal')
+        try:
+            # 取消在 **goal handle** 上，不在 ActionClient 上（见 _stop_task_cb 的注释）
+            goal_handle.cancel_goal_async()
+        except Exception as exc:
+            self.get_logger().warning(f'取消 action goal 失败: {exc}')
+            return
+
+        # 等它真的结束（basic_motion 收到 cancel 后会先原地保持再返回）。
+        # `_send_action_goal` 拿到结果后会清空 `_active_goal_handle`，即"跑完了"。
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            if self._active_goal_handle is not goal_handle:
+                self.get_logger().info(
+                    f'退出收尾: goal 已结束（{time.monotonic() - t0:.2f}s）')
+                return
+            time.sleep(0.05)
+        self.get_logger().warning(
+            f'退出收尾: {timeout:.1f}s 内 goal 未确认结束，仍继续退出')
+
     # ========================================================================
     # Status publishing
     # ========================================================================
@@ -1344,8 +1512,39 @@ def main(args=None):
     rclpy.init(args=args)
     node = TaskRunnerNode()
 
+    # ── 信号处理（与 basic_motion 同一套做法）──────────────────────────────
+    # `rclpy.init()` 默认装的 SIGINT 处理器会在 `spin()` 返回**之前**就 shutdown
+    # 上下文，于是 `finally` 里的收尾（要发 DDS 取消请求）没法工作。撤掉它换成
+    # 只抛 KeyboardInterrupt 的版本，shutdown 留给 finally。
+    try:
+        rclpy.signals.uninstall_signal_handlers()
+    except Exception as exc:
+        node.get_logger().warning(f'无法撤销 rclpy 信号处理器: {exc}')
+
+    interrupt_count = [0]
+
+    def _on_signal(signum, _frame):
+        interrupt_count[0] += 1
+        if interrupt_count[0] > 1:
+            # 第二次信号：用户不耐烦了。恢复默认处置硬退出，否则收尾卡住时
+            # 连 Ctrl+C 都杀不掉。
+            node.get_logger().warning('再次收到中断信号，强制退出')
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+            return
+        raise KeyboardInterrupt
+
+    for _sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(_sig, _on_signal)
+        except ValueError:
+            pass          # 不在主线程时装不上，忽略（正常启动不会走到这里）
+
     if not node._debug_mode:
-        # Normal mode: load default tasks and start immediately
+        # Normal mode: load the default list and start immediately.
+        # `load_tasks` validates as well as parses: a typo'd task name or a
+        # malformed file is caught here, before anything moves, instead of
+        # silently skipping a step mid-run.
         default_path = os.path.join(
             get_package_share_directory('uv_task'), 'config', 'tasks.json'
         )
@@ -1355,6 +1554,10 @@ def main(args=None):
                 thread = threading.Thread(target=node.run_task_list, daemon=True)
                 thread.start()
                 node.get_logger().info(f'Auto-started task list ({len(node.tasks)} tasks)')
+            else:
+                node.get_logger().error(
+                    'Task list 未启动（加载/校验失败，原因见上）。'
+                    '修好后用 /task/run 重新启动。')
     else:
         node.get_logger().info(
             'Debug mode active: auto-start skipped. '
@@ -1364,8 +1567,9 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info('收到中断信号，开始收尾')
     finally:
+        node.request_shutdown()
         node.destroy_node()
         rclpy.shutdown()
 
