@@ -26,6 +26,182 @@ class _Logger:
         pass
 
 
+def _deadline_test_node(**settings):
+    from uv_task.task_runner import _MissionDeadline
+    from uv_task.config_loader import DEFAULT_MISSION_RUNTIME
+    clock, messages = [0.], []
+    log = SimpleNamespace(info=lambda _: None, warn=lambda _: None, error=lambda _: None)
+    node = SimpleNamespace(stopped=False, running=True, _perception_lock=threading.RLock(),
+        _robot_pose=(2.,-1.,.6,0.,0.,90.), _robot_pose_received=0.,
+        pub_setpoint=SimpleNamespace(publish=messages.append), get_logger=lambda: log)
+    guard = _MissionDeadline(node)
+    node._mission_deadline = guard
+    guard.clock = lambda: clock[0]
+    guard.settings = dict(DEFAULT_MISSION_RUNTIME, return_waypoint_xy=[3.,-1.], **settings)
+    guard.started, guard.armed, guard.origin_ready = 0., True, True
+    def tick(seconds):
+        clock[0] = seconds
+        node._robot_pose_received = seconds
+        guard._tick()
+    return node, guard, messages, tick
+
+
+def test_mission_deadline_exact_14_minutes_and_parallel_return_surface():
+    node, guard, messages, tick = _deadline_test_node()
+    tick(839.999)
+    assert guard.phase == 'idle' and not node.stopped and not messages
+    tick(840.)
+    assert guard.phase == 'returning' and node.stopped
+    msg = messages[-1]
+    assert msg.control_key == 0x11
+    assert msg.y == pytest.approx(-.2) and msg.z == pytest.approx(-.05)
+    # 经一个中间点后才到START；水面Z独立并行控制。
+    node._robot_pose = (3.,-1.,.3,0.,0.,90.)
+    tick(845.)
+    assert guard.point_index == 1 and messages[-1].z < 0
+    node._robot_pose = (0.,0.,.02,0.,0.,90.)
+    tick(850.)
+    assert guard.phase == 'off'
+    assert messages[-1].control_key == 0x12 and messages[-1].z == 0
+
+
+def test_mission_deadline_60_seconds_hard_cutoff_and_old_outputs_blocked():
+    from uv_task.task_runner import TaskRunnerNode
+    node, guard, messages, tick = _deadline_test_node()
+    tick(840.)
+    tick(899.999)
+    assert guard.phase == 'returning'
+    tick(900.)
+    assert guard.phase == 'off'
+    for time_value in (900.05, 901., 1000.):
+        tick(time_value)
+        assert messages[-1].control_key == 0x12 and messages[-1].type_mask == 0
+        assert all(getattr(messages[-1], key) == 0 for key in ('x','y','z','roll','pitch','yaw'))
+    count = len(messages)
+    TaskRunnerNode._publish_body_velocity(node, forward_mps=1.)
+    TaskRunnerNode._publish_body_thrust(node, .3)
+    node.pub_servo = SimpleNamespace(publish=lambda _: pytest.fail('旧任务不能再释放夹爪'))
+    TaskRunnerNode.set_servo(node, math.radians(80), '旧任务清理')
+    assert len(messages) == count
+    assert TaskRunnerNode._send_action_goal(node, _grab.BasicMotion.Goal.BMOVE, [.1,0.,0.,0.])[0] is False
+    assert not guard.start(guard.settings)  # 普通服务不能解除截止锁存。
+
+
+def test_mission_deadline_waits_for_late_goal_acceptance_and_actual_cancel_completion():
+    from concurrent.futures import Future
+    node, guard, messages, tick = _deadline_test_node()
+    sent, result = Future(), Future()
+    cancel_calls = []
+    handle = SimpleNamespace(accepted=True, get_result_async=lambda: result,
+                             cancel_goal_async=lambda: cancel_calls.append(True))
+    node._action_client = SimpleNamespace(send_goal_async=lambda _: sent)
+    assert guard.send_goal(object()) is sent
+    tick(840.)
+    assert guard.phase == 'cancelling' and messages[-1].control_key == 0x12
+    sent.set_result(handle)
+    assert cancel_calls and guard.pending_sends == 0
+    tick(841.)
+    assert guard.phase == 'cancelling'  # 收到接受/发出cancel不等于旧动作已结束。
+    result.set_result(object())
+    tick(842.)
+    assert guard.phase == 'returning' and messages[-1].control_key == 0x11
+
+
+def test_stuck_cancel_is_included_in_one_minute_not_an_extra_minute():
+    from concurrent.futures import Future
+    node, guard, messages, tick = _deadline_test_node()
+    result = Future()
+    handle = SimpleNamespace(cancel_goal_async=lambda: None)
+    guard.goals = [(handle, result)]
+    tick(840.)
+    tick(900.)
+    assert guard.phase == 'off' and all(m.control_key == 0x12 for m in messages)
+
+
+@pytest.mark.parametrize('problem', ['missing_origin', 'missing_point', 'stale_pose'])
+def test_deadline_invalid_navigation_never_blind_returns(problem):
+    node, guard, messages, tick = _deadline_test_node()
+    if problem == 'missing_origin':
+        guard.origin_ready = False
+    elif problem == 'missing_point':
+        guard.settings['return_waypoint_xy'] = []
+    else:
+        node._robot_pose = None
+    tick(840.)
+    assert guard.phase == 'off'
+    assert all(m.control_key == 0x12 for m in messages)
+
+
+def test_manual_stop_overrides_forced_return():
+    node, guard, messages, tick = _deadline_test_node()
+    tick(840.)
+    guard.stop()
+    assert guard.phase == 'off'
+    tick(841.)
+    assert messages[-1].control_key == 0x12
+
+
+def test_delayed_watchdog_tick_does_not_extend_15_minute_total_budget():
+    node, guard, messages, tick = _deadline_test_node()
+    tick(910.)
+    assert guard.phase == 'off'
+    assert guard.return_end == 900.
+    assert all(m.control_key == 0x12 for m in messages)
+
+
+def test_return_and_surface_finish_independently():
+    node, guard, messages, tick = _deadline_test_node()
+    tick(840.)
+    # 已上浮但尚未到中间点：继续XY返航，不向下恢复深度。
+    node._robot_pose = (2.,-1.,0.,0.,0.,90.)
+    tick(841.)
+    assert guard.phase == 'returning' and messages[-1].y < 0 and messages[-1].z == 0
+    # 已回START但尚未上浮：只继续Z，不能因为XY完成而提前关闭推力。
+    guard.point_index = 1
+    node._robot_pose = (0.,0.,.5,0.,0.,90.)
+    tick(842.)
+    assert guard.phase == 'returning'
+    assert messages[-1].x == messages[-1].y == 0 and messages[-1].z < 0
+
+
+def test_manual_stop_cancels_a_goal_accepted_after_stop():
+    from concurrent.futures import Future
+    node, guard, messages, tick = _deadline_test_node()
+    sent, result = Future(), Future()
+    cancel_calls = []
+    node._action_client = SimpleNamespace(send_goal_async=lambda _: sent)
+    guard.send_goal(object())
+    guard.stop()
+    sent.set_result(SimpleNamespace(accepted=True, get_result_async=lambda: result,
+        cancel_goal_async=lambda: cancel_calls.append(True)))
+    assert cancel_calls and guard.phase == 'off'
+
+
+def test_wall_clock_thread_preempts_even_without_task_or_ros_timer_progress():
+    from uv_task.task_runner import TaskRunnerNode
+    node, guard, messages, _ = _deadline_test_node()
+    guard.armed = False
+    guard.clock = time.monotonic
+    node._robot_pose_received = time.monotonic()
+    reached_cutoff = threading.Event()
+    def publish(message):
+        messages.append(message)
+        if guard.phase == 'off':
+            reached_cutoff.set()
+    node.pub_setpoint.publish = publish
+    settings = dict(guard.settings, time_limit_s=.05, return_timeout_s=.1)
+    assert guard.start(settings)
+    try:
+        # 主任务/ROS timer都没有推进，独立线程仍须在自己的墙钟期限停止。
+        assert reached_cutoff.wait(1.)
+        assert guard.phase == 'off' and node.stopped
+        before = len(messages)
+        TaskRunnerNode._publish_body_velocity(node, forward_mps=1.)
+        assert all(m.control_key == 0x12 for m in messages[before:])
+    finally:
+        guard.close()
+
+
 def _world_route_node():
     node = SimpleNamespace(stopped=False, _perception_lock=threading.Lock(),
         _robot_pose=(0.,0.,.5,0.,0.,-80.), _robot_pose_received=time.monotonic(),
@@ -424,11 +600,11 @@ def test_sea_degree_config_preserves_internal_radians_without_old_descent_cap():
     params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
     params.update(descent_speed_mps=.5, descent_duration_seconds=3.,
                   ascent_speed_mps=.01,
-                  max_press_distance_m=1.3, pickup_servo_angle_deg=0., release_servo_angle_deg=90.)
+                  max_press_distance_m=1.3, pickup_servo_angle_deg=180., release_servo_angle_deg=80.)
     node = SimpleNamespace(get_logger=lambda: _Logger())
     task = GrabSeaCucumberTask(node, params)
-    assert task._pickup_angle == 0.
-    assert task._release_angle == pytest.approx(math.pi/2)
+    assert task._pickup_angle == pytest.approx(math.pi)
+    assert task._release_angle == pytest.approx(math.radians(80.))
     assert task._descent_speed == .5 and task._descent_duration == 3.
     assert task._ascent_speed == .01
 
@@ -446,6 +622,22 @@ def test_sea_descent_exception_still_sends_zero_velocity():
     with pytest.raises(RuntimeError, match='publish failed'):
         task._descend()
     assert packets == [.5,0.]
+
+
+def test_servo1_defaults_and_rejection_of_old_angles():
+    from uv_task.config_loader import load_task
+    params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
+    assert params['pickup_servo_angle_deg'] == 180.
+    assert params['release_servo_angle_deg'] == 80.
+    params.pop('pickup_servo_angle_deg')
+    params.pop('release_servo_angle_deg')
+    node = SimpleNamespace(get_logger=lambda: _Logger())
+    task = GrabSeaCucumberTask(node, params)
+    assert task._pickup_angle == pytest.approx(math.pi)
+    assert task._release_angle == pytest.approx(math.radians(80))
+    params.update(pickup_servo_angle_deg=0., release_servo_angle_deg=90.)
+    with pytest.raises(ValueError, match='抓180°、放80°'):
+        GrabSeaCucumberTask(node, params)
 
 
 def test_near_floor_press_is_latched_force_and_neutral_on_exception():
@@ -980,12 +1172,15 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
     file = Path(__file__).parents[1] / 'uv_task' / 'task_runner.py'
     tree = ast.parse(file.read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'TaskRunnerNode')
+    init = next(n.value for n in cls.body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == 'ANGLE_INIT' for t in n.targets))
+    assert eval(compile(ast.Expression(init), str(file), 'eval'), {'math': math}) == math.pi
     methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in ('set_servo', '_do_start')]
     namespace = {'math': math, 'ZitServo': ZitServo, 'BasicMotion': _grab.BasicMotion}
     exec(compile(ast.Module(body=methods, type_ignores=[]), str(file), 'exec'), namespace)
     messages, events = [], []
     fake = SimpleNamespace(pub_servo=SimpleNamespace(publish=messages.append),
-                           get_logger=lambda: _Logger(), ANGLE_INIT=0,
+                           get_logger=lambda: _Logger(), ANGLE_INIT=math.pi,
                            light_off=lambda: events.append('light'),
                            _send_action_goal=lambda *args, **kw: (events.append('start') or True, 'ok'))
     fake.set_servo = lambda angle, label, **kw: namespace['set_servo'](fake, angle, label, **kw)
@@ -994,8 +1189,10 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
     assert messages[-1].angle == pytest.approx(90.)
     fake.set_servo(math.pi, '180度')
     assert messages[-1].angle == pytest.approx(180.)
+    before = len(messages)
     assert namespace['_do_start'](fake)
-    assert messages[-1].angle == 0
+    assert len(messages) == before + 1
+    assert messages[-1].angle == pytest.approx(180.)
     assert messages[-1].servo_id == 1
     assert events == ['light', 'start']
     with pytest.raises(ValueError):
@@ -1006,7 +1203,10 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
         fake.set_servo(math.radians(270), '旧舵机不能270度')
     fake.tasks = [{'name': 'start'}, {'name': 'grab_sea_cucumber', 'params': {'gripper_servo_id': 2}}]
     fake.current_index = 0
+    before = len(messages)
     assert namespace['_do_start'](fake)
+    assert len(messages) == before + 2
+    assert messages[-2].servo_id == 1 and messages[-2].angle == pytest.approx(180.)
     assert messages[-1].servo_id == 2 and messages[-1].angle == pytest.approx(150.)
 
 

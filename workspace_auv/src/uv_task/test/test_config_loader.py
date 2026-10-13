@@ -29,9 +29,13 @@ EXPECTED_TASKS = [
 
 
 def test_competition_chain_enables_survey_and_six_minute_grab():
+    from uv_task.config_loader import load_mission_runtime
+    runtime = load_mission_runtime(CONFIG_ROOT / 'missions' / 'competition.yaml')
+    assert runtime['time_limit_s'] == 840. and runtime['return_timeout_s'] == 60.
+    assert runtime['return_waypoint_xy'] == [3.,-1.]
     tasks = load_mission(CONFIG_ROOT / 'missions' / 'competition.yaml')
     routes = [t for t in tasks if t['name'] == 'world_waypoints']
-    assert len(routes) == 4
+    assert len(routes) == 3  # 起点到标签路线由现场配置禁用，保留这一选择。
     assert all(t['params']['require_nonempty'] for t in routes)
     assert all(t['params']['mode'] == 'fixed_yaw' for t in routes)
     tasks = [t for t in tasks if t['name'] != 'world_waypoints']
@@ -50,6 +54,57 @@ def test_world_waypoint_nested_list_types():
     assert _validate_params('world_waypoints', {'waypoints': [[1.,2.,.3,90.]]})['waypoints'] == [[1.,2.,.3,90.]]
     with pytest.raises(ConfigError):
         _validate_params('world_waypoints', {'waypoints': [[1.,2.,'bad',90.]]})
+
+
+@pytest.mark.parametrize('key,value', [('return_timeout_s', 61.), ('time_limit_s', 0.),
+                                     ('return_waypoint_xy', [1.,2.,3.]), ('surface_z_m', -1.),
+                                     ('max_up_speed_mps', float('nan'))])
+def test_invalid_mission_runtime_is_rejected_before_start(tmp_path, key, value):
+    import yaml
+    path = tmp_path/'mission.yaml'
+    path.write_text(yaml.safe_dump({'mission': {'name': 'test', 'runtime': {key:value},
+                    'tasks': [{'name':'setz', 'params': {'z':.2}}]}}))
+    with pytest.raises(ConfigError):
+        load_mission(path)
+
+
+def test_world_waypoint_flat_list_reports_mission_stage_and_format(tmp_path):
+    path = tmp_path / 'competition.yaml'
+    path.write_text('mission:\n  name: test\n  tasks:\n'
+                    '    - name: world_waypoints\n      params:\n'
+                    '        waypoints: [2.7, -0.2, 0.1, 0.0]\n')
+    with pytest.raises(ConfigError) as error:
+        load_mission(path)
+    message = str(error.value)
+    assert str(path) in message
+    assert "第 1 个任务 'world_waypoints'" in message
+    assert '[[x,y,z,yaw_deg], ...]' in message
+
+
+def test_competition_preserves_field_waypoints_as_nested_lists():
+    routes = [t for t in load_mission(CONFIG_ROOT / 'missions' / 'competition.yaml')
+              if t['name'] == 'world_waypoints']
+    assert [t['params']['waypoints'] for t in routes] == [
+        [[2.7, -.2, .1, 0.], [2.79, -1.47, .774, -90.]],
+        [[2.7, -.2, .1, 0.], [4., -2., .1, 0.]],
+        [[3., -1., .1, 0.], [1., -1., .1, 0.]]]
+    assert all(t['params']['end_at_next_task'] for t in routes)
+
+
+def test_competition_route_endpoints_match_next_task_without_moving():
+    from types import SimpleNamespace
+    from uv_task.task_runner import TaskRunnerNode
+    tasks = load_mission(CONFIG_ROOT / 'missions' / 'competition.yaml')
+    calls = []
+    node = SimpleNamespace(tasks=tasks, stopped=False,
+                           _follow_world_waypoints=lambda *args: calls.append(args) or True,
+                           _publish_body_velocity=lambda: pytest.fail('valid route must not stop'))
+    for index, task in enumerate(tasks):
+        if task['name'] == 'world_waypoints':
+            node.current_index = index
+            assert TaskRunnerNode._task_world_waypoints(node, task['params'])
+    assert len(calls) == 3
+    assert not node.stopped
 
 
 def test_sea_cucumber_mission_and_nested_parameters():

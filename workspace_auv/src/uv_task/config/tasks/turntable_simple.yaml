@@ -1,5 +1,5 @@
-# 简单版：前视YOLO box居中 → 低速接近 → 定时顶碰一次 → yaw一下 → 零速度结束。
-# 执行动作即结束；不测量触碰，不验证盘体转角，无孔位/掩膜/SGBM依赖。
+# 简单版：前视YOLO box居中 → 低速前进接近 → body+x BMOVE顶碰一次 → 零速度结束。
+# 不上移，不追加yaw，不用前伸棍/孔位；只核对移动，不测量触碰或盘体转角。
 task: turntable
 params:
   mode: yolo_bump
@@ -27,12 +27,12 @@ params:
   box_max_age_s: 0.8
   target_lost_timeout_s: 6.0
   center_tolerance_fraction: 0.1
-  # box宽占每目宽45%后执行定时顶碰；仅为接近代理，不是真实距离/触碰反馈。
+  # box宽占每目宽45%后执行一次前向MOVE；仅为接近代理，不是真实距离/触碰反馈。
   bump_box_width_fraction: 0.45
-  approach_speed_mps: 0.08 # 接近和顶碰均为body+x速度，m/s；现场试调。
-  bump_seconds: 1.0      # 单次顶碰持续时间；期望自由行程约8cm，不保证实际触碰。
-  stroke_yaw_deg: 6.0    # 正数右转、负数左转；期望指令行程，非实测盘体转角。
-  yaw_rate_deg_s: 6.0    # 正的速率大小；6度/6度每秒=1秒yaw动作。
+  approach_speed_mps: 0.08 # 仅视觉接近的body+x速度m/s；MOVE阶段速度由下位机闭环决定。
+  bump_forward_m: 0.08    # 前向MOVE行程m；沿用旧0.08m/s×1s名义行程，须现场调试，不保证碰到盘。
+  bump_move_timeout_s: 10.0 # 一次BMOVE及实测位移等待共用超时，仍受任务总超时约束。
+  bump_position_tolerance_m: 0.02 # 本任务独立XY核对容差m，不修改BasicMotion全局容差。
   align_yaw_gain: 12.0
   align_vertical_gain: 0.12
   max_align_yaw_rate_deg_s: 6.0

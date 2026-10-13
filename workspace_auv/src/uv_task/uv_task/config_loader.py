@@ -8,6 +8,7 @@ legacy keys consumed by the task implementations.
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,41 @@ import yaml
 
 class ConfigError(ValueError):
     """Raised when a mission or task YAML file is invalid."""
+
+
+DEFAULT_MISSION_RUNTIME = {
+    'enabled': True, 'time_limit_s': 840.0, 'return_timeout_s': 60.0,
+    'return_waypoint_xy': [], 'surface_z_m': 0.0,
+    'max_xy_speed_mps': 0.2, 'max_up_speed_mps': 0.05,
+    'xy_tolerance_m': 0.15, 'z_tolerance_m': 0.05,
+}
+
+
+def load_mission_runtime(path):
+    """总计时独立于各task超时；单任务文件也默认14分钟，缺返航点时只停推力。"""
+    data = _read_yaml(Path(path).expanduser().resolve())
+    supplied = data.get('mission', {}).get('runtime', {}) if 'mission' in data else {}
+    if not isinstance(supplied, dict) or set(supplied)-set(DEFAULT_MISSION_RUNTIME):
+        raise ConfigError('mission.runtime必须为映射且只包含支持的总计时/返航参数')
+    values = deepcopy(DEFAULT_MISSION_RUNTIME)
+    values.update(supplied)
+    if not isinstance(values['enabled'], bool):
+        raise ConfigError('mission.runtime.enabled必须为bool')
+    for key in ('time_limit_s', 'return_timeout_s', 'max_xy_speed_mps',
+                'max_up_speed_mps', 'xy_tolerance_m', 'z_tolerance_m'):
+        value = values[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ConfigError(f'mission.runtime.{key}必须为有限正数')
+    if values['return_timeout_s'] > 60:
+        raise ConfigError('强制返航return_timeout_s不能超过60秒（包括取消原动作）')
+    z = values['surface_z_m']
+    if isinstance(z, bool) or not isinstance(z, (int, float)) or not math.isfinite(z) or z < 0:
+        raise ConfigError('mission.runtime.surface_z_m必须为有限非负深度')
+    point = values['return_waypoint_xy']
+    if (not isinstance(point, list) or (point and (len(point) != 2 or any(
+            isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in point)))):
+        raise ConfigError('mission.runtime.return_waypoint_xy须为一个[x,y]或待填空列表')
+    return values
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -145,6 +181,9 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "center_tolerance_fraction": float,
         "bump_box_width_fraction": float,
         "bump_seconds": float,
+        "bump_forward_m": float,
+        "bump_move_timeout_s": float,
+        "bump_position_tolerance_m": float,
         "yaw_rate_deg_s": float,
         "align_yaw_gain": float,
         "align_vertical_gain": float,
@@ -591,10 +630,11 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
     mission = data.get("mission")
     if not isinstance(mission, dict):
         raise ConfigError(f"{mission_path}：缺少 mission 映射")
-    unknown = set(mission) - {"name", "tasks"}
+    unknown = set(mission) - {"name", "tasks", "runtime"}
     if unknown:
         raise ConfigError(
             f"{mission_path}：mission 存在未知键：{sorted(unknown)}")
+    load_mission_runtime(mission_path)
     if not isinstance(mission.get("name"), str) or not mission["name"].strip():
         raise ConfigError(f"{mission_path}：mission.name 必须是非空字符串")
     entries = mission.get("tasks")
@@ -625,7 +665,14 @@ def load_mission(path: str | Path) -> list[dict[str, Any]]:
             task_path = _resolve_task_config(mission_path, config, task_name)
             defaults = _load_task_defaults(task_path, task_name)
         merged = _deep_merge(defaults, overrides)
-        tasks.append({"name": task_name, "params": _validate_params(task_name, merged)})
+        try:
+            validated = _validate_params(task_name, merged)
+        except ConfigError as exc:
+            hint = ('；waypoints须写成[[x,y,z,yaw_deg], ...]，单点也须双层列表'
+                    if task_name == 'world_waypoints' and 'waypoints' in str(exc) else '')
+            raise ConfigError(
+                f"{mission_path}：第 {index} 个任务 {task_name!r} 配置无效：{exc}{hint}") from exc
+        tasks.append({"name": task_name, "params": validated})
     return tasks
 
 

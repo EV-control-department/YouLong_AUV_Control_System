@@ -1,6 +1,8 @@
 """Simple turntable command sequencing without hardware or ROS nodes."""
 from pathlib import Path
 from types import SimpleNamespace
+import math
+import threading
 
 import pytest
 from uv_msgs.msg import Detection, DetectionArray
@@ -14,16 +16,28 @@ def setup_task(monkeypatch, **overrides):
 
     def sleep(dt):
         clock.t += dt
+        node._robot_pose_received = clock.t
         clock.on_sleep()
 
     monkeypatch.setattr(module, 'time', SimpleNamespace(monotonic=lambda: clock.t, sleep=sleep))
     monkeypatch.setattr(module.rclpy, 'ok', lambda: True)
     commands, logs = [], []
     node = SimpleNamespace(stopped=False,
+        _perception_lock=threading.Lock(), _robot_pose=(0.,0.,.5,0.,0.,0.), _robot_pose_received=clock.t,
+        motion_actions=[],
         get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=int(clock.t*1e9))),
         get_logger=lambda: SimpleNamespace(info=logs.append, error=logs.append),
         create_subscription=lambda *_: object(), destroy_subscription=lambda *_: None,
         _publish_body_velocity=lambda **kwargs: commands.append((clock.t, kwargs)))
+    def move(command, target, axes, **kwargs):
+        from uv_msgs.action import BasicMotion
+        node.motion_actions.append((command, target, axes, kwargs))
+        if command == BasicMotion.Goal.BMOVE:
+            x,y,z,r,p,yaw = node._robot_pose
+            a = math.radians(yaw)
+            node._robot_pose = (x+target[0]*math.cos(a), y+target[0]*math.sin(a), z,r,p,yaw)
+        return True, ''
+    node._send_action_goal = move
     path = Path(__file__).parents[1]/'config/tasks/turntable_simple.yaml'
     params = load_task(path)[0]['params']
     # Unit scenarios have no nominal disk unless explicitly requested; field
@@ -76,21 +90,34 @@ def test_fixed_heading_preposition_uses_world_route_not_extra_wtravel(monkeypatc
     assert routes[0][-1] == 'fixed_yaw'
 
 
-@pytest.mark.parametrize('angle', [6., -6.])
-def test_centered_box_bump_then_yaw_and_final_zero(monkeypatch, angle):
-    task, clock, commands = setup_task(monkeypatch, stroke_yaw_deg=angle)
+@pytest.mark.parametrize('yaw', [0., 90., -90.])
+def test_centered_box_forward_move_only_and_final_zero(monkeypatch, yaw):
+    from uv_msgs.action import BasicMotion
+    task, clock, commands = setup_task(monkeypatch)
+    task.node._robot_pose = (0.,0.,.5,0.,0.,yaw)
     clock.on_sleep = lambda: box(task, clock)
     assert task.execute()
-    moving = [(t, c) for t, c in commands if c.get('forward_mps') or c.get('yaw_rate_deg_s')]
-    bump = [(t, c) for t, c in moving if c.get('forward_mps')]
-    yaw = [(t, c) for t, c in moving if c.get('yaw_rate_deg_s')]
-    assert bump and yaw
-    assert all(c['forward_mps'] == .08 for _, c in bump)
-    assert all(c['yaw_rate_deg_s'] == angle for _, c in yaw)
-    assert max(t for t, _ in bump) < min(t for t, _ in yaw)
-    assert max(t for t, _ in bump)-min(t for t, _ in bump) == pytest.approx(1., abs=.06)
-    assert max(t for t, _ in yaw)-min(t for t, _ in yaw) == pytest.approx(1., abs=.06)
+    actions = task.node.motion_actions
+    assert len(actions) == 1
+    assert actions[0][:3] == (BasicMotion.Goal.BMOVE, [.08,0.,0.,0.], 'x')
+    assert not any(c.get('vertical_mps') or c.get('yaw_rate_deg_s') for _, c in commands)
     assert commands[-1][1] == {}
+
+
+def test_short_move_action_success_without_actual_motion_times_out(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch, bump_move_timeout_s=.2)
+    task.node._send_action_goal = lambda *args, **kw: (True, '')
+    clock.on_sleep = lambda: box(task, clock)
+    assert not task.execute()
+    assert commands[-1][1] == {}
+
+
+def test_small_centered_box_still_approaches_forward_before_move(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch)
+    clock.on_sleep = lambda: box(task, clock, width=.2 if clock.t < 1.3 else .5)
+    assert task.execute()
+    assert any(c.get('forward_mps') == .08 for _,c in commands)
+    assert len(task.node.motion_actions) == 1
 
 
 @pytest.mark.parametrize('flipped,expected_sign', [(True, -1), (False, 1)])
@@ -116,17 +143,14 @@ def test_wrong_class_and_old_frames_never_start_motion(monkeypatch):
     assert task._latest_box() is None
 
 
-def test_stop_during_bump_prevents_yaw(monkeypatch):
+def test_stop_during_bump_ends_task_without_yaw(monkeypatch):
     task, clock, commands = setup_task(monkeypatch)
-
-    def tick():
-        box(task, clock)
-        if any(c.get('forward_mps') for _, c in commands):
-            task.node.stopped = True
-
-    clock.on_sleep = tick
+    def stop(*args, **kw):
+        task.node.stopped = True
+        return False, 'cancelled'
+    task.node._send_action_goal = stop
+    clock.on_sleep = lambda: box(task, clock)
     assert not task.execute()
-    assert any(c.get('forward_mps') for _, c in commands)
     assert not any(c.get('yaw_rate_deg_s') for _, c in commands)
     assert commands[-1][1] == {}
 
@@ -164,9 +188,12 @@ def test_preinput_disk_center_positions_then_uses_new_boxes(monkeypatch):
     task, clock, commands = setup_task(monkeypatch,
                                      disk_pose_odom=[1., 2., .6, 90.])
     actions = []
+    original_send = task.node._send_action_goal
 
     def send(command, target, axes, timeout, task_context):
         actions.append((command, list(target), timeout))
+        if command == BasicMotion.Goal.BMOVE:
+            return original_send(command, target, axes, timeout=timeout, task_context=task_context)
         clock.t += 1.
         box(task, clock)  # Frames collected during travel must be discarded.
         return True, 'ok'
@@ -174,12 +201,12 @@ def test_preinput_disk_center_positions_then_uses_new_boxes(monkeypatch):
     task.node._send_action_goal = send
     clock.on_sleep = lambda: box(task, clock)
     assert task.execute()
-    assert [a[0] for a in actions] == [BasicMotion.Goal.WTRAVEL, BasicMotion.Goal.SET]
+    assert [a[0] for a in actions] == [BasicMotion.Goal.WTRAVEL, BasicMotion.Goal.SET, BasicMotion.Goal.BMOVE]
     assert actions[0][1] == pytest.approx([1., 1.22, .524, 90.])
     assert actions[1][1] == pytest.approx(actions[0][1])
     assert all(0 < a[2] <= 90. for a in actions)
     assert task._started_stamp == 3_000_000_000
-    assert min(t for t, c in commands if c.get('forward_mps')) > 3.
+    assert actions[-1][1] == [.08,0.,0.,0.]
 
 
 def test_preposition_failure_never_starts_contact(monkeypatch):

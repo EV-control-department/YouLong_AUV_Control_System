@@ -1,6 +1,6 @@
 # 转盘任务：最小标定与放行清单
 
-> 2026-10-11：当前 `turn_table.yaml` 任务链已切换到 [YOLO box顶碰+yaw简单版](turntable_simple.md)。下文为保留的旧孔位方案，只适用于 `tasks/turntable.yaml` 的precise模式。
+> 2026-10-13：当前 `turn_table.yaml` 任务链使用 [YOLO居中、前向MOVE顶碰简单版](turntable_simple.md)，不追加yaw。下文为保留的旧孔位方案，只适用于 `tasks/turntable.yaml` 的precise模式。
 
 ## 2026-10-10 移动逻辑更新
 

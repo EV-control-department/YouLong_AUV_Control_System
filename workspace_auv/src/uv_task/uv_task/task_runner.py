@@ -38,6 +38,8 @@ from uv_task.config_loader import (
     ConfigError,
     default_mission_path,
     load_mission_or_task,
+    load_mission_runtime,
+    DEFAULT_MISSION_RUNTIME,
 )
 
 from uv_task.arrow_surfacer import (
@@ -95,6 +97,182 @@ _LOCALIZER_TARGET_ALIASES = {
 }
 
 
+class _MissionDeadline:
+    """独立墙钟看门狗：840s抢占，单控制器XY返航+Z上浮，60s硬截止。
+
+    原任务可能仍在sleep/清理：所有普通运动出口锁在同一个gate上，不能覆盖返航。
+    先等待旧action真正终止，不能只收到cancel响应就发新运动。线程不依赖ROS timer。
+    """
+    def __init__(self, node):
+        self.node = node
+        self.lock = threading.RLock()
+        self.clock = time.monotonic
+        self.phase = 'idle'
+        self.armed = False
+        self.origin_ready = False
+        self.pending_sends = 0
+        self.goals = []  # (goal_handle, result_future)，包括迟到的目标接受响应。
+        self.event = threading.Event()
+        self.thread = None
+
+    def start(self, settings):
+        with self.lock:
+            if self.phase != 'idle' or self.armed:
+                return False
+            self.settings = dict(settings)
+            self.started = self.clock()
+            self.armed = bool(settings['enabled'])
+            self.event = threading.Event()
+            if self.armed:
+                self.thread = threading.Thread(target=self._loop, args=(self.event,), daemon=True)
+                self.thread.start()
+                self.node.get_logger().info(
+                    f'任务总计时已启动：{settings["time_limit_s"]:g}s后抢占；'
+                    f'经{settings["return_waypoint_xy"]}回START(0,0)，同时上浮；返航预算{settings["return_timeout_s"]:g}s')
+            return True
+
+    def disarm(self):
+        with self.lock:
+            if self.phase == 'idle':
+                self.armed = False
+                self.event.set()  # 普通链提前结束/人工停止，不在14分钟后再次盲返。
+
+    def publish_task(self, publisher, message):
+        with self.lock:
+            if self.phase == 'idle':
+                publisher.publish(message)
+
+    def send_goal(self, goal):
+        with self.lock:
+            if self.phase != 'idle':
+                return None
+            future = self.node._action_client.send_goal_async(goal)
+            self.pending_sends += 1
+            future.add_done_callback(self._goal_ready)
+            return future
+
+    def _goal_ready(self, future):
+        with self.lock:
+            try:
+                handle = future.result()
+                if handle is not None and handle.accepted:
+                    self.goals.append((handle, handle.get_result_async()))
+                    if self.phase != 'idle':
+                        handle.cancel_goal_async()  # 接管后才接受的旧目标也必须取消。
+            except Exception as error:
+                self.node.get_logger().error(f'总计时：旧动作响应异常：{error}')
+            finally:
+                self.pending_sends -= 1
+
+    def _cancel_goals(self):
+        for handle, future in self.goals:
+            if not future.done():
+                try:
+                    handle.cancel_goal_async()
+                except Exception as error:
+                    self.node.get_logger().error(f'总计时：取消旧动作异常：{error}')
+
+    def _zero(self):
+        # ACTUATOR全六轴0，关闭实际推力，不是仍可能产生闭环推力的“速度=0”。
+        msg = ZitSetpoint()
+        msg.control_key, msg.type_mask = 0x12, 0
+        self.node.pub_setpoint.publish(msg)
+
+    def _finish(self, reason):
+        self.phase = 'off'
+        self.node.stopped = True
+        self._cancel_goals()
+        self._zero()
+        self.node.get_logger().warn(f'总计时返航结束：{reason}；持续全轴零推力，禁止原任务恢复。重新比赛须重启task_runner')
+
+    def stop(self):
+        with self.lock:
+            self._finish('人工停止')  # 连迟到的旧目标也拦住；不能只取消当前已接受句柄。
+
+    def _tick(self):
+        with self.lock:
+            now = self.clock()
+            self.goals = [(h, f) for h, f in self.goals if not f.done()]
+            if self.phase == 'idle':
+                if not self.armed or now-self.started < self.settings['time_limit_s']:
+                    return
+                self.phase = 'cancelling'
+                self.node.stopped = True
+                self.return_end = self.started+self.settings['time_limit_s']+self.settings['return_timeout_s']
+                self.point_index = 0
+                self._cancel_goals()
+                self.node.get_logger().warn('任务达到总时限：中断全部普通任务，取消旧动作，进入限时返航/上浮')
+            if self.phase == 'off':
+                self._zero()
+                return
+            if now >= self.return_end:
+                self._finish('返航/取消总预算耗尽')
+                return
+            if self.phase == 'cancelling':
+                self._zero()
+                if self.pending_sends or self.goals:
+                    return  # 保留60s硬截止；取消卡住时不与旧action争抢运动控制。
+                point = self.settings['return_waypoint_xy']
+                if not self.origin_ready or len(point) != 2:
+                    self._finish('START未成功或返航中间点未填写，不盲目返航')
+                    return
+                self.points = [point, [0., 0.]]
+                self.hold_yaw = None
+                self.phase = 'returning'
+            with self.node._perception_lock:
+                pose, received = self.node._robot_pose, self.node._robot_pose_received
+            if (pose is None or len(pose) != 6 or not all(map(math.isfinite, pose))
+                    or now-received > 1.):
+                self._finish('返航定位缺失/过期')
+                return
+            if self.hold_yaw is None:
+                self.hold_yaw = pose[5]
+            target = self.points[self.point_index]
+            dx, dy = target[0]-pose[0], target[1]-pose[1]
+            xy_error = math.hypot(dx, dy)
+            if xy_error <= self.settings['xy_tolerance_m'] and self.point_index == 0:
+                self.point_index = 1
+                target = self.points[1]
+                dx, dy = target[0]-pose[0], target[1]-pose[1]
+                xy_error = math.hypot(dx, dy)
+                self.node.get_logger().info('限时返航中间点已到达，继续返回START(0,0)；上浮并行继续')
+            z_error = pose[2]-self.settings['surface_z_m']
+            if (self.point_index == 1 and xy_error <= self.settings['xy_tolerance_m']
+                    and z_error <= self.settings['z_tolerance_m']):
+                self._finish('已到START附近及配置水面深度，不宣称实际出水/接岸')
+                return
+            speed = min(self.settings['max_xy_speed_mps'], .5*xy_error)
+            vx, vy = ((speed*dx/xy_error, speed*dy/xy_error)
+                      if xy_error > self.settings['xy_tolerance_m'] else (0., 0.))
+            angle = math.radians(pose[5])
+            msg = ZitSetpoint()
+            msg.control_key, msg.type_mask = 0x11, 0
+            msg.x = vx*math.cos(angle)+vy*math.sin(angle)
+            msg.y = -vx*math.sin(angle)+vy*math.cos(angle)
+            msg.z = (-min(self.settings['max_up_speed_mps'], .5*z_error)
+                     if z_error > self.settings['z_tolerance_m'] else 0.)
+            yaw_error = (self.hold_yaw-pose[5]+180.) % 360.-180.
+            msg.yaw = math.radians(max(-10., min(10., yaw_error)))
+            self.node.pub_setpoint.publish(msg)  # 一条指令同时控制XY/Z/yaw，不另开返航action。
+
+    def _loop(self, event):
+        while not event.wait(.05):
+            try:
+                self._tick()
+            except Exception as error:
+                with self.lock:
+                    self._finish(f'看门狗异常：{error}')
+
+    def close(self):
+        self.event.set()
+        with self.lock:
+            self._cancel_goals()
+            self.phase = 'off'
+            self._zero()
+        if self.thread is not None and self.thread is not threading.current_thread():
+            self.thread.join(timeout=.3)
+
+
 class TaskRunnerNode(Node):
     """Task runner: YAML mission loader and sequential executor."""
 
@@ -108,7 +286,7 @@ class TaskRunnerNode(Node):
     ANGLE_DROP_BEACON = math.pi / 2  # 90°，接口单位为弧度
     ANGLE_SAMPLE_WATER = 0.0               # 采水样
     ANGLE_RELEASE_SAMPLER = 0   #   释放取水器
-    ANGLE_INIT = 0.0
+    ANGLE_INIT = math.pi  # 舵机1：180°抓取/START初始闭合；出口发布度。
 
     def __init__(self):
         super().__init__('task_runner')
@@ -265,6 +443,8 @@ class TaskRunnerNode(Node):
         # setpoint wire format: mode=VEL (0x01) + body frame (0x10).
         self.pub_setpoint = self.create_publisher(
             ZitSetpoint, '/zit6/cmd/setpoint', 10)
+        self._mission_runtime = dict(DEFAULT_MISSION_RUNTIME)
+        self._mission_deadline = _MissionDeadline(self)
 
         # Services
         self._odom_xy_client = self.create_client(
@@ -323,7 +503,13 @@ class TaskRunnerNode(Node):
             raise ValueError(f'舵机{servo_id}角度必须为0~{math.degrees(max_angle):g}°对应的有限弧度值')
         angle_deg = math.degrees(angle_rad)
         msg = ZitServo(servo_id=servo_id, angle=angle_deg)
-        self.pub_servo.publish(msg)
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None:
+            if guard.phase != 'idle':
+                return
+            guard.publish_task(self.pub_servo, msg)
+        else:
+            self.pub_servo.publish(msg)
         self.get_logger().info(
             f'⚙️  舵机{servo_id}：{label}（发布angle={angle_deg:.1f}°；内部={angle_rad:.4f} rad，已发指令）')
 
@@ -639,6 +825,7 @@ class TaskRunnerNode(Node):
     def load_tasks(self, path: str) -> list:
         """Load a mission YAML or standalone task YAML."""
         tasks = load_mission_or_task(path)
+        self._mission_runtime = load_mission_runtime(path)
         self.get_logger().info(f'已从 {path} 加载 {len(tasks)} 个任务')
         return tasks
 
@@ -672,6 +859,12 @@ class TaskRunnerNode(Node):
 
     def run_task_list(self):
         """Execute all tasks sequentially."""
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None:
+            if not guard.start(self._mission_runtime):
+                self.get_logger().error('总计时已接管或任务仍在运行，拒绝重新执行任务链')
+                return
+            guard.origin_ready = False
         self.running = True
         self.stopped = False
         self.current_index = 0
@@ -710,6 +903,8 @@ class TaskRunnerNode(Node):
                 self.stopped = True
 
         self.running = False
+        if guard is not None:
+            guard.disarm()
         self._current_task_name = ''
         self._current_task_step = 0
         if self.stopped:
@@ -774,6 +969,9 @@ class TaskRunnerNode(Node):
         Returns:
             (success: bool, message: str)
         """
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None and guard.phase != 'idle':
+            return False, '任务总计时已接管，禁止普通动作'
         type_names = {1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL', 5: 'BTRAVEL', 6: 'START'}
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
         task_context = (str(task_context).strip() or self._format_motion_context(
@@ -801,7 +999,9 @@ class TaskRunnerNode(Node):
         goal.timeout = float(effective_timeout)
         goal.task_context = task_context
 
-        send_future = self._action_client.send_goal_async(goal)
+        send_future = guard.send_goal(goal) if guard is not None else self._action_client.send_goal_async(goal)
+        if send_future is None:
+            return False, '任务总计时已接管，禁止普通动作'
         while rclpy.ok() and not self.stopped and not send_future.done():
             time.sleep(0.01)
         if not rclpy.ok() or self.stopped:
@@ -919,9 +1119,10 @@ class TaskRunnerNode(Node):
     def _do_start(self) -> bool:
         """发送 START action goal，初始化 odom 原点。"""
         self.light_off()
-        # 所有START入口（跳过准备、按回车、正常倒计时）均在此置零。
+        # 所有START入口（跳过准备、按回车、正常倒计时）均发送一次舵机1抓取180°。
         # 这里只确认指令发布；没有舵机反馈确认，不宣称已机械到位。
-        # START紧接海参任务时，读取同一份夹爪选择；切换为2后不再误操作舵机1。
+        self.set_servo(self.ANGLE_INIT, 'START初始抓取（180°）')
+        # START紧接舵机2海参任务时，额外保留其初始闭合，不改变舵机2协议。
         tasks = getattr(self, 'tasks', ())
         next_index = getattr(self, 'current_index', 0) + 1
         if next_index < len(tasks) and tasks[next_index].get('name') == 'grab_sea_cucumber':
@@ -929,14 +1130,13 @@ class TaskRunnerNode(Node):
             if int(params.get('gripper_servo_id', 1)) == 2:
                 self.set_servo(math.radians(float(params.get('servo2_close_angle_deg', 150.0))),
                                'START海参夹爪初始闭合', servo_id=2)
-            else:
-                self.set_servo(self.ANGLE_INIT, 'START置零（抓取位置）')
-        else:
-            self.set_servo(self.ANGLE_INIT, 'START置零（抓取位置）')
         success, msg = self._send_action_goal(
             BasicMotion.Goal.START, [0.0, 0.0, 0.0, 0.0], timeout=0)
         if success:
             self._cmd_x = self._cmd_y = self._cmd_z = self._cmd_yaw = 0.0
+            guard = getattr(self, '_mission_deadline', None)
+            if guard is not None and guard.phase == 'idle':
+                guard.origin_ready = True
         else:
             self.get_logger().error(f'START 执行失败：{msg}')
         return success
@@ -1475,7 +1675,11 @@ class TaskRunnerNode(Node):
         msg.x = float(forward_thrust)
         msg.z = float(vertical_thrust)
         msg.seq = 0
-        self.pub_setpoint.publish(msg)
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None:
+            guard.publish_task(self.pub_setpoint, msg)
+        else:
+            self.pub_setpoint.publish(msg)
 
     def _task_return_shore(self, p: dict) -> bool:
         """保持当前深度返回靠岸准备点，再定时前推、负z推力上浮。
@@ -1557,7 +1761,11 @@ class TaskRunnerNode(Node):
         msg.pitch = 0.0
         msg.yaw = math.radians(float(yaw_rate_deg_s))
         msg.seq = 0
-        self.pub_setpoint.publish(msg)
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None:
+            guard.publish_task(self.pub_setpoint, msg)
+        else:
+            self.pub_setpoint.publish(msg)
 
     def _run_major_task_with_light(self, task_type, p, label):
         """三项大任务统一灯态：黄运行、绿成功、红失败/停止/异常。
@@ -1997,6 +2205,11 @@ class TaskRunnerNode(Node):
 
     def _run_task_cb(self, request, response):
         if request.start:
+            guard = getattr(self, '_mission_deadline', None)
+            if self.running or self._debug_executing or (guard is not None and guard.phase != 'idle'):
+                response.success = False
+                response.message = '任务运行中或总计时已接管，禁止并发发车；接管后需重启task_runner'
+                return response
             path = self._resolve_mission_path(request.task_name)
 
             self.get_logger().info(f'服务 /task/run：从 {path} 开始执行任务')
@@ -2017,14 +2230,16 @@ class TaskRunnerNode(Node):
                 response.message = '未加载任何任务'
         else:
             self.get_logger().info('服务 /task/run：收到停止请求')
-            self.stopped = True
-            response.success = True
-            response.message = '已停止'
+            return self._stop_task_cb(request, response)
         return response
 
     def _stop_task_cb(self, request, response):
         self.get_logger().warn('服务 /task/stop：紧急停止')
         self.stopped = True
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None:
+            guard.stop()
+        self._publish_body_thrust()
         if self._active_goal_handle is not None:
             self.get_logger().info('正在取消当前动作目标')
             self._active_goal_handle.cancel_goal_async()
@@ -2041,7 +2256,8 @@ class TaskRunnerNode(Node):
             self.get_logger().warn('/task/exec 被调用，但调试模式未开启')
             return response
 
-        if self._debug_executing:
+        guard = getattr(self, '_mission_deadline', None)
+        if self._debug_executing or (guard is not None and guard.phase != 'idle'):
             response.success = False
             response.message = (
                 f'任务“{self._debug_task_name}”已在运行。'
@@ -2089,6 +2305,10 @@ class TaskRunnerNode(Node):
 
     def _debug_exec_single(self, name: str, params: dict):
         """Run a single task in debug mode (runs in daemon thread)."""
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None and not guard.start(self._mission_runtime):
+            self.get_logger().error('总计时已接管，拒绝调试任务重新发车')
+            return
         self._debug_executing = True
         self._debug_task_name = name
         self._current_task_name = name
@@ -2109,6 +2329,8 @@ class TaskRunnerNode(Node):
         except Exception as e:
             self.get_logger().error(f'调试执行 {name}：发生异常：{e}')
         finally:
+            if guard is not None:
+                guard.disarm()
             self._debug_executing = False
             self._debug_task_name = None
             self._current_task_name = ''
@@ -2123,7 +2345,14 @@ class TaskRunnerNode(Node):
     def _publish_status(self):
         msg = TaskStatus()
 
-        if self._debug_executing or (self._debug_mode and self.running):
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None and guard.phase != 'idle':
+            msg.status = (TaskStatus.STATUS_RUNNING if guard.phase != 'off' else TaskStatus.STATUS_PAUSED)
+            msg.current_task_name = 'forced_return_start_and_surface'
+            msg.error_message = f'总计时接管：{guard.phase}，普通任务已停止'
+            msg.total_tasks = len(self.tasks)
+            msg.current_task_index = self.current_index
+        elif self._debug_executing or (self._debug_mode and self.running):
             # Debug mode: single task executing
             msg.status = TaskStatus.STATUS_RUNNING
             msg.current_task_name = self._debug_task_name or 'unknown'
@@ -2146,6 +2375,14 @@ class TaskRunnerNode(Node):
                 msg.error_message = '[调试模式：空闲，等待 /task/exec]'
 
         self.pub_status.publish(msg)
+
+    def destroy_node(self):
+        self.stopped = True
+        guard = getattr(self, '_mission_deadline', None)
+        if guard is not None:
+            guard.close()
+        self._action_client.destroy()
+        return super().destroy_node()
 
 
 def main(args=None):

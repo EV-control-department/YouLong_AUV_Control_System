@@ -3,6 +3,16 @@
 # 发车前核对：建图标签/九宫格坐标、转盘盘心、海参搜索/投放点、最后靠岸航向与推力。
 mission:
   name: competition_mapping_bump_trepang_shore
+  runtime:
+    enabled: true
+    time_limit_s: 840.0           # 从任务列表开始执行计时；14分钟抢占所有普通任务。
+    return_timeout_s: 60.0        # 取消旧动作+返航+上浮合计最多1分钟，耗尽持续零推力。
+    return_waypoint_xy: [3.0, -1.0] # 一个返航中间点，沿用现有返航折点；到START(0,0)及上浮通道须现场核对。
+    surface_z_m: 0.0             # START后深度基准，z向下；只上浮、不主动下沉，需核对实际水面深度。
+    max_xy_speed_mps: 0.2        # 同一body速度指令同时控制返航XY和上浮Z；不是开环推力。
+    max_up_speed_mps: 0.05       # 上浮最大速度m/s；实际推力由下位机速度环决定。
+    xy_tolerance_m: 0.15
+    z_tolerance_m: 0.05
   tasks:
     - name: start
       config: ../tasks/start.yaml
@@ -10,12 +20,14 @@ mission:
         skip_preparation: true
 
     # 每行[x,y,z,yaw度]是绝对odom航点。填安全通道折点，程序自动细分直线。
-    # 四段均待现场测量；空路线停止，不自动退回跨区直走。
+    # 起点到标签段当前禁用；其余三段保留现场中间点，末端接到下一任务出发位。
+    # 2026-10-13：用户确认中间点之后到任务终点的通道安全；改变任务坐标后需同步更新终点。
+    # 空路线停止；格式/终点核对不是自动避障或实机定位精度保证。
     # - name: world_waypoints
     #   params:
     #     label: 起点到标签观察位
     #     end_at_next_task: true
-    #     waypoints: [0,0,0,0]                 # 最后一点为tag_x/tag_y、survey_z/survey_yaw。
+    #     waypoints: [[0,0,0,0]]             # 最后一点为tag_x/tag_y、survey_z/survey_yaw。
     #     mode: fixed_yaw               # 先原地调深归向，再固定yaw平移；不使用WTRAVEL追方向。
     #     max_step_m: 0.4
     #     timeout: 180.0
@@ -34,7 +46,9 @@ mission:
       params:
         label: 标签到转盘观察位
         end_at_next_task: true
-        waypoints: [2.7, -0.2, 0.1, 0.0]                 # 填绕障折点；终点为盘前观察位，不是接触盘心。
+        waypoints:
+          - [2.7, -0.2, 0.1, 0.0]       # 现场绕障中间点。
+          - [2.79, -1.47, 0.774, -90.0] # 当前盘前观察位，非接触盘心；在中间点先调深归向。
         # 观察位由disk_pose_odom、front_standoff_m和front_camera_center_body换算。
         mode: fixed_yaw
         max_step_m: 0.4
@@ -50,13 +64,15 @@ mission:
         # 盘心继承turntable_simple.yaml，不以空列表覆盖；跨区路线终点须与其观察位一致。
         disk_class_id: 3              # 当前模型wheel；使用前视左目YOLO框。
         timeout: 180.0
-        bump_seconds: 1.0             # 沿用已存在的简单转盘一次顶碰配置，不验证盘体转角。
+        # 前向BMOVE行程/超时继承turntable_simple.yaml；不再使用定时顶碰或yaw行程。
 
     - name: world_waypoints
       params:
         label: 转盘区到海参搜索位
         end_at_next_task: true
-        waypoints: [2.7, -0.2, 0.1, 0.0]                 # 填绕障折点；最后一点取海参search.pose。
+        waypoints:
+          - [2.7, -0.2, 0.1, 0.0]       # 现场绕障中间点。
+          - [4.0, -2.0, 0.1, 0.0]       # 当前海参search.pose；修改搜索位后须同步修改。
         mode: fixed_yaw
         max_step_m: 0.4
         timeout: 180.0
@@ -73,7 +89,9 @@ mission:
       params:
         label: 海参区到靠岸准备点
         end_at_next_task: true
-        waypoints: [3.0, -1.0, 0.1, 0.0]                # 最后一点XY=(1,-1)，深度、正对岸航向现场确认。
+        waypoints:
+          - [3.0, -1.0, 0.1, 0.0]       # 现场绕障中间点。
+          - [1.0, -1.0, 0.1, 0.0]       # 接到return_shore；保持0.1m深度及0°航向。
         mode: fixed_yaw
         max_step_m: 0.4
         timeout: 180.0

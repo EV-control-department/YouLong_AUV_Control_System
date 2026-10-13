@@ -1,5 +1,5 @@
 
-# 简单转盘任务链：START → YOLO box接近/顶碰 → yaw一下。
+# 简单转盘任务链：START → YOLO box居中/前进接近 → 前向BMOVE顶碰一次。
 mission:
   name: turn_table
   tasks:
