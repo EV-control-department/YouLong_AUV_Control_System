@@ -99,10 +99,17 @@ uint8 control_level          # 回读 MCU 层级 0=NONE 1=POS 2=VEL 3=FORCE
 
 #### 坐标系约定
 
-- **odom 系**：`x`/`y`/`yaw` 以 START 时的 AUV 位姿为原点，**但 `z` 不是**——`basic_motion.start()`
-  把原点 z 硬编码为 `0.0`，所以 **odom z == map z == 绝对深度，水面为 0**
-  （`SET(x,y,3,0)` 是「下潜到 3 m」，不是「比开始时深 3 m」）。2026-09-16 console SIL 实测确认
-  （`SET(0.5,0,3.0,0)` → map z≈3.12）。此前本节写「以 START 时位置为原点 (0,0,0)」，对 z 不成立
+- **odom 系**：`x`/`y`/`z`/`yaw` **四轴全部**以 START 时的 AUV 位姿为原点。
+  `start()` 的 `_origin` 取当前 map 位姿的**完整 4-DOF**（`x/y/z/rz`，rx/ry 恒为 0）。
+  所以 `SET(x,y,3,0)` 是「**比 START 时再深 3 m**」，**不是**「下潜到 3 m 绝对深度」。
+  2026-10-12 SIL console 实测确认：START 在 map z=6.89 处 → `origin_z=6.90` → `SET(z=1)`
+  到达 map z=**7.79**（≈6.89+1，继续下潜），而不是上浮到 1 m。
+  ⚠️ **此改动翻转了 z 的语义**：2026-09-16 定的是旧行为（`_origin.z` 写死 `0.0` ⇒ odom z =
+  绝对深度、水面 0）。改成 4-DOF 原点的原因是让"原点"名副其实 —— 旧写法下 `start()` 把
+  `self.pose.z` 清零、下一个 `_pos_cb`（33 ms 后）又把它变成绝对深度，那一帧是自相矛盾的。
+  **影响**：z 命令的含义随 START 深度漂移；**重复发送 START 会移动深度基准**
+  （下潜到 3 m 后重发 START，之后 `setz: 3` 就到 6 m 绝对深度）。凡是有绝对深度意图的
+  竞赛任务都要相应调整；`task_runner` 的 `setz`/`wmovez`/`bmovez` 同理
 - **yaw 单位**：度（°），NED 系顺时针为正
 - **NED 轴**：x=北(N), y=东(E), z=下(D, 正数更深)
 

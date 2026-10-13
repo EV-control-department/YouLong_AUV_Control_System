@@ -50,6 +50,10 @@ def generate_launch_description():
         arg('enable_ai', 'true', 'Enable AI perception nodes'),
         arg('enable_nav', 'false', 'Enable navigation node'),
         arg('enable_task', 'false', 'Enable task runner'),
+        arg('debug_mode', 'false',
+            'Enable the task_runner debug mode: the /task/exec service, which '
+            'runs a single task by name with JSON params (how a human drives the '
+            'vehicle step by step). Only forwarded to uv_task/task_launch.py'),
         arg('laser_attenuation_c', '0.0',
             'Water attenuation coefficient [1/m] for the line laser (laser_sim): '
             '0 disables it, ~0.05 clear ocean, ~0.2 coastal, ~0.5 turbid harbour, '
@@ -68,5 +72,7 @@ def generate_launch_description():
         include('uv_perception', 'perception_launch.py',
                 arguments={'sim_mode': 'true'}, when='enable_ai'),
         include('uv_nav', 'nav_launch.py', when='enable_nav'),
-        include('uv_task', 'task_launch.py', when='enable_task'),
+        include('uv_task', 'task_launch.py',
+                arguments={'debug_mode': LaunchConfiguration('debug_mode')},
+                when='enable_task'),
     ])

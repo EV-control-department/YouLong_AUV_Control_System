@@ -94,8 +94,11 @@
 3. **容差**：x/y/z 0.1 m，yaw 5°。
 4. **单位**：`target` 的位置用米、yaw 用**度**（NED，顺时针为正）。
 5. **odom 系 vs map 系**：`basic_motion` 只认 odom 系；`PoseInfo` 同时给 `origin_*` 与 `robot_*`，
-   两者相减即可回到 map 系（`odom 0° = 初始朝向`）。**z 是例外**：`start()` 把原点 z 硬编码为 0，
-   所以 odom z == map z == 绝对深度（`SET(x,y,3,0)` 是"下潜到 3 m"）。
+   两者相减即可回到 map 系（`odom 0° = 初始朝向`）。**四轴全部相对**：`start()` 的 `_origin`
+   取当前 map 位姿的 `x/y/z/rz`（rx/ry 恒 0），所以 odom z ≠ map z，`SET(x,y,3,0)` 是
+   「比 START 时再深 3 m」。2026-10-12 实测：START 在 map z=6.89 → `SET(z=1)` → map z=7.79。
+   ⚠️ 因此**重复 `START` 会移动深度基准**；2026-09-16 之前是"原点 z 写死 0 ⇒ odom z = 绝对深度"，
+   那次结论已被本次改动取代。
 
 ## 3. 服务 `/zit6/get_params`（`zit6_interfaces/srv/GetParams`）
 

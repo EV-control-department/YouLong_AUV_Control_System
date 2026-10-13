@@ -636,3 +636,99 @@ def test_shutdown_path_interrupts_before_zeroing_thrust() -> None:
     assert interrupt_at < zero_at, (
         "main() 里必须先 node.request_shutdown() 再 node.emergency_stop()"
     )
+
+
+# --------------------------------------------------------------------------- #
+# odom 原点必须是 START 的**完整 4-DOF 位姿**（含 z）
+# --------------------------------------------------------------------------- #
+# 为什么这组测试单独写：上面所有 hold/STAY 测试都在 `origin = (0,0,0)` 下跑，
+# 而原点为零时 map 系与 odom 系**数值相同**，于是 `set_map` 与 `set_world`
+# 无法区分 —— 2026-10-12 正是因此漏掉了 `_hold_current_position` 用错出口的 bug
+# （实测原点在 map(5.5,-9.5) 时，hold 打到偏 ~11 m 的位置）。
+# 修法就是**先把原点挪开**，让两个坐标系数值不同。
+
+def test_hold_uses_odom_not_map_when_the_origin_is_offset(ros_context) -> None:
+    """原点非零时，`_hold_current_position` 必须按 odom 解释 `self.pose`。
+
+    用 `set_map` 会把 odom 值当 map 再偏移一次，hold 落到错误位置。
+    """
+    from uv_control.coordinate import Coordinate
+
+    node = _node()
+    try:
+        # START 在一个远离原点的位置 → origin 非零
+        node.pose = Coordinate(x=5.5, y=-9.5, z=0.0, rz=10.0)
+        node._map_pose = Coordinate(x=5.5, y=-9.5, z=0.0, rz=10.0)
+        node.start()
+        # 然后艇移动到另一个 odom 位姿
+        node.pose = Coordinate(x=1.5, y=-2.5, z=3.25, rz=42.0)
+
+        node._hold_current_position()
+
+        # _target 是 odom：必须**等于**当前 odom 位姿
+        assert node._target.x == pytest.approx(1.5, abs=1e-6), (
+            "hold 的 odom 目标被 map 偏移污染了（用了 set_map？）")
+        assert node._target.y == pytest.approx(-2.5, abs=1e-6)
+        assert node._target.z == pytest.approx(3.25, abs=1e-6)
+        assert node._target.rz == pytest.approx(42.0, abs=1e-6)
+
+        # 发出去的 map 值必须是 odom + origin（绕原点 yaw 旋转后）
+        msg = node.pub_setpoint.messages[-1]
+        assert msg.control_key == 0
+        # 原点 yaw=10°，所以 map = origin ⊕ odom
+        exp = node._odom_to_map(Coordinate(x=1.5, y=-2.5, z=3.25, rz=42.0))
+        assert msg.x == pytest.approx(exp.x, abs=1e-5)
+        assert msg.y == pytest.approx(exp.y, abs=1e-5)
+        assert msg.z == pytest.approx(exp.z, abs=1e-5)
+    finally:
+        node.destroy_node()
+
+
+def test_start_takes_the_full_4dof_origin_including_depth(ros_context) -> None:
+    """`start()` 的原点必须含 z —— 否则原点自身的定义就不完整。
+
+    旧实现把 `_origin.z` 写死 0.0，却在 `start()` 里把 `self.pose.z` 清零：
+    下一个 `_pos_cb` 又按"绝对深度"覆盖它，那一帧自相矛盾。取完整 4-DOF 后
+    `map_z - origin_z == 0` 恰好成立，清零才是对的。
+    """
+    from uv_control.coordinate import Coordinate
+
+    node = _node()
+    try:
+        node.pose = Coordinate(x=5.5, y=-9.5, z=6.89, rz=10.0)
+        node._map_pose = Coordinate(x=5.5, y=-9.5, z=6.89, rz=10.0)
+        node.start()
+
+        assert node._origin is not None
+        assert node._origin.z == pytest.approx(6.89, abs=1e-9), (
+            "原点 z 没取当前深度（还写死 0.0？）")
+        assert node._origin.x == pytest.approx(5.5)
+        assert node._origin.y == pytest.approx(-9.5)
+        assert node._origin.rz == pytest.approx(10.0)
+        # rpy 之外的姿态不参与原点（控制栈是 4-DOF）
+        assert node._origin.rx == pytest.approx(0.0)
+        assert node._origin.ry == pytest.approx(0.0)
+    finally:
+        node.destroy_node()
+
+
+def test_set_z_is_relative_to_the_start_depth(ros_context) -> None:
+    """`SET z` 是**相对 START 深度**：map_z = origin_z + target_z。
+
+    这条是 2026-10-12 的语义翻转点，实测：START 在 map z=6.89 → origin_z=6.90,
+    `SET(z=1)` 到达 map z=7.79（继续下潜），而非上浮到 1 m。
+    """
+    from uv_control.coordinate import Coordinate
+
+    node = _node()
+    try:
+        node.pose = Coordinate(x=0.0, y=0.0, z=6.89, rz=0.0)
+        node._map_pose = Coordinate(x=0.0, y=0.0, z=6.89, rz=0.0)
+        node.start()
+        # 直接问"odom z=1 会被发成哪个 map z"
+        node.set_world(0.0, 0.0, 1.0, 0.0)
+        msg = node.pub_setpoint.messages[-1]
+        assert msg.z == pytest.approx(1.0 + 6.89, abs=1e-6), (
+            "SET z 不是相对 START 深度 —— 语义又变回去了？")
+    finally:
+        node.destroy_node()

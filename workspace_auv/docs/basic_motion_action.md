@@ -53,7 +53,7 @@ uint8 control_level          # 回读 MCU 层级 0=NONE 1=POS 2=VEL 3=FORCE
 | Yaw 0°     | 北（N）                                          |
 | Yaw 正方向  | **顺时针**                                 |
 | 角度单位    | **度**（°），内部使用，ROS 消息层也使用度 |
-| odom 原点   | START 时 AUV 的位置，START 后 `x`/`y`/`yaw` 为相对值；**`z` 例外：原点 z 固定为 0 ⇒ odom z = 绝对深度（水面 0）** |
+| odom 原点   | START 时 AUV 的位姿，**四轴全部**为相对值（`x`/`y`/`z`/`yaw`）|
 | 机体系 body | body-x = 机头方向，body-y = 右侧                 |
 
 ---
@@ -73,8 +73,12 @@ goal.cmd_type = BasicMotion.Goal.START
 START 的行为：
 
 - 记录当前 map 位姿为 odom 原点
-- odom (0,0,0,0) = AUV 在 START 时刻的位置和朝向（**z 除外**：`start()` 里 `_origin.z` 被写死为
-  `0.0`，所以 odom z 等于 map z，即**绝对深度**；`SET(x,y,3,0)` = 下潜到 3 m 而不是「比开始时深 3 m」）
+- odom (0,0,0,0) = AUV 在 START 时刻的位置和朝向，**四轴全部相对**（`start()` 的 `_origin`
+  取当前 map 位姿的 `x/y/z/rz`，rx/ry 恒为 0）
+  - 所以 `SET(x,y,3,0)` = 「**比 START 时再深 3 m**」，不是「下潜到 3 m 绝对深度」
+  - 2026-10-12 实测：START 在 map z=6.89 → `origin_z=6.90` → `SET(z=1)` 到达 map z=**7.79**
+- ⚠️ **重复发送 START 会移动深度基准**：下潜到 3 m 后重发 START，之后 `SET(z=3)` 会到
+  6 m 绝对深度。这是"原点 = START 位姿"的直接推论，不是 bug，但设计绝对深度任务时要当心
 - 例：AUV 朝东（map 90° 方向）→ START → odom 0° = 朝东
   - 之后 `SET(5, 0, 0, 0)` 表示向东走 5m
 - **重复发送 START 不是无操作**：`start()` 会覆盖原点（源码里先打

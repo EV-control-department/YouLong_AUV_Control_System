@@ -409,6 +409,7 @@ ros2 launch uv_sim bridge_launch.py laser_attenuation_c:=0.2   # 浑水线激光
 | `enable_ai` | `true` | 启用 vision + position（`sim_mode:=true`） |
 | `enable_nav` | `false` | 启用 navigator |
 | `enable_task` | `false` | 启用 task_runner |
+| `debug_mode` | `false` | task_runner 调试模式：开放 `/task/exec` 服务（按名字 + JSON 参数跑**单条**任务，人手动一步步开船）。只在 `enable_task:=true` 时有意义，透传给 `uv_task/task_launch.py`（2026-10-12 新增；此前**没有任何 launch 声明它**，预设里根本开不起来，而 `ros2 launch` 又不吃 `--ros-args -p`）|
 | `laser_attenuation_c` | `0.0` | 线激光水体衰减系数 [1/m]，透传给 `laser_sim`（见 §laser_sim）：`0` 关闭，`0.2` 沿岸 ≈4 m 有效距离，`0.5` 浑水 ≈2.2 m |
 
 **用法：**
@@ -420,6 +421,9 @@ ros2 launch uv_sim_bringup sim_bringup.py enable_motion:=false enable_ai:=false
 ros2 launch uv_sim_bringup sim_bringup.py headless:=true simulation_rate:=100.0
 # 水下浑水（沿岸）：线激光有效距离降到 ≈4 m
 ros2 launch uv_sim_bringup sim_bringup.py headless:=true laser_attenuation_c:=0.2
+# 手动一步步控制移动（开 task_runner + debug，用 /task/exec 发单条任务）：
+ros2 launch uv_sim_bringup sim_bringup.py scenario_desc:=canyon_vision_dvl.scn \
+    enable_task:=true debug_mode:=true
 ```
 
 ### hil_bringup.py（包 `uv_sim_bringup`）⏸

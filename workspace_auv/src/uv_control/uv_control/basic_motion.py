@@ -448,7 +448,7 @@ class BasicMotionNode(Node):
                     'odom origin already set, updating to current map pose')
             self._origin = Coordinate(
                 x=self._map_pose.x, y=self._map_pose.y,
-                z=0.0, rz=self._map_pose.rz)
+                z=self._map_pose.z, rz=self._map_pose.rz)
             self.get_logger().info(
                 f'DEBUG map pose: x={self._map_pose.x:.4f}, '
                 f'y={self._map_pose.y:.4f}, z={self._map_pose.z:.4f}, '
@@ -583,7 +583,7 @@ class BasicMotionNode(Node):
         self.get_logger().info(
             f'打断收尾: 目标设为当前位置 '
             f'({p.x:.2f}, {p.y:.2f}, {p.z:.2f}, {p.rz:.1f}°)')
-        self.set_map(p.x, p.y, p.z, p.rz)
+        self.set_world(p.x, p.y, p.z, p.rz)
 
     def effective_duration(self, duration: float, timeout: float) -> float:
         """速度/推力命令的保持时长：``duration`` > ``timeout`` > ``DEFAULT_DURATION``。
