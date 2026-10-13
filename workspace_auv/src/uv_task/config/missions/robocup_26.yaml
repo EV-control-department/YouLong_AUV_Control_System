@@ -29,47 +29,16 @@ mission:
       on_failure:
         "26rb_hit_balls.timeout": {}
 
-    - name: 26rb_gate_task
-      config: ../tasks/26rb_gate_task.yaml
-      initial:
-        poses:
-          - command: BMOVE
-            axes: xyzrz
-            target: [0.0, 0.0, 0.0, 0.0]
-            on_failure: continue
-          # - command: WTRAVEL
-          #   axes: xyz
-          #   target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-          # - command: SET
-          #   axes: rz
-          #   target: [0.0, 0.0, 0.0, 0.0]
-      # on_failure:
-      #   default:
-      #     # 失败覆盖只传给下一项任务 26rb_grab_ball_ring，作为其初始路线。
-      #     poses:
-      #       - command: WTRAVEL
-      #         axes: xyz
-      #         target: [3.0, -1.0, 0.2, 0.0]
-      #         on_failure: continue
-      #       - command: WTRAVEL
-      #         axes: xy
-      #         target: [0.0, 0.0, 0.2, 0.0]
-      #         on_failure: continue
-      #       - command: SET
-      #         axes: rz
-      #         target: [0.0, 0.0, 0.0, 0.0]
-      #         on_failure: continue
-
     - name: 26rb_grab_ball_ring
       config: ../tasks/26rb_grab_ball_ring.yaml
       initial:
         poses:
-          - command: BMOVE
+          - command: SET
             axes: x
-            target: [-0.2, 0.0, 0.0, 0.0]
-          - command: BMOVE
-            axes: y
-            target: [0.0, 1.0, 0.0, 0.0]
+            target: [0.5, 0.0, 0.0, 0.0]
+          # - command: BMOVE
+          #   axes: y
+          #   target: [0.0, 1.0, 0.0, 0.0]
           # - command: SET
           #   axes: xyz
           #   target: [0.5, 5.0, 0.2, 0.0] # 下潜0.2m
@@ -99,11 +68,42 @@ mission:
       on_failure:
         "26rb_drop_ball_target_rack.timeout": {}
 
+    - name: 26rb_gate_task
+      config: ../tasks/26rb_gate_task.yaml
+      initial:
+        poses:
+          - command: SET
+            axes: xy
+            target: [0.5, 0.5, 0.0, 0.0]
+            on_failure: continue
+          # - command: WTRAVEL
+          #   axes: xyz
+          #   target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
+          # - command: SET
+          #   axes: rz
+          #   target: [0.0, 0.0, 0.0, 0.0]
+      # on_failure:
+      #   default:
+      #     # 失败覆盖只传给下一项任务 26rb_grab_ball_ring，作为其初始路线。
+      #     poses:
+      #       - command: WTRAVEL
+      #         axes: xyz
+      #         target: [3.0, -1.0, 0.2, 0.0]
+      #         on_failure: continue
+      #       - command: WTRAVEL
+      #         axes: xy
+      #         target: [0.0, 0.0, 0.2, 0.0]
+      #         on_failure: continue
+      #       - command: SET
+      #         axes: rz
+      #         target: [0.0, 0.0, 0.0, 0.0]
+      #         on_failure: continue
+
     - name: return_origin
       config: ../tasks/return_origin.yaml
       initial:
         pose:
-          command: WTRAVEL
+          command: SET
           axes: xyz
           target: [0.5, 0.0, 0.5, 0.0]
           on_failure: continue

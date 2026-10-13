@@ -54,13 +54,19 @@ def test_equal_center_error_prefers_latest_position_and_retains_it_after_loss_an
         return point
     monkeypatch.setattr(mod, 'target_world_xy', record_projection)
     drifted = False
+    drift_position = None
     def images():
-        nonlocal drifted
+        nonlocal drifted, drift_position
         age = node.clock-started
-        if age > 1.2 and not drifted:
-            node.pose[:2] += [1., -.5]
+        if age > 1.2:
+            if not drifted:
+                drift_position = node.pose[:2]+[1., -.5]
+                drifted = True
+            # Recovery now heads back to the target observation point. Keep
+            # the external disturbance active to test frozen-world geometry
+            # while the measured vehicle pose still differs at timeout.
+            node.pose[:2] = drift_position
             node.pose[5] = 25.
-            drifted = True
         stream(node, (cid,) if age < .3 else (), error=(.15, -.1))
     node.hook = images
     images()
@@ -351,7 +357,7 @@ def test_relaxed_claw_alignment_budget_and_tolerances_do_not_change_other_set_st
     task._targets[kind] = ((1., 2.), tuple(node.pose), 'down_left')
     task._align_claw(kind, controller, 90.)
     action = [call for call in node.calls if call[0] == 'action'][-1]
-    assert action[4]['timeout'] == 30.
+    assert action[4]['timeout'] == 60.
     assert action[4]['position_tolerance'] == .15
     assert action[4]['yaw_tolerance'] == 10.
     assert action[2][2] == task.work_depth

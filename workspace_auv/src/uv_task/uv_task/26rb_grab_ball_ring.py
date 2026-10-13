@@ -218,6 +218,7 @@ class RB26GrabBallRingTask:
         self.frame_loss_timeout = float(
             params.get('frame_loss_timeout', legacy_loss_timeout))
         self._targets = {}
+        self._target_return_poses = {}
         self._blind_targets = {}
         self._blind_grabs_used = set()
         self._first_find_started = None
@@ -314,7 +315,7 @@ class RB26GrabBallRingTask:
                 self._wait(min(self.descent_period, max(0.0, deadline-now)))
 
     def _return_frame(self, controller):
-        """Return to this target's camera pose, without any visual servo."""
+        """Restore depth, then return to this attempt's best target observation."""
         kind = 'golf' if controller is self.ball else 'ring'
         anchor = getattr(self.state.pickup, kind+'_camera_pose')
         if anchor is None:
@@ -323,7 +324,7 @@ class RB26GrabBallRingTask:
         self._restore_work_depth('组合抓取：抓取后恢复作业深度',
                                  hold_xy_yaw=self._descent_anchor)
         self._descent_anchor = None
-        self._set_pose(anchor, '组合抓取：返回'+kind+'下视对齐位姿', axes='xyrz')
+        self._set_pose(anchor, '组合抓取：返回'+kind+'目标观测位姿', axes='xyrz')
 
     def _fresh_detection(self, class_id, controller, *, active_camera=None):
         with self.node._perception_lock:
@@ -345,7 +346,12 @@ class RB26GrabBallRingTask:
             max(candidates, key=lambda x: x[0]))
         return selected[1], selected[2], selected[0]
 
-    def _fallback_pose(self):
+    def _fallback_pose(self, kind=None):
+        # Return to where this target was best seen, rather than letting a
+        # later frame correction overwrite its observation point.
+        target_pose = self._target_return_poses.get(kind)
+        if target_pose is not None:
+            return target_pose
         recorded = self.state.pickup.last_servo_pose
         if recorded is not None:
             return recorded
@@ -361,7 +367,8 @@ class RB26GrabBallRingTask:
                   if world_target is None else world_target)
         self._targets[kind] = (target, pose, camera)
         controller._aligned_camera = camera
-        self.state.update_pickup(**{kind+'_camera_pose': anchor, 'last_servo_pose': anchor})
+        return_pose = self._target_return_poses.get(kind, anchor)
+        self.state.update_pickup(**{kind+'_camera_pose': return_pose, 'last_servo_pose': anchor})
         if timed_out:
             self.log.warning(
                 f'组合抓取：{kind} 进入过微调区后伺服超时，使用历史最靠近图像中心的有效世界位置'
@@ -386,6 +393,7 @@ class RB26GrabBallRingTask:
         controller._aligned_camera = None
         controller._servo_gain = self.target_servo_gains[kind]
         self._blind_targets.pop(kind, None)
+        self._target_return_poses.pop(kind, None)
         base_tolerance = controller._pixel_tolerance
         tolerance_change_at = None
         tolerance_change_label = ('线性放宽' if self.final_target_tolerance >= base_tolerance
@@ -524,6 +532,8 @@ class RB26GrabBallRingTask:
                                         and target_received >= best_target_observation.received)):
                                 best_target_observation = last_target_observation
                                 best_center_error = center_error
+                                self._target_return_poses[kind] = (
+                                    pose[0], pose[1], self.work_depth, pose[5])
                 # A fresh cached sighting may predate entry into a new ring stage.
                 if not checking and detection is not None and now <= window.search_deadline:
                     window.seen = True
@@ -558,6 +568,12 @@ class RB26GrabBallRingTask:
                 if announced != window.mode:
                     announced = window.mode
                     self.log.info(f'组合抓取：{kind} 进入{window.mode}，servo剩余={max(0., servo_deadline-now):.1f}s')
+                    if window.mode == 'return' and kind in self._target_return_poses:
+                        anchor = self._target_return_poses[kind]
+                        self.log.info(
+                            f'组合抓取：{kind} 返回本轮target最居中观测点，'
+                            f'XY=({anchor[0]:+.3f},{anchor[1]:+.3f})m，'
+                            f'yaw={anchor[3]:+.2f}°，中心误差={best_center_error:.4f}')
                 if frame is not None and not self._frame_light_indicated:
                     self._frame_light_indicated = True
                     controller._flash_green(1, '首次看到frame')
@@ -702,7 +718,7 @@ class RB26GrabBallRingTask:
                         controller._aligned_camera = last_frame_camera
                     frame_stable_since = None
                 elif window.mode == 'return':
-                    anchor = self._fallback_pose()
+                    anchor = self._fallback_pose(kind)
                     pose = self._pose()
                     horizontal = bounded_velocity(np.asarray(anchor[:2])-pose[:2], self.frame_servo_gain, controller._max_xy_speed)
                     controller._servo_yaw_target = anchor[3]
@@ -1058,6 +1074,7 @@ class RB26GrabBallRingTask:
 
     def execute(self):
         self.state.reset_pickup()
+        self._target_return_poses.clear()
         self._blind_targets.clear()
         self._blind_grabs_used.clear()
         try:
