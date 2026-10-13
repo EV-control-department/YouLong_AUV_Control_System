@@ -88,6 +88,55 @@ player默认完全离线，不发布任何DDS消息。若确实需要给另一�
 GUI也使用域77；命令和action话题始终排除。无需启动BasicMotion或task_runner。
 播放器优先PySide6，缺失时使用rqt常见的PyQt5。
 
+### 本地离线上位机（scp 后选择文件夹）
+
+在上位机复制本仓库的 `uv_record/` 和 `visualization/record_review.py`，安装
+`PySide6`、`numpy`、`opencv-contrib-python`（AprilTag 需要 `cv2.aruco`），
+并安装 FFmpeg 用于视频导出。已有 OpenCV 时先检查是否包含 aruco，避免同时安装多个 OpenCV 发行包。
+不需要启动 ROS 或连接 AUV；仅启用 bag 补读时需要对应 ROS 消息环境。
+
+```bash
+# 在仓库根目录启动，可不传路径，随后用窗口选择目录
+python3 visualization/record_review.py
+# 也可直接打开 scp 回来的 record 根目录（自动发现内部 session）
+python3 visualization/record_review.py /本地路径/records
+# 构建 ROS 包后的可选入口
+ros2 run uv_record review
+```
+
+选择 record 文件夹 → 在下拉框选择 session → 选择报告保存目录 → 点击
+“生成完整报告”。每次生成独立目录，默认放在 `~/AUV_reports/`，不覆盖历史报告。
+窗口内显示交互报告；“浏览器打开报告”用于外部浏览器回看视频，“打开导出文件夹”
+用于查阅 CSV、JSON 和 SVG。视频编解码支持因 Qt/浏览器而异，窗口不能播放时可用外部浏览器或播放器。
+分析由独立进程执行，窗口保持响应，错误与缺失数据在日志及报告内展示。
+
+生成后默认显示 **三维九宫格**，“完整报告”切回所有文档。三维场景可拖动旋转、
+滚轮缩放、切到俯视、选择建图轮次，并切换视觉/实际提交结果。
+点击锥桶或 ArUco/AprilTag 显示原始 XYZ、来源、投票和观测数；可叠加观测点
+（绿色接受、红色拒绝）及整段轨迹，也可保存当前视角 PNG。
+圆锥桶采用橙白条纹（Ø28 cm、高50 cm），方锥桶采用黄黑斜纹（35 cm底边、高50 cm），
+尺寸沿用仓库比赛模型，不表示从录像量出的尺寸。
+九宫格按记录的 center/side/yaw/floor_z 还原，标记按记录的世界坐标和字典/ID
+生成真实码纹；缺少字典或 OpenCV aruco 时只显示位置/ID，不伪造码纹。
+标记边长为30 cm展示值，未记录朝向时采用网格 yaw。世界系按 NED（+Z向下）
+显示，视觉 position 作为锥桶几何中心，fallback 格点作为底面位置，不改原始坐标。
+缺失目标坐标时列出对应格点，不补造锥桶位置；缺少网格几何时仅画已有坐标。
+三维渲染完全离线，不依赖 CDN、WebGL 或网络；`map3d.html` 可独立打开，
+`map3d.json` 包含场景坐标和证据来源，完整的历史快照仍在 `mapping_snapshots.json`。
+
+报告并列展示 **视觉融合、实际提交接口** 两份九宫格，界面不再提供独立 fallback 展示。
+视觉结果是否正确仍需结合录像核对；`verified_complete`、`ready`、`valid`、
+fallback 原因、提交参数及航点/观测失败记录会明确保留。
+未记录的提交结果不会用配置值补造；录像离线 AprilTag 重识别仍单独标注来源。
+
+新增完整导出：`result_comparison.json/csv`、每轮 `map_*_visual.svg`、
+`map_*_submission.svg`（仅有对应记录时生成）、
+`mapping_snapshots.json`（全部快照）、`mapping_observations.json/csv`、
+`rosout.json/csv`、`evidence_inventory.json`，以及 `evidence/` 中保持原字节的
+全部 JSONL 和 manifest 副本（含性能、事件、在线诊断等索引）。
+`report.md` 是可单独保存的文字复盘文档，`exports.html/json` 列出全部附件。
+分享报告时保留整个报告文件夹；原始视频文件链接仍依赖本地 session。
+
 ### 离线 Python 解读与可视化
 
 ```bash
@@ -106,6 +155,14 @@ PYTHONPATH=uv_record python3 -m uv_record.analyze /绝对路径/session \
 `videos.json`、`videos/*.mp4`、`apriltag.json/csv` 和 `apriltag/*.jpg`。
 SVG 可独立打开和导出，HTML 不需要网络。导出目录必须为空且位于 session 外；
 脚本不会修改原录制内容。视频清单保留原文件的链接，播放副本位于报告目录。
+
+报告和离线播放器的融合九宫格以 `final_assignment` 为准，编号按
+`0 1 2 / 3 4 5 / 6 7 8` 展示；世界俯视图仅交换绘制XY，+X向上、+Y向右，
+不修改格点ID或原始坐标。最终未选中的候选位置不会被画成额外锥桶。
+最新结果在报告最前；空的initializing快照仍完整保留在导出 JSON 中。
+`conclusion` 提交结论在独立对照面板中展示，不会覆盖融合图。
+此显示修正不改变任务规划、DDS提交消息或源录制。
+`maps.json` 保留原始地图证据；SVG、表格和地图CSV使用最终融合分类展示。
 
 默认使用 FFmpeg 将各 HLS 清单分别无转码封装为 MP4；不同重启不拼成连续视频。
 JPEG 归档生成8FPS的实时回看副本，间隙重复前一帧，原帧索引继续作为证据。

@@ -6,6 +6,7 @@ setup(
     name=package_name,
     version='0.1.0',
     packages=[package_name],
+    package_data={package_name: ['map3d_view.html']},
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
@@ -24,6 +25,7 @@ setup(
             'player = uv_record.player:main',
             'export_frames = uv_record.player:export_frames',
             'analyze = uv_record.analyze:main',
+            'review = uv_record.review:main',
         ],
     },
 )

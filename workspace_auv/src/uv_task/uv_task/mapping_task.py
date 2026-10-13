@@ -167,6 +167,8 @@ class MappingTask:
         for name, default in (('stable_seconds', 1.0), ('stable_position_m', 0.03),
                               ('stable_angle_deg', 2.0), ('motion_window_seconds', 0.5),
                               ('motion_position_m', 0.15), ('motion_angle_deg', 5.0)):
+            if name.startswith('motion_') and not params.get('allow_motion_observations', False):
+                continue  # 未启用移动观测时不检查它的备用参数。
             if not math.isfinite(float(params.get(name, default))) or float(
                     params.get(name, default)) <= 0:
                 raise ValueError(f'{name} 必须为有限正数')
@@ -183,6 +185,7 @@ class MappingTask:
         self.attempted_traversal_order = []
         self.travel_failures = []
         self.config_fallback_mode = False
+        self.navigation_paused = False
         self.last_stability_log = float('-inf')
         self.filters = {}                            # 格点索引 -> StaticPositionFilter
         self.class_votes = {}                        # 格点索引 -> [方形票, 圆形票]
@@ -533,9 +536,9 @@ class MappingTask:
                     'class_id': (getattr(self, 'final_assignment', {}).get(index)
                                  if hasattr(self, 'final_assignment') else
                                  int(np.argmax(votes)) if label else None),
-                    'position': (track.position.tolist() if track else
-                                 center.tolist() if guessed else None),
-                    'covariance': track.covariance.tolist() if track else None,
+                    'position': (center.tolist() if guessed else
+                                 track.position.tolist() if track else None),
+                    'covariance': track.covariance.tolist() if track and not guessed else None,
                     'source': 'fallback' if guessed else 'vision' if track else 'none',
                     'observations': track.observations if track else 0,
                     'accepted_observations': track.accepted if track else 0,
@@ -573,6 +576,7 @@ class MappingTask:
                 'attempted_traversal_order': list(self.attempted_traversal_order),
                 'travel_failures': list(self.travel_failures),
                 'config_fallback_mode': self.config_fallback_mode,
+                'navigation_paused': self.navigation_paused,
                 'submitted_config': dict(self.params),
                 'all_cells_visited': len(self.visit_order) == len(self.grid_centers),
                 'measurement_count': sum(
@@ -653,10 +657,39 @@ class MappingTask:
     def _continue_navigation(self):
         if not self._ready():
             raise RuntimeError('建图移动被停止或总超时')
-        if not self._position_ready():
-            # 定位失效是真正的全局移动禁令，不与摄像头故障混淆。
-            self.node.stopped = True
-            raise RuntimeError('定位数据失效，停止后续导航')
+        if self._position_ready():
+            return
+        # 临时断流暂停本任务，不把它升级成整链永久停止；等新鲜反馈再导航。
+        self.navigation_paused = True
+        started, next_log, last_light = time.monotonic(), float('-inf'), None
+        self._emit('navigation_paused', reason='定位缺失/超过1秒未更新')
+        recovered = False
+        try:
+            while self._ready():
+                if self._position_ready():
+                    recovered = True
+                    break
+                zero = getattr(self.node, '_publish_body_thrust', None)
+                if zero is not None:
+                    zero()  # 全轴零推力覆盖旧位置/速度指令，不拿旧位姿盲走。
+                now = time.monotonic()
+                light = 1 if int((now-started)/.5) % 2 == 0 else 0
+                if light != last_light and hasattr(self.node, 'set_light'):
+                    self.node.set_light(light, '建图定位断流：红灯闪烁等待恢复')
+                    last_light = light
+                if now >= next_log:
+                    self.node.get_logger().warning('建图定位暂不可用：全轴零推力，红灯闪烁等待；'
+                                                   '定位恢复后继续，不停止整条任务链')
+                    next_log = now+3.
+                time.sleep(.05)
+        finally:
+            self.navigation_paused = False
+            if hasattr(self.node, 'set_light'):
+                self.node.set_light(3 if recovered else 1,
+                                    '建图定位恢复，继续任务' if recovered else '建图等待定位结束')
+        if not recovered:
+            raise RuntimeError('等待定位被停止或建图总预算耗尽；不发盲目移动指令')
+        self._emit('navigation_resumed', wait_seconds=time.monotonic()-started)
 
     def _try_waypoint(self, position, label):
         self._continue_navigation()
@@ -839,7 +872,7 @@ class MappingTask:
           4. 按 visit_order 逐格：WTRAVEL 到理论格点中心 -> 等待观察时间 ->
              记录该格点观测统计。单格点观测不足只记警告并继续（空格是允许的）；
           5. 九格走完冻结地图；启用遍历时沿实际巡检路线反向走一圈回标签；
-          6. 视觉不足使用配置fallback；单航点失败继续后续点，定位失效/急停停止；
+          6. 视觉不足只补缺失目标；单航点失败继续，定位断流闪红等待，急停生效；
           7. finally 中再发布一次最终地图。
         """
         self._emit('started', model='best.pt', class_map={0: 'square_cone', 1: 'round_cone'},
@@ -885,7 +918,7 @@ class MappingTask:
                 camera_available = self._camera_available()
                 if not camera_available:
                     self.config_fallback_mode = True
-                    self._assume_tag('摄像头数据中断，提交默认配置地图并继续巡检')
+                    self._assume_tag('摄像头数据中断，保留可靠视觉格点并用配置补缺，继续巡检')
                 observation_ok = reached and camera_available and self._observe_cones()
                 if not self._camera_available():
                     self.config_fallback_mode = True
@@ -906,8 +939,7 @@ class MappingTask:
                         observation_ok=True, **observation)
                 # 每格完成后立刻刷新地图，便于现场实时观察进度
                 self.publish_map()
-            self.final_assignment = self._fill_fallback_assignment(
-                {} if self.config_fallback_mode else self._select_final_assignment())
+            self.final_assignment = self._fill_fallback_assignment(self._retained_visual_assignment())
             confirmed = sorted(self.final_assignment)
             self.state = 'mapping_complete'
             self._emit('mapping_completed', confirmed_cells=confirmed,
@@ -931,12 +963,12 @@ class MappingTask:
                                         and self.fallback_tag is None and not self.travel_failures))
             return True
         except Exception as error:
-            # 普通建图异常/总超时只结束本阶段；定位失效/外部停止已单独置stopped。
+            # 普通异常/总超时只结束本阶段；定位断流等待恢复，不置全局stopped。
             self.state = 'stopped' if self.node.stopped else 'failed'
             self._emit('failed', reason=str(error))
             self.node.get_logger().error(f'mapping task failed: {error}')
-            if self.config_fallback_mode and not hasattr(self, 'final_assignment'):
-                self.final_assignment = self._fill_fallback_assignment({})
+            if not hasattr(self, 'final_assignment'):
+                self.final_assignment = self._fill_fallback_assignment(self._retained_visual_assignment())
             return False
         finally:
             # camera 的感知线程与任务生命周期独立；这里只发布最终地图。
@@ -978,9 +1010,11 @@ class MappingTask:
                    direction='reverse_survey', result_complete=(len(self.traversal_order) == 9
                                                                and not self.travel_failures))
 
-    def _select_final_assignment(self):
+    def _select_final_assignment(self, eligible_votes=None):
         """在有类别观测支持的格点中联合选择两方两圆，不补造无观测目标。"""
-        votes = {cell: tuple(counts) for cell, counts in self.class_votes.items()}
+        with self.lock:
+            votes = {cell: tuple(counts) for cell, counts in
+                     (self.class_votes if eligible_votes is None else eligible_votes).items()}
         candidates = {kind: sorted(cell for cell, counts in votes.items()
                                    if counts[kind] > 0) for kind in (0, 1)}
         best, best_key = {}, (-1, float('-inf'))
@@ -1004,6 +1038,24 @@ class MappingTask:
             self.node.get_logger().warning(
                 '观测证据不足四个目标，输出部分结果，缺失目标保持未知')
         return best
+
+    def _retained_visual_assignment(self):
+        """相机降级不清空地图；仅把证据不足的格点留给配置补齐。"""
+        if not self.config_fallback_mode:
+            return self._select_final_assignment()
+        minimum = int(self.params.get('min_observations', 3))
+        ratio = float(self.params.get('class_vote_ratio', .67))
+        eligible = {}
+        with self.lock:
+            snapshot = {cell: tuple(votes) for cell, votes in self.class_votes.items()}
+        for cell, votes in snapshot.items():
+            total = sum(votes)
+            eligible[cell] = tuple(count if count >= minimum and total and count/total >= ratio
+                                   else 0 for count in votes)
+        # 先排除弱证据再做两方两圆选择，避免弱类别占位把可靠观测挤出结果。
+        reliable = self._select_final_assignment(eligible)
+        self.node.get_logger().info(f'相机降级：保留可靠视觉格点{reliable}，只对缺失目标补配置地图')
+        return reliable
 
     def destroy(self):
         """释放资源：停止感知线程、销毁定时器与所有订阅。"""

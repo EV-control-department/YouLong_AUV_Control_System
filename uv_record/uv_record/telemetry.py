@@ -10,6 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .analyze import cells_of, fused_display_map
 
 class TelemetryRecorder:
     """Write incrementally; never retain an entire session in RAM."""
@@ -184,12 +185,14 @@ class ReplayTelemetry:
                     stream.seek(offsets[index])
                     poses.append(json.loads(stream.readline())['pose'])
         current = self.at('pose', timestamp)
-        mapping = self.at('map', timestamp) or {}
-        cells = mapping.get('cells', {})
+        mapping = fused_display_map(self.at('map', timestamp) or {})
+        cells = {str(cell.get('id', key)): cell for key, cell in cells_of(mapping)}
         targets = []
         for cell_id, cell in cells.items():
             point = cell.get('position') or cell.get('filtered_position')
-            if point is not None and len(point) >= 2:
+            if (point is not None and len(point) >= 2 and
+                    cell.get('final_selected') is not False and
+                    cell.get('label') in ('square_cone', 'round_cone')):
                 targets.append((cell_id, point, cell))
         points = [[p['x'], p['y']] for p in poses] + [item[1][:2] for item in targets]
         centers = [cell.get('center') for cell in cells.values() if cell.get('center') is not None]
@@ -199,11 +202,11 @@ class ReplayTelemetry:
         if tag_position is not None:
             points.append(tag_position[:2])
         if points:
-            values = np.asarray(points, float)
+            values = np.asarray(points, float)[:, [1, 0]]
             lower, upper = values.min(axis=0)-0.4, values.max(axis=0)+0.4
-            scale = min(560/max(upper[0]-lower[0], 1), 350/max(upper[1]-lower[1], 1))
+            scale = min(370/max(upper[0]-lower[0], 1), 330/max(upper[1]-lower[1], 1))
             def pixel(point):
-                return (int(40+(point[0]-lower[0])*scale), int(425-(point[1]-lower[1])*scale))
+                return (int(25+(point[1]-lower[0])*scale), int(450-(point[0]-lower[1])*scale))
             if len(poses) > 1:
                 cv2.polylines(canvas, [np.array([pixel([p['x'], p['y']]) for p in poses])], False, (220, 190, 50), 2)
             for point in centers:
@@ -229,13 +232,33 @@ class ReplayTelemetry:
                 p = current['pose']
                 center = pixel([p['x'], p['y']])
                 yaw = math.radians(p['yaw'])
-                end = (center[0]+int(25*math.cos(yaw)), center[1]-int(25*math.sin(yaw)))
+                end = (center[0]+int(25*math.sin(yaw)), center[1]-int(25*math.cos(yaw)))
                 cv2.arrowedLine(canvas, center, end, (100, 255, 100), 3)
                 cv2.putText(canvas, 'x=%.2f y=%.2f z=%.2f yaw=%.1f' % (p['x'], p['y'], p['z'], p['yaw']),
                             (15, 40), 0, .5, (230, 230, 230), 1)
         cv2.putText(canvas, 'Map: '+str(mapping.get('state', 'no map'))+
                     (' [FALLBACK]' if mapping.get('fallback_used') else ''),
                     (15, 20), 0, .5, (230, 230, 230), 1)
+        # 独立逻辑九宫格避免候选点或观测位置偏差干扰最终分类的阅读。
+        final = isinstance(mapping.get('final_assignment'), dict)
+        assignment = {str(key): value for key, value in (mapping.get('final_assignment') or {}).items()}
+        for index in range(9):
+            cell = cells.get(str(index), {})
+            class_id = assignment.get(str(index)) if final else cell.get('class_id')
+            if class_id is None and not final:
+                class_id = {'square_cone': 0, 'round_cone': 1}.get(cell.get('label'))
+            x, y = 448+(index % 3)*62, 82+(index // 3)*76
+            cv2.rectangle(canvas, (x, y), (x+58, y+70), (70,70,70), 1)
+            cv2.putText(canvas, str(index), (x+4,y+15), 0, .4, (230,230,230), 1)
+            if class_id == 0:
+                cv2.rectangle(canvas, (x+18,y+25), (x+40,y+47), (30,170,245), -1)
+            elif class_id == 1:
+                cv2.circle(canvas, (x+29,y+36), 12, (240,180,60), -1)
+        cv2.putText(canvas, 'FUSED GRID', (448,72), 0, .45, (240,240,240), 1)
+        cv2.putText(canvas, 'S: square  R: round', (448,330), 0, .35, (210,210,210), 1)
+        cv2.putText(canvas, '+X up / +Y right', (15,470), 0, .4, (170,170,170), 1)
+        cv2.putText(canvas, 'Submit: '+str((mapping.get('conclusion') or {}).get('source','not recorded')),
+                    (448,355), 0, .35, (160,160,220), 1)
         log = self.at('log', timestamp) or {}
         text = '[%s] %s' % (log.get('name', ''), log.get('message', ''))
         return canvas, text

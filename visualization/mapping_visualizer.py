@@ -67,6 +67,23 @@ def display_heading_deg(yaw):
     return float(yaw) - 90.
 
 
+def normalize_display_payload(payload):
+    """最终融合分类是显示依据；conclusion仅为提交记录，不能覆盖融合图。"""
+    view = copy.deepcopy(payload)
+    if isinstance(view.get('cells'), dict):
+        view['cells'] = sorted(view['cells'].values(), key=lambda cell: int(cell['id']))
+    assignment = view.get('final_assignment')
+    if isinstance(assignment, dict):
+        chosen = {str(key): value for key, value in assignment.items()}
+        for cell in view.get('cells', []):
+            class_id = chosen.get(str(cell['id']))
+            cell['final_selected'] = class_id in (0, 1)
+            cell['class_id'] = class_id if cell['final_selected'] else None
+            cell['label'] = ('square_cone' if class_id == 0 else
+                             'round_cone' if class_id == 1 else None)
+    return view
+
+
 class PoolMap(QWidget):
     """只呈现已发布结果：世界坐标俯视图，图标为示意而非相机重建。"""
 
@@ -77,7 +94,7 @@ class PoolMap(QWidget):
         self.setMinimumSize(480, 420)
 
     def set_scene(self, payload, snapshot):
-        self.payload, self.snapshot_data = payload, snapshot
+        self.payload, self.snapshot_data = normalize_display_payload(payload), snapshot
         self.update()
 
     def paintEvent(self, event):
@@ -159,7 +176,7 @@ class PoolMap(QWidget):
         painter.setPen(QPen(QColor(ACCENT), 2))
         painter.drawPath(path(snapshot.get("trajectory", [])))
         for cell in p.get("cells", []):
-            if not cell.get("position"):
+            if not cell.get("position") or cell.get("class_id") not in (0, 1) or cell.get('final_selected') is False:
                 continue
             point = screen(cell["position"])
             fallback = cell.get("source") == "fallback"
@@ -257,7 +274,7 @@ class RosSnapshot(Node):
             payload = json.loads(message.data)
             if isinstance(payload, dict):
                 with self.lock:
-                    self.map_payload = payload
+                    self.map_payload = normalize_display_payload(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             self.get_logger().warning(f"地图消息解析失败: {error}")
 
@@ -504,8 +521,9 @@ class MappingDashboard(QMainWindow):
                 self.last_plot_time = time.monotonic()
             self.map_hint.setText(
                 f"已访问 {sum(bool(c.get('visited')) for c in payload.get('cells', []))}/9 格 · "
-                f"观测目标 {sum(bool(c.get('position')) and c.get('source') != 'fallback' for c in payload.get('cells', []))} 个 · "
-                f"默认地图 {'已使用' if payload.get('fallback_used') else '未使用'}")
+                f"融合方形 {[c['id'] for c in payload.get('cells', []) if c.get('class_id') == 0]} · "
+                f"融合圆形 {[c['id'] for c in payload.get('cells', []) if c.get('class_id') == 1]} · "
+                f"提交结论来源 {(payload.get('conclusion') or {}).get('source', '未记录')}（独立，不覆盖融合图）")
             self._update_table(payload, snapshot)
             state = str(payload.get("state", "—"))
             self.metrics["state"].setText(STATE_NAMES.get(state, state))
@@ -608,7 +626,7 @@ class MappingDashboard(QMainWindow):
                                  s=16 if accepted else 10, color=color if accepted else '#657080',
                                  alpha=0.65 if accepted else 0.2, marker='o' if accepted else 'x')
             position = cell.get("position")
-            if position:
+            if position and cell.get('class_id') in (0, 1) and cell.get('final_selected') is not False:
                 px, py, pz = position
                 guessed = cell.get("source") == "fallback"
                 axis.scatter([py], [px], [-pz], s=130,
@@ -663,7 +681,7 @@ class MappingDashboard(QMainWindow):
             values = [
                 str(cell.get("id", "")), "是" if cell.get("visited") else "否",
                 (("猜测: " if cell.get("source") == "fallback" else "") +
-                 CLASS_NAMES.get(cell.get("class_id"), "—")), str(len(points)),
+                 CLASS_NAMES.get(cell.get("class_id"), "空格" if cell.get('final_selected') is False else "—")), str(len(points)),
                 str(cell.get("accepted_observations", 0)),
                 "—" if not position else "(%.2f, %.2f, %.2f)" % tuple(position),
                 "—" if not cell.get("residual") else "%.3f" % np.linalg.norm(cell["residual"][:2]),

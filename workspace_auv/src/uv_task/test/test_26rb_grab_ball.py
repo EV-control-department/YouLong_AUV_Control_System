@@ -248,7 +248,7 @@ def test_world_waypoints_reanchors_after_rotation_drift():
 
 
 @pytest.mark.parametrize('problem', ['empty', 'failed', 'stale', 'nan'])
-def test_required_transition_route_never_falls_back_to_straight_crossing(problem):
+def test_failed_transition_does_not_unconditionally_stop_mission(problem):
     from uv_task.task_runner import TaskRunnerNode
     node, actions, stops = _world_route_node()
     params = {'waypoints': [[1.,0.,.2,90.]], 'require_nonempty': True}
@@ -265,7 +265,43 @@ def test_required_transition_route_never_falls_back_to_straight_crossing(problem
             TaskRunnerNode._task_world_waypoints(node, params)
     else:
         assert not TaskRunnerNode._task_world_waypoints(node, params)
-    assert node.stopped and stops
+    assert not node.stopped and stops
+    assert not actions  # 缺目标/坏坐标/定位过期仍不盲目发送运动；失败不冒充完成。
+
+
+def test_transition_failure_skips_middle_waypoints_and_reaches_final_target():
+    from uv_task.task_runner import TaskRunnerNode
+    node, actions, stops = _world_route_node()
+    original = node._send_action_goal
+    failed = []
+    def send(command, target, axes, **kwargs):
+        if not failed:
+            failed.append(list(target))
+            return False, 'motion timeout'
+        return original(command, target, axes, **kwargs)
+    node._send_action_goal = send
+    points = [[.4,.6,.2,0.], [1.,0.,.2,90.]]
+    assert TaskRunnerNode._task_world_waypoints(node, {'waypoints':points})
+    assert actions[-1][1] == points[-1]
+    assert all(target[1] == 0. for _,target,_ in actions)  # 兜底没有再经过y=0.6中间点。
+    assert not node.stopped and stops
+
+
+@pytest.mark.parametrize('condition', ['manual_stop','deadline_takeover'])
+def test_transition_failure_does_not_fallback_after_stop_or_global_takeover(condition):
+    from uv_task.task_runner import TaskRunnerNode
+    node, actions, stops = _world_route_node()
+    calls = []
+    def route(*args):
+        calls.append(args)
+        if condition == 'manual_stop':
+            node.stopped = True
+        else:
+            node._mission_deadline = SimpleNamespace(phase='returning')
+        return False
+    node._follow_world_waypoints = route
+    assert not TaskRunnerNode._task_world_waypoints(node, {'waypoints':[[1.,0.,.2,90.]]})
+    assert len(calls) == 1 and not actions and stops
 
 
 def test_world_waypoint_face_path_mode_is_explicit():
@@ -296,7 +332,8 @@ def test_legacy_endpoint_flag_does_not_require_a_next_task():
     assert actions and not stops
 
 
-@pytest.mark.parametrize('condition', ['normal', 'pending', 'motion_failed', 'stopped'])
+@pytest.mark.parametrize('condition', ['normal', 'pending', 'motion_failed', 'stopped',
+                                     'stale_depth', 'surface_timeout'])
 def test_return_shore_positions_before_timed_actuator_and_always_clears(condition):
     from uv_msgs.action import BasicMotion
     from zit6_interfaces.msg import ZitSetpoint
@@ -305,7 +342,7 @@ def test_return_shore_positions_before_timed_actuator_and_always_clears(conditio
                if isinstance(n, ast.ClassDef) and n.name == 'TaskRunnerNode')
     methods = [n for n in cls.body if isinstance(n, ast.FunctionDef)
                and n.name in ('_task_return_shore', '_publish_body_thrust')]
-    clock, packets, actions = [0.], [], []
+    clock, packets, actions, velocities = [0.], [], [], []
     timer = SimpleNamespace(monotonic=lambda: clock[0],
         sleep=lambda seconds: clock.__setitem__(0, clock[0]+seconds))
     scope = dict(math=math, time=timer, rclpy=SimpleNamespace(ok=lambda: True),
@@ -322,12 +359,22 @@ def test_return_shore_positions_before_timed_actuator_and_always_clears(conditio
             node.stopped = True
     node.pub_setpoint = SimpleNamespace(publish=publish)
     node._publish_body_thrust = lambda *args, **kwargs: scope['_publish_body_thrust'](node, *args, **kwargs)
+    def velocity(**kwargs):
+        velocities.append(kwargs)
+        if condition != 'surface_timeout':
+            node._robot_pose = (*node._robot_pose[:2], 0., *node._robot_pose[3:])
+        node._robot_pose_received = clock[0]
+    node._publish_body_velocity = velocity
     params = dict(x=1., y=-1., yaw_deg=90., move_timeout=10., forward_thrust=.1,
                   forward_seconds=.1, lift_thrust=-.05, lift_seconds=.1)
-    if condition == 'pending':
+    if condition in ('pending', 'stale_depth', 'surface_timeout'):
         params['forward_thrust'] = 0.
+        params['lift_thrust'] = 0.
+        params['surface_timeout_s'] = .2
+    if condition == 'stale_depth':
+        node._robot_pose_received = -2.
     result = scope['_task_return_shore'](node, params)
-    assert result is (condition == 'normal')
+    assert result is (condition in ('normal','pending'))
     assert all(p.control_key == 0x12 and p.y == p.roll == p.pitch == p.yaw == 0. for p in packets)
     assert packets[-1].x == packets[-1].z == 0.
     if condition == 'normal':
@@ -337,6 +384,11 @@ def test_return_shore_positions_before_timed_actuator_and_always_clears(conditio
         assert any(p.z == pytest.approx(-.05) for p in packets)
     elif condition in ('pending', 'motion_failed'):
         assert all(p.x == p.z == 0. for p in packets)
+        assert velocities and all(-.05 <= v['vertical_mps'] < 0 for v in velocities)
+    elif condition in ('stale_depth', 'surface_timeout'):
+        assert clock[0] == pytest.approx(.2)
+        assert all(p.x == p.z == 0. for p in packets)
+        assert bool(velocities) is (condition == 'surface_timeout')
 
 
 def test_sea_horizontal_hold_activates_position_even_when_already_centered(monkeypatch):
@@ -617,6 +669,21 @@ def test_sea_degree_config_preserves_internal_radians_without_old_descent_cap():
     assert task._release_angle == pytest.approx(math.radians(80.))
     assert task._descent_speed == .5 and task._descent_duration == 3.
     assert task._ascent_speed == .01
+
+
+def test_sea_unused_collection_fields_and_servo_angle_order_do_not_block_loading():
+    from uv_task.config_loader import load_task
+    params = load_task(Path(__file__).parents[1]/'config/tasks/grab_sea_cucumber.yaml')[0]['params']
+    params.update(collection_visual_align=False, collection_class_id=None,
+                  collection_projection_depth_m=None, collection_pixel_tolerance_fraction=None,
+                  collection_hold_seconds=None, restore_pre_press_odom_xy=False,
+                  odom_correction_max_m=None, gripper_servo_id=2,
+                  servo2_close_angle_deg=270., servo2_open_angle_deg=150., count_frames=1)
+    params.pop('image_width', None)
+    params.pop('image_height', None)
+    task = GrabSeaCucumberTask(SimpleNamespace(get_logger=lambda: _Logger()), params)
+    assert task._count_frames == 1 and not task._collection_align
+    assert task._pickup_angle == pytest.approx(math.radians(270))
 
 
 def test_sea_descent_exception_still_sends_zero_velocity():
@@ -1046,6 +1113,44 @@ def _sea_flow_fake():
     task._ascent_speed, task._ascent_period, task._ascent_tolerance = .08, .05, .05
     task._node._publish_body_velocity = lambda **kwargs: None
     return task
+
+
+@pytest.mark.parametrize('failure', ['horizontal', 'ascent', 'stopped', 'no_pose'])
+def test_post_press_horizontal_failure_still_delivers_without_after_count(failure):
+    task = _sea_flow_fake()
+    events = []
+    task._count_visible = lambda *args: events.append(args[-1]) or 5
+    def return_pose(_):
+        task._post_press_horizontal_return_failed = failure != 'ascent'
+        if failure == 'stopped':
+            task._node.stopped = True
+        if failure == 'no_pose':
+            task._measured_pose = lambda: None
+        return False
+    task._return_to_recorded_pose = return_pose
+    def deliver(*args, **kwargs):
+        events.append(('deliver', kwargs['return_to_search']))
+        task._node.stopped = True  # 一轮结束，避免测试替身无穷重试。
+        return True
+    task._deliver = deliver
+    assert not task.execute()
+    assert events == (['before', ('deliver', True)] if failure == 'horizontal' else ['before'])
+    assert task.confirmed_removed == 0
+
+
+def test_horizontal_return_timeout_is_distinguished_from_failed_ascent():
+    task = _sea_flow_fake()
+    del task._return_to_recorded_pose
+    task._ascend_to_depth = lambda *args: True
+    task._node._format_motion_context = lambda s: s
+    calls = []
+    task._node._send_action_goal = lambda *args, **kwargs: calls.append(args) or (False, 'timeout')
+    assert not task._return_to_recorded_pose((0., 0., .8, 0.))
+    assert task._post_press_horizontal_return_failed and calls[0][2] == 'xyrz'
+    calls.clear()
+    task._ascend_to_depth = lambda *args: False
+    assert not task._return_to_recorded_pose((0., 0., .8, 0.))
+    assert not task._post_press_horizontal_return_failed and not calls
 
 
 def test_collection_alignment_only_centers_and_restores_sea_mode():
@@ -1573,3 +1678,45 @@ def test_delivery_descends_before_release_and_ascends_after_even_on_final_round(
         assert events[release_index+1] == ('ascend', .1)
     else:
         assert all(e[0] not in ('release', 'ascend') for e in events)
+
+
+@pytest.mark.parametrize('phase', ['before','after'])
+@pytest.mark.parametrize('deadline,expected', [(10.,5),(1.,None)])
+def test_sea_count_observes_full_3_seconds_and_uses_late_maximum(monkeypatch, phase, deadline, expected):
+    clock = [0.]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    task = _sea_flow_fake()
+    task._count_frames, task._count_timeout, task._detection_timeout = 3, 3., 1.
+    task._node._perception_lock = threading.Lock()
+    task._node._down_detections = {}
+    task._segmented_detections = lambda msg: [object()]*msg.count
+    def sleep(dt):
+        clock[0] += dt
+        index = int(clock[0]/.5)
+        count = [2,2,2,5,7,2,2][min(index,6)]  # 7为超过锁定总量的异常分割帧。
+        stamp_ns = (index+1)*1000  # 同一采集帧重复到达仍只计一次。
+        task._node._down_detections['down_left'] = (clock[0],SimpleNamespace(
+            count=count, header=SimpleNamespace(stamp=SimpleNamespace(sec=0,nanosec=stamp_ns))))
+    monkeypatch.setattr(time, 'sleep', sleep)
+    assert task._count_visible(0.,0,deadline,phase) == expected
+    assert clock[0] == pytest.approx(min(3.,deadline))
+
+
+def test_sea_initial_five_is_not_reset_by_two_visible_before_grasp():
+    task = _sea_flow_fake()
+    counts = iter([2,2,2,0])
+    task._count_visible = lambda *a: next(counts)
+    deliveries = []
+    task._deliver = lambda *a, **kw: deliveries.append((task.confirmed_removed,kw['return_to_search'])) or True
+    assert task.execute()
+    assert deliveries == [(3,True),(5,False)]  # 第一轮基准5→2，下一轮2→0。
+
+
+def test_sea_repeated_remaining_count_does_not_recredit_initial_five():
+    task = _sea_flow_fake()
+    task._count_visible = lambda *a: 2
+    deliveries = []
+    task._deliver = lambda *a, **kw: deliveries.append(task.confirmed_removed) or True
+    assert not task.execute()
+    assert deliveries == [3]
+    assert task.confirmed_removed == 3

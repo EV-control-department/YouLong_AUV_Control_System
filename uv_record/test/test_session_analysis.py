@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from uv_record.analyze import analyze, map_runs, task_timeline
+from uv_record.analyze import analyze, map_runs, task_timeline, fused_display_map, fused_grid_svg, spatial_svg
 from uv_record.recorder import ChildSupervisor, Recorder, _parse_args
-from uv_record.telemetry import TelemetryRecorder
+from uv_record.telemetry import TelemetryRecorder, ReplayTelemetry
 
 
 def jsonl(path, rows):
@@ -74,6 +74,81 @@ def test_task_restart_does_not_claim_success():
     tasks, _, chains = task_timeline(logs, 8*10**9)
     assert [task['status'] for task in tasks] == ['interrupted_by_restart', 'failed']
     assert len(chains) == 2
+
+
+def test_fused_result_display_ignores_submission_and_unselected_candidates(tmp_path):
+    import copy
+    import xml.etree.ElementTree as ET
+    snapshot = {
+        'receive_time_unix_ns': 200, 'state': 'complete',
+        'final_assignment': {'6': 0, '8': 0, '0': 1, '2': 1},
+        'conclusion': {'source': 'fallback', 'square_cells': [0, 8], 'round_cells': [5, 6]},
+        'grid': {'side_m': 2.4},
+        'cells': {str(i): {'id': i, 'center': [2-i//3, i%3, 1],
+                          'position': [2-i//3, i%3, .7], 'label': 'square_cone',
+                          'class_id': 0, 'source': 'vision'} for i in range(9)}}
+    original = copy.deepcopy(snapshot)
+    view = fused_display_map(snapshot)
+    assert [k for k,c in view['cells'].items() if c['class_id'] == 0] == ['6','8']
+    assert [k for k,c in view['cells'].items() if c['class_id'] == 1] == ['0','2']
+    assert view['cells']['5']['final_selected'] is False
+    assert snapshot == original and view['conclusion'] == original['conclusion']
+    for cells in (snapshot['cells'], list(snapshot['cells'].values())):
+        xml = ET.fromstring(fused_grid_svg(dict(snapshot, cells=cells)))
+        groups = xml.findall('{http://www.w3.org/2000/svg}g')
+        assert [g.get('data-cell') for g in groups] == list(map(str,range(9)))
+        assert [g.get('data-class') for g in groups] == ['1','None','1','None','None','None','0','None','0']
+    svg, transform = spatial_svg([], snapshot)
+    assert '+X 向上 / +Y 向右' in svg and transform['axis_order'] == [1,0]
+    assert '格5 square_cone' not in svg  # 仍保留候选坐标，但不再当成第五个锥桶。
+    jsonl(tmp_path/'metadata/mapping.jsonl', [snapshot])
+    player = ReplayTelemetry(tmp_path)
+    frame, _ = player.render(200)
+    assert frame.shape == (480,640,3)
+    assert snapshot == original
+    # 圆形0/2、方形6/8在逻辑九宫格中使用各自颜色，空格5不画锥桶。
+    assert tuple(frame[118,477]) == (240,180,60)
+    assert tuple(frame[270,477]) == (30,170,245)
+    assert tuple(frame[194,601]) == (28,28,28)
+
+
+def test_report_prioritizes_final_fusion_but_preserves_raw_submission(tmp_path):
+    session = tmp_path/'session'
+    session.mkdir()
+    (session/'manifest.json').write_text('{"status":"STOPPED"}')
+    snapshots = [
+        {'receive_time_unix_ns': 100, 'state': 'initializing', 'measurement_count': 0,
+         'cells': {}, 'final_assignment': None},
+        {'receive_time_unix_ns': 200, 'state': 'complete', 'measurement_count': 227,
+         'cells': {'6': {'id':6,'label':'round_cone','class_id':1,'source':'vision','position':[1,2,.7]}},
+         'final_assignment': {'6':0,'8':0,'0':1,'2':1},
+         'conclusion': {'source':'fallback','square_cells':[0,8],'round_cells':[5,6]}}]
+    jsonl(session/'metadata/mapping.jsonl', snapshots)
+    output = tmp_path/'report'
+    analyze(session, output, detect_tags=False, use_bag=False)
+    report = (output/'report.html').read_text()
+    assert report.index('建图第 1 次 · complete') < report.index('最终分类')
+    assert '记录中的提交结论（不用于绘制融合图）' not in report
+    assert 'data-cell="6" data-class="0"' in report
+    exported = json.loads((output/'maps.json').read_text())[-1]
+    assert exported['cells']['6']['class_id'] == 1  # 原始证据不被显示覆盖。
+    assert exported['conclusion'] == snapshots[-1]['conclusion']
+
+
+def test_empty_initialization_is_hidden_not_removed_from_json(tmp_path):
+    session = tmp_path/'session'
+    session.mkdir()
+    (session/'manifest.json').write_text('{"status":"STOPPED"}')
+    final = {'receive_time_unix_ns': 100, 'state':'complete', 'measurement_count':10,
+             'final_assignment':{'6':0,'8':0,'0':1,'2':1}, 'cells':{}}
+    empty = {'receive_time_unix_ns':200, 'state':'initializing', 'measurement_count':0,
+             'final_assignment':None, 'cells':{'0':{'label':None,'position':None,'source':'none'}}}
+    jsonl(session/'metadata/mapping.jsonl', [final, empty])
+    output = tmp_path/'report'
+    analyze(session, output, detect_tags=False, use_bag=False)
+    report = (output/'report.html').read_text()
+    assert '· initializing' not in report and '· complete' in report
+    assert json.loads((output/'maps.json').read_text())[-1]['state'] == 'initializing'
 
 
 def test_final_map_categories_recovered_without_inventing_final_pose():

@@ -283,8 +283,50 @@ def cells_of(mapping):
     return cells.items() if isinstance(cells, dict) else enumerate(cells)
 
 
+def fused_display_map(mapping):
+    """展示以最终融合分类为准；不改变原证据，也不借用conclusion兜底分类。"""
+    view = copy.deepcopy(mapping)
+    assignment = mapping.get('final_assignment')
+    if isinstance(assignment, dict):
+        chosen = {str(key): value for key, value in assignment.items()}
+        for key, cell in cells_of(view):
+            class_id = chosen.get(str(cell.get('id', key)))
+            cell['final_selected'] = class_id in (0, 1)
+            cell['class_id'] = class_id if cell['final_selected'] else None
+            cell['label'] = ('square_cone' if class_id == 0 else
+                             'round_cone' if class_id == 1 else None)
+    return view
+
+
+def fused_grid_svg(mapping):
+    """逻辑九宫格：0 1 2 / 3 4 5 / 6 7 8；不重新编号世界格点。"""
+    view = fused_display_map(mapping)
+    cells = {str(cell.get('id', key)): cell for key, cell in cells_of(view)}
+    final = isinstance(view.get('final_assignment'), dict)
+    assignment = {str(key): value for key, value in (view.get('final_assignment') or {}).items()}
+    pieces = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 430" role="img">',
+              '<title>最终融合九宫格，格点编号不变</title>',
+              '<rect width="480" height="430" rx="16" fill="#101b2a"/>',
+              '<text x="24" y="30" fill="white">融合结果 · 橙色方形 / 蓝色圆形</text>']
+    for index in range(9):
+        cell = cells.get(str(index), {})
+        x, y = 24+(index % 3)*144, 48+(index // 3)*118
+        class_id = assignment.get(str(index)) if final else cell.get('class_id')
+        if class_id is None and not final:
+            class_id = {'square_cone': 0, 'round_cone': 1}.get(cell.get('label'))
+        label = '方形锥桶' if class_id == 0 else '圆形锥桶' if class_id == 1 else '空格' if final else '未确认'
+        pieces.append(f'<g data-cell="{index}" data-class="{class_id}"><rect x="{x}" y="{y}" width="136" height="110" rx="10" fill="#1c2a3d" stroke="#475569"/><text x="{x+10}" y="{y+22}" fill="#cbd5e1">格{index}</text>')
+        if class_id == 0:
+            pieces.append(f'<rect x="{x+52}" y="{y+31}" width="32" height="32" rx="4" fill="#fb923c"/>')
+        elif class_id == 1:
+            pieces.append(f'<circle cx="{x+68}" cy="{y+47}" r="17" fill="#4dabf7"/>')
+        pieces.append(f'<text x="{x+68}" y="{y+90}" text-anchor="middle" fill="white">{label}</text></g>')
+    pieces.append('<text x="24" y="418" fill="#94a3b8">仅展示融合分类，不替换提交结论或原始坐标</text></svg>')
+    return ''.join(pieces)
+
+
 def spatial_svg(poses, mapping=None, title='轨迹', tags=()):
-    mapping = mapping or {}
+    mapping = fused_display_map(mapping or {})
     points = [[row['pose']['x'], row['pose']['y']] for row in poses]
     for _, cell in cells_of(mapping):
         for key in ('center', 'position'):
@@ -296,21 +338,22 @@ def spatial_svg(poses, mapping=None, title='轨迹', tags=()):
     points = [p for p in points if len(p) >= 2 and all(isinstance(v, (int, float)) and math.isfinite(v) for v in p[:2])]
     if not points:
         points = [[0., 0.], [1., 1.]]
+    points = [[point[1], point[0]] for point in points]
     lower = [min(p[i] for p in points)-.4 for i in range(2)]
     upper = [max(p[i] for p in points)+.4 for i in range(2)]
     scale = min(820/max(upper[0]-lower[0], 1.), 440/max(upper[1]-lower[1], 1.))
     def pixel(p):
-        return (70+(p[0]-lower[0])*scale, 520-(p[1]-lower[1])*scale)
+        return (70+(p[1]-lower[0])*scale, 520-(p[0]-lower[1])*scale)
     pieces = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 580" role="img">',
               '<rect width="960" height="580" fill="#101b2a"/>',
-              f'<text x="30" y="30" fill="white">{html.escape(title)} · X/Y 米，NED；Z 向下</text>']
-    for i, axis in enumerate(('X', 'Y')):
+              f'<text x="30" y="30" fill="white">{html.escape(title)} · +X 向上 / +Y 向右；原始坐标不变</text>']
+    for i, axis in enumerate(('Y', 'X')):
         pieces.append(f'<text x="{870 if i == 0 else 20}" y="{555 if i == 0 else 70}" fill="#bbb">{axis} (m)</text>')
     for x in [lower[0]+(upper[0]-lower[0])*i/8 for i in range(9)]:
-        px, _ = pixel([x, lower[1]])
+        px, _ = pixel([lower[1], x])
         pieces.append(f'<path d="M{px:.2f} 65V520" stroke="#243449"/><text x="{px:.2f}" y="542" fill="#aab">{x:.2f}</text>')
     for y in [lower[1]+(upper[1]-lower[1])*i/8 for i in range(9)]:
-        _, py = pixel([lower[0], y])
+        _, py = pixel([y, lower[0]])
         pieces.append(f'<path d="M70 {py:.2f}H900" stroke="#243449"/><text x="35" y="{py:.2f}" fill="#aab">{y:.2f}</text>')
     if poses:
         line = ' '.join(f'{pixel([p["pose"]["x"],p["pose"]["y"]])[0]:.2f},{pixel([p["pose"]["x"],p["pose"]["y"]])[1]:.2f}' for p in poses)
@@ -320,11 +363,16 @@ def spatial_svg(poses, mapping=None, title='轨迹', tags=()):
             pieces.append(f'<circle cx="{x}" cy="{y}" r="5" fill="{color}"/><text x="{x+8}" y="{y-8}" fill="{color}">{label}</text>')
         pieces.append('<circle id="cursor" r="7" fill="#facc15" visibility="hidden"/>')
     side = float(mapping.get('grid', {}).get('side_m') or 0)/3*scale
-    yaw = -float(mapping.get('grid', {}).get('yaw_deg') or 0)
+    yaw = float(mapping.get('grid', {}).get('yaw_deg') or 0)
     for key, cell in cells_of(mapping):
         if cell.get('center') and side:
             x, y = pixel(cell['center'])
             pieces.append(f'<rect x="{x-side/2}" y="{y-side/2}" width="{side}" height="{side}" transform="rotate({yaw} {x} {y})" fill="none" stroke="#64748b"/>')
+        if cell.get('final_selected') is False or cell.get('label') not in ('square_cone', 'round_cone'):
+            if cell.get('center'):
+                x, y = pixel(cell['center'])
+                pieces.append(f'<text x="{x}" y="{y}" fill="#94a3b8" text-anchor="middle">格{key} · 空/未确认</text>')
+            continue
         position = cell.get('position') or cell.get('center')
         if not position:
             continue
@@ -348,7 +396,7 @@ def spatial_svg(poses, mapping=None, title='轨迹', tags=()):
         else:
             pieces.append(f'<circle cx="{x}" cy="{y}" r="2" fill="#facc15" opacity=".5"><title>{html.escape(str(tag))}</title></circle>')
     pieces.append('</svg>')
-    return ''.join(pieces), {'lower': lower, 'scale': scale}
+    return ''.join(pieces), {'lower': lower, 'scale': scale, 'axis_order': [1, 0]}
 
 
 def timeline_svg(rows, start, end, tags=False):
@@ -609,6 +657,10 @@ def analyze(root, output, *, ffmpeg=None, offset=8, detect_tags=True,
     if not data['maps']:
         warnings.append('没有建图快照；本 session 无法输出实际建图结果')
     maps = map_runs(data['maps'], data['logs'])
+    from .report_evidence import export_evidence
+    evidence_html = export_evidence(root, output, data, maps, warnings)
+    from .scene3d import export_scene3d
+    scene3d_html = export_scene3d(output, maps, poses)
     tags = apriltag_results(data['maps'], data['observations'], data['logs'])
     if detect_tags and any(part.get('mp4') for video in videos for part in video['playbacks']):
         tags.extend(detect_video_tags(videos, output, dictionary, tag_fps, max_tag_images, warnings))
@@ -646,13 +698,20 @@ def analyze(root, output, *, ffmpeg=None, offset=8, detect_tags=True,
     path_svg, transform = spatial_svg(poses, title='实际记录的 XY 路径')
     (output/'trajectory.svg').write_text(path_svg, encoding='utf-8')
     map_views = []
-    for i, mapping in enumerate(maps):
+    # 最新融合结果排在最前；JSON仍保留原始快照及原时间顺序。
+    for i in reversed(range(len(maps))):
+        mapping = fused_display_map(maps[i])
         svg, _ = spatial_svg([], mapping, f'建图第 {i+1} 次 · {mapping.get("state", "")}',
                              [mapping['tag']] if mapping.get('tag') else [])
         (output/f'map_{i+1:02d}.svg').write_text(svg, encoding='utf-8')
         rows = [dict(cell_id=key, **cell) for key, cell in cells_of(mapping)]
         write_csv(output/f'map_{i+1:02d}.csv', rows, ['cell_id', 'label', 'class_id', 'center', 'position',
                   'source', 'label_source', 'final_selected', 'visited', 'accepted_observations', 'covariance'])
+        # 空初始化只留在导出证据中，不占用用户可见的建图结果页面。
+        if (mapping.get('state') == 'initializing' and not mapping.get('final_assignment')
+                and not mapping.get('measurement_count')
+                and not any(cell.get('position') for _, cell in cells_of(mapping))):
+            continue
         final_text = ''
         if mapping.get('final_assignment') is not None:
             final_text = (f'<p>最终分类（0=方形，1=圆形）：{html.escape(str(mapping["final_assignment"]))}；'
@@ -662,7 +721,7 @@ def analyze(root, output, *, ffmpeg=None, offset=8, detect_tags=True,
                 final_text += '<p class="warning">最终类别从任务日志恢复；位置/协方差取最后可用过程快照，未捕获最终地图快照。灰色候选未被最终约束选中。</p>'
         map_views.append(f'<h3>建图第 {i+1} 次 · {html.escape(mapping.get("state", ""))}</h3>'
                          f'<p>快照时间：{clock_text(timestamp(mapping), offset)}；verified_complete={mapping.get("verified_complete", False)}；'
-                         f'fallback_used={mapping.get("fallback_used", False)}；灰色为未知、默认配置或最终未选中。</p>'+final_text+svg+
+                         f'fallback_used={mapping.get("fallback_used", False)}；灰色为未知、默认配置或最终未选中。</p>'+final_text+fused_grid_svg(mapping)+svg+
                          table(rows, [('cell_id', '格'), ('label', '类别'), ('source', '来源'),
                                       ('position', '位置'), ('final_selected', '最终选中'),
                                       ('accepted_observations', '接受观测数')]))
@@ -699,7 +758,9 @@ def analyze(root, output, *, ffmpeg=None, offset=8, detect_tags=True,
 <title>Session {html.escape(root.name)} 解读</title>
 <style>body{{margin:30px auto;max-width:1200px;background:#0b1220;color:#e2e8f0;font:16px/1.65 sans-serif}}a{{color:#7dd3fc}}svg{{width:100%;max-height:650px}}section{{padding:20px;background:#162033;margin:22px 0;border-radius:12px}}.warning{{color:#fda4af}}table{{border-collapse:collapse;width:100%;font-size:14px}}td,th{{border:1px solid #334155;padding:8px;vertical-align:top}}.scroll{{overflow:auto;max-height:520px}}video{{width:100%;max-height:600px}}input{{width:100%}}.gallery{{display:flex;flex-wrap:wrap}}figure{{width:320px;margin:8px}}img{{width:100%}}nav{{display:flex;gap:20px;flex-wrap:wrap}}p{{overflow-wrap:anywhere}}</style>
 <h1>Session {html.escape(root.name)} 解读</h1><p>{summary['start_local']} → {summary['end_local']} · {summary['duration_s']:.1f}s · 位姿 {len(poses)} 条 · 建图 {len(maps)} 次 · 任务 {len(tasks)} 个</p>
-<nav><a href="#map">建图</a><a href="#path">路径</a><a href="#video">视频</a><a href="#tasks">任务时间戳</a><a href="#tags">AprilTag</a><a href="summary.json">完整导出清单</a></nav>
+<nav><a href="#map3d">三维九宫格</a><a href="#comparison">视觉与提交对照</a><a href="#map">建图</a><a href="#path">路径</a><a href="#video">视频</a><a href="#tasks">任务时间戳</a><a href="#tags">AprilTag</a><a href="#evidence">完整证据</a><a href="summary.json">摘要</a></nav>
+<style>.result-comparison{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}</style>
+{scene3d_html}{evidence_html}
 <section><h2>数据完整性</h2><ul>{''.join('<li class="warning">'+html.escape(w)+'</li>' for w in warnings) or '<li>未发现索引/导出异常</li>'}</ul><ul>{''.join('<li>'+html.escape(n)+'</li>' for n in summary['notes'])}</ul></section>
 <section id="map"><h2>建图结果</h2>{''.join(map_views) or '<p>没有建图记录。</p>'}<a href="maps.json">地图 JSON</a></section>
 <section id="path"><h2>路径</h2><p>采样 XY 折线路长 {distance:.2f}m；包括漂移和坐标修正。</p><div id="path-plot">{path_svg}</div><input id="scrub" type="range" min="0" max="{max(0,len(report_data['poses'])-1)}" value="0"><p id="pose-label"></p><a href="trajectory.csv">完整轨迹 CSV</a></section>
@@ -707,8 +768,10 @@ def analyze(root, output, *, ffmpeg=None, offset=8, detect_tags=True,
 <section id="tasks"><h2>各任务时间戳</h2>{tasks_svg}{table(task_rows, [('run','轮次'),('index','序号'),('name','任务'),('start_local','开始'),('end_local','结束/截断'),('duration_s','秒'),('status','状态'),('end_inferred','推断结束')])}<p><a href="tasks.csv">任务 CSV</a> · <a href="task_events.csv">全部阶段日志时间戳</a> · <a href="tasks.json">任务及状态事件 JSON</a></p></section>
 <section id="tags"><h2>AprilTag 识别结果</h2><p>已记录 ID：{decoded_ids}。在线诊断、带深度观测、融合地图与录像重识别分别标明来源。</p>{tags_svg}{positions_svg}<div class="gallery">{tag_images}</div>{table([dict(row,time_local=clock_text(row['timestamp_ns'],offset)) for row in tags[-300:]], [('time_local','时间'),('source','来源'),('decoded_ids','ID'),('status','状态'),('position','世界坐标'),('excluded_ids','ID过滤'),('depth_rejected','深度拒绝')])}<p>表格展示最近 300 条；<a href="apriltag.csv">完整 AprilTag CSV</a> · <a href="apriltag.json">角点及识别 JSON</a></p></section>
 <script type="application/json" id="report-data">{safe_json}</script>
-<script>const d=JSON.parse(document.getElementById('report-data').textContent);function update(){{const p=d.poses[Number(document.getElementById('scrub').value)];if(!p)return;const c=document.querySelector('#path-plot #cursor');c.setAttribute('cx',70+(p[1]-d.transform.lower[0])*d.transform.scale);c.setAttribute('cy',520-(p[2]-d.transform.lower[1])*d.transform.scale);c.setAttribute('visibility','visible');const local=new Date(p[0]/1e6+d.offset*3600000).toISOString().replace('Z','');document.getElementById('pose-label').textContent=local+' UTC'+(d.offset>=0?'+':'')+d.offset+' · x='+p[1].toFixed(3)+' y='+p[2].toFixed(3)+' z='+p[3].toFixed(3)+' m';}}document.getElementById('scrub').addEventListener('input',update);update();</script></html>'''
+<script>const d=JSON.parse(document.getElementById('report-data').textContent);function update(){{const p=d.poses[Number(document.getElementById('scrub').value)];if(!p)return;const c=document.querySelector('#path-plot #cursor');c.setAttribute('cx',70+(p[2]-d.transform.lower[0])*d.transform.scale);c.setAttribute('cy',520-(p[1]-d.transform.lower[1])*d.transform.scale);c.setAttribute('visibility','visible');const local=new Date(p[0]/1e6+d.offset*3600000).toISOString().replace('Z','');document.getElementById('pose-label').textContent=local+' UTC'+(d.offset>=0?'+':'')+d.offset+' · x='+p[1].toFixed(3)+' y='+p[2].toFixed(3)+' z='+p[3].toFixed(3)+' m';}}document.getElementById('scrub').addEventListener('input',update);update();</script></html>'''
     (output/'report.html').write_text(content, encoding='utf-8')
+    from .report_evidence import write_documents
+    write_documents(output, summary)
     return summary
 
 

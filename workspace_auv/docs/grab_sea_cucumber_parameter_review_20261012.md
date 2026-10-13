@@ -24,7 +24,7 @@
 | bottom_reference_offset_z_m / gripper.contact_body_xyz | 非重复；取艇底参考点与姿态旋转后爪子最低点的较大下伸量。水平时0.29大于0.10。 |
 | near_floor_open_loop及floor_z/clearance/press/lift参数 | 当前启用，均实际使用；descent.duration_seconds限制总下压时间，press_thrust_seconds限制近底推力时间。 |
 | restore_pre_press_odom_xy / odom_correction_max_m | 保留近底B锚点校正；仍假定压抓中无真实水平漂移。去掉收集框地标校正不等于去掉近底校正。 |
-| 各层timeout | 保留；整项900秒，单轮视觉60秒，单次动作30秒，运输/搜索180秒，计数20秒，上浮回观察位360秒，不是重复参数；有效预算受总预算截断。 |
+| 各层timeout | 保留；整项900秒，单轮视觉60秒，单次动作30秒，运输/搜索180秒，计数完整3秒，上浮回观察位360秒，不是重复参数；有效预算受总预算截断。 |
 
 旧参数仍在config_loader兼容schema内，因此旧任务文件不会仅因存在旧键而无法读取，
 GrabSeaCucumberTask初始化会明确告警并忽略；新YAML不再提供这些键。

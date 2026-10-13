@@ -59,13 +59,21 @@ def box(task, clock, cx=.5, cy=.5, width=.5, class_id=3, stamp=None):
     task._on_boxes(msg)
 
 
+def test_disabled_alignment_axes_and_unused_preposition_are_allowed(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch, align_yaw_gain=0.,
+        align_vertical_gain=0., max_align_yaw_rate_deg_s=0.,
+        max_vertical_speed_mps=0., preposition_mode='unused')
+    clock.on_sleep = lambda: box(task, clock)
+    assert task.execute() and commands
+
+
 @pytest.mark.parametrize('seen_before_loss', [False, True])
 def test_target_loss_moves_to_configured_disk_center(monkeypatch, seen_before_loss):
     task, clock, commands = setup_task(monkeypatch, disk_pose_odom=[1.,2.,.6,90.])
     actions = []
     task.node._send_action_goal = lambda *args, **kwargs: actions.append(args) or (True, '')
     if seen_before_loss:
-        clock.on_sleep = lambda: box(task, clock, width=.2) if clock.t < 1.5 else None
+        clock.on_sleep = lambda: box(task, clock, cx=.7, width=.2) if clock.t < 1.5 else None
     assert task.execute()
     assert len(actions) == 4  # 观察位预定位两步 + 盘心兜底两步。
     assert all(a[1] == [1.,2.,.6,90.] and a[2] == 'xyzrz' for a in actions[-2:])
@@ -77,6 +85,34 @@ def test_target_loss_without_disk_center_never_guesses_motion(monkeypatch):
     task.node._send_action_goal = lambda *args, **kwargs: pytest.fail('未填盘心不能猜测')
     assert not task.execute()
     assert all(c == {} for _, c in commands)
+
+
+@pytest.mark.parametrize('fallback_success', [True,False])
+def test_alignment_timeout_uses_disk_center_fallback(monkeypatch, fallback_success):
+    task, clock, commands = setup_task(monkeypatch, disk_pose_odom=[1.,2.,.6,90.],
+                                     approach_timeout_s=.2)
+    calls = []
+    def send(*args, **kwargs):
+        calls.append(args)
+        return (True,'') if len(calls) <= 2 else (fallback_success,'timeout')
+    task.node._send_action_goal = send
+    clock.on_sleep = lambda: box(task,clock,cx=.7,width=.2)
+    assert task.execute() is fallback_success
+    assert len(calls) == (4 if fallback_success else 3)
+    assert all(args[1] == [1.,2.,.6,90.] for args in calls[2:])
+    assert not any(c.get('forward_mps') for _,c in commands)  # 未居中不执行定时盲冲。
+    assert commands[-1][1] == {}
+
+
+def test_total_timeout_during_alignment_never_starts_disk_fallback(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch, disk_pose_odom=[1.,2.,.6,90.],
+                                     timeout=.2, approach_timeout_s=25.)
+    calls=[]
+    task.node._send_action_goal=lambda *args,**kwargs:calls.append(args) or (True,'')
+    clock.on_sleep = lambda: box(task,clock,cx=.7,width=.2)
+    assert not task.execute()
+    assert len(calls) == 2  # 只有观察位两步；总预算耗尽后禁止再发盘心兜底。
+    assert commands[-1][1] == {}
 
 
 def test_fixed_heading_preposition_uses_world_route_not_extra_wtravel(monkeypatch):
@@ -91,33 +127,35 @@ def test_fixed_heading_preposition_uses_world_route_not_extra_wtravel(monkeypatc
 
 
 @pytest.mark.parametrize('yaw', [0., 90., -90.])
-def test_centered_box_forward_move_only_and_final_zero(monkeypatch, yaw):
-    from uv_msgs.action import BasicMotion
+def test_centered_box_forward_charge_only_and_final_zero(monkeypatch, yaw):
     task, clock, commands = setup_task(monkeypatch)
     task.node._robot_pose = (0.,0.,.5,0.,0.,yaw)
     clock.on_sleep = lambda: box(task, clock)
     assert task.execute()
-    actions = task.node.motion_actions
-    assert len(actions) == 1
-    assert actions[0][:3] == (BasicMotion.Goal.BMOVE, [.08,0.,0.,0.], 'x')
+    assert not task.node.motion_actions  # 冲撞不再调用BMOVE/WTRAVEL/SET。
+    charge = [(t,c) for t,c in commands if c.get('forward_mps')]
+    assert charge and all(c['forward_mps'] == .15 for _,c in charge)
+    assert clock.t-charge[0][0] == pytest.approx(5.)
     assert not any(c.get('vertical_mps') or c.get('yaw_rate_deg_s') for _, c in commands)
     assert commands[-1][1] == {}
 
 
-def test_short_move_action_success_without_actual_motion_times_out(monkeypatch):
-    task, clock, commands = setup_task(monkeypatch, bump_move_timeout_s=.2)
-    task.node._send_action_goal = lambda *args, **kw: (True, '')
+def test_contact_not_rejected_by_position_stall_or_short_move_tolerance(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch)
+    task.node._robot_pose = None
+    task.node._send_action_goal = lambda *args, **kw: pytest.fail('撞击不应发送位置动作')
     clock.on_sleep = lambda: box(task, clock)
-    assert not task.execute()
+    assert task.execute()  # 执行结束仅表示指令完成，不虚构触碰确认。
     assert commands[-1][1] == {}
 
 
-def test_small_centered_box_still_approaches_forward_before_move(monkeypatch):
-    task, clock, commands = setup_task(monkeypatch)
-    clock.on_sleep = lambda: box(task, clock, width=.2 if clock.t < 1.3 else .5)
+def test_small_centered_box_charges_without_width_threshold(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch, bump_box_width_fraction=.99,
+                                     bump_forward_m=0., bump_position_tolerance_m=1.)
+    clock.on_sleep = lambda: box(task, clock, width=.02)
     assert task.execute()
-    assert any(c.get('forward_mps') == .08 for _,c in commands)
-    assert len(task.node.motion_actions) == 1
+    assert next(t for t,c in commands if c.get('forward_mps')) == pytest.approx(1.05)
+    assert not task.node.motion_actions
 
 
 @pytest.mark.parametrize('flipped,expected_sign', [(True, -1), (False, 1)])
@@ -145,14 +183,41 @@ def test_wrong_class_and_old_frames_never_start_motion(monkeypatch):
 
 def test_stop_during_bump_ends_task_without_yaw(monkeypatch):
     task, clock, commands = setup_task(monkeypatch)
-    def stop(*args, **kw):
-        task.node.stopped = True
-        return False, 'cancelled'
-    task.node._send_action_goal = stop
-    clock.on_sleep = lambda: box(task, clock)
+    def stop():
+        box(task, clock)
+        if clock.t >= 1.1:
+            task.node.stopped = True
+    clock.on_sleep = stop
     assert not task.execute()
     assert not any(c.get('yaw_rate_deg_s') for _, c in commands)
     assert commands[-1][1] == {}
+    assert any(c.get('forward_mps') for _,c in commands)
+    assert clock.t < 1.2
+
+
+def test_charge_timeout_stops_and_does_not_report_success(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch, timeout=.3, charge_duration=5.)
+    clock.on_sleep = lambda: box(task, clock)
+    assert not task.execute()
+    assert clock.t == pytest.approx(1.3)
+    assert commands[-1][1] == {}
+    assert not task.node.motion_actions
+
+
+def test_target_disappearing_after_charge_start_does_not_restart_alignment(monkeypatch):
+    task, clock, commands = setup_task(monkeypatch, charge_duration=.3, box_max_age_s=.05)
+    clock.on_sleep = lambda: box(task, clock) if clock.t < 1.06 else None
+    assert task.execute()
+    assert commands[-1][1] == {}
+    assert clock.t == pytest.approx(1.35)
+
+
+@pytest.mark.parametrize('key,value', [('charge_speed_mps', 0.), ('charge_duration', -1.),
+                                      ('charge_publish_period', float('nan'))])
+def test_invalid_charge_params_never_publish_motion(monkeypatch, key, value):
+    task, clock, commands = setup_task(monkeypatch, **{key:value})
+    assert not task.execute()
+    assert all(not c for _,c in commands)
 
 
 def test_target_loss_stops_forward_and_does_not_bump(monkeypatch):
@@ -161,12 +226,12 @@ def test_target_loss_stops_forward_and_does_not_bump(monkeypatch):
 
     def tick():
         if clock.t < 1.07:
-            box(task, clock, width=.2)
+            box(task, clock, cx=.7, width=.2)
 
     clock.on_sleep = tick
     assert not task.execute()
-    assert any(c.get('forward_mps') for _, c in commands)
-    assert not any(c.get('yaw_rate_deg_s') for _, c in commands)
+    assert not any(c.get('forward_mps') for _, c in commands)
+    assert any(c.get('yaw_rate_deg_s') for _, c in commands)
     assert commands[-1][1] == {}
     assert not any(c for t, c in commands if t > 1.2)
 
@@ -201,12 +266,12 @@ def test_preinput_disk_center_positions_then_uses_new_boxes(monkeypatch):
     task.node._send_action_goal = send
     clock.on_sleep = lambda: box(task, clock)
     assert task.execute()
-    assert [a[0] for a in actions] == [BasicMotion.Goal.WTRAVEL, BasicMotion.Goal.SET, BasicMotion.Goal.BMOVE]
+    assert [a[0] for a in actions] == [BasicMotion.Goal.WTRAVEL, BasicMotion.Goal.SET]
     assert actions[0][1] == pytest.approx([1., 1.22, .524, 90.])
     assert actions[1][1] == pytest.approx(actions[0][1])
     assert all(0 < a[2] <= 90. for a in actions)
     assert task._started_stamp == 3_000_000_000
-    assert actions[-1][1] == [.08,0.,0.,0.]
+    assert any(c.get('forward_mps') == .15 for _,c in commands)
 
 
 def test_preposition_failure_never_starts_contact(monkeypatch):

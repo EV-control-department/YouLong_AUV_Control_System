@@ -37,6 +37,8 @@ def load_mission_runtime(path):
     values.update(supplied)
     if not isinstance(values['enabled'], bool):
         raise ConfigError('mission.runtime.enabled必须为bool')
+    if not values['enabled']:
+        return values  # 关闭总计时功能时，未启用的返航参数不阻止其他任务加载。
     for key in ('time_limit_s', 'return_timeout_s', 'max_xy_speed_mps',
                 'max_up_speed_mps', 'xy_tolerance_m', 'z_tolerance_m'):
         value = values[key]
@@ -89,6 +91,8 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "x": float, "y": float, "yaw_deg": float,
         "move_timeout": float, "forward_thrust": float,
         "forward_seconds": float, "lift_thrust": float, "lift_seconds": float,
+        "surface_z_m": float, "surface_speed_mps": float,
+        "surface_timeout_s": float, "surface_tolerance_m": float,
     },
     "world_waypoints": {
         "waypoints": (list, (list, float)), "mode": str,
@@ -184,6 +188,9 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "bump_forward_m": float,
         "bump_move_timeout_s": float,
         "bump_position_tolerance_m": float,
+        "charge_speed_mps": float,
+        "charge_duration": float,
+        "charge_publish_period": float,
         "yaw_rate_deg_s": float,
         "align_yaw_gain": float,
         "align_vertical_gain": float,
@@ -279,6 +286,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "collection_center_odom_xy": (list, float),
         "collection_camera_body_xy": (list, float),
         "odom_correction_max_m": float,
+        "return_observation_confidence": float,
         "sea_cucumber_class_id": int,
         "target_match_radius_px": float,
         "target_lost_wait_seconds": float,
@@ -495,8 +503,7 @@ def _flatten_params(
         current_path = path + (key,)
         if isinstance(child, dict):
             if not child:
-                raise ConfigError(
-                    f"参数组 {'.'.join(current_path)!r} 不能为空")
+                continue  # 空参数组表示沿用任务默认值，不是任务启动错误。
             nested = _flatten_params(
                 child, schema, task_name=task_name, path=current_path)
             for canonical, nested_value in nested.items():

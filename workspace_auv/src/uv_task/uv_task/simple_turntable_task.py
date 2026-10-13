@@ -1,4 +1,4 @@
-"""前视YOLO居中、向前接近、一次机体+x BMOVE顶碰；不使用棍子或孔位。"""
+"""前视YOLO视觉伺服居中，再定时body+x速度撞击一次；不使用棍子或孔位。"""
 import math
 import threading
 import time
@@ -9,7 +9,7 @@ from uv_msgs.action import BasicMotion
 
 
 class _TargetLost(RuntimeError):
-    """仅视觉目标丢失可转入盘心兜底；取消、导航失败等不能混用。"""
+    """视觉目标丢失或局部对准超时转入盘心兜底；停止/总超时不能混用。"""
 
 
 class SimpleTurntableTask:
@@ -67,41 +67,30 @@ class SimpleTurntableTask:
         if time.monotonic() >= self._deadline:
             raise RuntimeError('简单转盘总超时')
 
-    def _measured_pose(self):
-        with self.node._perception_lock:
-            pose, received = self.node._robot_pose, self.node._robot_pose_received
-        if (pose is None or len(pose) != 6 or not all(map(math.isfinite, pose))
-                or time.monotonic()-received > 1.):
-            raise RuntimeError('顶碰所需定位缺失/过期')
-        return pose
+    def _charge_forward(self):
+        """参考robotcup撞球：对准后定时前冲，不因接触导致XY不收敛而卡住。
 
-    def _bump_forward(self):
-        """沿body+x MOVE一次；独立核对XY，避免短行程落在全局10cm容差内空完成。"""
+        只发body+x速度；其余速度为零，不再视觉追踪、插棍、上移或追加yaw。
+        速度指令不是开环推力，也不是绝对深度/航向位置闭环。定时结束只说明
+        指令执行完成，没有接触传感器时不能声称已碰到或已转动圆盘。
+        全局任务停止和总超时仍优先，finally保证正常/异常退出都发送零速度。
+        """
         self._check_running()
-        distance = float(self.params.get('bump_forward_m', .08))
-        tolerance = float(self.params.get('bump_position_tolerance_m', .02))
-        pose = self._measured_pose()
-        angle = math.radians(pose[5])
-        target_x, target_y = pose[0]+distance*math.cos(angle), pose[1]+distance*math.sin(angle)
-        end = min(self._deadline, time.monotonic()+float(self.params.get('bump_move_timeout_s', 10.)))
-        self.node._publish_body_velocity()  # 结束视觉速度控制，再交由BasicMotion位置闭环。
-        self.log.info(f'简单转盘：前向BMOVE顶碰一次，body+x={distance:.3f}m；保持深度/航向，不上移、不转yaw')
-        self._check_running()
-        remaining = end-time.monotonic()
-        if remaining <= 0:
-            raise RuntimeError('前向顶碰MOVE预算已耗尽')
-        ok, message = self.node._send_action_goal(BasicMotion.Goal.BMOVE,
-            [distance, 0., 0., 0.], 'x', timeout=remaining,
-            task_context='turntable_simple:前向MOVE顶碰一次')
-        if not ok:
-            raise RuntimeError(f'前向顶碰MOVE失败：{message}')
-        while time.monotonic() < end:
+        duration = float(self.params.get('charge_duration', 5.))
+        speed = float(self.params.get('charge_speed_mps', .15))
+        period = float(self.params.get('charge_publish_period', .05))
+        end = time.monotonic()+duration
+        self.log.info(f'简单转盘：视觉居中，直接前冲一次：body+x={speed:.3f}m/s，'
+                      f'持续{duration:.2f}s，名义行程{speed*duration:.3f}m；不等待框宽或位置到位')
+        try:
+            while time.monotonic() < end:
+                self._check_running()
+                self.node._publish_body_velocity(forward_mps=speed)
+                time.sleep(min(period, max(0., end-time.monotonic()),
+                               max(0., self._deadline-time.monotonic())))
             self._check_running()
-            current = self._measured_pose()
-            if math.hypot(current[0]-target_x, current[1]-target_y) <= tolerance:
-                return
-            time.sleep(.05)
-        raise RuntimeError('前向顶碰实测位移等待超时；action成功不等于短行程已执行')
+        finally:
+            self.node._publish_body_velocity()
 
     def _preposition(self):
         """Optional disk center in START odom; stop outside it before vision."""
@@ -150,24 +139,22 @@ class SimpleTurntableTask:
 
     def _validate(self):
         p = self.params
-        if p.get('preposition_mode', 'face_path') not in ('face_path', 'fixed_yaw'):
+        if p.get('disk_pose_odom') and p.get('preposition_mode', 'face_path') not in ('face_path', 'fixed_yaw'):
             raise ValueError('preposition_mode仅支持fixed_yaw或face_path')
         for key, default in (('timeout', 45.), ('observation_timeout_s', 8.),
                              ('approach_timeout_s', 25.), ('box_max_age_s', .8),
                              ('target_lost_timeout_s', 1.), ('image_width', 640),
-                             ('image_height', 480), ('approach_speed_mps', .08),
-                             ('bump_forward_m', .08), ('bump_move_timeout_s', 10.),
-                             ('bump_position_tolerance_m', .02),
-                             ('align_yaw_gain', 12.), ('align_vertical_gain', .12),
-                             ('max_align_yaw_rate_deg_s', 6.), ('max_vertical_speed_mps', .04)):
+                             ('image_height', 480), ('charge_speed_mps', .15),
+                             ('charge_duration', 5.), ('charge_publish_period', .05)):
             if not math.isfinite(float(p.get(key, default))) or float(p.get(key, default)) <= 0:
                 raise ValueError(f'{key}必须为有限正数')
-        for key, default in (('min_confidence', .35), ('center_tolerance_fraction', .06),
-                             ('bump_box_width_fraction', .45)):
-            if not math.isfinite(float(p.get(key, default))) or not 0 < float(p.get(key, default)) < 1:
-                raise ValueError(f'{key}必须在(0,1)内')
-        if float(p.get('bump_position_tolerance_m', .02)) >= float(p.get('bump_forward_m', .08)):
-            raise ValueError('顶碰实测容差须小于前向行程，避免未移动就判完成')
+        for key, default in (('align_yaw_gain', 12.), ('align_vertical_gain', .12),
+                             ('max_align_yaw_rate_deg_s', 6.), ('max_vertical_speed_mps', .04)):
+            if not math.isfinite(float(p.get(key, default))) or float(p.get(key, default)) < 0:
+                raise ValueError(f'{key}必须为有限非负数；0表示不修正该轴')
+        for key, default in (('min_confidence', .35), ('center_tolerance_fraction', .06)):
+            if not math.isfinite(float(p.get(key, default))) or not 0 < float(p.get(key, default)) <= 1:
+                raise ValueError(f'{key}必须在(0,1]内')
         if int(p.get('disk_class_id', 3)) < 0:
             raise ValueError('disk_class_id必须非负')
 
@@ -206,7 +193,9 @@ class SimpleTurntableTask:
             first_deadline = time.monotonic() + float(p.get('observation_timeout_s', 8.))
             approach_deadline = None
             last_seen = None
-            self.log.info('简单转盘：YOLO框居中→向前接近→前向MOVE顶碰一次；不使用棍子/孔位，不追加yaw')
+            self.log.info('简单转盘：前视YOLO视觉伺服居中→定时前向速度撞击一次→零速度结束；'
+                          '取消框宽阈值、前向BMOVE及位置到位等待，不使用棍子/孔位')
+            next_align_log = time.monotonic()
             while True:
                 self._check_running()
                 now = time.monotonic()
@@ -216,30 +205,36 @@ class SimpleTurntableTask:
                     if last_seen is None and now >= first_deadline:
                         raise _TargetLost('未识别到新鲜转盘YOLO框')
                     if last_seen is not None and now-last_seen >= float(p.get('target_lost_timeout_s', 1.)):
-                        raise _TargetLost('接近时转盘框丢失')
+                        raise _TargetLost('视觉对准时转盘框丢失')
                 else:
                     last_seen = now
                     if approach_deadline is None:
                         approach_deadline = now + float(p.get('approach_timeout_s', 25.))
-                    _, cx, cy, box_width = box
+                    _, cx, cy, _ = box
                     sign = -1. if p.get('front_camera_upside_down', True) else 1.
                     ex, ey = sign*(cx-.5), sign*(cy-.5)
                     tolerance = float(p.get('center_tolerance_fraction', .06))
                     centered = abs(ex) <= tolerance and abs(ey) <= tolerance
-                    if centered and box_width >= float(p.get('bump_box_width_fraction', .45)):
+                    if centered:
                         break
                     yaw_limit = float(p.get('max_align_yaw_rate_deg_s', 6.))
                     z_limit = float(p.get('max_vertical_speed_mps', .04))
                     yaw = max(-yaw_limit, min(yaw_limit, ex*float(p.get('align_yaw_gain', 12.))))
                     vertical = max(-z_limit, min(z_limit, ey*float(p.get('align_vertical_gain', .12))))
                     self.node._publish_body_velocity(
-                        forward_mps=float(p.get('approach_speed_mps', .08)) if centered else 0.,
+                        forward_mps=0.,
                         vertical_mps=vertical, yaw_rate_deg_s=yaw)
+                    if now >= next_align_log:
+                        self.log.info(f'简单转盘视觉对准：框心=({cx:.3f},{cy:.3f})，'
+                                      f'补偿误差=({ex:+.3f},{ey:+.3f})，容差={tolerance:.3f}；'
+                                      f'yaw速度={yaw:+.2f}°/s，升沉速度={vertical:+.3f}m/s，前进=0')
+                        next_align_log = now+.5
                 if approach_deadline is not None and now >= approach_deadline:
-                    raise RuntimeError('YOLO框接近超时')
+                    raise _TargetLost('YOLO视觉对准超时，改用盘心坐标兜底')
                 time.sleep(.05)
-            self._bump_forward()
-            self.log.info('简单转盘动作完成：前向MOVE实测到位，不验证触碰或盘体转角')
+            self.node._publish_body_velocity()  # 清除对准阶段升沉/yaw速度，再单独前冲。
+            self._charge_forward()
+            self.log.info('简单转盘动作完成：定时前向撞击指令已执行，不验证触碰或盘体转角')
             return True
         except _TargetLost as error:
             self.log.info(f'简单转盘：{error}；尝试已知盘心兜底')

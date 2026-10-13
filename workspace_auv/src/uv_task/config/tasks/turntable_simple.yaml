@@ -1,5 +1,5 @@
-# 简单版：前视YOLO box居中 → 低速前进接近 → body+x BMOVE顶碰一次 → 零速度结束。
-# 不上移，不追加yaw，不用前伸棍/孔位；只核对移动，不测量触碰或盘体转角。
+# 简单版：前视YOLO视觉伺服居中 → 定时body+x速度撞击一次 → 零速度结束。
+# 参考robotcup撞球，不要求框宽/位置到位，不用前伸棍/孔位，不测量接触或盘体转角。
 task: turntable
 params:
   mode: yolo_bump
@@ -9,30 +9,28 @@ params:
   disk_pose_odom: [2.79, -2.2, 0.85, -90.0]
   # 首次识别超时/接近中目标丢失：直接按上述盘心WTRAVEL+SET兜底，不等视觉。
   # 属于接触移动，不是观察位；未填写盘心则无兜底，不猜测坐标，不验证180°旋转。
-  # 先到盘前观察位，随后YOLO闭环接近；不是直接航行到盘心。
+  # 先到盘前观察位，再原地视觉对准；居中后直接前冲，不再先低速接近。
   front_standoff_m: 0.50 # 相机到名义盘面的观察距离，米。
   front_camera_center_body: [0.230, 0.0, 0.076]
   motion_timeout_s: 90.0 # 预定位WTRAVEL/SET各自上限，同时受总超时限制。
-  # [P0-核对] 沿用camera的turntable_disk_class_id=3，但共享模型表3=gate_front。
-  # 必须按实际转盘模型标签确认本项，不能把门的box当转盘。
+  # 当前具身智能模型wheel=3；更换模型时核对类别，勿使用旧robocup门模型映射。
   disk_class_id: 3
   image_width: 640
   image_height: 480
   # 当前front物理倒装；检测box已恢复原像素，本项反转横/纵误差方向。
   front_camera_upside_down: true
   min_confidence: 0.35
-  timeout: 180.0 # 包含可选预定位、识别、接近、顶碰和yaw。
+  timeout: 180.0 # 包含可选预定位、等待识别、视觉对准、定时前冲。
   observation_timeout_s: 8.0
-  approach_timeout_s: 25.0
+  approach_timeout_s: 25.0 # 沿用参数名：从首次看到目标起的视觉对准预算，不再前进接近。
   box_max_age_s: 0.8
   target_lost_timeout_s: 6.0
   center_tolerance_fraction: 0.1
-  # box宽占每目宽45%后执行一次前向MOVE；仅为接近代理，不是真实距离/触碰反馈。
-  bump_box_width_fraction: 0.45
-  approach_speed_mps: 0.08 # 仅视觉接近的body+x速度m/s；MOVE阶段速度由下位机闭环决定。
-  bump_forward_m: 0.08    # 前向MOVE行程m；沿用旧0.08m/s×1s名义行程，须现场调试，不保证碰到盘。
-  bump_move_timeout_s: 10.0 # 一次BMOVE及实测位移等待共用超时，仍受任务总超时约束。
-  bump_position_tolerance_m: 0.02 # 本任务独立XY核对容差m，不修改BasicMotion全局容差。
+  # 撞击仅调下面两项。速度单位m/s，不是开环推力；实际距离取决于水阻和接触。
+  # 0.15m/s×5s名义行程0.75m，参考robotcup代码默认值，须按现场观察距离调试。
+  charge_speed_mps: 0.15
+  charge_duration: 5.0
+  charge_publish_period: 0.05 # 20Hz刷新速度；停止/总超时立即结束并发送零速度。
   align_yaw_gain: 12.0
   align_vertical_gain: 0.12
   max_align_yaw_rate_deg_s: 6.0

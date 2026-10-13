@@ -9,7 +9,43 @@ import pytest
 import numpy as np
 from uv_msgs.msg import MappingObservation, MappingObservationArray
 from uv_task.config_loader import load_task
-from uv_task.mapping_task import MappingTask
+from uv_task.mapping_task import MappingTask, StaticPositionFilter
+
+
+def test_visualizer_diagonal_mirror_is_display_only():
+    import ast
+    source = Path(__file__).parents[4]/'visualization/mapping_visualizer.py'
+    tree = ast.parse(source.read_text())
+    functions = [n for n in tree.body if isinstance(n, ast.FunctionDef)
+                 and n.name in ('display_xy', 'display_heading_deg', 'normalize_display_payload')]
+    import copy
+    scope = {'np': np, 'copy': copy}
+    exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), 'exec'), scope)
+    xy = np.asarray([(1-r, c-1) for r in range(3) for c in range(3)], dtype=float)
+    old = xy.copy()
+    view = scope['display_xy'](xy)
+    order = sorted(range(9), key=lambda i: (-view[i,1], view[i,0]))
+    assert order == list(range(9))  # 俯视图按从上到下、从左到右为0 1 2 / 3 4 5 / 6 7 8。
+    assert np.array_equal(xy, old)
+    assert np.array_equal(scope['display_xy'](view), xy)  # 对角镜像自身的逆变换。
+    for yaw, expected in [(0.,-90.), (90.,0.), (180.,90.), (-90.,-180.)]:
+        assert scope['display_heading_deg'](yaw) == expected
+    payload = {'cells': {'8': {'id':8,'position':[1.,2.,3.]}, '0': {'id':0}},
+               'conclusion': {'assignment': {'8':0}, 'square_cells':[8]}}
+    before = json.dumps(payload)
+    normalized = scope['normalize_display_payload'](payload)
+    assert [c['id'] for c in normalized['cells']] == [0,8]
+    assert normalized['cells'][1]['position'] == [1.,2.,3.]
+    assert normalized['conclusion'] == payload['conclusion']
+    assert json.dumps(payload) == before
+    payload['final_assignment'] = {'8': 0, '0': 1}
+    payload['cells']['5'] = {'id':5, 'class_id':0, 'label':'square_cone', 'position':[2.,3.,1.]}
+    before = json.dumps(payload)
+    normalized = scope['normalize_display_payload'](payload)
+    assert [(c['id'],c['class_id']) for c in normalized['cells']] == [(0,1),(5,None),(8,0)]
+    assert normalized['cells'][1]['final_selected'] is False
+    assert normalized['conclusion'] == payload['conclusion']
+    assert json.dumps(payload) == before
 
 
 def test_mapping_runner_import_does_not_require_unrelated_competition_modules():
@@ -79,14 +115,64 @@ def test_dead_camera_with_healthy_position_attempts_complete_route_and_records_d
             assert cell not in task.visit_order
 
 
-def test_mapping_position_loss_stops_navigation_not_camera_loss(monkeypatch):
+@pytest.mark.parametrize('recover', [True,False])
+def test_mapping_position_loss_blinks_waits_and_never_stops_chain(monkeypatch, recover):
     from uv_task import mapping_task as module
+    clock, zeros, lights = [0.], [], []
+    monkeypatch.setattr(module, 'time', SimpleNamespace(monotonic=lambda:clock[0],
+        sleep=lambda seconds:clock.__setitem__(0,clock[0]+seconds)))
     monkeypatch.setattr(module.rclpy, 'ok', lambda: True)
     task = MappingTask(_Node(), load_task(Path(__file__).parents[1]/'config/tasks/mapping_grid.json')[0]['params'])
     task.node.stopped = False
-    with pytest.raises(RuntimeError, match='定位数据失效'):
+    task.deadline = 2.
+    task.node._publish_body_thrust = lambda:zeros.append(clock[0])
+    task.node.set_light = lambda color, *_:lights.append(color)
+    monkeypatch.setattr(task,'_position_ready',lambda:recover and clock[0] >= 1.2)
+    if recover:
         task._continue_navigation()
-    assert task.node.stopped
+        assert lights[-1] == 3 and clock[0] < task.deadline
+    else:
+        with pytest.raises(RuntimeError, match='等待定位'):
+            task._continue_navigation()
+        assert lights[-1] == 1
+    assert 1 in lights and 0 in lights and zeros
+    assert not task.node.stopped and not task.navigation_paused
+
+
+def test_camera_degradation_preserves_reliable_visual_and_only_fills_missing_cells():
+    params=load_task(Path(__file__).parents[1]/'config/tasks/mapping_grid.json')[0]['params']
+    task=MappingTask(_Node(),params)
+    task.config_fallback_mode=True
+    task.class_votes={6:[10,0],0:[0,10],1:[1,0]}
+    retained=task._retained_visual_assignment()
+    assert retained == {6:0,0:1}  # 一个孤立候选不能代替已标定的默认目标。
+    task.final_assignment=task._fill_fallback_assignment(retained)
+    assert task.final_assignment[6] == 0 and task.final_assignment[0] == 1
+    assert len(task.final_assignment) == 4
+    assert not ({0,6} & task.fallback_cells)
+    # 弱观测即使已有滤波坐标，补齐目标也必须使用正确配置中心。
+    guessed = next(iter(task.fallback_cells))
+    task.filters[guessed] = StaticPositionFilter([9.,9.,9.], np.eye(3), 1.)
+    task.filters[6] = StaticPositionFilter([1.,2.,3.], np.eye(3), 1.)
+    task.publish_map()
+    cells = json.loads(task.map_pub.messages[-1].data)['cells']
+    assert cells[guessed]['source'] == 'fallback'
+    assert cells[guessed]['position'] == task.grid_centers[guessed].tolist()
+    assert cells[guessed]['covariance'] is None
+    assert cells[6]['source'] == 'vision' and cells[6]['position'] == [1.,2.,3.]
+
+
+def test_weak_wrong_class_cannot_displace_reliable_cell_on_camera_degradation():
+    params=load_task(Path(__file__).parents[1]/'config/tasks/mapping_grid.json')[0]['params']
+    task=MappingTask(_Node(),params)
+    task.config_fallback_mode=True
+    task.class_votes={0:[100,1],1:[99,0],2:[98,0],3:[0,100]}
+    assert task._retained_visual_assignment() == {0:0,1:0,3:1}
+
+
+def test_disabled_motion_observations_do_not_validate_unused_window():
+    params=load_task(Path(__file__).parents[1]/'config/tasks/mapping_grid.json')[0]['params']
+    MappingTask(_Node(),dict(params,allow_motion_observations=False,motion_window_seconds=0.))
 
 
 def test_mapping_fixed_yaw_travel_uses_world_segments(monkeypatch):
@@ -354,7 +440,9 @@ def test_no_camera_does_not_move_without_a_completed_survey(monkeypatch):
     monkeypatch.setattr(task, '_travel_to', lambda *_: pytest.fail('未完成首圈不能遍历'))
     assert not task.execute()
     assert task.visit_order == task.traversal_order == []
-    assert not json.loads(task.conclusion_pub.messages[-1].data)['ready']
+    conclusion = json.loads(task.conclusion_pub.messages[-1].data)
+    assert conclusion['ready'] and not conclusion['verified']
+    assert task.state == 'failed'  # 可提交默认结果，不冒充完成检索。
 
 
 def test_disabled_conclusion_keeps_map_without_creating_result_publisher():
@@ -399,7 +487,8 @@ def test_full_flow_requires_survey_instead_of_skipping_to_next_task(monkeypatch)
     assert not task.execute()
     assert not task.node.stopped  # 普通阶段结束不再无条件杀死整条链。
     assert task.state == 'failed'
-    assert not json.loads(task.conclusion_pub.messages[-1].data)['ready']
+    conclusion = json.loads(task.conclusion_pub.messages[-1].data)
+    assert conclusion['ready'] and not conclusion['verified']
 
 
 def test_full_flow_mission_orders_stages_under_one_start():

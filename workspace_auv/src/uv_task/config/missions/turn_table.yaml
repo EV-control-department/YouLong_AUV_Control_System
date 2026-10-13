@@ -1,5 +1,5 @@
 
-# 简单转盘任务链：START → YOLO box居中/前进接近 → 前向BMOVE顶碰一次。
+# 简单转盘任务链：START → 前视视觉对准 → 定时前向撞击一次；不追加yaw。
 mission:
   name: turn_table
   tasks:

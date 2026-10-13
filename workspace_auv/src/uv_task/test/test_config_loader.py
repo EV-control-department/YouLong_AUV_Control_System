@@ -28,6 +28,23 @@ EXPECTED_TASKS = [
 ]
 
 
+def test_disabled_runtime_does_not_validate_unused_motion_fields(tmp_path):
+    from uv_task.config_loader import load_mission_runtime
+    path = tmp_path/'mission.yaml'
+    path.write_text('mission:\n  name: test\n  runtime:\n    enabled: false\n    time_limit_s: 0\n'
+                    '    return_waypoint_xy: []\n    max_up_speed_mps: null\n'
+                    '  tasks:\n    - name: setz\n      params: {z: 0.2}\n')
+    assert not load_mission_runtime(path)['enabled']
+    assert load_mission(path)[0]['params']['z'] == .2
+
+
+def test_empty_parameter_group_uses_defaults(tmp_path):
+    path = tmp_path/'task.yaml'
+    path.write_text('task: turntable\nparams:\n  alignment: {}\n  mode: yolo_bump\n')
+    from uv_task.config_loader import load_task
+    assert load_task(path)[0]['params'] == {'mode': 'yolo_bump'}
+
+
 def test_competition_chain_enables_survey_and_six_minute_grab():
     from uv_task.config_loader import load_mission_runtime
     runtime = load_mission_runtime(CONFIG_ROOT / 'missions' / 'competition.yaml')
@@ -121,6 +138,41 @@ def test_sea_cucumber_mission_and_nested_parameters():
     assert params['pickup_servo_angle_deg'] == source['gripper']['pickup_angle_deg']
     assert params['release_servo_angle_deg'] == source['gripper']['release_angle_deg']
     assert params['collection_release_offset_body_xy'] == source['collection_release_offset_body_xy']
+
+
+@pytest.mark.parametrize('timeout,expected', [(180.,40.), (10.,10.)])
+def test_failed_world_route_has_fresh_bounded_direct_target_budget(timeout, expected):
+    from types import SimpleNamespace
+    from uv_task.task_runner import TaskRunnerNode
+    calls, zeros = [], []
+    node = SimpleNamespace(stopped=False,
+        get_logger=lambda:SimpleNamespace(warning=lambda *_:None),
+        _follow_world_waypoints=lambda *args: calls.append(args) or len(calls) == 2,
+        _publish_body_velocity=lambda: zeros.append(True))
+    points = [[.5,1.,.2,0.], [2.,3.,.2,90.]]
+    assert TaskRunnerNode._task_world_waypoints(node, {'waypoints':points,'timeout':timeout})
+    assert calls[1][0] == [points[-1]] and calls[1][2] == expected
+    assert calls[1][-1] == 'fixed_yaw'
+    assert zeros and not node.stopped
+
+
+def test_direct_target_failure_still_allows_following_mission_task():
+    from types import SimpleNamespace
+    from uv_task.task_runner import TaskRunnerNode
+    reached = []
+    log = SimpleNamespace(info=lambda *_:None, warning=lambda *_:None,
+                          warn=lambda *_:None, error=lambda *_:None)
+    node = SimpleNamespace(stopped=False, current_index=0,
+        tasks=[{'name':'world_waypoints','params':{'waypoints':[[1.,2.,.2,0.]]}},
+               {'name':'turntable','params':{}}],
+        _cmd_x=0.,_cmd_y=0.,_cmd_z=.2,_cmd_yaw=0.,
+        get_logger=lambda:log,
+        _follow_world_waypoints=lambda *args:False,
+        _publish_body_velocity=lambda:None)
+    node._execute_task = lambda name, p: (TaskRunnerNode._task_world_waypoints(node,p)
+        if name == 'world_waypoints' else reached.append(name) or True)
+    TaskRunnerNode.run_task_list(node)
+    assert reached == ['turntable'] and node.current_index == 2 and not node.stopped
 
 
 def test_default_mission_preserves_order_and_values():

@@ -27,7 +27,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
     def __init__(self, node, params: dict):
         # 明确要求现场模型和投放机构参数；不能用抓球模型的默认类别误抓。
         required = (
-            'sea_cucumber_class_id', 'image_width', 'image_height',
+            'sea_cucumber_class_id',
             'descent_speed_mps', 'descent_duration_seconds',
             'drop_pose', 'search_pose')
         if int(params.get('gripper_servo_id', 1)) == 1:
@@ -44,6 +44,9 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         if not math.isfinite(speed) or not math.isfinite(duration) or speed <= 0 or duration <= 0:
             raise ValueError('下压速度和时长必须是有限正数')
         super().__init__(node, params)
+        threshold = float(params.get('return_observation_confidence', .8))
+        if not math.isfinite(threshold) or not 0 < threshold <= 1:
+            raise ValueError('return_observation_confidence必须在(0,1]内')
         self._class_id = int(params['sea_cucumber_class_id'])
         if self._class_id < 0:
             raise ValueError('sea_cucumber_class_id 必须非负')
@@ -71,8 +74,8 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             pickup_deg = float(params.get('servo2_close_angle_deg', 150.0))
             release_deg = float(params.get('servo2_open_angle_deg', 270.0))
             if (not all(map(math.isfinite, (pickup_deg, release_deg)))
-                    or not 0 <= pickup_deg < release_deg <= 270):
-                raise ValueError('舵机2闭合/张开角度须满足0≤close<open≤270°')
+                    or not all(0 <= angle <= 270 for angle in (pickup_deg, release_deg))):
+                raise ValueError('舵机2闭合/张开角度须为0~270°的有限数值')
         elif (not all(map(math.isfinite, (pickup_deg, release_deg)))
               or not all(0 <= angle <= 180 for angle in (pickup_deg, release_deg))):
             raise ValueError('舵机1抓放角度须为0~180°的有限数值')
@@ -110,7 +113,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._total_timeout = float(params.get('total_timeout_seconds', 600.0))
         self._target_count = int(params.get('expected_count', 5))
         self._count_frames = int(params.get('count_frames', 3))
-        self._count_timeout = float(params.get('count_timeout_seconds', 12.0))
+        self._count_timeout = float(params.get('count_timeout_seconds', 3.0))
         self._min_confidence = float(params.get('min_confidence', 0.35))
         self._drop_timeout = float(params.get('drop_timeout_seconds', 90.0))
         self._release_wait = float(params.get('release_wait_seconds', 2.0))
@@ -143,7 +146,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         width = float(params.get('image_width', 640.0))
         height = float(params.get('image_height', 480.0))
         if (width <= 0 or height <= 0 or self._target_count <= 0
-                or self._count_frames < 2 or self._count_timeout <= 0
+                or self._count_frames < 1 or self._count_timeout <= 0
                 or not math.isfinite(self._total_timeout)
                 or self._total_timeout <= 0 or self._drop_timeout <= 0
                 or self._max_failed_attempts < 0 or not 0 < self._min_confidence <= 1):
@@ -180,17 +183,21 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._pre_press_pose = None
         self._restore_press_xy = bool(params.get('restore_pre_press_odom_xy', False))
         self._collection_align = bool(params.get('collection_visual_align', True))
-        self._collection_class = int(params.get('collection_class_id', 4))
-        self._collection_depth = float(params.get('collection_projection_depth_m', self._projection_depth))
-        self._collection_pixel_tolerance = float(params.get('collection_pixel_tolerance_fraction', .08))
-        self._collection_hold_seconds = float(params.get('collection_hold_seconds', 0.0))
+        self._collection_class = 4
+        self._collection_depth = self._projection_depth
+        self._collection_pixel_tolerance, self._collection_hold_seconds = .08, 0.
+        if self._collection_align:
+            self._collection_class = int(params.get('collection_class_id', 4))
+            self._collection_depth = float(params.get('collection_projection_depth_m', self._projection_depth))
+            self._collection_pixel_tolerance = float(params.get('collection_pixel_tolerance_fraction', .08))
+            self._collection_hold_seconds = float(params.get('collection_hold_seconds', 0.0))
         self._collection_stereo_mode = False
         if (not math.isfinite(self._collection_pixel_tolerance)
                 or not 0 < self._collection_pixel_tolerance <= .3
                 or not math.isfinite(self._collection_hold_seconds)
                 or self._collection_hold_seconds < 0):
             raise ValueError('收集框居中容差或保持时间无效')
-        self._correction_max = float(params.get('odom_correction_max_m', 1.0))
+        self._correction_max = float(params.get('odom_correction_max_m', 1.0)) if self._restore_press_xy else 1.
         if self._near_floor_enabled and (not all(map(math.isfinite, (
                 self._floor_z, self._bottom_offset, self._force_clearance,
                 self._press_thrust, self._lift_thrust, self._press_seconds))) or self._floor_z <= 0
@@ -198,9 +205,9 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                 or not -1 <= self._lift_thrust < 0
                 or self._press_seconds <= 0):
             raise ValueError('近底开环请先标定floor_z_m、press_thrust(0,1]、lift_thrust[-1,0)，不是速度')
-        if (self._collection_class < 0 or not math.isfinite(self._collection_depth)
-                or self._collection_depth <= 0 or not math.isfinite(self._correction_max)
-                or self._correction_max <= 0):
+        if ((self._collection_align and (self._collection_class < 0 or not math.isfinite(self._collection_depth)
+                or self._collection_depth <= 0)) or (self._restore_press_xy and (
+                    not math.isfinite(self._correction_max) or self._correction_max <= 0))):
             raise ValueError('收集框类别、伺服参考距离或校正最大偏移无效')
         obsolete = ('collection_release_margin_m', 'collection_correct_odom_xy',
                     'collection_center_odom_xy', 'collection_camera_body_xy',
@@ -390,8 +397,11 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         return [d for d in getattr(message, 'detections', ())
                 if int(getattr(d, 'class_id', -1)) == self._class_id
                 and float(getattr(d, 'confidence', 0.0)) >= self._min_confidence
+                and math.isfinite(float(getattr(d, 'confidence', 0.0)))
+                and float(getattr(d, 'confidence', 0.0)) <= 1.
                 and len(getattr(d, 'mask_x', ())) >= 3
-                and len(getattr(d, 'mask_x', ())) == len(getattr(d, 'mask_y', ()))]
+                and len(getattr(d, 'mask_x', ())) == len(getattr(d, 'mask_y', ()))
+                and all(math.isfinite(float(v)) for v in (*d.mask_x, *d.mask_y))]
 
     def _best_left_detection(self):
         """选择最大可信掩膜，并用掩膜中心而非 bbox 中心压准目标。"""
@@ -565,37 +575,45 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
 
     def _count_visible(self, since: float, capture_after_ns: int,
                        deadline: float, conservative: str):
-        """只数下视左目中不同的、动作完成后的新鲜分割帧。"""
-        counts = []
-        last_stamp = since
-        end = min(deadline, time.monotonic() + self._count_timeout)
+        """完整观测窗口内取最大可信数量，抓前/抓后一致；重复采集帧不重复计数。"""
+        counts, seen = [], set()
+        last_received = since
+        window_end = time.monotonic() + self._count_timeout
+        end = min(deadline, window_end)
         while not self._node.stopped and time.monotonic() < end:
             with self._node._perception_lock:
                 entry = self._node._down_detections.get('down_left')
-            if entry is not None and entry[0] > last_stamp:
-                last_stamp = entry[0]
+            if entry is not None and entry[0] > last_received:
+                last_received = entry[0]
                 stamp = getattr(getattr(entry[1], 'header', None), 'stamp', None)
-                stamp_ns = (int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+                stamp_ns = (int(stamp.sec)*1_000_000_000 + int(stamp.nanosec)
                             if stamp is not None else 0)
-                if (stamp_ns > capture_after_ns
-                        and time.monotonic() - last_stamp <= self._detection_timeout):
-                    counts.append(len(self._segmented_detections(entry[1])))
-                    if len(counts) >= self._count_frames:
-                        # 抓前取最小、抓后取最大：偶发漏检不会假报抓取成功。
-                        result = min(counts) if conservative == 'before' else max(counts)
-                        self._logger.info(
-                            f'抓海参：{conservative}计数帧={counts}，保守结果={result}')
-                        return result
-            time.sleep(min(0.1, max(0.0, end - time.monotonic())))
-        self._logger.warning(f'抓海参：{conservative}计数缺少新鲜帧，已收{len(counts)}帧')
-        # 帧率波动时不要求必须收满默认3帧；至少2帧仍保留多帧复核。
-        # 不接受旧帧、不用单帧或历史数量猜测当前是否抓到。
-        if not self._node.stopped and time.monotonic() < deadline and len(counts) >= 2:
-            result = min(counts) if conservative == 'before' else max(counts)
-            self._logger.warning(
-                f'抓海参：降级使用{len(counts)}个新鲜计数帧={counts}，保守结果={result}')
-            return result
-        return None
+                if (stamp_ns > capture_after_ns and stamp_ns not in seen
+                        and 0 <= time.monotonic()-last_received <= self._detection_timeout):
+                    seen.add(stamp_ns)
+                    count = len(self._segmented_detections(entry[1]))
+                    if count <= self._target_count:
+                        counts.append(count)
+                    else:
+                        self._logger.warning(f'抓海参：单帧数量{count}超过初始锁定'
+                                             f'{self._target_count}，不纳入最大可信数量')
+            time.sleep(min(.1, max(0., end-time.monotonic())))
+        if self._node.stopped or time.monotonic() < window_end:
+            self._logger.warning(f'抓海参：{conservative}数量观测被停止/总预算截断，结果未知')
+            return None
+        minimum = min(self._count_frames, 2)
+        if len(counts) < minimum:
+            self._logger.warning(f'抓海参：{conservative}观测{self._count_timeout:g}s仅'
+                                 f'{len(counts)}张独立新鲜帧，结果未知')
+            return None
+        result = max(counts)
+        message = (f'抓海参：{conservative}观测{self._count_timeout:g}s，计数帧={counts}，'
+                   f'最大可信数量={result}')
+        if len(counts) < self._count_frames:
+            self._logger.warning(message+f'；帧率降级，已满足至少{minimum}帧')
+        else:
+            self._logger.info(message)
+        return result
 
     def _retry_perception(self, reason, failures, deadline):
         """视觉失败只结束本轮，不立刻结束整项任务；仍受重试与总超时约束。"""
@@ -616,6 +634,57 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         while not self._node.stopped and time.monotonic() < end:
             time.sleep(min(0.05, max(0.0, end-time.monotonic())))
         return not self._node.stopped and time.monotonic() < deadline
+
+    def _return_target_visible(self):
+        """只接受本次返回途中拍摄的新鲜高置信海参帧。"""
+        with self._node._perception_lock:
+            entry = self._node._down_detections.get('down_left')
+        now = time.monotonic()
+        if entry is None or not 0 <= now-entry[0] <= self._detection_timeout:
+            return False
+        stamp = entry[1].header.stamp
+        ns = int(stamp.sec)*1_000_000_000 + int(stamp.nanosec)
+        age = (self._node.get_clock().now().nanoseconds-ns)/1e9
+        if (entry[0] <= self._return_observation_started or ns <= self._return_capture_after_ns
+                or ns <= self._return_last_frame_ns or not 0 <= age <= self._detection_timeout):
+            return False
+        self._return_last_frame_ns = ns
+        threshold = float(self._params.get('return_observation_confidence', .8))
+        candidates = [d for d in self._segmented_detections(entry[1]) if d.confidence >= threshold]
+        if not candidates or self._measured_pose() is None:
+            return False
+        self._logger.info(f'抓海参：返回途中发现海参，置信度={max(d.confidence for d in candidates):.3f}'
+                          f'≥{threshold:g}，提前结束返回并归正航向')
+        return True
+
+    def _return_face_and_hold(self, yaw, deadline):
+        pose = self._measured_pose()
+        if pose is None or self._node.stopped or time.monotonic() >= deadline:
+            return False
+        target = [pose[0], pose[1], pose[2], float(yaw)]
+        ok, message = self._node._send_action_goal(
+            BasicMotion.Goal.SET, target, 'xyzrz',
+            timeout=min(self._command_timeout, deadline-time.monotonic()),
+            task_context=self._node._format_motion_context('返回途中发现海参：当前位置归正航向'))
+        if not ok:
+            self._logger.error(f'抓海参：途中目标归向失败：{message}')
+            return False
+        self._node._cmd_x, self._node._cmd_y, self._node._cmd_z, self._node._cmd_yaw = target
+        if not self._wait_visual_motion(target, deadline):
+            return False
+        self._return_servo_handoff = True
+        return True
+
+    def _return_observing(self, search_pose, deadline):
+        self._return_observation_started = time.monotonic()
+        self._return_capture_after_ns = self._node.get_clock().now().nanoseconds
+        self._return_last_frame_ns = -1
+        self._return_servo_handoff = False
+        self._return_watch_active = True
+        try:
+            return self._travel(search_pose, '返回海参搜索区', deadline, self._search_travel_timeout)
+        finally:
+            self._return_watch_active = False
 
     def _travel(self, pose, label, deadline, timeout):
         motion_deadline = min(deadline, time.monotonic() + timeout)
@@ -642,10 +711,14 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         remaining = motion_deadline - time.monotonic()
         if remaining <= 0 or self._node.stopped:
             return False
+        watch = ({'interrupt_if': self._return_target_visible}
+                 if getattr(self, '_return_watch_active', False) else {})
         success, message = self._node._send_action_goal(
             BasicMotion.Goal.WTRAVEL, target, 'xyzrz',
             timeout=remaining,
-            task_context=self._node._format_motion_context(label))
+            task_context=self._node._format_motion_context(label), **watch)
+        if message == '视觉目标触发中断':
+            return self._return_face_and_hold(pose[3], motion_deadline)
         if not success:
             self._logger.error(f'抓海参：{label}失败：{message}')
             return False
@@ -662,7 +735,9 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                           f'yaw={target[3]:.1f}°')
         success, message = self._node._send_action_goal(
             BasicMotion.Goal.SET, target, 'xyzrz', timeout=remaining,
-            task_context=self._node._format_motion_context(label + '到位归向'))
+            task_context=self._node._format_motion_context(label + '到位归向'), **watch)
+        if message == '视觉目标触发中断':
+            return self._return_face_and_hold(pose[3], motion_deadline)
         if not success:
             self._logger.error(f'抓海参：{label}到位归向失败：{message}')
             return False
@@ -799,6 +874,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
 
     def _return_to_recorded_pose(self, recorded_pose):
         """先直接低速上浮，再做不含 z 的水平回位。"""
+        self._post_press_horizontal_return_failed = False
         if len(recorded_pose) != 4 or not all(math.isfinite(float(v)) for v in recorded_pose):
             self._logger.error('抓海参：记录位姿无效，拒绝上浮')
             return False
@@ -829,7 +905,9 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             timeout=max(0.1, deadline - time.monotonic()),
             task_context=self._node._format_motion_context('抓海参后水平回位'))
         if not success:
-            self._logger.error(f'抓海参：上浮后水平回位失败：{message}')
+            self._post_press_horizontal_return_failed = True
+            self._logger.warning(f'抓海参：上浮后水平回位失败：{message}；'
+                                 '不在错误观察位计数，定位有效时仍尝试前往收集区投放')
             return False
         self._node._cmd_x, self._node._cmd_y = target[:2]
         self._node._cmd_z, self._node._cmd_yaw = target[2:]
@@ -880,10 +958,12 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         if not return_to_search:
             return True
         self._logger.info('抓海参：投放结束，返回配置扫描点；返回成功前不启动扫描')
-        if not self._travel(search_pose, '返回海参搜索区', deadline,
-                            self._search_travel_timeout):
+        if not self._return_observing(search_pose, deadline):
             return False
-        self._logger.info('抓海参：已返回扫描点并恢复扫描航向，允许开始下一轮识别')
+        if self._return_servo_handoff:
+            self._logger.info('抓海参：途中发现目标且已归正，下一轮立即从当前位置进入视觉伺服')
+        else:
+            self._logger.info('抓海参：已返回扫描点并恢复扫描航向，允许开始下一轮识别')
         return True
 
     def _correct_xy(self, target_xy, deadline, reason):
@@ -1014,6 +1094,9 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             return False
         failed_attempts = 0
         perception_failures = 0
+        remaining_count = self._target_count - self.confirmed_removed
+        self._logger.info(f'抓海参：初始数量锁定为{self._target_count}；抓前观测不重置初始基准，'
+                          f'数量观测窗口={getattr(self, "_count_timeout", 3.):g}s取最大可信值')
         while not self._node.stopped and time.monotonic() < deadline:
             if self.confirmed_removed >= self._target_count:
                 self._logger.info(f'抓海参：已确认减少 {self.confirmed_removed} 只')
@@ -1031,14 +1114,20 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                 if self._retry_perception('水平对准本轮未完成', perception_failures, deadline):
                     continue
                 break
-            before = self._count_visible(
+            observed_before = self._count_visible(
                 time.monotonic(), self._node.get_clock().now().nanoseconds,
                 deadline, 'before')
-            if before is None or before == 0:
+            if observed_before is None or observed_before == 0:
                 perception_failures += 1
                 if self._retry_perception('抓前计数缺失或暂未看到目标', perception_failures, deadline):
                     continue
                 break
+            # 漏检不能把5只初始基准缩小；重新看到更多目标时只撤回旧的视觉减少估计。
+            remaining_count = min(self._target_count, max(remaining_count, observed_before))
+            self.confirmed_removed = self._target_count - remaining_count
+            before = remaining_count
+            self._logger.info(f'抓海参：本轮数量基准={before}，抓前最大观测={observed_before}，'
+                              f'初始锁定={self._target_count}')
             if not self._apply_gripper_offset() or not self._wait_pre_descent_settle():
                 break
             if time.monotonic() >= deadline:
@@ -1046,9 +1135,18 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
             self._return_timeout = min(
                 self._return_timeout, max(0.1, deadline - time.monotonic()))
             self._descent_duration = min(self._descent_duration, deadline - time.monotonic())
-            if (not self._descend() or not self._close_after_press(deadline)
-                    or not self._return_to_recorded_pose(recorded_pose)):
+            if not self._descend() or not self._close_after_press(deadline):
                 break
+            if not self._return_to_recorded_pose(recorded_pose):
+                if (not getattr(self, '_post_press_horizontal_return_failed', False)
+                        or self._node.stopped or time.monotonic() >= deadline
+                        or self._measured_pose() is None):
+                    break  # 尚未离底/原点校正未知/停止时不能伪称可运输。
+                self._logger.warning('抓海参：已离底但水平回观察位失败，跳过抓后计数；'
+                                     '先投放可能携带的海参，再回扫描区复查，不增加确认数量')
+                if not self._deliver(search_pose, deadline, return_to_search=True):
+                    break
+                continue
             after = self._count_visible(
                 time.monotonic(), self._node.get_clock().now().nanoseconds,
                 deadline, 'after')
@@ -1063,8 +1161,19 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                 if self._retry_perception('投放后重新确认目标数量', perception_failures, deadline):
                     continue
                 break
+            if after > self._target_count:
+                self._logger.warning(f'抓海参：抓后最大观测{after}超过初始锁定{self._target_count}，'
+                                     '疑似重复分割；本轮数量结果未知，先投放再复查')
+                if not self._deliver(search_pose, deadline, return_to_search=True):
+                    break
+                perception_failures += 1
+                if self._retry_perception('计数超过初始总量', perception_failures, deadline):
+                    continue
+                break
             perception_failures = 0
             removed = max(0, before - after)
+            remaining_count = after
+            self.confirmed_removed = self._target_count - remaining_count
             if not removed:
                 failed_attempts += 1
                 self._logger.warning(
@@ -1074,7 +1183,6 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                     break
                 continue
             failed_attempts = 0
-            self.confirmed_removed += removed
             self._logger.info(f'抓海参：观察位数量 {before}→{after}，本次可能抓起 {removed} 只')
             if not self._deliver(
                     search_pose, deadline,

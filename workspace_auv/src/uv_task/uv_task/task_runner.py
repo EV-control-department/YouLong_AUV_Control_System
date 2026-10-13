@@ -951,7 +951,7 @@ class TaskRunnerNode(Node):
         return f'{purpose}({axes or "all"})'
 
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
-                          quiet=False, task_context=''):
+                          quiet=False, task_context='', interrupt_if=None):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -965,6 +965,8 @@ class TaskRunnerNode(Node):
             quiet: if True, suppress per-goal INFO logs (errors still logged)
             task_context: context shown by basic_motion; empty uses the standard
                 current-task/current-step/action context.
+            interrupt_if: optional visual predicate polled while awaiting result;
+                cancellation must finish before the caller can issue a new goal.
 
         Returns:
             (success: bool, message: str)
@@ -1023,7 +1025,17 @@ class TaskRunnerNode(Node):
             self.get_logger().info('动作目标已接受，等待执行结果……')
 
         result_future = goal_handle.get_result_async()
+        interrupted, cancel_deadline = False, None
         while rclpy.ok() and not self.stopped and not result_future.done():
+            if interrupt_if is not None and not interrupted and interrupt_if():
+                interrupted = True
+                cancel_deadline = time.monotonic() + 3.
+                goal_handle.cancel_goal_async()
+                self.get_logger().info('途中视觉目标触发：取消当前动作，等待旧动作结束后接管')
+            if interrupted and time.monotonic() >= cancel_deadline:
+                # 保留句柄供停止流程继续取消；结果未知时绝不启动另一个动作。
+                self.stopped = True
+                return False, '视觉触发取消未确认，禁止接管'
             time.sleep(0.01)
         self._active_goal_handle = None
         if not rclpy.ok() or self.stopped:
@@ -1033,6 +1045,9 @@ class TaskRunnerNode(Node):
         if not result_future.done():
             self.get_logger().error('等待动作结果超时')
             return False, '等待动作结果超时'
+
+        if interrupted:
+            return False, '视觉目标触发中断'
 
         result = result_future.result().result
         if not result.success:
@@ -1241,9 +1256,11 @@ class TaskRunnerNode(Node):
         return True
 
     def _task_world_waypoints(self, p: dict) -> bool:
-        """执行用户指定路线，不强制末点匹配下一任务的观察位。
+        """按路线移动；普通航点失败后直接尝试这段路线的最后目标点。
 
         旧end_at_next_task参数兼容读取但不生效；下一任务自行执行其定位逻辑。
+        兜底保留原fixed_yaw/face_path模式，但不再经过其余中间点。额外预算
+        最多40秒，仍受总计时/人工停止控制；不把局部失败变成全链停止。
         """
         points = p.get('waypoints', [])
         ok = False
@@ -1251,14 +1268,31 @@ class TaskRunnerNode(Node):
             if not points:
                 if not p.get('require_nonempty', True):
                     return True
-                self.get_logger().error('任务间航点未填写：禁止跳过路线直接跨区移动')
+                self.get_logger().error('任务间航点未填写：没有可用最终目标，本段失败，继续后续任务')
                 return False
-            ok = self._follow_world_waypoints(points, p.get('label', '任务间转移'),
-                float(p.get('timeout', 180.)), float(p.get('max_step_m', .4)), p.get('mode', 'fixed_yaw'))
+            label = p.get('label', '任务间转移')
+            timeout = float(p.get('timeout', 180.))
+            step = float(p.get('max_step_m', .4))
+            mode = p.get('mode', 'fixed_yaw')
+            ok = self._follow_world_waypoints(points, label, timeout, step, mode)
+            if ok:
+                return True
+            guard = getattr(self, '_mission_deadline', None)
+            if self.stopped or (guard is not None and guard.phase != 'idle'):
+                return False
+            self._publish_body_velocity()
+            target = list(points[-1])
+            fallback_timeout = min(timeout, 40.)
+            self.get_logger().warning(
+                f'{label}：航点路线失败，跳过中间点，直接尝试最终比赛目标{target}；'
+                f'模式={mode}，额外预算={fallback_timeout:g}s，不进行自动绕障')
+            ok = self._follow_world_waypoints([target], f'{label}:直接目标兜底',
+                                             fallback_timeout, step, mode)
+            if not ok and not self.stopped:
+                self.get_logger().warning(f'{label}：最终目标兜底也未完成，记录本段失败，继续后续任务')
             return ok
         finally:
             if not ok and (points or p.get('require_nonempty', True)):
-                self.stopped = True
                 self._publish_body_velocity()
 
     # --- SET tasks (absolute positioning) ---
@@ -1656,7 +1690,7 @@ class TaskRunnerNode(Node):
             self.pub_setpoint.publish(msg)
 
     def _task_return_shore(self, p: dict) -> bool:
-        """保持当前深度返回靠岸准备点，再定时前推、负z推力上浮。
+        """返回准备点；配置了推力则靠岸，没填上浮推力则低速上浮。
 
         推力不是速度：航向必须正对岸，参数需实测。纯ACTUATOR期间无位置/
         姿态闭环，也没有自动接岸或出水检测；到时、停止、异常均发全轴零推力。
@@ -1673,6 +1707,43 @@ class TaskRunnerNode(Node):
             raise ValueError('靠岸参数无效：前推[0,1]、上浮[-1,0]，时间须为有限非负数')
         self.set_light(self.LIGHT_YELLOW, '返航靠岸执行中')
         success = False
+        def surface():
+            """正常链结束前完成上浮，不依赖14分钟定时器再次唤醒。"""
+            target_z = float(p.get('surface_z_m', 0.))
+            speed_limit = float(p.get('surface_speed_mps', .05))
+            surface_timeout = float(p.get('surface_timeout_s', 60.))
+            tolerance = float(p.get('surface_tolerance_m', .05))
+            if (not all(math.isfinite(v) for v in (target_z, speed_limit, surface_timeout, tolerance))
+                    or target_z < 0 or min(speed_limit, surface_timeout, tolerance) <= 0):
+                raise ValueError('正常返航上浮深度须非负，速度/超时/容差须为有限正数')
+            self.get_logger().info(f'返航上浮：目标z={target_z:.3f}m，速度上限={speed_limit:.3f}m/s，'
+                                   f'独立预算={surface_timeout:g}s；不自动向下纠偏')
+            surface_end = time.monotonic()+surface_timeout
+            waiting_logged = False
+            try:
+                while not self.stopped and rclpy.ok() and time.monotonic() < surface_end:
+                    with self._perception_lock:
+                        current, received = self._robot_pose, self._robot_pose_received
+                    if (current is None or len(current) < 6 or time.monotonic()-received > 1.
+                            or not all(math.isfinite(float(v)) for v in current)):
+                        self._publish_body_thrust()
+                        if not waiting_logged:
+                            self.get_logger().warning('返航上浮：深度反馈暂不可用，零推力等待恢复，不盲目上浮')
+                            waiting_logged = True
+                        time.sleep(min(.05, max(0., surface_end-time.monotonic())))
+                        continue
+                    remaining = float(current[2])-target_z
+                    if remaining <= tolerance:
+                        self._cmd_z = float(current[2])
+                        self.get_logger().info(f'返航上浮已到配置深度：实测z={current[2]:.3f}m；不宣称已接岸/出水')
+                        return True
+                    speed = min(speed_limit, max(.001, .5*remaining))
+                    self._publish_body_velocity(vertical_mps=-speed)
+                    time.sleep(min(.05, max(0., surface_end-time.monotonic())))
+                self.get_logger().warning('返航上浮超时或被停止，停止推力')
+                return False
+            finally:
+                self._publish_body_thrust()
         try:
             with self._perception_lock:
                 pose = self._robot_pose
@@ -1680,25 +1751,35 @@ class TaskRunnerNode(Node):
             if (pose is None or len(pose) < 6 or age > 1.
                     or not all(math.isfinite(float(v)) for v in pose)):
                 self.get_logger().error('返航靠岸：缺少新鲜实测位姿，不盲目移动')
+                surface()  # 在上浮预算内等待新鲜深度；仍不会使用旧位姿移动。
                 return False
             target = [x, y, float(pose[2]), yaw]
             end = time.monotonic()+move_timeout
+            navigation_ok = True
             for command, axes, label in ((BasicMotion.Goal.WTRAVEL, 'xy', '返回靠岸准备点'),
                                           (BasicMotion.Goal.SET, 'xyrz', '恢复靠岸航向')):
-                if self.stopped or time.monotonic() >= end:
+                if self.stopped:
                     return False
+                if time.monotonic() >= end:
+                    navigation_ok = False
+                    self.get_logger().warning('返航定位预算耗尽，停止水平移动，仍尝试低速上浮')
+                    break
                 ok, message = self._send_action_goal(command, target, axes,
                     timeout=end-time.monotonic(), task_context=self._format_motion_context(label))
                 if not ok:
-                    self.get_logger().error(f'返航靠岸：{label}失败：{message}，不盲目给推力')
-                    return False
+                    self.get_logger().warning(f'返航靠岸：{label}失败：{message}，取消盲目前推，仍尝试低速上浮')
+                    navigation_ok = False
+                    break
+            if not navigation_ok:
+                if not self.stopped:
+                    surface()
+                return False  # 上浮成功也不能冒充已返回目标XY。
             self._cmd_x, self._cmd_y, self._cmd_yaw = x, y, yaw
-            if not (forward > 0 and forward_seconds > 0 and lift < 0 and lift_seconds > 0):
-                self.get_logger().warning('返航准备点已到达；靠岸/上浮推力或时间未填，跳过开环动作')
-                return False
             for label, fx, fz, duration in (
                     ('前推靠岸', forward, 0., forward_seconds),
                     ('开环上浮', 0., lift, lift_seconds)):
+                if duration <= 0 or (fx == 0 and fz == 0):
+                    continue  # 未填开环推力不拒绝执行正常返航上浮。
                 self.get_logger().warning(f'返航靠岸：{label}，body推力x={fx:g}、z={fz:g}，'
                                            f'持续{duration:g}s；不是速度，不保证实际接岸/出水')
                 pulse_end = time.monotonic()+duration
@@ -1708,12 +1789,15 @@ class TaskRunnerNode(Node):
                 self._publish_body_thrust()
                 if self.stopped or not rclpy.ok():
                     return False
+            if not (lift < 0 and lift_seconds > 0):
+                success = surface()
+                return success
             success = True
             return True
         finally:
             self._publish_body_thrust()
             self.set_light(self.LIGHT_GREEN if success else self.LIGHT_RED,
-                           '靠岸上浮指令完成' if success else '返航靠岸未完成')
+                           '返航/上浮指令完成（不确认实际接岸）' if success else '返航靠岸未完成')
 
     def _publish_body_velocity(self, forward_mps: float = 0.0,
                                lateral_mps: float = 0.0,
