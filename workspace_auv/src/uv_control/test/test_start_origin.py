@@ -64,6 +64,7 @@ def node():
         'Future': lambda executor=None: asyncio.Future(),
         'UInt32': NS, 'StateResetRequest': NS, 'StateResetResult': NS, 'ZitSetpoint': NS,
         'DEFAULT_VELOCITY_LEASE': 0.25, 'CK_POS': 0, 'CK_VEL_BODY': 0x11,
+        'BODY_THRUST_COMMAND': 11,
         'TOL_X': 0.1, 'TOL_Y': 0.1, 'TOL_Z': 0.1, 'TOL_RZ': 5.0,
     }
     exec(compile(ast.Module(body=[cls], type_ignores=[]), str(source), 'exec'), namespace)
@@ -73,6 +74,8 @@ def node():
         _state_lock=threading.Lock(), _velocity_lock=threading.Lock(),
         _line_output_lock=threading.RLock(), _line_stop_requested=threading.Event(),
         _line_reserved=False, _line_feedback=None, _line_config=LineConfig(),
+        _thrust_reserved=False, _thrust_stop_requested=threading.Event(),
+        _body_thrust_active=False, _body_thrust_mask=0, _thrust_ends_at=0.,
         _twist_received_at=float('-inf'),
         vel_body=dict(x=0.0, y=0.0, z=0.0, rz=0.0),
         _shutdown_requested=False, _safe_stop_latched=False,

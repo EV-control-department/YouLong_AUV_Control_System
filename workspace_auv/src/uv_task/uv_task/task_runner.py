@@ -1025,6 +1025,13 @@ class TaskRunnerNode(Node):
                 outcome = self._execute_initial_pose(name, pose)
                 if not outcome:
                     self._cancel_task_light_animation(restore=False)
+                    if pose.get('on_failure') == 'continue' and not self.stopped:
+                        self.get_logger().warning(
+                            f'{name} 初始动作失败，按 on_failure=continue 继续后续位姿/任务：'
+                            f'{outcome.failure_code}，{outcome.message}')
+                        self._last_motion_failure_kind = ''
+                        self._last_motion_failure_message = ''
+                        continue
                     self._set_task_phase_light(
                         self.LIGHT_RED, f'{name} 初始动作失败')
                     return outcome

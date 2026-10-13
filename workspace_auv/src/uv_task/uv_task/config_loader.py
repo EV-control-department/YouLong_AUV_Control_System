@@ -42,7 +42,7 @@ def _validate_pose(value: Any, *, context: str) -> dict[str, Any]:
     """Validate and normalize a mission-level BasicMotion pose override."""
     if not isinstance(value, dict):
         raise ConfigError(f"{context} 必须是映射")
-    unknown = set(value) - {"command", "axes", "target"}
+    unknown = set(value) - {"command", "axes", "target", "on_failure"}
     if unknown:
         raise ConfigError(
             f"{context} 存在未知键：{sorted(unknown)}")
@@ -83,11 +83,18 @@ def _validate_pose(value: Any, *, context: str) -> dict[str, Any]:
                 f"{context}.target[{index}] 必须是有限数值")
         normalized_target.append(float(item))
 
-    return {
+    normalized = {
         "command": command,
         "axes": axes,
         "target": normalized_target,
     }
+    if "on_failure" in value:
+        policy = value["on_failure"]
+        if not isinstance(policy, str) or policy.strip().lower() != "continue":
+            raise ConfigError(
+                f"{context}.on_failure 目前只支持 'continue'")
+        normalized["on_failure"] = "continue"
+    return normalized
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

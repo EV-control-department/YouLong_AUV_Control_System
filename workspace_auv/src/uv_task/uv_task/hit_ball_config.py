@@ -31,12 +31,14 @@ DEFAULTS = {
     'observe_yaw_step_deg': 15.0,
     'observe_direction_dwell_seconds': 5.0,
     'observe_rotate_timeout': 5.0,
+    # Compatibility-only fields for old task files; no longer used by motion.
     'approach_distance_m': 0.5,
     'approach_speed_mps': 0.18,
     'approach_timeout': 15.0,
     'charge_alignment_seconds': 2.0,
+
     'charge_duration': 8.0,
-    'charge_speed_mps': 0.24,
+    'charge_speed_mps': 0.5,
     'charge_timeout': 20.0,
     'retreat_duration': 3.0,
     'retreat_thrust_fraction': 1.0,
@@ -86,8 +88,8 @@ def validate_hit_params(params):
         raise ValueError('search.min_confidence 必须在 [0,1] 内')
     if p['observe_yaw_step_deg'] > 180:
         raise ValueError('observe.yaw_step_deg 不能超过 180°')
-    if p['search_yaw_stable_seconds'] > min(p['search_align_seconds'], p['charge_alignment_seconds']):
-        raise ValueError('yaw_stable_seconds 不能大于任一 yaw 对准阶段时长')
+    if p['search_yaw_stable_seconds'] > p['search_align_seconds']:
+        raise ValueError('yaw_stable_seconds 不能大于 search.align_seconds')
     for phase in ('charge', 'fallback'):
         if p[f'{phase}_timeout'] <= p[f'{phase}_duration']:
             raise ValueError(f'{phase}.timeout 必须大于 duration，留出 BLINE 起步时间')

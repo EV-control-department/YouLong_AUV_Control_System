@@ -37,14 +37,9 @@ params:
     yaw_step_deg: 15.0 # NED 航向：相对停车航向左 -15°、右 +15°。
     direction_dwell_seconds: 5.0 # 左右方向各最多观察 5 秒，发现即对准。
     rotate_timeout: 5.0 # 左、右扫视每次转向的动作超时。
-  approach:
-    distance_m: 0.5
-    speed_mps: 0.18
-    timeout: 15.0
-  charge:
-    alignment_seconds: 2.0 # 前进 0.5m 后，再进行两秒 yaw 对准。
+  charge: # 近场航向矫正完成后直接执行撞击 BLINE。
     duration: 8.0 # 从 BLINE 正向速度反馈开始计时，到时取消并停车。
-    speed_mps: 0.24 # 请求撞击速度；uv_control 按配置限幅。
+    speed_mps: 0.5 # 请求撞击速度；uv_control 按配置限幅。
     timeout: 20.0 # BLINE 整体上限，包含接受目标、启动和 8 秒撞击时长。
   retreat:
     duration: 3.0 # 整个撞球流程（含兜底）结束前，只执行一次后退。

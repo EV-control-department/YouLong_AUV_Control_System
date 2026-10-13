@@ -40,10 +40,12 @@ class DownCameraPriority:
     detections, stale messages, and lease expiry release it. Cached observations
     from the other eye cannot acquire it: a new valid callback must arrive.
     ``generation`` changes on release/acquisition so callers reset stability.
+    ``reuse_recent`` replays still-fresh callbacks when handing over from
+    a completed search; other callers keep the new-callback requirement.
     """
 
     def __init__(self, node, class_id, *, priority_seconds=3.0,
-                 detection_timeout=0.8, label='下视伺服'):
+                 detection_timeout=0.8, label='下视伺服', reuse_recent=False):
         self.node = node
         self.class_id = class_id
         self.priority_seconds = max(0.1, float(priority_seconds))
@@ -57,6 +59,12 @@ class DownCameraPriority:
         self.first_observation = None
         with node._perception_lock:
             self._cursor = node._down_detection_sequence
+            if reuse_recent:
+                cutoff = time.monotonic() - self.detection_timeout
+                for sequence, received_at, _, _ in node._down_detection_events:
+                    if received_at >= cutoff:
+                        self._cursor = sequence - 1
+                        break
 
     def _release(self, reason):
         if self.active_camera is not None:

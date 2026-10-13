@@ -88,7 +88,7 @@ def rig(monkeypatch):
         pose[:3], pose[5] = target[:3], target[3]
         return True, ''
     node._send_action_goal = action
-    task = mod.RB26DropBallTargetRackTask(node, {'down_visual_servo_stable_seconds': .2})
+    task = mod.RB26DropBallTargetRackTask(node, {'depth_task_depth_m': .2, 'down_visual_servo_stable_seconds': .2})
     monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: (.12, -.08))
     return NS(task=task, node=node, pose=pose, state=state, calls=calls,
               clock=clock, messages=messages, logs=logs)
@@ -128,10 +128,10 @@ def test_closed_loop_centers_rack_and_recovers_depth(rig, monkeypatch):
     velocities = [call[2] for call in rig.calls if call[0] == 'velocity']
     assert any(world[2] < -.001 for world in velocities)
     assert all(np.linalg.norm(world[:2]) <= .08+1e-9 for world in velocities)
-    assert np.allclose(velocities[-1], 0.)
+    assert rig.calls[-1][0] == 'action'  # SET takes over velocity control.
     holds = [call for call in rig.calls if call[0] == 'action']
     assert len(holds) == 1 and holds[0][3] == 'xyzrz'
-    assert holds[0][2][2] == .2  # Measured depth, not stale command Z=.8.
+    assert holds[0][2][2] == .2  # Configured depth, not stale command Z=.8.
 
 
 def test_centered_rack_still_waits_for_depth_recovery(rig, monkeypatch):
@@ -151,20 +151,19 @@ def test_lost_rack_stops_xy_but_retains_upward_depth_correction(rig):
     rig.pose[2] = .26
     rig.task._servo_timeout = 1.
     rig.state.hook = lambda: setattr(rig.state, 'detected', False)
-    assert not rig.task._servo_rack()
+    assert rig.task._servo_rack()  # Detection timeout still permits the drop flow.
     velocities = [call[2] for call in rig.calls if call[0] == 'velocity']
     assert np.linalg.norm(velocities[0][:2]) > 0.
     assert all(np.allclose(world[:2], 0.) for world in velocities[1:])
-    assert any(world[2] < 0. for world in velocities[1:-1])
-    assert np.allclose(velocities[-1], 0.)
-    assert rig.node._last_motion_failure_kind == 'timeout'
+    assert any(world[2] < 0. for world in velocities[1:])
+    assert rig.calls[-1][0] == 'action'  # SET takes over velocity control.
+    assert rig.task._aligned_camera == rig.state.camera
     assert rig.messages == []
 
 
 @pytest.mark.parametrize('failure', ['动作确认超时', RuntimeError('模拟动作异常'), 'cancel'])
-def test_error_or_cancel_stops_velocity_and_prevents_release(rig, monkeypatch, failure):
+def test_error_or_cancel_prevents_release(rig, monkeypatch, failure):
     monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=lambda: TaskOutcome.ok()))
-    rig.task._observe_rack = lambda: True
     rig.task._flash_green = lambda *args, **kwargs: True
     if failure == 'cancel':
         rig.state.hook = lambda: setattr(rig.node, 'stopped', True)
@@ -172,7 +171,8 @@ def test_error_or_cancel_stops_velocity_and_prevents_release(rig, monkeypatch, f
         rig.state.failure = failure
     assert not rig.task.execute()
     velocities = [call for call in rig.calls if call[0] == 'velocity']
-    assert np.allclose(velocities[-1][2], 0.)
+    if failure != 'cancel':
+        assert rig.calls[-1][0] == 'action'  # Hold with SET after a motion error.
     assert rig.task._aligned_camera is None
     assert rig.messages == []
     if failure == 'cancel':
@@ -197,22 +197,21 @@ def test_disc_claw_alignment_preserves_locked_depth_and_eye_offset(rig, camera):
     assert any(call[0] == 'velocity' and np.linalg.norm(call[2][:2]) > 0 for call in rig.calls)
 
 
-def test_release_publishes_90_degrees_without_radian_conversion(rig):
+def test_release_publishes_180_degrees_without_radian_conversion(rig):
     assert rig.task._release_ball()
     assert len(rig.messages) == 3
-    assert all(message.servo_id == 1 and message.angle == 90. for message in rig.messages)
-    assert not any('90.00 rad' in line for line in rig.logs)
+    assert all(message.servo_id == 1 and message.angle == 180. for message in rig.messages)
+    assert not any('180.00 rad' in line for line in rig.logs)
 
 
 def test_full_drop_sequence_holds_depth_through_release(rig, monkeypatch):
     monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=lambda: TaskOutcome.ok()))
     monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: (0., 0.))
-    rig.task._observe_rack = lambda: True
     rig.task._flash_green = lambda *args, **kwargs: True
     assert rig.task.execute()
     assert rig.task._servo_depth == .2
     assert rig.pose[2] == .2 and rig.node._cmd_z == .2
-    assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 90.)]*3+[(2, 270.)]*3
+    assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 180.)]*3+[(2, 270.)]*3
     holds = [call for call in rig.calls if call[0] == 'action']
     assert len(holds) == 3
     # Release the ball before moving to the hairpin target, then release the ring.
@@ -275,7 +274,6 @@ def test_release_ring_publishes_configurable_degrees_on_servo_two(rig):
 def test_failed_ring_alignment_or_cancellation_prevents_further_release(rig, monkeypatch, failure):
     monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=TaskOutcome.ok))
     monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: (0., 0.))
-    rig.task._observe_rack = lambda: True
     rig.task._flash_green = lambda *args, **kwargs: True
     lookup = rig.node.camera_extrinsics_provider.lookup_transform
     if failure == 'missing_tf':
@@ -302,7 +300,7 @@ def test_failed_ring_alignment_or_cancellation_prevents_further_release(rig, mon
     assert not result
     if failure in ('missing_tf', 'alignment_motion'):
         assert result.failure_code.endswith('.ring_alignment')
-        assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 90.)]*3
+        assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 180.)]*3
     elif failure == 'cancel_ball':
         assert [msg.servo_id for msg in rig.messages] == [1]
     else:
@@ -324,8 +322,8 @@ def test_invalid_ring_release_settings_rejected_at_runtime_and_yaml(rig, params)
 def test_ring_release_yaml_defaults():
     path = Path(__file__).parents[1]/'config/tasks/26rb_drop_ball_target_rack.yaml'
     params = load_task(path)[0]['params']
-    assert params['release_angle_deg'] == 90.
-    assert params['ring_release_angle_deg'] == 270.
+    assert params['release_angle_deg'] == 180.
+    assert params['ring_release_angle_deg'] == 210.
     assert params['ring_release_repeat_count'] == 3
     assert params['ring_release_repeat_period'] == .1
     assert params['ring_release_settle_seconds'] == 1.

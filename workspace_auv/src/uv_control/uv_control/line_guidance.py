@@ -5,9 +5,9 @@ import math
 
 
 # Leave a small margin so float32 transport rounding stays strictly below the
-# unified 0.30m/s LINE speed ceiling.
-CRUISE_SPEED_LIMIT = 0.30 - 1e-6
-TOTAL_SPEED_LIMIT = 0.30 - 1e-6
+# unified 0.80m/s LINE speed ceiling.
+CRUISE_SPEED_LIMIT = 0.80 - 1e-6
+TOTAL_SPEED_LIMIT = 0.80 - 1e-6
 
 
 def norm(vector):
@@ -46,28 +46,28 @@ def rotate_world_to_body(vector, roll_deg, pitch_deg, yaw_deg):
 
 @dataclass(frozen=True)
 class LineConfig:
-    default_speed: float = 0.15
-    max_speed: float = 0.30
-    acceleration: float = 0.15
-    deceleration: float = 0.10
-    vector_acceleration: float = 0.15
-    brake_acceleration: float = 0.08
-    cross_gain: float = 0.8
-    cross_speed: float = 0.14
+    default_speed: float = 0.30
+    max_speed: float = 0.80
+    acceleration: float = 0.30
+    deceleration: float = 0.30
+    vector_acceleration: float = 0.40
+    brake_acceleration: float = 0.20
+    cross_gain: float = 0.60
+    cross_speed: float = 0.18
     capture_enter: float = 0.30
-    capture_exit: float = 0.15
-    capture_speed: float = 0.10
+    capture_exit: float = 0.10
+    capture_speed: float = 0.15
     reverse_speed: float = 0.08
     terminal_speed: float = 0.10
-    terminal_radius: float = 0.20
-    position_tolerance: float = 0.10
-    stop_speed: float = 0.06
-    yaw_tolerance: float = 5.0
-    stable_seconds: float = 0.5
+    terminal_radius: float = 0.35
+    position_tolerance: float = 0.08
+    stop_speed: float = 0.04
+    yaw_tolerance: float = 3.0
+    stable_seconds: float = 0.8
     align_timeout: float = 30.0
-    yaw_gain: float = 1.0
-    yaw_rate_limit: float = 20.0
-    brake_delay: float = 0.15
+    yaw_gain: float = 0.8
+    yaw_rate_limit: float = 15.0
+    brake_delay: float = 0.30
 
     def validate(self):
         if not all(math.isfinite(value) and value > 0.0
@@ -166,19 +166,27 @@ class LineGuidance:
                 phase = ('BRAKE' if sample.remaining <= max(
                     brake_distance, self.speed ** 2 / (2.0 * cfg.brake_acceleration))
                          else 'CRUISE')
-        change = along_star - current_along
-        along = current_along + max(-cfg.deceleration * dt,
-                                    min(cfg.acceleration * dt, change))
         offset = tuple(p - a for p, a in zip(position, self.start))
         perpendicular = tuple(p - sample.progress * d
                               for p, d in zip(offset, self.direction))
-        cross_limit = min(cfg.cross_speed,
-                          math.sqrt(max(0.0, max_speed ** 2 - along ** 2)))
-        cross = saturate(tuple(-cfg.cross_gain * p for p in perpendicular),
-                         cross_limit)
+        target_limit = min(cfg.terminal_speed, max_speed) if self.terminal else max_speed
+        cross_star = saturate(tuple(-cfg.cross_gain * p for p in perpendicular),
+                              min(cfg.cross_speed, target_limit))
+        # Reserve the requested correction before choosing along-track speed.
+        # Otherwise cruising at max_speed leaves no authority to recover drift.
+        along_limit = math.sqrt(max(0.0, target_limit ** 2 - dot(cross_star, cross_star)))
+        along_star = max(-along_limit, min(along_limit, along_star))
+        change = along_star - current_along
+        along = current_along + max(-cfg.deceleration * dt,
+                                    min(cfg.acceleration * dt, change))
+        # As along-track speed ramps down, progressively release its budget to
+        # correction. Keep the hard total limit throughout the transition.
+        cross_limit = math.sqrt(max(0.0, max_speed ** 2 - along ** 2))
+        cross = saturate(cross_star, cross_limit)
         desired = tuple(along * d + c for d, c in zip(self.direction, cross))
-        desired = saturate(desired, min(cfg.terminal_speed, max_speed)
-                           if self.terminal else max_speed)
+        # Terminal speed is a target reached under the same slew limits; an
+        # immediate terminal clamp would bypass along-track deceleration.
+        desired = saturate(desired, max_speed)
         delta = saturate(tuple(new - old for new, old in zip(desired, self.velocity)),
                          cfg.vector_acceleration * dt)
         self.velocity = tuple(old + dv for old, dv in zip(self.velocity, delta))

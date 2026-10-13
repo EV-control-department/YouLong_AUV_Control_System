@@ -7,9 +7,21 @@ from types import SimpleNamespace as NS
 import pytest
 
 from uv_task.config_loader import load_mission_or_task
+from uv_task.gate_config import validate_gate_params
 
 
 ROOT = Path(__file__).parents[1]
+
+
+@pytest.mark.parametrize('speed', [.3, .6, .79])
+def test_gate_bline_accepts_speeds_below_new_ceiling(speed):
+    assert validate_gate_params({'fore_aft_speed_mps': speed})['fore_aft_speed_mps'] == speed
+
+
+@pytest.mark.parametrize('speed', [.8, .81, 1.])
+def test_gate_bline_rejects_speeds_at_or_above_new_ceiling(speed):
+    with pytest.raises(ValueError, match='0.80m/s'):
+        validate_gate_params({'fore_aft_speed_mps': speed})
 
 
 def test_bline_default_yaml():

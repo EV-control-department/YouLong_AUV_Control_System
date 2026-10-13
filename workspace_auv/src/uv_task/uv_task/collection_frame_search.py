@@ -642,7 +642,7 @@ class CollectionFrameSearch(FrontDownSearch):
 
 
 class TargetRackSearch(FrontDownSearch):
-    """Drop-ball approach: set entry depth once, then preserve current depth."""
+    """Drop-ball approach: maintain the configured task depth throughout."""
     # Rack has the same full-circle down-camera fallback as collection-frame
     # search.  The fallback is only entered after the complete observation
     # window at the preset/endpoint has elapsed.
@@ -652,4 +652,4 @@ class TargetRackSearch(FrontDownSearch):
         super().__init__(node, params, validator=validate_drop_search_params,
                          position_key='rack_position', front_class='target_rack_front',
                          down_class='target_rack_down', task_name='26rb_drop_ball_target_rack',
-                         target_label='目标架', correct_depth=False)
+                         target_label='目标架', correct_depth=True)

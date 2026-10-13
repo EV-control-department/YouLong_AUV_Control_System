@@ -10,6 +10,7 @@ import numpy as np
 
 from uv_msgs.action import BasicMotion
 from uv_task.task_outcome import TaskOutcome
+from uv_task.drop_search_config import validate_drop_search_params
 from uv_task.collection_frame_search import TargetRackSearch
 from uv_task.down_camera_servo import (
     DownCameraPriority, body_image_step, normalized_image_error, body_to_world_rotation,
@@ -21,7 +22,7 @@ SET_COMMAND = BasicMotion.Goal.SET
 
 
 def validate_ring_release_params(params):
-    for key, default in (('release_angle_deg', 90.0), ('ring_release_angle_deg', 270.0)):
+    for key, default in (('release_angle_deg', 180.0), ('ring_release_angle_deg', 270.0)):
         angle = params.get(key, default)
         if (isinstance(angle, bool) or not isinstance(angle, (int, float))
                 or not math.isfinite(angle) or not 0 <= angle <= 270.0):
@@ -44,8 +45,7 @@ class RB26DropBallTargetRackTask:
         self._node = node
         self._params = params
         self._logger = node.get_logger()
-        self._observe_seconds = max(
-            0.1, float(params.get('observation_seconds', 2.0)))
+        self._task_depth = validate_drop_search_params(params)['search_cruise_depth_m']
         self._detection_timeout = max(
             0.1, float(params.get('down_detection_timeout', 0.8)))
         self._priority_seconds = max(
@@ -80,7 +80,7 @@ class RB26DropBallTargetRackTask:
         self._alignment_settle_seconds = max(
             0.0, float(params.get('alignment_settle_seconds', 0.5)))
         self._alignment_timed_out = False
-        self._release_angle_deg = float(params.get('release_angle_deg', 90.0))
+        self._release_angle_deg = float(params.get('release_angle_deg', 180.0))
         if (not math.isfinite(self._release_angle_deg)
                 or not 0 <= self._release_angle_deg <= 270.0):
             raise ValueError('释放舵机角度必须是 [0, 270] 范围内的度数')
@@ -100,7 +100,7 @@ class RB26DropBallTargetRackTask:
         self._light_gap_seconds = max(
             0.0, float(params.get('light_gap_seconds', 0.25)))
         self._priority = None
-        self._servo_depth = None
+        self._servo_depth = self._task_depth
         self._aligned_camera = None
 
     def _sleep(self, seconds: float) -> bool:
@@ -108,34 +108,6 @@ class RB26DropBallTargetRackTask:
         while not self._node.stopped and time.monotonic() < deadline:
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
         return not self._node.stopped
-
-    def _observe_rack(self) -> bool:
-        """Watch for a fresh rack in either eye and start camera arbitration."""
-        self._priority = DownCameraPriority(
-            self._node, self._node._target_rack_down_class_id,
-            priority_seconds=self._priority_seconds,
-            detection_timeout=self._detection_timeout,
-            label='26rb_drop_ball_target_rack rack观测')
-        deadline = time.monotonic() + self._observe_seconds
-        found = False
-        self._logger.info(
-            f'26rb_drop_ball_target_rack：从当前位置观察 rack '
-            f'{self._observe_seconds:.1f}s；相机=down_left/down_right')
-        while not self._node.stopped and time.monotonic() < deadline:
-            self._priority.update()
-            if self._priority.first_observation is not None:
-                if not found:
-                    camera_name, detection = self._priority.first_observation
-                    self._logger.info(
-                        f'26rb_drop_ball_target_rack：观测到 rack；'
-                        f'相机={camera_name}，'
-                        f'像素=({detection.pixel_x:.1f},{detection.pixel_y:.1f})，'
-                        f'置信度={detection.confidence:.3f}')
-                found = True
-            if not self._sleep(min(self._period, max(
-                    0.0, deadline - time.monotonic()))):
-                return False
-        return found and not self._node.stopped
 
     def _servo_pose(self):
         pose = tuple(float(value) for value in self._node._latest_robot_pose())
@@ -168,14 +140,9 @@ class RB26DropBallTargetRackTask:
         if not success:
             raise RuntimeError(f'rack速度指令失败：{message}')
 
-    def _stop_rack_velocity(self):
+    def _hold_rack_pose(self):
+        """Hand velocity control directly to SET at the configured task depth."""
         node = self._node
-        success, message = node._send_body_velocity(
-            wait_deadline=time.monotonic()+2.0,
-            task_context='26rb_drop_ball_target_rack 结束速度伺服',
-            light_color=node.LIGHT_OFF)
-        if not success:
-            raise RuntimeError(f'rack停止速度失败：{message}')
         if node.stopped:
             return False
         pose = self._servo_pose()
@@ -198,7 +165,7 @@ class RB26DropBallTargetRackTask:
             node, node._target_rack_down_class_id,
             priority_seconds=self._priority_seconds,
             detection_timeout=self._detection_timeout,
-            label='26rb_drop_ball_target_rack rack伺服')
+            label='26rb_drop_ball_target_rack rack伺服', reuse_recent=True)
         deadline = time.monotonic()+self._servo_timeout
         stable_since = None
         stable_generation = None
@@ -209,12 +176,11 @@ class RB26DropBallTargetRackTask:
         failure_message = 'rack定深速度伺服未完成'
         last_camera = None
         timed_out = False
+        motion_failed = False
         try:
-            if self._servo_depth is None:
-                self._servo_depth = self._servo_pose()[2]
             self._logger.info(
                 '26rb_drop_ball_target_rack：开始单目定深速度伺服；'
-                f'锁定深度={self._servo_depth:.3f}m，水平限速={self._max_speed:.3f}m/s')
+                f'统一任务深度={self._servo_depth:.3f}m，水平限速={self._max_speed:.3f}m/s')
             while not node.stopped and time.monotonic() < deadline:
                 camera_name, detection = self._priority.update()
                 now = time.monotonic()
@@ -259,13 +225,14 @@ class RB26DropBallTargetRackTask:
                 timed_out = True
                 failure_message = 'rack定深速度伺服超时，将按最后位姿继续完成放球放环'
         except (KeyError, ValueError, RuntimeError, cv2.error, np.linalg.LinAlgError) as error:
+            motion_failed = True
             failure_message = f'rack定深速度伺服失败：{error}'
         finally:
             try:
-                stopped_ok = self._stop_rack_velocity()
+                stopped_ok = self._hold_rack_pose()
             except Exception as error:
                 failure_message += f'；停车失败：{error}'
-        if not stopped_ok:
+        if not stopped_ok or motion_failed:
             node._last_motion_failure_kind = failure_kind
             node._last_motion_failure_message = failure_message
             self._logger.error(failure_message)
@@ -359,7 +326,7 @@ class RB26DropBallTargetRackTask:
         world_dx = math.cos(yaw) * body_dx - math.sin(yaw) * body_dy
         world_dy = math.sin(yaw) * body_dx + math.cos(yaw) * body_dy
         target = [pose[0] + world_dx, pose[1] + world_dy,
-                  self._servo_depth if self._servo_depth is not None else float(pose[2]),
+                  self._servo_depth,
                   float(pose[5])]
         self._logger.info(
             f'26rb_drop_ball_target_rack：按 {self._aligned_camera} '
@@ -426,12 +393,12 @@ class RB26DropBallTargetRackTask:
         return self._sleep(self._ring_release_settle_seconds)
 
     def execute(self) -> TaskOutcome:
-        self._servo_depth = None
+        self._servo_depth = self._task_depth
         self._rack_camera_pose = None
         self._alignment_timed_out = False
         completion_flash_pending = False
         node = self._node
-        node._set_task_phase_light(node.LIGHT_YELLOW, 'rack观测与放球放环阶段')
+        node._set_task_phase_light(node.LIGHT_YELLOW, 'rack搜索与放球放环阶段')
         try:
             if not node._ensure_camera_extrinsics():
                 return TaskOutcome.failed(
@@ -443,13 +410,9 @@ class RB26DropBallTargetRackTask:
             approach = TargetRackSearch(node, self._params).execute()
             if not approach:
                 return approach
-            node._set_task_phase_light(node.LIGHT_YELLOW, 'rack下视观测')
-            if not self._observe_rack():
-                return TaskOutcome.failed(
-                    '26rb_drop_ball_target_rack.observation',
-                    f'{self._observe_seconds:.1f}s 观测窗口内未看到rack或任务被中止')
-
-            # XY velocity control and subsequent claw alignment share one depth target.
+            node._set_task_phase_light(node.LIGHT_YELLOW, 'rack下视伺服')
+            # Search already observed the rack. Reuse its fresh detections and
+            # keep the configured depth through servo, SET hold and both claws.
             if not self._servo_rack():
                 return node._fallback_failure_outcome(
                     '26rb_drop_ball_target_rack', 'visual_servo')

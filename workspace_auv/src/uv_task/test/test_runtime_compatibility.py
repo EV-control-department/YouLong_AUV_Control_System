@@ -191,7 +191,7 @@ def test_task_launch_description_loads():
     assert isinstance(launch['generate_launch_description'](), LaunchDescription)
 
 
-@pytest.mark.parametrize('configured_angle, expected_angle', [(None, 90.0), (45.0, 45.0)])
+@pytest.mark.parametrize('configured_angle, expected_angle', [(None, 180.0), (45.0, 45.0)])
 def test_rack_release_publishes_degree_value_without_radian_conversion(configured_angle, expected_angle):
     from uv_task.task_runner import TaskRunnerNode
     task_class = importlib.import_module('uv_task.26rb_drop_ball_target_rack').RB26DropBallTargetRackTask

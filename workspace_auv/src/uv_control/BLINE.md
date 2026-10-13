@@ -3,16 +3,18 @@
 `BasicMotion.Goal.BLINE=8` 使用动作开始时的实测位置、航向固定起终点。
 `target=[dx,dy,dz,dyaw_deg]`，`axes` 为空或 `xyz`。XY 位移只按开始航向旋转，
 Z 为深度变化；速度转换使用实时完整 RPY。巡航速度 `cruise_speed=0`
-使用默认 0.15 m/s；正的有限速度请求超过上限时自动限幅，不拒绝请求。
-沿线巡航速度严格小于 0.30 m/s，纠偏后的 XYZ 合成指令速度严格小于
-0.30 m/s（预留 0.000001 m/s 浮点传输余量）。`line.max_speed`
+使用 `line.default_speed`，默认 0.30 m/s；正的有限速度请求超过上限时自动限幅，不拒绝请求。
+沿线巡航速度严格小于 0.80 m/s，纠偏后的 XYZ 合成指令速度严格小于
+0.80 m/s（预留 0.000001 m/s 浮点传输余量）。`line.max_speed`
 可进一步收紧合速度限制；负速度、NaN/Inf 和无效位移仍拒绝。
+满速时先计算所需纠偏速度，再降低沿线目标速度预留合速度预算；
+沿线加减速和整个速度向量的变化率限制仍生效。
 
 阶段：保持起点转向（ALIGN，最多 30 秒）→ 捕获/沿线跟踪
 （CAPTURE/CRUISE）→ 制动（BRAKE）→ 终点收敛/超调回退（TERMINAL）
-→ 零速度后保持终点并转向（FINAL_TURN）→ 稳定保持（HOLD）。XYZ 各轴误差不超过 0.10 m、
-实测平移速度不超过 0.06 m/s、航向误差不超过 5°，在 HOLD 连续满足
-0.5 秒后成功。控制频率 20 Hz；阶段切换及每秒输出进度、偏差、
+→ 零速度后保持终点并转向（FINAL_TURN）→ 稳定保持（HOLD）。默认 XYZ 各轴误差不超过 0.08 m、
+实测平移速度不超过 0.04 m/s、航向误差不超过 3°，在 HOLD 连续满足
+0.8 秒后成功。控制频率 20 Hz；阶段切换及每秒输出进度、偏差、
 固定终点、目标/实测沿线速度。
 
 `timeout>0` 覆盖转向、跟踪和保持全过程；否则自动取
@@ -41,10 +43,51 @@ ros2 action send_goal /auv/basic_motion uv_msgs/action/BasicMotion \
 导引参数均放在 `uv_control/config/default.yaml` 的 `line.*`；当前为初始值，
 需先仿真验收，再进行实机标定。
 
+## 稳定到点参数
+
+内置 `LineConfig` 与启动 YAML 使用相同的 22 项默认值。下表参数均带 `line.` 前缀；
+任务 YAML 显式指定的巡航速度仍优先，bline/wline 独立任务默认仍为 0.15 m/s。
+
+| 参数 | 默认值 | 单位 | 作用 |
+|---|---:|---|---|
+| default_speed | 0.30 | m/s | cruise_speed=0 时使用 |
+| max_speed | 0.80 | m/s | XYZ 合速度上限 |
+| acceleration | 0.30 | m/s² | 沿线指令加速度 |
+| deceleration | 0.30 | m/s² | 沿线指令减速度 |
+| vector_acceleration | 0.40 | m/s² | 整个速度向量变化率 |
+| brake_acceleration | 0.20 | m/s² | 制动能力估计，不是实际减速度指令 |
+| brake_delay | 0.30 | s | 制动响应延迟估计 |
+| cross_gain | 0.60 | s⁻¹ | 横向和终点比例修正增益 |
+| cross_speed | 0.18 | m/s | 横向纠偏速度上限 |
+| capture_enter | 0.30 | m | 偏差超过此值进入捕获 |
+| capture_exit | 0.10 | m | 偏差恢复到此值退出捕获 |
+| capture_speed | 0.15 | m/s | 捕获时沿线目标速度上限 |
+| reverse_speed | 0.08 | m/s | 终点超调回退速度上限 |
+| terminal_speed | 0.10 | m/s | 终点合速度目标上限 |
+| terminal_radius | 0.35 | m | 进入终点阶段的半径 |
+| position_tolerance | 0.08 | m | 默认各轴到点容差 |
+| stop_speed | 0.04 | m/s | 到点允许的最大实测合速度 |
+| yaw_tolerance | 3.0 | ° | 对准和到点航向容差 |
+| stable_seconds | 0.80 | s | 到点条件连续保持时间 |
+| align_timeout | 30.0 | s | 起点对准阶段时限 |
+| yaw_gain | 0.80 | s⁻¹ | 巡航航向比例修正增益 |
+| yaw_rate_limit | 15.0 | °/s | 巡航转向指令上限 |
+
+进入 TERMINAL 后，指令按上述减速度及向量变化率逐步达到低速目标，
+不直接截断当前速度；从静止启动且长度不超过 0.35 m 的短段全程使用终点低速目标。
+起终点位置模式的转向由底层控制器执行，`yaw_rate_limit` 限制巡航速度模式转向，
+也用于估算终点转向预算。
+
+按 `v²/(2*brake_acceleration)+v*brake_delay`，0.8 m/s 的规划制动距离约为
+1.84 m，0.3 m/s 时约为 0.315 m。制动估计和响应延迟需用水中实测数据校准；
+这些数值不能作为实际停车距离保证。uv_task 近距 BLINE 的 fore_aft.speed_mps
+保持严格小于 0.80 m/s，近距伺服、定深、升降专用限速不随此配置提高。
+
 ## 构建与验收
 
-新增 action 字段改变 ROS 类型定义，所有 BasicMotion 客户端和服务端必须
-使用相同的新 `uv_msgs` 并重启，包括独立启动的 task_runner 和导航节点。
+本次仅修改 Action 字段注释，字段结构不变。已有包含 cruise_speed 和
+position_tolerance 的客户端接口仍兼容；旧版缺字段的类型需要先统一构建。
+重新构建 uv_control 并重启节点后才会加载新的代码和默认配置。
 
 ```bash
 colcon build --packages-select uv_msgs uv_control uv_task uv_bringup

@@ -149,7 +149,7 @@ class RB26HitBallsTask:
         """Compute one target bearing, then send a direct yaw-only SET.
 
         The three visual yaw phases (initial sighting, cruise interruption and
-        near-field alignment, plus the final charge check) all use the same
+        near-field alignment) all use the same
         position command.  Stereo is preferred when a valid pair is available;
         otherwise the newest mono ray is used.  The wait budget only waits for
         a usable observation and never runs a velocity-servo loop.
@@ -420,16 +420,6 @@ class RB26HitBallsTask:
         self._near_observation()
         if not self._align(p['search_align_seconds']):
             raise ObservationFailure('近场对准结束时没有有效目标')
-        result = self._run_bline([p['approach_distance_m'], 0.0],
-                                 p['approach_speed_mps'], p['approach_timeout'],
-                                 '对准后 BLINE 前进 0.5m')
-        if result.reason != 'endpoint':
-            raise MotionFailure('前进 0.5m 的 BLINE 超时')
-        self._hold()
-        if not self._align(p['charge_alignment_seconds']):
-            self._node.get_logger().warning(
-                f'hit_balls：{self._name} 撞击前未看到球；不做视觉修正，'
-                '按当前航向直接执行撞击 BLINE')
         distance = p['charge_speed_mps']*p['charge_duration']+1.0
         result = self._run_bline([distance, 0.0], p['charge_speed_mps'],
                                  p['charge_timeout'], 'BLINE 前向定时撞击',

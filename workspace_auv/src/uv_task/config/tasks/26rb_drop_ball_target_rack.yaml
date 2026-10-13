@@ -5,7 +5,7 @@ params:
   # 预设 odom [x,y,z]；z 仅描述 rack 位置，不参与 XY 半径或巡游深度。
   rack_position: [0.0, 4.2, -1.0]
   depth:
-    task_depth_m: 0.1 # 进入任务时定深；水平伺服、圆盘爪和发夹爪平移共用锁定深度。
+    task_depth_m: 0.1 # 搜索、下视伺服、停车SET和两只爪子定位统一使用此目标深度。
     timeout: 15.0 # 初始定深动作超时，秒。
 
   search:
@@ -34,10 +34,8 @@ params:
     stereo_max_distance_m: 20.0
     cancel_timeout: 2.0 # 取消 BLINE 后确认终止，再启动校准或定点。
 
-  # 巡游看到下视 rack 后接以下原投球流程。
-  # 下视仅用 detection 做单目像素伺服，不使用 tracks、measurements 或双目定位。
-  observation:
-    seconds: 2.0 # 完整观察 2 秒；首次下视看到rack由共享搜索统一闪1次绿灯。
+  # 搜索停车或兜底已完成下视观测，直接复用仍有效的检测进入像素伺服。
+  # 下视仅用 detection，不使用 tracks、measurements 或双目定位。
 
   # 谁先收到 rack detection 就获得单目伺服优先权；成功后闪 1 次绿灯。
   visual_servo:
@@ -61,9 +59,9 @@ params:
     timeout: 10.0 # 每只夹爪等待到点的上限；超时后仍发送该爪子的释放指令。
     settle_seconds: 0.5 # 每只爪子确认到点后稳定这些秒，再释放该爪子。
 
-  # 固定使用 servo 1。本任务 ZitServo.angle 直接发送度数，90° 对应 angle=90.0。
+  # 固定使用 servo 1。本任务 ZitServo.angle 直接发送度数，180° 对应 angle=180.0。
   release:
-    angle_deg: 90.0
+    angle_deg: 180.0
     repeat_count: 3 # 同一释放角重复发送，降低单条消息丢失影响。
     repeat_period: 0.1 # 重发间隔，单位：秒。
     settle_seconds: 1.0 # 圆盘爪放球后等待机械动作，再开始发夹爪定位。

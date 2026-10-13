@@ -122,13 +122,16 @@ def test_reserved_line_rejects_nonzero_and_accepts_zero_velocity(node):
     assert node._line_stop_requested.is_set()
 
 
-@pytest.mark.parametrize('speed', [.28, .32, 1.0])
-def test_overspeed_action_is_accepted_and_completes(node, speed):
-    goal = Goal(8, [0, 1, .2, 0])
+@pytest.mark.parametrize('command', [8, 9])
+@pytest.mark.parametrize('speed', [.3, .6, .79, .8, 1.0])
+def test_overspeed_action_is_accepted_and_completes(node, command, speed):
+    goal = Goal(command, [10, 0, .2, 0])
     goal.request.cruise_speed = speed
     prepare(node, goal)
     result = node._execute_body_line(goal)
     assert result.success and goal.terminal == 'succeeded'
+    velocities = [(m.x, m.y, m.z) for m in node.pub_setpoint.messages if m.control_key == 0x11]
+    assert max(sum(v*v for v in command)**.5 for command in velocities) < .8
 
 
 @pytest.mark.parametrize('length,speed,requested,expected', [

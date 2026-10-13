@@ -140,8 +140,8 @@ def validate_gate_params(params, complete=False):
         raise ValueError('fore_aft.height_limit_percent 必须在 (0,100] 内')
     if values['fore_aft_max_distance_m'] <= values['fore_aft_position_tolerance_m']:
         raise ValueError('fore_aft.max_distance_m 必须大于 BLINE 到点位置容差')
-    if values['fore_aft_speed_mps'] >= 0.30:
-        raise ValueError('fore_aft.speed_mps 必须小于 BLINE 速度上限 0.30m/s')
+    if values['fore_aft_speed_mps'] >= 0.80:
+        raise ValueError('fore_aft.speed_mps 必须小于 BLINE 速度上限 0.80m/s')
     if values['pass_yaw_servo_min_seconds'] > values['pass_yaw_servo_max_seconds']:
         raise ValueError('最终 yaw 最短时限不能大于最长时限')
     if not 0 < values['search_lock_center_delta_fraction'] <= 1:
