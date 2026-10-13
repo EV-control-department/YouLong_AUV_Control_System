@@ -3,7 +3,7 @@
 # z 正向向下；yaw/角速度为度/度每秒；高度百分比使用单目画面高度。
 task: 26rb_gate_task
 params:
-  gate_count: 4 # 实际执行门数，范围 1–4；第 5 条位姿仅作为第 4 门定点通过的出口。
+  gate_count: 1 # 实际执行门数，范围 1–4；第 5 条位姿仅作为第 4 门定点通过的出口。
   timeout: 720.0 # 单门总时限，下一门重新计时。
   max_failures: 2 # 允许失败后跳到下一门的次数；最后一门失败仍返回失败。
   fixed_pass:
@@ -11,11 +11,11 @@ params:
   observation:
     # odom 绝对 [x,y,z,yaw]；第一门定点模式先 SET 到第 1 条，再 BLINE 前往第 2 条。
     poses:
-      - [1.3, 0.3, 0.4, 90.0] # 第 1 门
-      - [1.9, 2.0, 0.18, 90.0] # 第 2 门
-      - [1.48, 3.9, 0.18, 90.0] # 第 3 门
-      - [1.70, 4.2, 0.4, 90.0] # 第 4 门
-      - [1.70, 5.3, 0.4, 90.0] # 第 5 门
+      - [1.3, 0.3, 0.41, 90.0] # 第 1 门
+      - [1.9, 2.0, 0.23, 90.0] # 第 2 门
+      - [1.48, 3.9, 0.23, 90.0] # 第 3 门
+      - [1.70, 4.2, 0.41, 90.0] # 第 4 门
+      - [1.70, 5.3, 0.41, 90.0] # 第 5 门
     xy_radius_m: [0.8, 0.8, 0.8, 0.8, 0.8] # 与位姿序号对应；进入终点的 XY 半径才停车调深。
     travel_timeout: 60.0 # 定点模式每段 BLINE 的时限；速度使用 pass.speed_mps。
     set_timeout: 20.0 # SET 到预设完整位姿的到点超时，单位秒。
@@ -43,7 +43,7 @@ params:
     light_gap_seconds: 0.3
   # 对正后单次向前 BLINE；所有当前有效观测中的最大框高超限时停车，丢框继续走到上限。
   fore_aft:
-    height_limit_percent: 80.0 # 最大 bbox 高度 / 单目画面高度 > 80% 时停车。
+    height_limit_percent: 90.0 # 最大 bbox 高度 / 单目画面高度 > 80% 时停车。
     speed_mps: 0.6 # 近距 BLINE 正向巡航速度。
     max_distance_m: 0.30 # 单次近距 BLINE 行程上限，单位米。
     position_tolerance_m: 0.05 # 此次 BLINE 到点容差。
@@ -56,7 +56,7 @@ params:
     yaw_stable_seconds: 0.3
     yaw_kp: 1.2
     max_yaw_rate_deg_s: 12.0
-    distance_m: 1.0
+    distance_m: 1.6
     speed_mps: 0.5
     timeout: 20.0
     next_observe_seconds: 2.0 # 过门后保持终点观察下一门；没看到才 SET 到下一条预设位姿。

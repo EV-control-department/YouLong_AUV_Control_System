@@ -122,7 +122,7 @@ def test_closed_loop_centers_rack_and_recovers_depth(rig, monkeypatch):
         return optical[0]/rig.task._projection_depth, optical[1]/rig.task._projection_depth
     monkeypatch.setattr(mod, 'normalized_image_error', image_error)
     assert rig.task._servo_rack()
-    assert np.max(np.abs(target-rig.pose[:2])) < .04
+    assert max(map(abs, image_error(rig.node, rig.state.camera, NS()))) <= rig.task._pixel_tolerance
     assert abs(depths[-1]-.2) <= rig.task._depth_tolerance
     assert rig.task._servo_depth == .2 and rig.node._cmd_z == .2
     velocities = [call[2] for call in rig.calls if call[0] == 'velocity']
@@ -141,7 +141,9 @@ def test_centered_rack_still_waits_for_depth_recovery(rig, monkeypatch):
     depth_before_hold = []
     rig.state.hook = lambda: depth_before_hold.append(rig.pose[2])
     assert rig.task._servo_rack()
-    assert rig.clock[0]-100. > 1.
+    assert len(depth_before_hold) > 1
+    assert abs(depth_before_hold[0]-.2) > rig.task._depth_tolerance
+    assert rig.clock[0]-100. >= rig.task._stable_seconds
     assert abs(depth_before_hold[-1]-.2) <= rig.task._depth_tolerance
     assert all(np.allclose(call[2][:2], 0.) for call in rig.calls if call[0] == 'velocity')
 
@@ -194,7 +196,7 @@ def test_disc_claw_alignment_preserves_locked_depth_and_eye_offset(rig, camera):
     expected = start[:2]+np.array([[np.cos(yaw), -np.sin(yaw)],
                                  [np.sin(yaw), np.cos(yaw)]]) @ offset
     assert np.linalg.norm(np.asarray(action[2][:2])-expected) <= .02
-    assert any(call[0] == 'velocity' and np.linalg.norm(call[2][:2]) > 0 for call in rig.calls)
+    assert len(rig.calls) == 1 and action[1] == mod.SET_COMMAND
 
 
 def test_release_publishes_180_degrees_without_radian_conversion(rig):
@@ -345,3 +347,47 @@ def test_servo_270_reaches_publisher(rig, servo_id):
     release = task._release_ball if servo_id == 1 else task._release_ring
     assert release()
     assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(servo_id, 270.)]*3
+
+
+@pytest.mark.parametrize('residual', [(0.0033, 0.0799), (-0.0047, 0.0591)])
+def test_logged_rack_residual_can_finish_with_relaxed_conditions(rig, monkeypatch, residual):
+    rig.task = mod.RB26DropBallTargetRackTask(rig.node, {'depth_task_depth_m': .2})
+    rig.pose[2] = .24
+    monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: residual)
+    started = rig.clock[0]
+    assert rig.task._servo_rack()
+    assert not rig.task._visual_servo_timed_out
+    assert .5 <= rig.clock[0]-started < 1.
+    assert all(np.allclose(call[2][:2], 0.) for call in rig.calls if call[0] == 'velocity')
+
+
+def test_residual_outside_relaxed_tolerance_still_uses_timeout_fallback(rig, monkeypatch):
+    monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: (0., .081))
+    rig.task._servo_timeout = 1.
+    assert rig.task._servo_rack()
+    assert rig.task._visual_servo_timed_out
+    assert any('超时' in line for line in rig.logs)
+
+
+def test_timeout_drop_flow_does_not_announce_visual_servo_success(rig, monkeypatch):
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=TaskOutcome.ok))
+    rig.task._servo_timeout = 1.
+    indications = []
+    def flash(count, label, **kwargs):
+        indications.append(label)
+        return True
+    rig.task._flash_green = flash
+    assert rig.task.execute()
+    assert rig.task._visual_servo_timed_out
+    assert indications == ['放球完成', '放环完成']
+    assert [msg.servo_id for msg in rig.messages] == [1, 1, 1, 2, 2, 2]
+
+
+def test_completed_visual_servo_retains_success_indication(rig, monkeypatch):
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=TaskOutcome.ok))
+    monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: (0., 0.))
+    indications = []
+    rig.task._flash_green = lambda count, label, **kwargs: indications.append(label) or True
+    assert rig.task.execute()
+    assert not rig.task._visual_servo_timed_out
+    assert indications == ['rack视觉伺服成功', '放球完成', '放环完成']

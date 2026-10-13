@@ -52,12 +52,12 @@ class RB26DropBallTargetRackTask:
             0.1, float(params.get('down_camera_priority_seconds', 3.0)))
         self._servo_timeout = max(1.0, float(params.get(
             'down_visual_servo_timeout',
-            params.get('horizontal_servo_timeout', 20.0))))
+            params.get('horizontal_servo_timeout', 45.0))))
         self._stable_seconds = max(0.1, float(params.get(
             'down_visual_servo_stable_seconds',
-            params.get('horizontal_servo_stable_seconds', 1.0))))
+            params.get('horizontal_servo_stable_seconds', 0.5))))
         self._pixel_tolerance = max(
-            0.001, float(params.get('down_pixel_tolerance_fraction', 0.035)))
+            0.001, float(params.get('down_pixel_tolerance_fraction', 0.08)))
         # This is a constant pixel-servo scale, not a measured target range.
         self._projection_depth = max(
             0.1, float(params.get('down_projection_depth_m', 0.8)))
@@ -69,14 +69,14 @@ class RB26DropBallTargetRackTask:
         self._max_vertical_speed = min(0.15, max(
             0.005, float(params.get('down_depth_hold_max_speed_mps', 0.08))))
         self._depth_tolerance = max(
-            0.005, float(params.get('down_depth_hold_tolerance_m', 0.03)))
+            0.005, float(params.get('down_depth_hold_tolerance_m', 0.05)))
         self._command_timeout = max(0.2, float(params.get(
             'down_visual_command_timeout',
-            params.get('horizontal_command_timeout', 10.0))))
+            params.get('horizontal_command_timeout', 20.0))))
         self._period = max(
             0.05, float(params.get('down_visual_servo_period', 0.2)))
         self._alignment_timeout = max(
-            0.2, float(params.get('alignment_timeout', 10.0)))
+            0.2, float(params.get('alignment_timeout', 30.0)))
         self._alignment_settle_seconds = max(
             0.0, float(params.get('alignment_settle_seconds', 0.5)))
         self._alignment_timed_out = False
@@ -102,6 +102,7 @@ class RB26DropBallTargetRackTask:
         self._priority = None
         self._servo_depth = self._task_depth
         self._aligned_camera = None
+        self._visual_servo_timed_out = False
 
     def _sleep(self, seconds: float) -> bool:
         deadline = time.monotonic() + seconds
@@ -161,6 +162,7 @@ class RB26DropBallTargetRackTask:
     def _servo_rack(self) -> bool:
         node = self._node
         self._aligned_camera = None
+        self._visual_servo_timed_out = False
         self._priority = DownCameraPriority(
             node, node._target_rack_down_class_id,
             priority_seconds=self._priority_seconds,
@@ -180,7 +182,9 @@ class RB26DropBallTargetRackTask:
         try:
             self._logger.info(
                 '26rb_drop_ball_target_rack：开始单目定深速度伺服；'
-                f'统一任务深度={self._servo_depth:.3f}m，水平限速={self._max_speed:.3f}m/s')
+                f'统一任务深度={self._servo_depth:.3f}m，水平限速={self._max_speed:.3f}m/s，'
+                f'中心容差=±{self._pixel_tolerance:.4f}，深度容差=±{self._depth_tolerance:.3f}m，'
+                f'稳定保持={self._stable_seconds:.2f}s，超时={self._servo_timeout:.1f}s')
             while not node.stopped and time.monotonic() < deadline:
                 camera_name, detection = self._priority.update()
                 now = time.monotonic()
@@ -247,6 +251,7 @@ class RB26DropBallTargetRackTask:
             self._logger.error(node._last_motion_failure_message)
             return False
         self._aligned_camera = aligned_camera
+        self._visual_servo_timed_out = timed_out
         if timed_out:
             self._logger.warning(
                 f'{failure_message}；采用相机={aligned_camera}的当前位姿继续外参对准')
@@ -416,9 +421,10 @@ class RB26DropBallTargetRackTask:
             if not self._servo_rack():
                 return node._fallback_failure_outcome(
                     '26rb_drop_ball_target_rack', 'visual_servo')
-            if not self._flash_green(1, 'rack视觉伺服成功'):
-                return TaskOutcome.failed(
-                    '26rb_drop_ball_target_rack.stopped', '伺服成功提示被中止')
+            if not self._visual_servo_timed_out:
+                if not self._flash_green(1, 'rack视觉伺服成功'):
+                    return TaskOutcome.failed(
+                        '26rb_drop_ball_target_rack.stopped', '伺服成功提示被中止')
             if not self._align_disc_claw():
                 return node._fallback_failure_outcome(
                     '26rb_drop_ball_target_rack', 'alignment', '圆盘爪未到达rack目标')

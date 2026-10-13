@@ -350,7 +350,7 @@ class RB26GrabBallRingTask:
         self.state.update_pickup(**{kind+'_camera_pose': anchor, 'last_servo_pose': anchor})
         if timed_out:
             self.log.warning(
-                f'组合抓取：{kind} 进入过微调区后伺服超时，使用最后有效世界位置'
+                f'组合抓取：{kind} 进入过微调区后伺服超时，使用历史最靠近图像中心的有效世界位置'
                 f'({target[0]:+.3f},{target[1]:+.3f})m盲抓一次')
         else:
             self.log.info(f'组合抓取：{kind} 目标对齐完成')
@@ -392,7 +392,7 @@ class RB26GrabBallRingTask:
             f'剩余={max(0., servo_deadline-time.monotonic()):.2f}s，I=(0.000,0.000)')
         self.log.info(
             '[PICKUP] 列说明：ex_n/ey_n=归一化X/Y残差，tol_n=当前容差；'
-            'src=live新鲜观测/last历史观测/none无数据；'
+            'src=live新鲜观测/last历史观测/best历史最居中观测/none无数据；'
             'tol_phase=coarse常规/hold保持/ramp线性变化；'
             'elapsed_s/remain_s=已用/剩余秒，fallback=off未进入微调/armed可盲抓/used已用盲抓')
 
@@ -444,6 +444,8 @@ class RB26GrabBallRingTask:
         last_target_camera = None
         last_target_error = None
         last_target_observation = None
+        best_target_observation = None
+        best_center_error = math.inf
         last_target_world = None
         last_target_world_camera = None
         last_target_received = float('-inf')
@@ -498,6 +500,16 @@ class RB26GrabBallRingTask:
                                 camera=camera, detection=detection, pose=pose,
                                 world=world_target, received=target_received,
                                 error=last_target_error)
+                            # Keep the most centred valid observation for this
+                            # servo attempt. Equal errors prefer newer data;
+                            # a later drift/loss must not replace a better point.
+                            center_error = math.hypot(*last_target_error)
+                            if (best_target_observation is None
+                                    or center_error < best_center_error-1e-9
+                                    or (abs(center_error-best_center_error) <= 1e-9
+                                        and target_received >= best_target_observation.received)):
+                                best_target_observation = last_target_observation
+                                best_center_error = center_error
                 # A fresh cached sighting may predate entry into a new ring stage.
                 if not checking and detection is not None and now <= window.search_deadline:
                     window.seen = True
@@ -556,17 +568,18 @@ class RB26GrabBallRingTask:
                 horizontal = np.zeros(2)
                 if now >= servo_deadline:
                     can_blind = (tolerance_change_at is not None
-                                 and last_target_observation is not None
+                                 and best_target_observation is not None
                                  and kind not in self._blind_grabs_used and not exhausted)
                     if can_blind:
-                        observation = last_target_observation
-                        # Freeze the observed world point and ring direction.
+                        observation = best_target_observation
+                        # Freeze the best observed world point and retain the
+                        # existing last-valid world-axis rule for ring heading.
                         # Reprojecting an old pixel from the timeout pose would
                         # move the blind target when the vehicle has drifted.
                         self._blind_targets[kind] = (
                             self._last_ring_axis if kind == 'ring' else None)
                         self._blind_grabs_used.add(kind)
-                        log_status('blind', observation.camera, 'last', observation.error,
+                        log_status('blind', observation.camera, 'best', observation.error,
                                    target_tolerance, tolerance_phase, horizontal,
                                    received=observation.received)
                         result = self._record_target(

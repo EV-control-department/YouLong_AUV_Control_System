@@ -42,7 +42,7 @@ def test_target_outside_micro_zone_is_skipped_at_timeout(rig, kind, cid):
 
 
 @pytest.mark.parametrize('kind,cid', [('golf', 7), ('ring', 8)])
-def test_blind_grab_retains_world_position_and_pose_after_loss_and_drift(rig, monkeypatch, kind, cid):
+def test_equal_center_error_prefers_latest_position_and_retains_it_after_loss_and_drift(rig, monkeypatch, kind, cid):
     node, task = rig
     controller = task.ball if kind == 'golf' else task.ring
     started = node.clock
@@ -177,7 +177,7 @@ def test_fixed_columns_cover_missing_data_eye_change_loss_and_blind(rig):
     assert any('src=none ' in row and 'ex_n=       --' in row for row in rows)
     assert any('ex_n=  +0.1500' in row for row in rows)
     assert any('ex_n=  -0.1700' in row and 'eye=down_right' in row for row in rows)
-    assert 'mode=blind' in rows[-1] and 'src=last ' in rows[-1]
+    assert 'mode=blind' in rows[-1] and 'src=best ' in rows[-1]
     assert 'tol_n=  0.1000' in rows[-1] and 'remain_s=    0.00' in rows[-1]
     tolerances = [float(re.search(r'tol_n=\s*([0-9.]+)', row).group(1)) for row in rows]
     assert tolerances[0] == pytest.approx(.04) and tolerances[-1] == pytest.approx(.10)
@@ -259,3 +259,85 @@ def test_exhausted_target_does_not_get_an_extra_blind_attempt(rig):
     node.hook()
     assert task._align_target('golf', task.ball, node.clock, exhausted=True) == 'exhausted'
     assert task._blind_targets == {} and task._blind_grabs_used == set()
+
+
+@pytest.mark.parametrize('kind,cid', [('golf', 7), ('ring', 8)])
+def test_timeout_grabs_best_centered_historical_world_point_instead_of_last(rig, monkeypatch, kind, cid):
+    node, task = rig
+    controller = task.ball if kind == 'golf' else task.ring
+    started = node.clock
+    records = []
+    project = mod.target_world_xy
+    def remember(node, camera, det, pose, depth):
+        world = project(node, camera, det, pose, depth)
+        error = mod.normalized_image_error(node, camera, det)
+        records.append((math.hypot(*error), node.clock, world, tuple(pose), camera))
+        return world
+    monkeypatch.setattr(mod, 'target_world_xy', remember)
+    def images():
+        age = node.clock-started
+        error = (.11, .04) if .3 <= age < .6 else (.22, .10)
+        stream(node, (cid,) if age < 1. else (), error=error)
+    node.hook = images
+    images()
+    assert task._align_target(kind, controller, started) == 'ready'
+    nearest = [entry for entry in records if entry[0] < .15][-1]
+    target, observed_pose, camera = task._targets[kind]
+    assert target == pytest.approx(nearest[2])
+    assert observed_pose == pytest.approx(nearest[3])
+    assert camera == nearest[4]
+    assert np.linalg.norm(np.asarray(target)-records[-1][2]) > .02
+    assert getattr(task.state.pickup, kind+'_camera_pose')[:2] == pytest.approx(nearest[3][:2])
+    blind_row = [line for line in node.logs if 'mode=blind' in line][-1]
+    assert 'src=best ' in blind_row and 'ex_n=  +0.1100' in blind_row
+    task._align_claw(kind, controller, observed_pose[5])
+    tf = node.camera_extrinsics_provider.lookup_transform('base_link', controller._gripper_frame).translation
+    offset = mod.body_to_world_rotation(node.pose) @ [tf.x, tf.y, tf.z]
+    assert node.pose[:2]+offset[:2] == pytest.approx(target)
+
+
+@pytest.mark.parametrize('kind,cid', [('golf', 7), ('ring', 8)])
+def test_invalid_better_projection_does_not_replace_valid_blind_record(rig, monkeypatch, kind, cid):
+    node, task = rig
+    controller = task.ball if kind == 'golf' else task.ring
+    started = node.clock
+    valid_records = []
+    invalid_records = []
+    project = mod.target_world_xy
+    def checked_projection(node, camera, det, pose, depth):
+        error = mod.normalized_image_error(node, camera, det)
+        score = math.hypot(*error)
+        if score < .15:
+            invalid_records.append(node.clock)
+            raise ValueError('投影无效的更居中观测')
+        world = project(node, camera, det, pose, depth)
+        valid_records.append((score, world))
+        return world
+    monkeypatch.setattr(mod, 'target_world_xy', checked_projection)
+    def images():
+        age = node.clock-started
+        error = (.11, .04) if .3 <= age < .6 else ((.18, .04) if age < .3 else (.24, .10))
+        stream(node, (cid,) if age < 1. else (), error=error)
+    node.hook = images
+    images()
+    assert task._align_target(kind, controller, started) == 'ready'
+    assert invalid_records
+    best_valid = [entry for entry in valid_records if entry[0] < .20][-1]
+    assert task._targets[kind][0] == pytest.approx(best_valid[1])
+
+
+@pytest.mark.parametrize('kind,cid', [('golf', 7), ('ring', 8)])
+def test_best_history_is_reset_between_servo_attempts(rig, kind, cid):
+    node, task = rig
+    controller = task.ball if kind == 'golf' else task.ring
+    node.pose[2] = task.work_depth
+    node.hook = lambda: stream(node, (cid,))
+    node.hook()
+    assert task._align_target(kind, controller, node.clock) == 'ready'
+    old_target = np.asarray(task._targets[kind][0])
+    node.pose[:2] += [2., -1.]
+    node.hook = lambda: stream(node, (cid,), error=(.15, -.1))
+    node.hook()
+    assert task._align_target(kind, controller, node.clock) == 'ready'
+    assert kind in task._blind_targets
+    assert np.linalg.norm(np.asarray(task._targets[kind][0])-old_target) > 1.
