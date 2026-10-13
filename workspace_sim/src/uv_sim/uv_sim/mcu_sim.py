@@ -139,7 +139,10 @@ class McuSimNode(Node):
         self.get_logger().info(f"Servo: {msg.data:.3f} rad")
 
     def _light_cb(self, msg: UInt8) -> None:
-        colors = {1: "red", 2: "yellow", 3: "green"}
+        # 2=绿 3=黄（2026-10-13 更正：此前写 2=yellow/3=green，与 task_runner 的
+        # `LIGHT_GREEN=2` / `LIGHT_YELLOW=3` 以及实机都相反 —— 调试时会把发的绿报成
+        # 黄，把人带偏）。权威定义见 docs/interfaces/indicator_light.md §2。
+        colors = {1: "red", 2: "green", 3: "yellow"}
         name = colors.get(msg.data, f"unknown ({msg.data})")
         self.get_logger().info(f"Light: {name}")
 

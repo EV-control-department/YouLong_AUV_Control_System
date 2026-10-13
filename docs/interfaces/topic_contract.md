@@ -96,7 +96,7 @@
 | `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 发布 | `basic_motion` | — | SIL | `workspace_auv/src/uv_control/uv_control/basic_motion.py:create_publisher` | 运动设定值；`type_mask` 1=忽略该轴 |
 | `/zit6/cmd/setpoint` | `zit6_interfaces/ZitSetpoint` | 订阅 | — | `mcu_sim` | SIL | `workspace_sim/src/uv_sim/uv_sim/mcu_sim.py:create_subscription` | HIL 下由 MCU 经 micro-ROS 订阅 |
 | `/auv/thrusters_cmd` | `std_msgs/Float64MultiArray` | 发布 | `mcu_sim` | — | 两者 | `workspace_sim/src/uv_sim/uv_sim/mcu_sim.py:create_publisher` | 6 推进器归一化 [−1, 1]，直接驱动 Stonefish（SIL 由 PID 算；HIL 转发 MCU 的力） |
-| `/zit6/cmd/light` | `std_msgs/UInt8` | 发布 | `task_runner` | — | 两者 | `workspace_auv/src/uv_task/uv_task/task_runner.py:create_publisher` | `1`=红 `2`=黄 `3`=绿 |
+| `/zit6/cmd/light` | `std_msgs/UInt8` | 发布 | `task_runner` | — | 两者 | `workspace_auv/src/uv_task/uv_task/task_runner.py:create_publisher` | `1`=红 **`2`=绿 `3`=黄**（2026-10-13 更正：此前写 `2`=黄 `3`=绿，与 `task_runner.LIGHT_GREEN=2` / `LIGHT_YELLOW=3` 及实机相反）。**灯语与状态机见 `interfaces/indicator_light.md`** |
 | `/zit6/cmd/light` | `std_msgs/UInt8` | 订阅 | — | `mcu_sim` | SIL | `workspace_sim/src/uv_sim/uv_sim/mcu_sim.py:create_subscription` | SIL 下仅记账，不驱动仿真 |
 | `/zit6/cmd/servo` | `std_msgs/Float32` | 发布 | `task_runner` | — | 两者 | `workspace_auv/src/uv_task/uv_task/task_runner.py:create_publisher` | 舵机/云台 |
 | `/zit6/cmd/servo` | `std_msgs/Float32` | 订阅 | — | `mcu_sim` | SIL | `workspace_sim/src/uv_sim/uv_sim/mcu_sim.py:create_subscription` | |

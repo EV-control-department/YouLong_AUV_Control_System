@@ -33,6 +33,7 @@
 | `frames/extrinsics_reference.md` | 外参数值（仿真表 / 实机表 / 推导 / T6 必改清单） | ✅ 权威 |
 | `interfaces/service_action_contract.md` | **服务与动作的字段语义**（含引擎自带服务与死定义登记） | ✅ T3b 建立 |
 | `interfaces/launch_entries.md` | **启动入口清单与新旧映射**（T4 起，含编排规则） | ✅ 权威 |
+| `interfaces/indicator_light.md` | **状态指示灯设计规范**（值定义 / 状态机 / 灯语 / 优先级 / 实现约束） | ✅ 权威（2026-10-13 建，**待实施**） |
 
 ### 架构
 
