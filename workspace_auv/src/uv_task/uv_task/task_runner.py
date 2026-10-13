@@ -599,6 +599,29 @@ class TaskRunnerNode(Node):
     # Action helper
     # ========================================================================
 
+    def _cancel_goal(self, goal_handle, why: str) -> bool:
+        """取消一个 action goal；返回是否真的发出了取消请求。
+
+        **取消只能在 goal handle 上做**。rclpy Jazzy 的 `ActionClient` 既没有
+        `async_cancel_goal` 也没有 `cancel_goal_async` —— 客户端侧根本没有取消 API
+        （见 `_stop_task_cb` 的注释与 B23）。所以统一走这里，避免再有人写出
+        `self._action_client.<something>` 那种永远不会生效的调用。
+
+        未接受的 goal 不需要取消（服务端没有它）。重复取消是安全的：服务端会
+        回一个空的取消列表，不是错误。
+        """
+        if goal_handle is None:
+            return False
+        if not getattr(goal_handle, 'accepted', True):
+            return False
+        try:
+            goal_handle.cancel_goal_async()
+            self.get_logger().info(f'已请求取消 action goal（{why}）')
+            return True
+        except Exception as exc:
+            self.get_logger().error(f'取消 action goal 失败（{why}）: {exc}')
+            return False
+
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
                           quiet=False, duration=0.0):
         """Send a BasicMotion action goal and wait for completion (blocking).
@@ -649,16 +672,35 @@ class TaskRunnerNode(Node):
         send_future = self._action_client.send_goal_async(goal)
         while rclpy.ok() and not self.stopped and not send_future.done():
             time.sleep(0.01)
+
+        # ── R4：从这里开始，**任何**提前 return 都必须先取消已经发出去的 goal ──
+        # 原实现在 `stopped` 分支直接 return，而此时 `send_goal_async` 已经调用过、
+        # goal 可能已被服务端接受，`_active_goal_handle` 却还是 None（句柄要等
+        # response 回来才有）—— 于是 `/task/stop` 找不到它、谁都不会取消，
+        # 船继续走到目标。实测：`/task/stop` 之后 basic_motion 的 `等待到达`
+        # 一路继续了十几秒。
+        if not send_future.done():
+            # stop/退出先到了：给 send 一个短宽限期把响应对回来，好拿到句柄去取消。
+            # 正常情况下 `done()` 早就在第一次循环时就为真，这里不会真的等。
+            grace = time.monotonic() + 1.0
+            while not send_future.done() and time.monotonic() < grace:
+                time.sleep(0.01)
+
+        goal_handle = send_future.result() if send_future.done() else None
+        if goal_handle is not None:
+            self._active_goal_handle = goal_handle
+
         if not rclpy.ok() or self.stopped:
+            self._cancel_goal(goal_handle, '发送期间收到 stop/退出')
+            self._active_goal_handle = None
             if not quiet:
                 self.get_logger().warn(f'Goal interrupted (stopped={self.stopped})')
             return False, 'Stopped'
-        if not send_future.done():
+
+        if goal_handle is None:
             self.get_logger().error('Goal send timeout')
             return False, 'Goal send timeout'
 
-        goal_handle = send_future.result()
-        self._active_goal_handle = goal_handle
         if not goal_handle.accepted:
             self._active_goal_handle = None
             self.get_logger().error(f'Goal rejected by server')
@@ -672,6 +714,9 @@ class TaskRunnerNode(Node):
             time.sleep(0.01)
         self._active_goal_handle = None
         if not rclpy.ok() or self.stopped:
+            # 同一个道理：goal 还在跑，必须取消（`_stop_task_cb` 通常已经取消过一次，
+            # 重复取消在服务端是安全的）。
+            self._cancel_goal(goal_handle, '等待结果期间收到 stop/退出')
             if not quiet:
                 self.get_logger().warn(f'Goal result interrupted (stopped={self.stopped})')
             return False, 'Stopped'
@@ -1331,21 +1376,21 @@ class TaskRunnerNode(Node):
 
     def _stop_task_cb(self, request, response):
         self.get_logger().warn('Service /task/stop: emergency stop')
-        self.stopped = True
+        # 先抓句柄再置 stopped：`_send_action_goal` 一看到 stopped 就会往下走并把
+        # `_active_goal_handle` 清空，先置位会让这里读到 None 而漏掉取消。
         handle = self._active_goal_handle
-        if handle is not None:
-            self.get_logger().info('Cancelling active action goal')
-            # 修 2026-10-12：原代码是 `self._action_client.async_cancel_goal(handle)`，
-            # 而 rclpy Jazzy 的 `ActionClient` **根本没有这个方法**（也没有
-            # `cancel_goal_async`）—— 取消只能在 goal handle 上做。原写法每次都抛
-            # AttributeError，在这个服务回调里被 rclpy 记一条日志就吞了，于是
-            # `/task/stop` 一直是"停列表但不停船"：`stopped=True` 让列表不再发新
-            # 命令，可**当前那条 action goal 继续跑到底**。
-            try:
-                handle.cancel_goal_async()
-            except Exception as exc:
-                self.get_logger().error(f'取消 action goal 失败: {exc}')
-            self._active_goal_handle = None
+        self.stopped = True
+        # 修 2026-10-12（B23）：原代码是 `self._action_client.async_cancel_goal(handle)`，
+        # 而 rclpy Jazzy 的 `ActionClient` **根本没有这个方法**（也没有
+        # `cancel_goal_async`）—— 取消只能在 goal handle 上做。原写法每次都抛
+        # AttributeError，在这个服务回调里被 rclpy 记一条日志就吞了，于是
+        # `/task/stop` 一直是"停列表但不停船"：`stopped=True` 让列表不再发新
+        # 命令，可**当前那条 action goal 继续跑到底**。
+        #
+        # 这里只负责"当前已记录"的那条；若 goal 刚发出、句柄还没回来（R4 竞态），
+        # `_send_action_goal` 会在拿到句柄后发现 `stopped` 并自行取消。
+        self._cancel_goal(handle, '/task/stop')
+        self._active_goal_handle = None
         response.success = True
         response.message = 'Tasks stopped'
         return response
@@ -1457,11 +1502,7 @@ class TaskRunnerNode(Node):
             return
 
         self.get_logger().info('退出收尾: 取消正在执行的 action goal')
-        try:
-            # 取消在 **goal handle** 上，不在 ActionClient 上（见 _stop_task_cb 的注释）
-            goal_handle.cancel_goal_async()
-        except Exception as exc:
-            self.get_logger().warning(f'取消 action goal 失败: {exc}')
+        if not self._cancel_goal(goal_handle, '节点退出'):
             return
 
         # 等它真的结束（basic_motion 收到 cancel 后会先原地保持再返回）。

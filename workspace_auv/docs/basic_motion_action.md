@@ -14,10 +14,10 @@
 文件：`uv_msgs/action/BasicMotion.action`
 
 ```
-uint8 WMOVE=1       # 世界系步进, target=[dx, dy, dz, dyaw]
+uint8 WMOVE=1       # 世界系**绝对**目标, target=[x, y, z, yaw]  ← 不是偏移！
 uint8 BMOVE=2       # 机体系步进, target=[dx, dy, dz, dyaw]
 uint8 SET=3         # 绝对定位, target=[x, y, z, yaw]
-uint8 WTRAVEL=4     # 世界系直线, target=[dx, dy, dz]
+uint8 WTRAVEL=4     # 世界系**绝对**目标, target=[x, y, z]     ← 不是偏移！
 uint8 BTRAVEL=5     # 机体系直线, target=[dx, dy, dz]
 uint8 START=6       # 初始化里程计原点
 uint8 WVELOCITY=7   # 世界系速度, target=[vx, vy, vz, vyaw_rate(度/秒)]   (2026-10-12 新增)
@@ -109,17 +109,23 @@ goal.target = [5.0, 0.0, -2.0, 90.0]
 # 结果：AUV 移动到 odom x=5, y=0, z=-2, 朝东(yaw=90°)
 ```
 
-### WMOVE — 世界系步进
+### WMOVE — 世界系步进（**绝对目标**）
 
 ```
 cmd_type: BasicMotion.Goal.WMOVE
-target:   [dx, dy, dz, dyaw]    # 世界系偏移量
+target:   [x, y, z, yaw]        # odom 系**绝对目标**，不是偏移量
 ```
 
-- 从当前位置加上偏移量为目标
+- **绝对目标**：`target` 就是 odom 系里的目的地，`basic_motion` 自己算出剩余位移
 - 使用动态步进算法：长距离拆成小段逐段发送
 - 每步根据当前横向误差动态调整步长
 - 横向误差大时步长自动减小，提高抗干扰能力
+
+> ⚠️ **2026-10-12 更正**：此前本节写「从当前位置加上偏移量为目标」、`target=[dx,dy,dz,dyaw]`，
+> **与实现相反**。实现一直是绝对的：`_step_move_world` 的文档串写「odom 系目标」，
+> 且用 `target - 当前位姿` 算误差。实测在 odom x=4.94 发 `WMOVE [2.0,...,axes="x"]` →
+> 日志 `步进开始: 目标=(2.00, ...)` → 结束在 **x=2.00**（往回走），而非前进到 x=6.94。
+> 想要「走一段」请用 **BMOVE/BTRAVEL**（机体系偏移），或自己算好绝对目标。
 
 **步进参数：**
 
@@ -138,7 +144,8 @@ target:   [dx, dy, dz, dyaw]    # 世界系偏移量
 ```python
 goal.cmd_type = BasicMotion.Goal.WMOVE
 goal.target = [2.0, 1.0, 0.0, 0.0]
-# 结果：AUV 向北 2m, 向东 1m（相对于当前位置）
+# 结果：AUV 走到 odom 点 (2.0, 1.0)（**绝对**，不是"向北 2m 向东 1m"）
+#       若当前位置就是 (2,1)，这条命令不动
 ```
 
 ### BMOVE — 机体系步进
@@ -166,23 +173,28 @@ goal.target = [0.0, 1.0, 0.0, 45.0]
 # 结果：AUV 向右 1m 且右转 45°，先旋转再在 body 系移动
 ```
 
-### WTRAVEL — 世界系直线移动
+### WTRAVEL — 世界系直线移动（**绝对目标**）
 
 ```
 cmd_type: BasicMotion.Goal.WTRAVEL
-target:   [dx, dy, dz, 0]       # yaw 被忽略
+target:   [x, y, z, 0]          # odom 系**绝对目标**，yaw 被忽略
 ```
 
 - 两步执行：先原地转向目标方向 → 再沿 body-X 直线前进
-- 转向角 = `atan2(dy, dx)`
+- 转向角 = `atan2(y_target - y_now, x_target - x_now)`
 - 适用于需要直线轨迹的任务（过门、巡线等）
+
+> ⚠️ **2026-10-12 更正**：与 WMOVE 同一处错误 —— `target` 是**绝对** odom 目标。
+> 实测在 odom x=5 发 `WTRAVEL [2.0, 0, 0]`：日志 `WTRAVEL: 目标=(2.00,...), 方向角=180.0°`
+> → `直线移动 第二阶段(前进): 距离=3.00m` → 结束在 **x=2.00**（**掉头往回走**）。
+> 照"偏移量"理解会写反方向。要沿当前朝向走一段，用 **BTRAVEL**。
 
 **示例：**
 
 ```python
 goal.cmd_type = BasicMotion.Goal.WTRAVEL
 goal.target = [3.0, 4.0, 0.0, 0.0]
-# 结果：AUV 先转向 atan2(4,3)≈53° 方向，再向前走 5m
+# 结果：AUV 走到 odom 点 (3,4)——先转向该方向，再直线过去（**绝对**目标）
 ```
 
 ### BTRAVEL — 机体系直线移动
@@ -208,9 +220,9 @@ goal.target = [3.0, 0.0, 0.0, 0.0]
 | 命令    | 坐标系 | 目标含义 | 运动模式           | 典型场景         |
 | ------- | ------ | -------- | ------------------ | ---------------- |
 | SET     | odom   | 绝对坐标 | 直发 + 等到达      | 明确目标点       |
-| WMOVE   | odom   | 偏移量   | 动态步进           | 向指定方向走一段 |
+| WMOVE   | odom   | **绝对坐标** | 动态步进       | 走到 odom 某点（步进式） |
 | BMOVE   | body   | 偏移量   | 旋转 + 动态步进    | 相对当前姿态移动 |
-| WTRAVEL | odom   | 偏移量   | 转向 + 直线        | 过门、直线轨迹   |
+| WTRAVEL | odom   | **绝对坐标** | 转向 + 直线    | 走到 odom 某点（直线轨迹） |
 | BTRAVEL | body   | 偏移量   | 旋转 + 转向 + 直线 | 沿当前方向直线   |
 | START   | —     | —       | 初始化原点         | 开始作业         |
 | WVELOCITY | **world** | 速度 | 世界系速度闭环 | 沿岸/沿画面前进 |

@@ -40,7 +40,21 @@
 
 | cmd_type | `target` | 坐标系 |
 |---|---|---|
-| `SET` / `WMOVE` / `WTRAVEL` | `[x, y, z, yaw]` / `[dx, dy, dz, dyaw]` | odom（世界）系，米与度 |
+| `SET` | `[x, y, z, yaw]` | odom（世界）系，米与度；**绝对目标** |
+| `WMOVE` | `[x, y, z, yaw]` | odom 系；**绝对目标**（⚠️ 2026-10-12 更正：此前本表写 `[dx, dy, dz, dyaw]`「偏移」，与实现不符 —— 实现一直是绝对的，见下方"位置类语义") |
+| `WTRAVEL` | `[x, y, z, yaw]`（yaw 忽略） | odom 系；**绝对目标**（同上更正；`_travel_world` 用 `target - 当前位姿` 算位移） |
+| `BMOVE` | `[dx, dy, dz, dyaw]` | **机体系偏移**，`basic_motion` 内转世界 |
+| `BTRAVEL` | `[dx, dy, dz]` | **机体系偏移**，`basic_motion` 内转世界 |
+| `WVELOCITY` / `BVELOCITY` | `[vx, vy, vz, vyaw_rate]` | m/s 与**度/秒**；世界/机体由 `cmd_type` 决定 |
+| `WFORCE` / `BFORCE` | `[Fx, Fy, Fz, Mz]` | 与 `force_4dof` 同量纲（调好增益下的单位） |
+| `STAY` | 忽略 | 目标 = **当前位姿** |
+
+> **位置类语义（2026-10-12 实测厘清）**：`SET`/`WMOVE`/`WTRAVEL` 的 `target` 都是
+> **odom 系绝对目标**；只有 `BMOVE`/`BTRAVEL` 是**机体系偏移**。
+> 实测：在 odom x=5 发 `WTRAVEL target=[2.0,...]`，basic_motion 日志为
+> `WTRAVEL: 目标=(2.00, 0.00, 0.00), 方向角=180.0°` → `直线移动 第二阶段(前进): 距离=3.00m`
+> → 结束于 x=2.00（**掉头往回走**），而不是前进到 x=7。`WMOVE` 同理（从 x=4.94 到 x=2.00）。
+> 此前 action 文件与 4 处 md 把它写成「偏移量」，照那个写会让船朝**反方向**走。
 | `BMOVE` / `BTRAVEL` | `[dx, dy, dz, dyaw]` | 机体系；`basic_motion` 内转世界系 |
 | `WVELOCITY` / `BVELOCITY` | `[vx, vy, vz, vyaw_rate]` | m/s 与**度/秒**；世界/机体由 `cmd_type` 决定 |
 | `WFORCE` / `BFORCE` | `[Fx, Fy, Fz, Mz]` | 与 `force_4dof` 同量纲（调好增益下的单位）；世界/机体由 `cmd_type` 决定 |

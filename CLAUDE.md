@@ -119,9 +119,9 @@ uint8 control_level          # 回读 MCU 层级 0=NONE 1=POS 2=VEL 3=FORCE
 |---|---|---|---|---|
 | **START** | 6 | 忽略 | — | 初始化 odom 原点。必须在所有运动命令之前发送一次 |
 | **SET** | 3 | 绝对坐标 `[x, y, z, yaw]` | `set_world` + `wait_reached` | 直接发往目标，等到达。简单直接 |
-| **WMOVE** | 1 | 世界系偏移 `[dx, dy, dz, dyaw]` | `step_move_world` | 拆分长距离为动态步进段。横向误差大时自动减小步长 |
+| **WMOVE** | 1 | 世界系**绝对目标** `[x, y, z, yaw]` | `step_move_world` | 走到 odom 某点，拆分长距离为动态步进段。⚠️ **不是偏移量**（2026-10-12 更正，见下）|
 | **BMOVE** | 2 | 机体系偏移 `[dx, dy, dz, dyaw]` | `body_to_world` + `step_move_world` | 先将 body 偏移旋转到世界系，再走 WMOVE |
-| **WTRAVEL** | 4 | 世界系偏移 `[dx, dy, dz]` | 转向 + 直线 step_move | 先转向目标方向 (atan2)，再沿 body-X 前进 |
+| **WTRAVEL** | 4 | 世界系**绝对目标** `[x, y, z]` | 转向 + 直线 step_move | 先转向目标方向 (atan2)，再沿 body-X 前进。⚠️ **不是偏移量**（同上）|
 | **BTRAVEL** | 5 | 机体系偏移 `[dx, dy, dz]` | `body_to_world` + WTRAVEL | 先转 body→world，再走 WTRAVEL |
 | **WVELOCITY** | 7 | 世界系速度 `[vx,vy,vz,vyaw(度/秒)]` | 速度闭环（MCU） | 保持 `duration` 秒后**自动收尾为原地保持** |
 | **BVELOCITY** | 8 | 机体系速度 | 速度闭环（MCU） | 同上；`vx` 恒指艇头方向 |
@@ -167,10 +167,13 @@ goal.target = [5.0, 0.0, -2.0, 90.0]   # odom x=5, y=0, z=-2, yaw=90°(朝东)
 
 ```python
 goal.cmd_type = BasicMotion.Goal.WMOVE
-goal.target = [2.0, 1.0, 0.0, 0.0]     # 世界系：向北 2m，向东 1m
+goal.target = [2.0, 1.0, 0.0, 0.0]     # odom 系绝对点 (2,1)——不是"向北 2m 向东 1m"
 ```
 
-- **世界系步进**：从当前位置加上偏移量为目标
+- **世界系绝对目标**：`target` 即 odom 系目的地（`_step_move_world` 用 `target - 当前位姿`
+  算误差）。⚠️ 2026-10-12 实测更正：此前这里写「从当前位置加上偏移量为目标」，与实现**相反**。
+  实测在 odom x=4.94 发 `WMOVE [2.0,...,axes="x"]` → 结束在 **x=2.00**（往回走）。
+  要"走一段"用 **BMOVE/BTRAVEL**（机体系偏移），或自己算好绝对目标
 - 使用动态步进算法：长距离拆成小段，每步根据横向误差动态调整步长
 - 步进参数：STEP_X=0.6m, STEP_Y=0.4m（椭圆模型），STEP_PERIOD=0.2s（2026-10-12 与 `basic_motion.py` 常量对拍更正；此前写 0.2/0.3 是错的）
 - 收敛判据：预估剩余时间 ≤ 0.15s，或前向误差 < 步长×0.3
@@ -194,8 +197,9 @@ goal.cmd_type = BasicMotion.Goal.WTRAVEL
 goal.target = [3.0, 4.0, 0.0, 0.0]     # 世界系：向 (3,4) 方向直线移动
 ```
 
-- **世界系直线移动**：先转向目标方向，再沿 body-X 前进
-- 第一步：在当前原地转向至 `atan2(dy, dx)`
+- **世界系直线移动，目标是绝对 odom 点**（同 WMOVE 的更正）：先转向目标方向，再沿 body-X 前进
+- 第一步：在当前原地转向至 `atan2(target_y - y_now, target_x - x_now)`
+- ⚠️ 实测在 odom x=5 发 `WTRAVEL [2.0,0,0]` → 日志 `方向角=180.0°` → **掉头**回到 x=2.00
 - 第二步：沿 body-X 轴直线前进到目标
 - yaw 被忽略（由方向决定）
 - 适用于需要直线轨迹的任务（过门、巡线等）

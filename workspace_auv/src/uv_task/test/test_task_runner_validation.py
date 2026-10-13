@@ -20,6 +20,7 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import threading
 from pathlib import Path
 
 import pytest
@@ -169,3 +170,136 @@ def test_default_task_list_validates(node) -> None:
         data = json.load(f)
     problems = node.validate_tasks(data['tasks'], path)
     assert problems == [], f'仓库自带的 tasks.json 校验失败: {problems}'
+
+
+# --------------------------------------------------------------------------- #
+# R4：goal 已发出但句柄尚未记录时收到 /task/stop
+# --------------------------------------------------------------------------- #
+class _FakeFuture:
+    """只实现 `_send_action_goal` 用到的那两个方法：done() / result()。"""
+
+    def __init__(self, value=None, already_done=False):
+        self._value = value
+        self._done = threading.Event()
+        if already_done:
+            self._done.set()
+
+    def set_result(self, value):
+        self._value = value
+        self._done.set()
+
+    def done(self):
+        return self._done.is_set()
+
+    def result(self):
+        return self._value
+
+
+class _FakeResult:
+    def __init__(self, success=True, message=''):
+        self.success = success
+        self.message = message
+
+
+class _FakeResultWrapper:
+    def __init__(self, result):
+        self.result = result
+
+
+class _FakeGoalHandle:
+    def __init__(self, accepted=True, result_future=None):
+        self.accepted = accepted
+        self.cancel_calls = 0
+        self._result_future = result_future or _FakeFuture()   # 默认永不完成
+
+    def cancel_goal_async(self):
+        self.cancel_calls += 1
+        return _FakeFuture()
+
+    def get_result_async(self):
+        return self._result_future
+
+
+class _FakeActionClient:
+    def __init__(self, send_future):
+        self._send_future = send_future
+        self.sent = []
+
+    def wait_for_server(self, timeout_sec=0.0):
+        return True
+
+    def send_goal_async(self, goal):
+        self.sent.append(goal)
+        return self._send_future
+
+
+@pytest.fixture
+def fake_client(node):
+    """替换 node._action_client，测试后还原（node 是模块级共享的）。"""
+    original = node._action_client
+    holder = {}
+    yield holder
+    node._action_client = original
+    node.stopped = False
+    node._debug_timeout = -1.0
+    node._active_goal_handle = None
+
+
+def test_stop_arriving_while_the_goal_is_in_flight_still_cancels(node, fake_client):
+    """R4：句柄还没回来时 stop 先到 —— goal 仍必须被取消。
+
+    原实现在 `stopped` 分支直接 return，那时 `_active_goal_handle` 还是 None
+    （句柄要等 goal response 才拿得到），于是 `/task/stop` 找不到它、代码也不再
+    取消它 —— goal 在服务端继续跑到目标。实测那次 `basic_motion` 的
+    `等待到达` 一路继续了十几秒。
+    """
+    import time as _time
+    from uv_msgs.action import BasicMotion
+
+    send_future = _FakeFuture()
+    handle = _FakeGoalHandle()
+    node._action_client = _FakeActionClient(send_future)
+    node.stopped = False
+    node._debug_timeout = -1.0
+
+    out = {}
+
+    def worker():
+        out['ret'] = node._send_action_goal(
+            BasicMotion.Goal.SET, [1.0, 0.0, 0.0, 0.0], timeout=5.0, quiet=True)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    # 等到 goal 真的发出去了（这就是竞态窗口：已发出、句柄未记录）
+    deadline = _time.monotonic() + 3.0
+    while not node._action_client.sent and _time.monotonic() < deadline:
+        _time.sleep(0.01)
+    assert node._action_client.sent, 'send_goal_async 没被调用'
+    assert node._active_goal_handle is None, '此刻句柄本应还没记录'
+
+    node.stopped = True                 # /task/stop 到达
+    send_future.set_result(handle)      # 响应对回来了
+
+    thread.join(timeout=5.0)
+    assert not thread.is_alive()
+    assert out['ret'] == (False, 'Stopped'), out['ret']
+    assert handle.cancel_calls == 1, (
+        'goal 已经发出去却没有被取消 —— 它会继续在服务端跑到目标')
+
+
+def test_a_successful_goal_is_not_cancelled(node, fake_client):
+    """对照组：正常完成的 goal 不能被误取消。"""
+    from uv_msgs.action import BasicMotion
+
+    handle = _FakeGoalHandle(
+        result_future=_FakeFuture(_FakeResultWrapper(_FakeResult(True, '')), already_done=True))
+    node._action_client = _FakeActionClient(_FakeFuture(handle, already_done=True))
+    node.stopped = False
+    node._debug_timeout = -1.0
+
+    ok, msg = node._send_action_goal(
+        BasicMotion.Goal.SET, [1.0, 0.0, 0.0, 0.0], timeout=5.0, quiet=True)
+    assert (ok, msg) == (True, ''), (ok, msg)
+    assert handle.cancel_calls == 0, '成功的 goal 不该被取消'
+    assert node._active_goal_handle is None, '结束后句柄应清空'

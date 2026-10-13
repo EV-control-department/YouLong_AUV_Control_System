@@ -1,10 +1,15 @@
 # Request (Goal)
 # ── 位置类（阻塞到到位；world = odom/map 系；body 命令在 basic_motion 内转换）──
-uint8 WMOVE=1        # 世界系步进, target=[dx, dy, dz, dyaw(度)]
-uint8 BMOVE=2        # 机体系步进, target=[dx, dy, dz, dyaw(度)]
+# ⚠️ WMOVE/WTRAVEL 是**绝对 odom 目标**，不是偏移量！2026-10-12 更正：
+#    实现一直是绝对的（`_step_move_world` 文档串写「odom 系目标」，`_travel_world`
+#    用 `target - 当前位姿` 算位移），但本文件与 4 处 md 都写成 `[dx,dy,dz]`「偏移量」。
+#    实测：在 odom x=5 发 `WTRAVEL target=[2,...]` 会**掉头 180°** 退回 x=2，
+#    而不是前进到 x=7。只有 BMOVE/BTRAVEL 是偏移量。
+uint8 WMOVE=1        # 世界系**绝对**目标, target=[x, y, z, yaw(度)]（步进式移动过去）
+uint8 BMOVE=2        # 机体系偏移, target=[dx, dy, dz, dyaw(度)]
 uint8 SET=3          # 绝对定位,   target=[x, y, z, yaw(度)]
-uint8 WTRAVEL=4      # 世界系直线, target=[dx, dy, dz, (yaw 忽略)]
-uint8 BTRAVEL=5      # 机体系直线, target=[dx, dy, dz, (yaw 忽略)]
+uint8 WTRAVEL=4      # 世界系**绝对**目标, target=[x, y, z, (yaw 忽略)]（先转向再直线过去）
+uint8 BTRAVEL=5      # 机体系偏移, target=[dx, dy, dz, (yaw 忽略)]
 uint8 START=6        # 初始化里程计原点（无视 axes/target/timeout/duration）
 # ── 速度类（限时 duration，到时自动收尾为原地保持）──
 uint8 WVELOCITY=7    # 世界系速度, target=[vx, vy, vz, vyaw_rate(度/秒)]
