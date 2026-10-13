@@ -286,7 +286,7 @@ class TaskRunnerNode(Node):
     ANGLE_DROP_BEACON = math.pi / 2  # 90°，接口单位为弧度
     ANGLE_SAMPLE_WATER = 0.0               # 采水样
     ANGLE_RELEASE_SAMPLER = 0   #   释放取水器
-    ANGLE_INIT = math.pi  # 舵机1：180°抓取/START初始闭合；出口发布度。
+    ANGLE_INIT = math.radians(80.0)  # 舵机1：80°抓取/START初始闭合；出口发布度。
 
     def __init__(self):
         super().__init__('task_runner')
@@ -1119,9 +1119,9 @@ class TaskRunnerNode(Node):
     def _do_start(self) -> bool:
         """发送 START action goal，初始化 odom 原点。"""
         self.light_off()
-        # 所有START入口（跳过准备、按回车、正常倒计时）均发送一次舵机1抓取180°。
+        # 所有START入口（跳过准备、按回车、正常倒计时）均发送一次舵机1抓取80°。
         # 这里只确认指令发布；没有舵机反馈确认，不宣称已机械到位。
-        self.set_servo(self.ANGLE_INIT, 'START初始抓取（180°）')
+        self.set_servo(self.ANGLE_INIT, 'START初始抓取（80°）')
         # START紧接舵机2海参任务时，额外保留其初始闭合，不改变舵机2协议。
         tasks = getattr(self, 'tasks', ())
         next_index = getattr(self, 'current_index', 0) + 1
@@ -1241,7 +1241,10 @@ class TaskRunnerNode(Node):
         return True
 
     def _task_world_waypoints(self, p: dict) -> bool:
-        """任务间安全通道：未填或失败不能直接执行下一任务的直线粗定位。"""
+        """执行用户指定路线，不强制末点匹配下一任务的观察位。
+
+        旧end_at_next_task参数兼容读取但不生效；下一任务自行执行其定位逻辑。
+        """
         points = p.get('waypoints', [])
         ok = False
         try:
@@ -1250,35 +1253,6 @@ class TaskRunnerNode(Node):
                     return True
                 self.get_logger().error('任务间航点未填写：禁止跳过路线直接跨区移动')
                 return False
-            if p.get('end_at_next_task', False):
-                next_index = self.current_index+1
-                if next_index >= len(self.tasks):
-                    raise ValueError('衔接航点之后没有任务')
-                next_task = self.tasks[next_index]
-                name, q = next_task['name'], next_task['params']
-                if name == 'mapping_grid':
-                    expected = [q['tag_x'], q['tag_y'], q['survey_z'], q['survey_yaw_deg']]
-                elif name == 'turntable':
-                    disk = q.get('disk_pose_odom', [])
-                    if len(disk) != 4:
-                        raise ValueError('转盘盘心未填，无法确认安全观察位终点')
-                    x, y, z, yaw = map(float, disk)
-                    cx, cy, cz = map(float, q.get('front_camera_center_body', [.23,0.,.076]))
-                    d = float(q.get('front_standoff_m', .55))+cx
-                    angle = math.radians(yaw)
-                    expected = [x-d*math.cos(angle)+cy*math.sin(angle),
-                                y-d*math.sin(angle)-cy*math.cos(angle), z-cz, yaw]
-                elif name == 'grab_sea_cucumber':
-                    expected = q['search_pose']
-                elif name == 'return_shore':
-                    expected = [q.get('x', 1.), q.get('y', -1.), points[-1][2], q.get('yaw_deg', 0.)]
-                else:
-                    raise ValueError(f'不支持衔接任务{name}')
-                last = points[-1]
-                if (len(last) != 4 or not all(math.isfinite(float(v)) for v in last)
-                        or any(abs(float(last[i])-float(expected[i])) > .05 for i in range(3))
-                        or abs((float(last[3])-float(expected[3])+180.) % 360.-180.) > 5.):
-                    raise ValueError(f'路线终点未接到下一任务观察/出发位：需要{expected}，实际{last}')
             ok = self._follow_world_waypoints(points, p.get('label', '任务间转移'),
                 float(p.get('timeout', 180.)), float(p.get('max_step_m', .4)), p.get('mode', 'fixed_yaw'))
             return ok

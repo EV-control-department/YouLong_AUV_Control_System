@@ -22,11 +22,10 @@ mission:
     # 每行[x,y,z,yaw度]是绝对odom航点。填安全通道折点，程序自动细分直线。
     # 起点到标签段当前禁用；其余三段保留现场中间点，末端接到下一任务出发位。
     # 2026-10-13：用户确认中间点之后到任务终点的通道安全；改变任务坐标后需同步更新终点。
-    # 空路线停止；格式/终点核对不是自动避障或实机定位精度保证。
+    # 空路线停止；航点按配置执行，不强制终点匹配下一任务，下一任务可继续自行定位。
     # - name: world_waypoints
     #   params:
     #     label: 起点到标签观察位
-    #     end_at_next_task: true
     #     waypoints: [[0,0,0,0]]             # 最后一点为tag_x/tag_y、survey_z/survey_yaw。
     #     mode: fixed_yaw               # 先原地调深归向，再固定yaw平移；不使用WTRAVEL追方向。
     #     max_step_m: 0.4
@@ -45,7 +44,6 @@ mission:
     - name: world_waypoints
       params:
         label: 标签到转盘观察位
-        end_at_next_task: true
         waypoints:
           - [2.7, -0.2, 0.1, 0.0]       # 现场绕障中间点。
           - [2.79, -1.47, 0.774, -90.0] # 当前盘前观察位，非接触盘心；在中间点先调深归向。
@@ -61,7 +59,7 @@ mission:
         mode: yolo_bump
         preposition_mode: fixed_yaw
         max_world_step_m: 0.4
-        # 盘心继承turntable_simple.yaml，不以空列表覆盖；跨区路线终点须与其观察位一致。
+        # 盘心继承turntable_simple.yaml，不以空列表覆盖；该任务可从路线末点继续到观察位。
         disk_class_id: 3              # 当前模型wheel；使用前视左目YOLO框。
         timeout: 180.0
         # 前向BMOVE行程/超时继承turntable_simple.yaml；不再使用定时顶碰或yaw行程。
@@ -69,7 +67,6 @@ mission:
     - name: world_waypoints
       params:
         label: 转盘区到海参搜索位
-        end_at_next_task: true
         waypoints:
           - [2.7, -0.2, 0.1, 0.0]       # 现场绕障中间点。
           - [4.0, -2.0, 0.1, 0.0]       # 当前海参search.pose；修改搜索位后须同步修改。
@@ -88,7 +85,6 @@ mission:
     - name: world_waypoints
       params:
         label: 海参区到靠岸准备点
-        end_at_next_task: true
         waypoints:
           - [3.0, -1.0, 0.1, 0.0]       # 现场绕障中间点。
           - [1.0, -1.0, 0.1, 0.0]       # 接到return_shore；保持0.1m深度及0°航向。

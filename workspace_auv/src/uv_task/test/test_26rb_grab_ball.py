@@ -275,15 +275,25 @@ def test_world_waypoint_face_path_mode_is_explicit():
     assert [a[0] for a in actions] == [BasicMotion.Goal.WTRAVEL, BasicMotion.Goal.SET]
 
 
-def test_transition_rejects_endpoint_that_would_trigger_another_long_coarse_move():
+@pytest.mark.parametrize('point', [[3.,4.,.2,0.], [2.79,-1.47,.674,-90.]])
+def test_transition_accepts_user_endpoint_independent_of_next_task(point):
     from uv_task.task_runner import TaskRunnerNode
     node, actions, stops = _world_route_node()
     node.current_index = 0
     node.tasks = [{'name': 'world_waypoints', 'params': {}}, {'name': 'mapping_grid', 'params':
                   {'tag_x': 0., 'tag_y': 0., 'survey_z': .2, 'survey_yaw_deg': 0.}}]
-    with pytest.raises(ValueError, match='路线终点未接到'):
-        TaskRunnerNode._task_world_waypoints(node, {'waypoints': [[3.,4.,.2,0.]], 'end_at_next_task': True})
-    assert node.stopped and not actions and stops
+    assert TaskRunnerNode._task_world_waypoints(node, {'waypoints': [point], 'end_at_next_task': True})
+    assert not node.stopped and actions and not stops
+    assert actions[-1][1] == pytest.approx(point)
+
+
+def test_legacy_endpoint_flag_does_not_require_a_next_task():
+    from uv_task.task_runner import TaskRunnerNode
+    node, actions, stops = _world_route_node()
+    node.tasks, node.current_index = [], 0
+    assert TaskRunnerNode._task_world_waypoints(node, {
+        'waypoints': [[1.,0.,.2,0.]], 'end_at_next_task': True})
+    assert actions and not stops
 
 
 @pytest.mark.parametrize('condition', ['normal', 'pending', 'motion_failed', 'stopped'])
@@ -624,20 +634,26 @@ def test_sea_descent_exception_still_sends_zero_velocity():
     assert packets == [.5,0.]
 
 
-def test_servo1_defaults_and_rejection_of_old_angles():
+def test_servo1_swapped_defaults_and_custom_angles_without_conflict_rejection():
     from uv_task.config_loader import load_task
     params = load_task(Path(__file__).parents[1] / 'config/tasks/grab_sea_cucumber.yaml')[0]['params']
-    assert params['pickup_servo_angle_deg'] == 180.
-    assert params['release_servo_angle_deg'] == 80.
+    assert params['pickup_servo_angle_deg'] == 80.
+    assert params['release_servo_angle_deg'] == 180.
     params.pop('pickup_servo_angle_deg')
     params.pop('release_servo_angle_deg')
     node = SimpleNamespace(get_logger=lambda: _Logger())
     task = GrabSeaCucumberTask(node, params)
-    assert task._pickup_angle == pytest.approx(math.pi)
-    assert task._release_angle == pytest.approx(math.radians(80))
-    params.update(pickup_servo_angle_deg=0., release_servo_angle_deg=90.)
-    with pytest.raises(ValueError, match='抓180°、放80°'):
-        GrabSeaCucumberTask(node, params)
+    assert task._pickup_angle == pytest.approx(math.radians(80))
+    assert task._release_angle == pytest.approx(math.pi)
+    params.update(pickup_servo_angle_deg=25., release_servo_angle_deg=140.,
+                  pickup_servo_angle_rad=0., release_servo_angle_rad=0.)
+    task = GrabSeaCucumberTask(node, params)
+    assert task._pickup_angle == pytest.approx(math.radians(25))
+    assert task._release_angle == pytest.approx(math.radians(140))
+    params.pop('pickup_servo_angle_deg')
+    params.pop('release_servo_angle_deg')
+    task = GrabSeaCucumberTask(node, params)
+    assert task._pickup_angle == task._release_angle == 0.
 
 
 def test_near_floor_press_is_latched_force_and_neutral_on_exception():
@@ -1174,13 +1190,13 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'TaskRunnerNode')
     init = next(n.value for n in cls.body if isinstance(n, ast.Assign)
                 and any(isinstance(t, ast.Name) and t.id == 'ANGLE_INIT' for t in n.targets))
-    assert eval(compile(ast.Expression(init), str(file), 'eval'), {'math': math}) == math.pi
+    assert eval(compile(ast.Expression(init), str(file), 'eval'), {'math': math}) == math.radians(80)
     methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in ('set_servo', '_do_start')]
     namespace = {'math': math, 'ZitServo': ZitServo, 'BasicMotion': _grab.BasicMotion}
     exec(compile(ast.Module(body=methods, type_ignores=[]), str(file), 'exec'), namespace)
     messages, events = [], []
     fake = SimpleNamespace(pub_servo=SimpleNamespace(publish=messages.append),
-                           get_logger=lambda: _Logger(), ANGLE_INIT=math.pi,
+                           get_logger=lambda: _Logger(), ANGLE_INIT=math.radians(80),
                            light_off=lambda: events.append('light'),
                            _send_action_goal=lambda *args, **kw: (events.append('start') or True, 'ok'))
     fake.set_servo = lambda angle, label, **kw: namespace['set_servo'](fake, angle, label, **kw)
@@ -1192,7 +1208,7 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
     before = len(messages)
     assert namespace['_do_start'](fake)
     assert len(messages) == before + 1
-    assert messages[-1].angle == pytest.approx(180.)
+    assert messages[-1].angle == pytest.approx(80.)
     assert messages[-1].servo_id == 1
     assert events == ['light', 'start']
     with pytest.raises(ValueError):
@@ -1206,7 +1222,7 @@ def test_task_runner_servo_protocol_and_start_reset_without_ros_node():
     before = len(messages)
     assert namespace['_do_start'](fake)
     assert len(messages) == before + 2
-    assert messages[-2].servo_id == 1 and messages[-2].angle == pytest.approx(180.)
+    assert messages[-2].servo_id == 1 and messages[-2].angle == pytest.approx(80.)
     assert messages[-1].servo_id == 2 and messages[-1].angle == pytest.approx(150.)
 
 

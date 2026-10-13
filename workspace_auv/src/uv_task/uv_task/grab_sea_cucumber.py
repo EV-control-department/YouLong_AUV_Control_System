@@ -63,24 +63,23 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._gripper_servo_id = int(params.get('gripper_servo_id', 1))
         if self._gripper_servo_id not in (1, 2):
             raise ValueError('gripper.servo_id只能选择1或2')
-        pickup_deg = float(params.get('pickup_servo_angle_deg', 180.0))
-        release_deg = float(params.get('release_servo_angle_deg', 80.0))
+        pickup_deg = float(params.get('pickup_servo_angle_deg',
+                                      math.degrees(float(params.get('pickup_servo_angle_rad', math.radians(80.0))))))
+        release_deg = float(params.get('release_servo_angle_deg',
+                                       math.degrees(float(params.get('release_servo_angle_rad', math.pi)))))
         if self._gripper_servo_id == 2:
             pickup_deg = float(params.get('servo2_close_angle_deg', 150.0))
             release_deg = float(params.get('servo2_open_angle_deg', 270.0))
             if (not all(map(math.isfinite, (pickup_deg, release_deg)))
                     or not 0 <= pickup_deg < release_deg <= 270):
                 raise ValueError('舵机2闭合/张开角度须满足0≤close<open≤270°')
-        elif not math.isclose(pickup_deg, 180.0, abs_tol=0.01) or not math.isclose(release_deg, 80.0, abs_tol=0.01):
-            raise ValueError('舵机1固定定义为抓180°、放80°')
+        elif (not all(map(math.isfinite, (pickup_deg, release_deg)))
+              or not all(0 <= angle <= 180 for angle in (pickup_deg, release_deg))):
+            raise ValueError('舵机1抓放角度须为0~180°的有限数值')
         # 配置使用角度；任务内部沿用弧度接口，set_servo出口再转为真机角度协议。
         self._release_angle = math.radians(release_deg)
         self._pickup_angle = math.radians(pickup_deg)
-        # 兼容旧配置，但拒绝与实机定义相反的角度，不允许静默改变抓放方向。
-        for key, expected in (('pickup_servo_angle_rad', self._pickup_angle),
-                              ('release_servo_angle_rad', self._release_angle)):
-            if self._gripper_servo_id == 1 and key in params and not math.isclose(float(params[key]), expected, abs_tol=0.01):
-                raise ValueError(f'{key} 与舵机1固定定义冲突：抓180°、放80°对应的弧度')
+        # 度配置优先；旧弧度配置仅在未提供度时使用，不再拒绝角度冲突。
         self._close_wait = float(params.get('gripper_close_wait_seconds', 0.5))
         if not math.isfinite(self._close_wait) or self._close_wait < 0:
             raise ValueError('夹爪闭合等待时间须为非负秒数')
@@ -107,7 +106,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
                               f'前下方抓取点body={gripper}m，水平补偿='
                               f'({self._gripper_offset_x:+.3f},{self._gripper_offset_y:+.3f})m')
         else:
-            self._logger.info('抓海参：选择舵机1圆盘爪，抓180°、放80°，使用原水平补偿')
+            self._logger.info(f'抓海参：选择舵机1圆盘爪，抓{pickup_deg:g}°、放{release_deg:g}°，使用原水平补偿')
         self._total_timeout = float(params.get('total_timeout_seconds', 600.0))
         self._target_count = int(params.get('expected_count', 5))
         self._count_frames = int(params.get('count_frames', 3))

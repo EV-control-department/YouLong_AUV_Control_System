@@ -94,7 +94,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "waypoints": (list, (list, float)), "mode": str,
         "max_step_m": float, "timeout": float, "label": str,
         "require_nonempty": bool,
-        "end_at_next_task": bool,
+        "end_at_next_task": bool,  # 旧配置兼容键，终点与下一任务一致性判定已取消，不生效。
     },
     "btravelx": {"dx": float},
     "setz": {"z": float},

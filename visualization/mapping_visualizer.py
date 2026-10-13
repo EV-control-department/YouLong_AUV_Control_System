@@ -56,6 +56,17 @@ STATE_NAMES = {"complete": "建图完成", "failed": "任务失败", "mapping": 
                "idle": "待机", "traversing": "正在遍历", "running": "任务进行中"}
 
 
+def display_xy(points):
+    """只在绘制时交换XY：屏幕右上→左下对角镜像，不改消息或格点ID。"""
+    values = np.asarray(points, dtype=float)
+    return values[..., [1, 0]] if values.size else values.copy()
+
+
+def display_heading_deg(yaw):
+    """Qt右向为0、顺时针为正；显示+X向上、+Y向右。"""
+    return float(yaw) - 90.
+
+
 class PoolMap(QWidget):
     """只呈现已发布结果：世界坐标俯视图，图标为示意而非相机重建。"""
 
@@ -79,7 +90,7 @@ class PoolMap(QWidget):
         painter.drawText(QRectF(22, 12, self.width()-44, 32), "水池 · 建图结果")
         painter.setFont(QFont("Noto Sans", 10))
         painter.setPen(QColor(MUTED))
-        painter.drawText(QRectF(22, 48, self.width()-44, 26), "世界坐标俯视 · +X 向右 / +Y 向上 · 图标非实物尺寸")
+        painter.drawText(QRectF(22, 48, self.width()-44, 26), "俯视显示 · +X 向上 / +Y 向右 · 仅显示对角翻转，世界坐标不变")
         if not p:
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "等待地图数据…")
             return
@@ -100,13 +111,14 @@ class PoolMap(QWidget):
         for key in ("traversal_path", "return_path"):
             bounds.extend(point[:2] for point in p.get(key, []))
         bounds.extend(c["position"][:2] for c in p.get("cells", []) if c.get("position"))
-        bounds = np.asarray(bounds)
+        bounds = display_xy(bounds)
         low, high = bounds.min(axis=0)-.45, bounds.max(axis=0)+.45
         area = QRectF(30, 92, self.width()-60, self.height()-180)
         scale = min(area.width()/(high[0]-low[0]), area.height()/(high[1]-low[1]))
         mid = (low+high)/2
 
         def screen(xy):
+            xy = display_xy(xy)
             return QPointF(area.center().x()+(xy[0]-mid[0])*scale,
                            area.center().y()-(xy[1]-mid[1])*scale)
 
@@ -195,7 +207,7 @@ class PoolMap(QWidget):
             point = screen(pose)
             painter.save()
             painter.translate(point)
-            painter.rotate(-float(pose[3]))
+            painter.rotate(display_heading_deg(pose[3]))
             painter.setPen(QPen(QColor("#aff5ff"), 2))
             painter.setBrush(QColor("#22bdd2"))
             painter.drawRoundedRect(QRectF(-23,-12,46,24), 10,10)
@@ -467,7 +479,7 @@ class MappingDashboard(QMainWindow):
         table_group = QGroupBox("九宫格状态与聚类结果")
         table_layout = QVBoxLayout(table_group)
         self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(["格点", "访问", "类别", "原始点", "滤波观测", "位置 / m", "残差 / m"])
+        self.table.setHorizontalHeaderLabels(["格点", "访问", "类别", "原始点", "滤波观测", "原始位置[x,y,z] / m", "残差 / m"])
         self.table.horizontalHeader().setStretchLastSection(True)
         table_layout.addWidget(self.table)
         bottom.addWidget(table_group)
@@ -545,8 +557,8 @@ class MappingDashboard(QMainWindow):
         axis = self.map_canvas.axis
         axis.clear()
         axis.set_facecolor(BG)
-        axis.set_xlabel("X / m", color=TEXT)
-        axis.set_ylabel("Y / m", color=TEXT)
+        axis.set_xlabel("Y / m", color=TEXT)
+        axis.set_ylabel("X / m", color=TEXT)
         axis.set_zlabel("-Z / m", color=TEXT)
         axis.tick_params(colors=MUTED)
         axis.grid(True, color="#344253", alpha=0.55)
@@ -560,11 +572,11 @@ class MappingDashboard(QMainWindow):
         for offset in np.linspace(-side / 2, side / 2, 4):
             for segment in (np.array([[offset, -side/2], [offset, side/2]]),
                             np.array([[-side/2, offset], [side/2, offset]])):
-                line = segment @ rotation.T + center[:2]
+                line = display_xy(segment @ rotation.T + center[:2])
                 axis.plot(line[:, 0], line[:, 1], [-floor, -floor], color=MUTED, alpha=0.6)
         trajectory = np.asarray(snapshot['trajectory'])
-        planned = np.asarray(payload.get('traversal_path', []))
-        returning = np.asarray(payload.get('return_path', []))
+        planned = display_xy(payload.get('traversal_path', []))
+        returning = display_xy(payload.get('return_path', []))
         if returning.size:
             height = -snapshot['pose'][2] if snapshot['pose'] else -0.1
             axis.plot(returning[:, 0], returning[:, 1],
@@ -575,29 +587,31 @@ class MappingDashboard(QMainWindow):
             axis.plot(planned[:, 0], planned[:, 1], np.full(len(planned), height),
                       '--o', color='#ffd43b', linewidth=1.5, markersize=3, label='遍历规划')
         if trajectory.size:
-            axis.plot(trajectory[:, 0], trajectory[:, 1], -trajectory[:, 2], color=ACCENT, alpha=0.6, linewidth=1)
+            view = display_xy(trajectory)
+            axis.plot(view[:, 0], view[:, 1], -trajectory[:, 2], color=ACCENT, alpha=0.6, linewidth=1)
         for pane in (axis.xaxis, axis.yaxis, axis.zaxis):
             pane.set_pane_color((0.08, 0.11, 0.15, 1))
         for cell in payload.get("cells", []):
             x, y, z = cell.get("center", center)
             color = CLASS_COLORS.get(cell.get("class_id"), "#718096")
             if cell.get("visited"):
-                axis.scatter([x], [y], [-z], marker="s", s=90, facecolors="none",
+                axis.scatter([y], [x], [-z], marker="s", s=90, facecolors="none",
                              edgecolors=color, linewidths=1.8)
-            axis.text(x, y, -z, f" {cell.get('id')}", color=MUTED, fontsize=9)
+            axis.text(y, x, -z, f" {cell.get('id')}", color=MUTED, fontsize=9)
             points = self._cell_points(cell, snapshot)
             for accepted in (True, False):
                 positions = np.asarray([p['position'] for p in points
                                         if p.get('position') and bool(p.get('accepted')) == accepted])
                 if positions.size:
-                    axis.scatter(positions[:, 0], positions[:, 1], -positions[:, 2],
+                    view = display_xy(positions)
+                    axis.scatter(view[:, 0], view[:, 1], -positions[:, 2],
                                  s=16 if accepted else 10, color=color if accepted else '#657080',
                                  alpha=0.65 if accepted else 0.2, marker='o' if accepted else 'x')
             position = cell.get("position")
             if position:
                 px, py, pz = position
                 guessed = cell.get("source") == "fallback"
-                axis.scatter([px], [py], [-pz], s=130,
+                axis.scatter([py], [px], [-pz], s=130,
                              facecolors="none" if guessed else color,
                              marker="D" if guessed else "o",
                              edgecolors=color if guessed else "white",
@@ -607,26 +621,26 @@ class MappingDashboard(QMainWindow):
         if tag and tag.get("position"):
             tx, ty, tz = tag["position"]
             guessed = tag.get("source") in ("fallback", "partial_vision")
-            axis.scatter([tx], [ty], [-tz], marker="*", s=240,
+            axis.scatter([ty], [tx], [-tz], marker="*", s=240,
                          color="#fb923c" if guessed else "#ffd43b",
                          edgecolors="white", linewidths=0.7,
                          label="猜测 AprilTag" if guessed else "AprilTag")
         if snapshot["pose"]:
             px, py, pz, yaw = snapshot["pose"]
             yaw = math.radians(yaw)
-            axis.scatter([px], [py], [-pz], marker="^", s=130, color=ACCENT, label="AUV")
-            axis.quiver(px, py, -pz, 0.35 * math.cos(yaw), 0.35 * math.sin(yaw), 0,
+            axis.scatter([py], [px], [-pz], marker="^", s=130, color=ACCENT, label="AUV")
+            axis.quiver(py, px, -pz, 0.35 * math.sin(yaw), 0.35 * math.cos(yaw), 0,
                         color=ACCENT, linewidth=2)
         floor = float(grid.get("floor_z", center[2]))
-        axis.set_xlim(center[0] - side * 0.75, center[0] + side * 0.75)
-        axis.set_ylim(center[1] - side * 0.75, center[1] + side * 0.75)
+        axis.set_xlim(center[1] - side * 0.75, center[1] + side * 0.75)
+        axis.set_ylim(center[0] - side * 0.75, center[0] + side * 0.75)
         if snapshot['pose']:
             px, py, pz, _ = snapshot['pose']
-            axis.set_xlim(min(center[0] - side*.75, px-.4), max(center[0] + side*.75, px+.4))
-            axis.set_ylim(min(center[1] - side*.75, py-.4), max(center[1] + side*.75, py+.4))
+            axis.set_xlim(min(center[1] - side*.75, py-.4), max(center[1] + side*.75, py+.4))
+            axis.set_ylim(min(center[0] - side*.75, px-.4), max(center[0] + side*.75, px+.4))
         axis.set_zlim(-max(floor + .45, snapshot['pose'][2] + .3 if snapshot['pose'] else floor), .2)
         axis.set_box_aspect((np.ptp(axis.get_xlim()), np.ptp(axis.get_ylim()), np.ptp(axis.get_zlim())))
-        axis.set_title(f"{payload.get('state', 'unknown')} · 三维原始点集 + 卡尔曼结果",
+        axis.set_title(f"{payload.get('state', 'unknown')} · 三维点集（仅显示XY交换）",
                        color=TEXT, pad=12)
         handles, labels = axis.get_legend_handles_labels()
         unique = dict(zip(labels, handles))

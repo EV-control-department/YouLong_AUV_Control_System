@@ -88,10 +88,10 @@ def test_competition_preserves_field_waypoints_as_nested_lists():
         [[2.7, -.2, .1, 0.], [2.79, -1.47, .774, -90.]],
         [[2.7, -.2, .1, 0.], [4., -2., .1, 0.]],
         [[3., -1., .1, 0.], [1., -1., .1, 0.]]]
-    assert all(t['params']['end_at_next_task'] for t in routes)
+    assert all('end_at_next_task' not in t['params'] for t in routes)
 
 
-def test_competition_route_endpoints_match_next_task_without_moving():
+def test_competition_routes_execute_without_next_task_endpoint_constraint():
     from types import SimpleNamespace
     from uv_task.task_runner import TaskRunnerNode
     tasks = load_mission(CONFIG_ROOT / 'missions' / 'competition.yaml')

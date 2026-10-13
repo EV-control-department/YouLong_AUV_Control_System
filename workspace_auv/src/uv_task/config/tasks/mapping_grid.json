@@ -48,7 +48,7 @@
     "travel_mode": "fixed_yaw",
     "max_world_step_m": 0.4,
     "timeout": 1800.0,
-    "move_timeout": 150.0,
+    "move_timeout": 30.0,
     "observe_seconds": 12.0,
     "stable_seconds": 1.0,
     "stable_position_m": 0.03,

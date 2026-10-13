@@ -53,6 +53,15 @@ competition录制包含结论话题，地图JSONL也保留内嵌结论。
 
 ## 信息流与边界
 
+### 上位机显示方向（2026-10-13）
+
+`visualization/mapping_visualizer.py`只在绘图时交换XY，形成屏幕右上—左下对角镜像。
+未旋转九宫格在俯视页显示为`0 1 2 / 3 4 5 / 6 7 8`，+X向上、+Y向右。
+格线、目标图标、Tag、AUV航向、轨迹与三维点集一起转换；三维横轴标Y、纵轴标X。
+表格位置仍显示原始`[x,y,z]`。不修改格点ID、任务坐标、相机图像、滤波、巡检路线，
+也不修改`/task/mapping/map`及`/task/mapping/conclusion`的内容或编号。
+这是我们的建图面板的显示修正；未修改未提供源文件的官方接收程序。
+
 ```text
 真机 V4L2 → uv_camera.Sensor → 内存 FrameGate → uv_camera.Ai (YOLO-Seg)
 仿真 Stonefish 左/右目 Image → uv_camera.Sensor 直接配对 → 同一 FrameGate

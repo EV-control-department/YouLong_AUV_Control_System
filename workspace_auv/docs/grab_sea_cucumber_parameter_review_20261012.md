@@ -19,7 +19,7 @@
 | gripper.settle_seconds | 共用4秒固定等待：海参抓取补偿后、收集框投放偏置后。之前必须通过独立实测到位判定。 |
 | servo.motion_settle_seconds | 保留0.3秒实测XYZ/yaw连续到位时间，区别于固定等待及视觉持续居中。 |
 | gripper.servo2.*、gripper.close_wait_seconds | 当前servo_id=1时不启用，已标记；保留用于切换舵机2，不应按冗余删除。 |
-| gripper.pickup_angle_deg / release_angle_deg | 2026-10-13更新：舵机1抓180°、放80°；START发送一次180°。与旧0/90度配置冲突时初始化拒绝。 |
+| gripper.pickup_angle_deg / release_angle_deg | 2026-10-13更新：舵机1抓80°、放180°；START默认发送一次80°。允许自定义0~180度抓放角度，度参数优先，旧弧度仅作缺省兼容，不再拒绝固定值冲突。 |
 | ascent.min_speed_mps | 当前0.003在tolerance=0.05、slowdown_gain=0.20下不会触发：退出前剩余深度乘gain>0.01。保留供以后收紧深度容差。 |
 | bottom_reference_offset_z_m / gripper.contact_body_xyz | 非重复；取艇底参考点与姿态旋转后爪子最低点的较大下伸量。水平时0.29大于0.10。 |
 | near_floor_open_loop及floor_z/clearance/press/lift参数 | 当前启用，均实际使用；descent.duration_seconds限制总下压时间，press_thrust_seconds限制近底推力时间。 |
