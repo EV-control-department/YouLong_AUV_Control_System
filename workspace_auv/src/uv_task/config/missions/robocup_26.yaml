@@ -43,22 +43,22 @@ mission:
           # - command: SET
           #   axes: rz
           #   target: [0.0, 0.0, 0.0, 0.0]
-      on_failure:
-        default:
-          # 失败覆盖只传给下一项任务 26rb_grab_ball_ring，作为其初始路线。
-          poses:
-            - command: WTRAVEL
-              axes: xyz
-              target: [3.0, -1.0, 0.2, 0.0]
-              on_failure: continue
-            - command: WTRAVEL
-              axes: xy
-              target: [0.0, 0.0, 0.2, 0.0]
-              on_failure: continue
-            - command: SET
-              axes: rz
-              target: [0.0, 0.0, 0.0, 0.0]
-              on_failure: continue
+      # on_failure:
+      #   default:
+      #     # 失败覆盖只传给下一项任务 26rb_grab_ball_ring，作为其初始路线。
+      #     poses:
+      #       - command: WTRAVEL
+      #         axes: xyz
+      #         target: [3.0, -1.0, 0.2, 0.0]
+      #         on_failure: continue
+      #       - command: WTRAVEL
+      #         axes: xy
+      #         target: [0.0, 0.0, 0.2, 0.0]
+      #         on_failure: continue
+      #       - command: SET
+      #         axes: rz
+      #         target: [0.0, 0.0, 0.0, 0.0]
+      #         on_failure: continue
 
     - name: 26rb_grab_ball_ring
       config: ../tasks/26rb_grab_ball_ring.yaml

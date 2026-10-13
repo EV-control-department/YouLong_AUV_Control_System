@@ -127,6 +127,6 @@
   <joint name="hairpin_claw_mount" type="fixed">
     <parent link="base_link"/>
     <child link="hairpin_claw_link"/>
-    <origin xyz="0.230 0 0.130" rpy="3.141592653589793 -1.5707963267948966 0"/>
+    <origin xyz="0.350 0 0.130" rpy="3.141592653589793 -1.5707963267948966 0"/>
   </joint>
 </robot>

@@ -595,7 +595,13 @@ class RB26GateTask:
         except Exception as exc:
             self._log(f'停车指令未确认: {exc}', True)
             confirmed = False
-        return confirmed and not self._cleanup_unconfirmed
+        confirmed = confirmed and not self._cleanup_unconfirmed
+        if not confirmed:
+            # This guard applies to the containing mission, including its
+            # failure-transfer route, as well as the remaining gates.
+            self.node.stopped = True
+            self._log('过门停车未确认：暂停整个任务列表，禁止进入后续任务', True)
+        return confirmed
 
     def _fixed_motion_confirmed(self):
         if self._cleanup_unconfirmed or not getattr(self.node, '_last_motion_cleanup_confirmed', True):

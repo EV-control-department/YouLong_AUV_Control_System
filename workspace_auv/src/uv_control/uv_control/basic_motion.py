@@ -318,7 +318,8 @@ class BasicMotionNode(Node):
         self._timers.append(self.create_timer(0.5, self._publish_safe_stop_state))
         self.context.on_shutdown(self._on_context_shutdown)
 
-        self.get_logger().info('BasicMotion node started')
+        self.get_logger().info(
+            f'BasicMotion node started; state_timeout={self._state_timeout:.2f}s')
 
     def _on_context_shutdown(self):
         """Stop callbacks before the ROS context starts destroying handles.

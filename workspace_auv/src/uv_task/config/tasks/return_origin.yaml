@@ -1,7 +1,8 @@
 task: return_origin
 
 params:
-  # 按入口实测yaw将odom方向换算为机体系开环推力，不先回原点或转向。
+  # robocup_26 的 initial 先用 WLINE 返回目标点；本任务随后按入口实测yaw
+  # 将odom方向换算为机体系开环推力，依次执行西南满推和上浮。
   horizontal:
     yaw_deg: -135.0 # odom -X/-Y方向，即西南侧。
     thrust_fraction: 1.0 # 沿指定方向放大到至少一个水平轴满推，所有分量不超过100%。

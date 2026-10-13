@@ -35,6 +35,8 @@ _MOTION_COMMANDS = {
     "BMOVE",
     "WTRAVEL",
     "BTRAVEL",
+    "BLINE",
+    "WLINE",
 }
 
 
@@ -42,7 +44,9 @@ def _validate_pose(value: Any, *, context: str) -> dict[str, Any]:
     """Validate and normalize a mission-level BasicMotion pose override."""
     if not isinstance(value, dict):
         raise ConfigError(f"{context} 必须是映射")
-    unknown = set(value) - {"command", "axes", "target", "on_failure"}
+    unknown = set(value) - {
+        "command", "axes", "target", "on_failure", "cruise_speed",
+    }
     if unknown:
         raise ConfigError(
             f"{context} 存在未知键：{sorted(unknown)}")
@@ -69,6 +73,10 @@ def _validate_pose(value: Any, *, context: str) -> dict[str, Any]:
     if len(set(axis_text)) != len(axis_text):
         raise ConfigError(f"{context}.axes 不能重复指定同一坐标轴")
 
+    if command in {"BLINE", "WLINE"} and axes not in {"", "xyz"}:
+        raise ConfigError(
+            f"{context}.axes 对 BLINE/WLINE 只能为空或 xyz")
+
     target = value.get("target")
     if not isinstance(target, list) or len(target) != 4:
         raise ConfigError(
@@ -88,6 +96,16 @@ def _validate_pose(value: Any, *, context: str) -> dict[str, Any]:
         "axes": axes,
         "target": normalized_target,
     }
+    if "cruise_speed" in value:
+        if command not in {"BLINE", "WLINE"}:
+            raise ConfigError(
+                f"{context}.cruise_speed 只支持 BLINE/WLINE")
+        speed = value["cruise_speed"]
+        if (isinstance(speed, bool) or not isinstance(speed, (int, float))
+                or not math.isfinite(float(speed)) or speed < 0.0):
+            raise ConfigError(
+                f"{context}.cruise_speed 必须是有限非负数值")
+        normalized["cruise_speed"] = float(speed)
     if "on_failure" in value:
         policy = value["on_failure"]
         if not isinstance(policy, str) or policy.strip().lower() != "continue":

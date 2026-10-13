@@ -835,6 +835,15 @@ class TaskRunnerNode(Node):
     def _update_command_tracker_from_pose(self, pose: dict):
         """Update the local command pose after an initial pose override."""
         command = str(pose['command']).upper()
+        if command in {'BLINE', 'WLINE'}:
+            # LINE resolves its fixed world endpoint from the measured start pose.
+            target = self._last_motion_final_target
+            if (target is None or len(target) != 4
+                    or not all(math.isfinite(value) for value in target)):
+                raise ValueError(f'{command} 返回的 final_target 无效')
+            self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw = target
+            return
+
         x, y, z, yaw = (float(value) for value in pose['target'])
         axes = pose.get('axes', '')
 
@@ -871,6 +880,8 @@ class TaskRunnerNode(Node):
             'BMOVE': BasicMotion.Goal.BMOVE,
             'WTRAVEL': BasicMotion.Goal.WTRAVEL,
             'BTRAVEL': BasicMotion.Goal.BTRAVEL,
+            'BLINE': BasicMotion.Goal.BLINE,
+            'WLINE': BasicMotion.Goal.WLINE,
         }
         command = str(pose['command']).upper()
         axes = str(pose.get('axes', ''))
@@ -883,6 +894,7 @@ class TaskRunnerNode(Node):
                 command_types[command],
                 target,
                 axes,
+                cruise_speed=float(pose.get('cruise_speed', 0.0)),
                 task_context=self._format_motion_context(
                     f'{task_name}初始位姿'),
                 light_pattern=(self.LIGHT_RED, self.LIGHT_YELLOW),
@@ -901,7 +913,13 @@ class TaskRunnerNode(Node):
                 else f'{task_name}.motion')
             return TaskOutcome.failed(code, message)
 
-        self._update_command_tracker_from_pose(pose)
+        try:
+            self._update_command_tracker_from_pose(pose)
+        except ValueError as exc:
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = str(exc)
+            self.get_logger().error(self._last_motion_failure_message)
+            return TaskOutcome.failed(f'{task_name}.motion', str(exc))
         return TaskOutcome.ok()
 
     def _select_failure_override(self, task: dict, failure_code: str):
@@ -961,7 +979,7 @@ class TaskRunnerNode(Node):
                         f'[{self.current_index + 1}/{total}] {name} 执行失败：'
                         f'code={outcome.failure_code}，{outcome.message}')
                     pending_failure_override = None
-                    if self.current_index + 1 < total:
+                    if not self.stopped and self.current_index + 1 < total:
                         pending_failure_override = self._select_failure_override(
                             task, outcome.failure_code)
                         if pending_failure_override is not None:
@@ -982,7 +1000,7 @@ class TaskRunnerNode(Node):
                     f'[{self.current_index + 1}/{total}] {name} 发生异常：'
                     f'code={outcome.failure_code}，{outcome.message}')
 
-                if self.current_index + 1 < total:
+                if not self.stopped and self.current_index + 1 < total:
                     pending_failure_override = self._select_failure_override(
                         task, outcome.failure_code)
                     if pending_failure_override is not None:
