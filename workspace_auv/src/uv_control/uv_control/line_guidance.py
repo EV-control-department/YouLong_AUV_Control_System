@@ -54,6 +54,8 @@ class LineConfig:
     brake_acceleration: float = 0.20
     cross_gain: float = 0.60
     cross_speed: float = 0.18
+    z_gain: float = 1.20
+    z_max_speed: float = 0.20
     capture_enter: float = 0.30
     capture_exit: float = 0.10
     capture_speed: float = 0.15
@@ -61,6 +63,7 @@ class LineConfig:
     terminal_speed: float = 0.10
     terminal_radius: float = 0.35
     position_tolerance: float = 0.08
+    z_tolerance: float = 0.15
     stop_speed: float = 0.04
     yaw_tolerance: float = 3.0
     stable_seconds: float = 0.8
@@ -170,11 +173,21 @@ class LineGuidance:
         perpendicular = tuple(p - sample.progress * d
                               for p, d in zip(offset, self.direction))
         target_limit = min(cfg.terminal_speed, max_speed) if self.terminal else max_speed
-        cross_star = saturate(tuple(-cfg.cross_gain * p for p in perpendicular),
-                              min(cfg.cross_speed, target_limit))
-        # Reserve the requested correction before choosing along-track speed.
+        # Follow the segment depth with along-track feed-forward; near the end
+        # servo directly to endpoint Z. The XY terminal cap must not weaken Z.
+        vz = (cfg.z_gain * sample.endpoint_error[2] if self.terminal else
+              along_star * self.direction[2] - cfg.z_gain * perpendicular[2])
+        z_limit = min(cfg.z_max_speed, max_speed)
+        vz = max(-z_limit, min(z_limit, vz))
+        horizontal_limit = min(target_limit,
+                               math.sqrt(max(0.0, max_speed ** 2 - vz ** 2)))
+        # XY correction and terminal speed leave a separate budget for depth.
+        cross_xy = saturate(tuple(-cfg.cross_gain * p for p in perpendicular[:2]),
+                            min(cfg.cross_speed, horizontal_limit))
+        cross_star = (*cross_xy, 0.0)
+        # Reserve the requested horizontal correction before along-track speed.
         # Otherwise cruising at max_speed leaves no authority to recover drift.
-        along_limit = math.sqrt(max(0.0, target_limit ** 2 - dot(cross_star, cross_star)))
+        along_limit = math.sqrt(max(0.0, horizontal_limit ** 2 - dot(cross_star, cross_star)))
         along_star = max(-along_limit, min(along_limit, along_star))
         change = along_star - current_along
         along = current_along + max(-cfg.deceleration * dt,
@@ -184,6 +197,10 @@ class LineGuidance:
         cross_limit = math.sqrt(max(0.0, max_speed ** 2 - along ** 2))
         cross = saturate(cross_star, cross_limit)
         desired = tuple(along * d + c for d, c in zip(self.direction, cross))
+        # Reach the horizontal target under the existing deceleration limit;
+        # reserve only the hard total-speed budget during that transition.
+        horizontal = saturate(desired[:2], math.sqrt(max(0.0, max_speed ** 2 - vz ** 2)))
+        desired = (*horizontal, vz)
         # Terminal speed is a target reached under the same slew limits; an
         # immediate terminal clamp would bypass along-track deceleration.
         desired = saturate(desired, max_speed)
@@ -201,9 +218,18 @@ class LineGuidance:
                 position_tolerance=None):
         target_yaw = self.final_yaw if final else self.yaw
         yaw_error = abs((target_yaw - yaw_deg + 180.0) % 360.0 - 180.0)
+        return (self.position_reached(position, position_tolerance=position_tolerance)
+                and norm(world_velocity) <= self.config.stop_speed
+                and yaw_error <= self.config.yaw_tolerance)
+
+    def position_reached(self, position, *, target=None, position_tolerance=None):
+        """Use an independent depth tolerance for alignment and arrival.
+
+        The per-goal position override controls XY; Z uses ``z_tolerance``.
+        """
+        target = self.end if target is None else target
         tolerance = (self.config.position_tolerance if position_tolerance is None
                      else float(position_tolerance))
         return (all(abs(b - p) <= tolerance
-                    for b, p in zip(self.end, position))
-                and norm(world_velocity) <= self.config.stop_speed
-                and yaw_error <= self.config.yaw_tolerance)
+                    for b, p in zip(target[:2], position[:2]))
+                and abs(target[2] - position[2]) <= self.config.z_tolerance)

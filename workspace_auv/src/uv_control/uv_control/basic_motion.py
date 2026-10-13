@@ -1606,8 +1606,7 @@ class BasicMotionNode(Node):
                     along_command = 0.0
                     if phase == 'ALIGN':
                         aligned = (
-                            all(abs(p - a) <= self._line_config.position_tolerance
-                                for p, a in zip(position, guide.start))
+                            guide.position_reached(position, target=guide.start)
                             and abs(wrap_deg(guide.yaw - attitude[2]))
                             <= self._line_config.yaw_tolerance
                             and norm(world_velocity) <= self._line_config.stop_speed)

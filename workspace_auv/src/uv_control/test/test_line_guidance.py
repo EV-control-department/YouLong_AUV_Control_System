@@ -168,7 +168,8 @@ def test_full_speed_drift_gets_correction_without_breaking_slew_limits(world, of
         assert norm(command) < .8
         assert norm(tuple(a-b for a, b in zip(command, previous))) <= cfg.vector_acceleration*.05 + 1e-12
         assert -cfg.deceleration*.05 - 1e-12 <= command[0]-previous[0] <= cfg.acceleration*.05 + 1e-12
-    assert command[1:] == pytest.approx(tuple(-cfg.cross_gain*v for v in offset[1:]))
+    assert command[1:] == pytest.approx((-cfg.cross_gain*offset[1],
+                                        -cfg.z_gain*offset[2]))
     assert command[0] < TOTAL_SPEED_LIMIT
 
 
@@ -223,6 +224,66 @@ def test_goal_position_tolerance_override_remains_effective():
     guide = LineGuidance((0, 0, 0), 0, (1, 0, 0), .3, LineConfig())
     assert guide.reached((.95, 0, 0), (0, 0, 0), 0)
     assert not guide.reached((.95, 0, 0), (0, 0, 0), 0, position_tolerance=.01)
+
+
+def test_gate_endpoint_accepts_depth_tolerance_without_accepting_large_drift():
+    guide = LineGuidance((0, 0, .4), 0, (1.7, 4.2, .4), .5,
+                         LineConfig(), world=True, final_yaw=90)
+    assert guide.reached((1.71, 4.25, .54), (0, 0, 0), 90, final=True)
+    assert not guide.reached((1.71, 4.25, .67), (0, 0, 0), 90, final=True)
+    assert not guide.reached((1.79, 4.25, .54), (0, 0, 0), 90, final=True)
+
+
+def test_depth_tolerance_is_independent_of_goal_xy_override_and_applies_to_start():
+    guide = LineGuidance((0, 0, .4), 0, (1, 0, 0), .3, LineConfig())
+    assert guide.reached((1, 0, .54), (0, 0, 0), 0, position_tolerance=.01)
+    assert not guide.reached((.98, 0, .54), (0, 0, 0), 0, position_tolerance=.01)
+    assert not guide.reached((1, 0, .56), (0, 0, 0), 0, position_tolerance=.4)
+    assert guide.position_reached((0, 0, .54), target=guide.start)
+    assert not guide.position_reached((0, 0, .56), target=guide.start)
+
+
+@pytest.mark.parametrize('error', [-.3, -.1, .1, .3])
+@pytest.mark.parametrize('terminal', [False, True])
+def test_depth_servo_corrects_both_directions_with_independent_speed_budget(error, terminal):
+    cfg = LineConfig(z_gain=1.2, z_max_speed=.2)
+    guide = LineGuidance((0, 0, .4), 0, (1, 0, 0), .5, cfg)
+    position = (.9 if terminal else 0., 0., .4-error)
+    # Freeze the observed pose to examine the steady requested correction.
+    for _ in range(100):
+        previous = guide.velocity
+        command, phase, _ = guide.step(position, (0, 0, 0), .05)
+        assert norm(command) <= TOTAL_SPEED_LIMIT + 1e-12
+        assert norm(tuple(a-b for a, b in zip(command, previous))) <= cfg.vector_acceleration*.05 + 1e-12
+    assert (phase == 'TERMINAL') == terminal
+    assert command[2] == pytest.approx(max(-.2, min(.2, 1.2*error)))
+    if terminal:
+        assert norm(command[:2]) <= cfg.terminal_speed + 1e-12
+        assert abs(command[2]) > cfg.terminal_speed
+
+
+@pytest.mark.parametrize('delta', [(0, 0, .8), (1, .3, .8), (1, .3, -.4)])
+def test_depth_servo_preserves_vertical_and_sloped_segment_convergence(delta):
+    cfg = LineConfig()
+    guide = LineGuidance((0, 0, .5), 0, delta, .5, cfg)
+    position, measured = guide.start, (0, 0, 0)
+    for _ in range(2400):
+        command, _, _ = guide.step(position, measured, .05)
+        assert abs(command[2]) <= cfg.z_max_speed + 1e-12
+        assert norm(command) <= TOTAL_SPEED_LIMIT + 1e-12
+        measured = tuple(v+.2*(c-v) for v, c in zip(measured, command))
+        position = tuple(p+.05*v for p, v in zip(position, measured))
+        if guide.reached(position, measured, guide.yaw):
+            break
+    else:
+        pytest.fail(f'failed to converge: position={position}, velocity={measured}')
+
+
+@pytest.mark.parametrize('parameter', ['z_gain', 'z_max_speed', 'z_tolerance'])
+@pytest.mark.parametrize('value', [0., -1., math.nan, math.inf])
+def test_invalid_depth_servo_parameters(parameter, value):
+    with pytest.raises(ValueError):
+        LineConfig(**{parameter: value}).validate()
 
 
 def test_arrival_requires_low_measured_speed_and_aligned_heading():

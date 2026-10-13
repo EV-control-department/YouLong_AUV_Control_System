@@ -17,13 +17,16 @@
     line.brake_acceleration: 0.20
     line.cross_gain: 0.60
     line.cross_speed: 0.18
+    line.z_gain: 1.20 # Z误差到世界垂直速度的比例增益，单位1/s。
+    line.z_max_speed: 0.20 # 垂直速度上限m/s，独立于末端水平低速限制。
     line.capture_enter: 0.30
     line.capture_exit: 0.10
     line.capture_speed: 0.15
     line.reverse_speed: 0.08
-    line.terminal_speed: 0.10
+    line.terminal_speed: 0.10 # 末端水平速度；Z使用独立伺服参数。
     line.terminal_radius: 0.35
-    line.position_tolerance: 0.08
+    line.position_tolerance: 0.08 # XY到点容差m，可由动作position_tolerance覆盖。
+    line.z_tolerance: 0.15 # Z到点及起步对准容差m。
     line.stop_speed: 0.04
     line.yaw_tolerance: 3.0
     line.stable_seconds: 0.8
