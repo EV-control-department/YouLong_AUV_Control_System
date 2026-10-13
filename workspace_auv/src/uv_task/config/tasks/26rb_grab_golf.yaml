@@ -62,7 +62,7 @@ params:
     depth_gain: 0.8 # 实测深度偏差到世界垂直速度的增益，单位：1/秒。
     max_vertical_speed_mps: 0.08 # 定深修正最大垂直速度，单位：米/秒。
     depth_tolerance_m: 0.03 # 进入居中保持需同时满足的深度误差，单位：米。
-    position_command_timeout: 10.0 # 伺服结束定点保持/夹爪外参 BMOVE 超时，单位：秒。
+    position_command_timeout: 30.0 # 伺服结束定点保持/夹爪外参 BMOVE 超时，单位：秒。
 
   # 夹爪舵机 1 先重复发送到 0 rad，降低单次消息丢失的影响。
   claw:
@@ -83,7 +83,7 @@ params:
     speed_mps: 0.1 # 上浮速度，NED 负值向上，单位：米/秒。
     duration_seconds: 5.0
   vertical_publish_period: 0.05 # 速度指令周期，单位：秒。
-  return_timeout: 60.0 # 回到水平伺服位置的最长时间，单位：秒。
+  return_timeout: 120.0 # 回到水平伺服位置的最长时间，单位：秒。
 
   # 回到相机正对球时的位姿，用本次伺服成功相机复检；存在则重试抓取。
   verification:

@@ -66,7 +66,7 @@ mission:
         poses:
           - command: BMOVE
             axes: x
-            target: [-0.5, 0.0, 0.0, 0.0]
+            target: [-0.2, 0.0, 0.0, 0.0]
           - command: BMOVE
             axes: y
             target: [0.0, 1.0, 0.0, 0.0]

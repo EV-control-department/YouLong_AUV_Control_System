@@ -9,7 +9,7 @@ params:
     red_position: [2.8, 1.05, 0.4]
   depth:
     task_depth_m: 0.35 # 任务入场定深一次，之后不再发送 z 定位或垂向修正速度。
-    timeout: 15.0
+    timeout: 30.0
   search:
     initial_observe_seconds: 2.0 # 朝向预设位置后完整观察两秒。
     align_seconds: 3.0 # 前视 yaw 对准最多等待三秒获取目标方位，然后直接 SET。
@@ -19,7 +19,7 @@ params:
     yaw_stable_seconds: 0.2
     yaw_gain: 1.2
     max_yaw_rate_deg_s: 10.0
-    rotate_timeout: 8.0
+    rotate_timeout: 30.0
     period: 0.05
     stereo_pair_slop: 0.15
     stereo_min_angle_deg: 0.1
@@ -36,18 +36,18 @@ params:
     timeout: 5.0 # 到水平半径内停车，当前方向等待目标最多 5 秒。
     yaw_step_deg: 15.0 # NED 航向：相对停车航向左 -15°、右 +15°。
     direction_dwell_seconds: 5.0 # 左右方向各最多观察 5 秒，发现即对准。
-    rotate_timeout: 5.0 # 左、右扫视每次转向的动作超时。
+    rotate_timeout: 20.0 # 左、右扫视每次转向的动作超时。
   charge: # 近场航向矫正完成后直接执行撞击 BLINE。
     duration: 8.0 # 从 BLINE 正向速度反馈开始计时，到时取消并停车。
     speed_mps: 0.79 # 请求撞击速度；uv_control 按配置限幅。
-    timeout: 20.0 # BLINE 整体上限，包含接受目标、启动和 8 秒撞击时长。
+    timeout: 60.0 # BLINE 整体上限，包含接受目标、启动和 8 秒撞击时长。
   retreat:
     duration: 3.0 # 整个撞球流程（含兜底）结束前，只执行一次后退。
     thrust_fraction: 1.0 # 满推力：control_key=18、type_mask=62、x=-1.0；只改变机体前后轴。
   fallback:
     duration: 15.0 # 观测失败红灯一次；直接前往预设 XY，最多前进 15 秒。
     speed_mps: 0.15 # 请求兜底速度；uv_control 按配置限幅。
-    timeout: 25.0 # 兜底 BLINE 整体上限，包含接受目标和启动等待。
+    timeout: 60.0 # 兜底 BLINE 整体上限，包含接受目标和启动等待。
   motion:
     cancel_timeout: 2.0 # BLINE 取消未确认结束时，禁止后续运动。
     start_timeout: 30.0 # 等待首次正向速度反馈的最长时间。

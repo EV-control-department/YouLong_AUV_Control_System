@@ -5,7 +5,7 @@ params:
   # NED向下为正，单位米；仅抓取下沉阶段暂时离开此深度。
   work_depth_m: 0.05
   depth:
-    timeout: 15.0 # 进入作业深度的SET动作超时，单位：秒。
+    timeout: 30.0 # 进入作业深度的SET动作超时，单位：秒。
   # 使用 robotcup20260901.yaml 中的 canonical detector class name。
   golf_color: pink_golf # 可选 pink_golf / yellow_golf。
   collection_frame_class: collection_frame_down
@@ -38,7 +38,7 @@ params:
     fallback_rotate_speed_deg_s: 30.0 # 定点观察失败后，保持深度缓慢旋转搜索 frame。
     fallback_rotate_degrees: 360.0 # 最多旋转一整圈；期间发现 frame 会立即停止。
     fallback_rotate_timeout: 15.0 # 旋转搜索安全上限；未转满则按搜索故障处理。
-    move_timeout: 10.0 # 定深、朝向、停车保持和兜底定点的 SET 动作超时。
+    move_timeout: 60.0 # 定深、朝向、停车保持和兜底定点的 SET 动作超时。
     period: 0.05
     stereo_pair_slop: 0.15 # 同 ID 配对，缺失 ID 时按时间戳配对。
     stereo_min_angle_deg: 0.1
@@ -74,11 +74,11 @@ params:
     depth_gain: 0.8 # 实测深度偏差到世界垂直速度的增益，单位：1/秒。
     max_vertical_speed_mps: 0.08 # 定深修正最大垂直速度，单位：米/秒。
     depth_tolerance_m: 0.03 # 进入居中保持需同时满足的深度误差，单位：米。
-    position_command_timeout: 10.0 # 停车、恢复深度及合爪前保持超时；抓前对爪使用claw_alignment.timeout，单位：秒。
+    position_command_timeout: 30.0 # 停车、恢复深度及合爪前保持超时；抓前对爪使用claw_alignment.timeout，单位：秒。
 
   # 仅抓取前的转向/对爪SET使用这些到位条件；Z沿用SET默认容差。
   claw_alignment:
-    timeout: 30.0 # 球、环各自的对爪SET总等待时间，秒。
+    timeout: 60.0 # 球、环各自的对爪SET执行上限60秒，到位后立即继续。
     position_tolerance_m: 0.15 # 世界X/Y每轴到位容差，米。
     yaw_tolerance_deg: 10.0 # 对爪航向到位容差，度。
 
@@ -111,9 +111,9 @@ params:
     yaw_hold_gain: 1.2 # 固定航向误差到偏航角速度的增益，单位：1/秒。
     yaw_hold_max_rate_deg_s: 10.0 # 偏航纠偏角速度上限，单位：度/秒。
   # 恢复使用完整SET：保持本次夹爪对准XY/yaw，上浮到work_depth_m。
-  # 定深动作超时沿用servo.position_command_timeout（默认10秒）。
+  # 定深动作超时沿用servo.position_command_timeout（当前30秒）。
   vertical_publish_period: 0.05 # 速度指令周期，单位：秒。
-  return_timeout: 60.0 # 抓后返回该目标原本下视对齐位姿的运动超时。
+  return_timeout: 120.0 # 抓后返回该目标原本下视对齐位姿的运动超时。
 
   # 最多尝试次数包含首次，球失败用尽后仍继续抓环。
   golf:
