@@ -375,6 +375,12 @@ class LineFollower:
 
     # ── 主循环 ────────────────────────────────────────────────────────
 
+    def _motion(self, *args, **kwargs):
+        success, message = self._node._send_action_goal(*args, **kwargs)
+        if not success:
+            raise RuntimeError('LineFollower 运动失败：'+str(message))
+        return success, message
+
     def execute(self) -> bool:
         """搜索 → 跟踪主循环。返回 True=成功，False=超时或停止。
 
@@ -431,13 +437,14 @@ class LineFollower:
                                 f'LineFollower：检测到三角形标记 '
                                 f'（class={self._triangle_cid}），开始接近')
                             # 1. 对准三角形
-                            self._node._align_to_class(
-                                self._triangle_cid, 'triangle')
+                            if not self._node._align_to_class(
+                                    self._triangle_cid, 'triangle'):
+                                return False
                             self._node._pulse_task_light(
                                 self._node.LIGHT_GREEN,
                                 '检测到三角形标记', duration=1.0)
                             # 2. 前移 + 右移 (对齐后微调) → 下沉 → 上浮
-                            self._node._send_action_goal(
+                            self._motion(
                                 BasicMotion.Goal.BMOVE,
                                 [self._triangle_xy_adjust_dx,
                                  self._triangle_xy_adjust_dy, 0.0, 0.0],
@@ -445,12 +452,12 @@ class LineFollower:
                             self._node._cmd_x += self._triangle_xy_adjust_dx
                             self._node._cmd_y += self._triangle_xy_adjust_dy
 
-                            self._node._send_action_goal(
+                            self._motion(
                                 BasicMotion.Goal.BMOVE,
                                 [0.0, 0.0, self._triangle_sink_depth, 0.0],
                                 'z', timeout=15.0, quiet=True)
                             self._node._cmd_z += self._triangle_sink_depth
-                            self._node._send_action_goal(
+                            self._motion(
                                 BasicMotion.Goal.BMOVE,
                                 [0.0, 0.0, -self._triangle_sink_depth, 0.0],
                                 'z', timeout=15.0, quiet=True)
@@ -493,8 +500,9 @@ class LineFollower:
                                 f'LineFollower：检测到正方形标记 '
                                 f'（class={self._square_cid}），开始接近')
                             # 1. 对准正方形
-                            self._node._align_to_class(
-                                self._square_cid, 'square')
+                            if not self._node._align_to_class(
+                                    self._square_cid, 'square'):
+                                return False
                             self._node._pulse_task_light(
                                 self._node.LIGHT_GREEN,
                                 '检测到正方形标记', duration=1.0)
@@ -508,7 +516,7 @@ class LineFollower:
                             for _ in range(self._square_rotation_count):
                                 if self._stopped:
                                     return False
-                                self._node._send_action_goal(
+                                self._motion(
                                     BasicMotion.Goal.BMOVE,
                                     [0.0, 0.0, 0.0, self._square_rotation_step],
                                     'rz', timeout=15.0, quiet=True)
@@ -579,7 +587,7 @@ class LineFollower:
             f'巡线搜索：方向={self._search_spiral_dir}，'
             f'范围={size:.2f}m，步长=({dx:.2f}, {dy:.2f})')
 
-        success, _ = self._node._send_action_goal(
+        success, _ = self._motion(
             BasicMotion.Goal.BMOVE,
             [float(dx), float(dy), 0.0, 0.0], 'xy', timeout=8.0,
             quiet=True)
@@ -629,7 +637,7 @@ class LineFollower:
                 f'前进={forward:.3f}，横移={dy:.3f}，偏航变化=0，'
                 f'中心误差={line.center_error:.3f}')
 
-            success, _ = self._node._send_action_goal(
+            success, _ = self._motion(
                 BasicMotion.Goal.BMOVE,
                 [forward, dy, 0.0, 0.0], 'xy', timeout=1.0,
                 quiet=True)
@@ -703,7 +711,7 @@ class LineFollower:
                 f'中心误差={line.center_error:.3f}，航向误差={line.heading_error_deg:.1f}°')
 
         # 发送 BMOVE xyrz（同步前向 + 横向 + 偏航）
-        success, _ = self._node._send_action_goal(
+        success, _ = self._motion(
             BasicMotion.Goal.BMOVE,
             [forward, dy, 0.0, dyaw], 'xyrz', timeout=8.0,
             quiet=True)

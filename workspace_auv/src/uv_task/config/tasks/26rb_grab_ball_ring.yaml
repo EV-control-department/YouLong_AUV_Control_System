@@ -73,7 +73,13 @@ params:
     depth_gain: 0.8 # 实测深度偏差到世界垂直速度的增益，单位：1/秒。
     max_vertical_speed_mps: 0.08 # 定深修正最大垂直速度，单位：米/秒。
     depth_tolerance_m: 0.03 # 进入居中保持需同时满足的深度误差，单位：米。
-    position_command_timeout: 10.0 # 停车保持和最终夹爪对准的动作执行超时，单位：秒。
+    position_command_timeout: 10.0 # 停车、恢复深度及合爪前保持超时；抓前对爪使用claw_alignment.timeout，单位：秒。
+
+  # 仅抓取前的转向/对爪SET使用这些到位条件；Z沿用SET默认容差。
+  claw_alignment:
+    timeout: 30.0 # 球、环各自的对爪SET总等待时间，秒。
+    position_tolerance_m: 0.15 # 世界X/Y每轴到位容差，米。
+    yaw_tolerance_deg: 10.0 # 对爪航向到位容差，度。
 
   frame:
     servo_gain: 4.0 # frame水平伺服主增益。

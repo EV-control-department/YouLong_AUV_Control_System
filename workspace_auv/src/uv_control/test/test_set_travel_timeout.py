@@ -71,3 +71,59 @@ def test_failed_turn_never_moves(node):
     node._step_move_world=step
     assert not node._travel_world(2,0,0,0,timeout=10)
     assert len(calls)==1
+
+
+@pytest.mark.parametrize('errors,override,expected', [
+    ((.14, -.14, .09, 9.), True, True),
+    ((.151, 0., 0., 0.), True, False),
+    ((0., -.151, 0., 0.), True, False),
+    ((0., 0., .101, 0.), True, False),
+    ((0., 0., 0., 10.1), True, False),
+    ((.14, 0., 0., 0.), False, False),
+    ((0., 0., 0., 9.), False, False),
+    ((.09, -.09, .09, 4.), False, True),
+])
+def test_set_arrival_overrides_are_per_goal_and_preserve_depth(node, errors, override, expected):
+    ns = node._execute_motion.__globals__
+    for name, value in [('SET', 3), ('WMOVE', 1), ('BMOVE', 2), ('WTRAVEL', 4), ('BTRAVEL', 5)]:
+        setattr(ns['BasicMotion'].Goal, name, value)
+    clock = [0.]
+    ns['time'] = NS(monotonic=lambda: clock[0], sleep=lambda dt: clock.__setitem__(0, clock[0]+dt))
+    ns['rclpy'] = NS(ok=lambda: True)
+    pose = Coordinate()
+    target = Coordinate(x=errors[0], y=errors[1], z=errors[2], rz=errors[3])
+    node.get_state = lambda: (pose, target, target)
+    node._target_error_snapshot = lambda: (pose, target, target)
+    node._motion_block_reasons = lambda: []
+    node._is_cancelled = lambda: False
+    node.set_world = lambda *args: None
+    goal = Goal(3, [target.x, target.y, target.z, target.rz], timeout=.2)
+    goal.request.axes = 'xyzrz'
+    if override:
+        goal.request.position_tolerance = .15
+        goal.request.yaw_tolerance = 10.
+    result = node._execute_motion(goal)
+    assert result.success is expected
+    assert goal.terminal == ('succeeded' if expected else 'aborted')
+    assert node._action_axes is None
+    if expected and override:
+        # A subsequent plain SET must return to the original XY/yaw bounds.
+        plain = Goal(3, [target.x, target.y, target.z, target.rz], timeout=.2)
+        plain.request.axes = 'xyzrz'
+        assert not node._execute_motion(plain).success
+
+
+@pytest.mark.parametrize('field,value', [('position_tolerance', -1.),
+    ('position_tolerance', float('nan')), ('yaw_tolerance', -1.),
+    ('yaw_tolerance', float('inf')), ('yaw_tolerance', 181.)])
+def test_set_rejects_invalid_arrival_override_before_motion(node, field, value):
+    ns = node._execute_motion.__globals__
+    for name, number in [('SET', 3), ('WMOVE', 1), ('BMOVE', 2), ('WTRAVEL', 4), ('BTRAVEL', 5)]:
+        setattr(ns['BasicMotion'].Goal, name, number)
+    node.get_state = lambda: (Coordinate(), Coordinate(), None)
+    node._motion_block_reasons = lambda: []
+    node.setxyzrz = lambda *a, **k: pytest.fail('invalid overrides must not start SET')
+    goal = Goal(3)
+    setattr(goal.request, field, value)
+    with pytest.raises(ValueError):
+        node._execute_motion(goal)

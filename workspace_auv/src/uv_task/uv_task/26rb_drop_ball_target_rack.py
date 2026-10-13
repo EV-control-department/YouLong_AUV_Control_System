@@ -132,14 +132,20 @@ class RB26DropBallTargetRackTask:
         yaw_rate = float(np.clip(yaw_error*1.2, -10.0, 10.0))
         # Preserve world depth even when body-horizontal axes are tilted.
         body = body_to_world_rotation(pose).T @ np.array([*horizontal, vz])
+        sent_at = time.monotonic()
+        # The visual deadline stops new corrections. An already-issued goal
+        # needs its own acknowledgement budget even at the end of that window.
+        if sent_at >= deadline:
+            return False
         success, message = self._node._send_body_velocity(
             *body.tolist(), yaw_rate_deg_s=yaw_rate,
             lease_s=max(0.25, 4*self._period),
-            wait_deadline=min(deadline, time.monotonic()+2.0),
+            wait_deadline=sent_at+2.0,
             task_context='26rb_drop_ball_target_rack 定深速度伺服',
             light_color=self._node.LIGHT_YELLOW)
         if not success:
             raise RuntimeError(f'rack速度指令失败：{message}')
+        return True
 
     def _hold_rack_pose(self):
         """Hand velocity control directly to SET at the configured task depth."""
@@ -219,7 +225,8 @@ class RB26DropBallTargetRackTask:
                     if stable_since is not None and now-stable_since >= self._stable_seconds:
                         aligned_camera = camera_name
                         break
-                self._send_rack_velocity(horizontal, deadline)
+                if not self._send_rack_velocity(horizontal, deadline):
+                    break
                 if not self._sleep(min(self._period, max(0.0, deadline-time.monotonic()))):
                     break
             if node.stopped:

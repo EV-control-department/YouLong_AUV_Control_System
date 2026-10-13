@@ -65,8 +65,11 @@ mission:
       initial:
         poses:
           - command: BMOVE
+            axes: x
+            target: [-0.5, 0.0, 0.0, 0.0]
+          - command: BMOVE
             axes: y
-            target: [0.0, 1.5, 0.0, 0.0]
+            target: [0.0, 1.0, 0.0, 0.0]
           # - command: SET
           #   axes: xyz
           #   target: [0.5, 5.0, 0.2, 0.0] # 下潜0.2m
@@ -102,7 +105,7 @@ mission:
         pose:
           command: WTRAVEL
           axes: xyz
-          target: [1.0, 1.0, 0.5, 0.0]
+          target: [0.5, 0.0, 0.5, 0.0]
           on_failure: continue
       # WTRAVEL 失败时继续执行西南满推3秒、上浮满推10秒。
       on_failure:

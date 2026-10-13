@@ -973,7 +973,7 @@ class BasicMotionNode(Node):
         return response
 
     def _cmd_and_wait(self, target_x, target_y, target_z, target_yaw_degree, timeout,
-                      *, reach_axes=None):
+                      *, reach_axes=None, reach_tolerances=None):
         """Publish a full position hold; optionally wait only for selected axes."""
         p, _, _ = self.get_state()
         dist = math.sqrt((target_x-p.x)**2 + (target_y-p.y)**2 + (target_z-p.z)**2)
@@ -982,9 +982,10 @@ class BasicMotionNode(Node):
             f'当前位置=({p.x:.2f}, {p.y:.2f}, {p.z:.2f}, {p.rz:.1f}°), '
             f'距离={dist:.2f}m')
         self.set_world(target_x, target_y, target_z, target_yaw_degree)
+        wait_options = dict(reach_tolerances or {})
         if reach_axes is not None:
-            return self._wait_reached(timeout=timeout, axes=reach_axes)
-        return self._wait_reached(timeout=timeout)
+            wait_options['axes'] = reach_axes
+        return self._wait_reached(timeout=timeout, **wait_options)
     
     
     def _wait_reached(self,
@@ -1229,11 +1230,18 @@ class BasicMotionNode(Node):
     # --- SET 系列 (绝对定位) ------------------------------------------------
 
     def setxyzrz(self, x: float, y: float, z: float, rz: float,
-                 timeout: float = 60.0) -> bool:
-        """odom position + yaw in degrees, with the active SET's arrival axes."""
-        return self._cmd_and_wait(x, y, z, rz,
-                                  timeout=timeout,
-                                  reach_axes=getattr(self, '_action_axes', None))
+                 timeout: float = 60.0, *, position_tolerance=0.0,
+                 yaw_tolerance=0.0) -> bool:
+        """Odom SET with optional XY/yaw arrival overrides; Z keeps its default."""
+        tolerances = {}
+        if position_tolerance > 0.0:
+            tolerances.update(tol_x=position_tolerance, tol_y=position_tolerance)
+        if yaw_tolerance > 0.0:
+            tolerances['tol_rz'] = yaw_tolerance
+        options = {'reach_axes': getattr(self, '_action_axes', None)}
+        if tolerances:
+            options['reach_tolerances'] = tolerances
+        return self._cmd_and_wait(x, y, z, rz, timeout=timeout, **options)
 
     def setxyz(self, x: float, y: float, z: float,
                timeout: float = 60.0) -> bool:
@@ -1915,11 +1923,20 @@ class BasicMotionNode(Node):
                     success = True
             else:
                 timeout = self._position_action_timeout(req.timeout, p, tx, ty, tz)
+                arrival = {}
+                for field in ('position_tolerance', 'yaw_tolerance'):
+                    value = float(getattr(req, field, 0.0))
+                    if not math.isfinite(value) or value < 0.0:
+                        raise ValueError(f'SET {field} must be finite and nonnegative')
+                    if field == 'yaw_tolerance' and value > 180.0:
+                        raise ValueError('SET yaw_tolerance must not exceed 180 degrees')
+                    if value > 0.0:
+                        arrival[field] = value
                 # Hold unselected axes at their measured start positions,
                 # but their drift must not block a yaw-only/depth-only SET.
                 self._action_axes = axes
                 try:
-                    success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout)
+                    success = self.setxyzrz(tx, ty, tz, tyaw, timeout=timeout, **arrival)
                 finally:
                     self._action_axes = None
 

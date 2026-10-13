@@ -598,7 +598,9 @@ class RB26GrabGolfTask:
             while not self._node.stopped and time.monotonic() < deadline:
                 success, message = self._node._send_body_velocity(
                     vertical_mps=speed_mps,
-                    lease_s=max(0.25, self._vertical_period * 4.0),
+                    lease_s=min(max(0.25, self._vertical_period * 4.0),
+                                max(0.001, deadline-time.monotonic())),
+                    wait_deadline=time.monotonic()+2.0,
                     task_context=self._node._format_motion_context(
                         f'{self._task_name} {label}速度控制'))
                 if not success:
@@ -612,6 +614,7 @@ class RB26GrabGolfTask:
         finally:
             neutral_ok, neutral_message = self._node._send_body_velocity(
                 lease_s=max(0.25, self._vertical_period * 4.0),
+                wait_deadline=time.monotonic()+2.0,
                 task_context=self._node._format_motion_context(
                     f'{self._task_name} 结束{label}速度控制'))
             if not neutral_ok:

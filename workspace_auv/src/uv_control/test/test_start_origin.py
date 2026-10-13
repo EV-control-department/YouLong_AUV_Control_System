@@ -64,7 +64,7 @@ def node():
         'Future': lambda executor=None: asyncio.Future(),
         'UInt32': NS, 'StateResetRequest': NS, 'StateResetResult': NS, 'ZitSetpoint': NS,
         'DEFAULT_VELOCITY_LEASE': 0.25, 'CK_POS': 0, 'CK_VEL_BODY': 0x11,
-        'BODY_THRUST_COMMAND': 11,
+        'BODY_THRUST_COMMAND': 11, 'SETPOINT_COMMAND': 10,
         'TOL_X': 0.1, 'TOL_Y': 0.1, 'TOL_Z': 0.1, 'TOL_RZ': 5.0,
     }
     exec(compile(ast.Module(body=[cls], type_ignores=[]), str(source), 'exec'), namespace)

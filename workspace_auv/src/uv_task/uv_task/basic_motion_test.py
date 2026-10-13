@@ -351,31 +351,61 @@ class RosMotionTest:
         goal.target, goal.timeout = list(target), float(timeout)
         goal.velocity_lease = 0.25
         goal.task_context = f'basic_motion_test/{self.settings.stage}'
+        confirm = getattr(self.node, '_confirm_previous_motion', None)
+        if command != 7 and callable(confirm) and not confirm(2.0):
+            raise MotionTestError('motion', '上一条动作结束未确认')
+        track_goal = (getattr(self.node, '_active_goal_handle', None) is None
+                      and getattr(self.node, '_pending_goal_send_future', None) is None)
         send_future = client.send_goal_async(goal)
+        if track_goal:
+            self.node._pending_goal_send_future = send_future
+        self.node._last_motion_cleanup_confirmed = False
         handle = None
+        result_future = None
+        confirmed = False
         try:
             self.wait_future(send_future, 3.0, guarded)
             handle = send_future.result()
             if handle is None or not handle.accepted:
                 raise MotionTestError('motion', 'BasicMotion 拒绝目标')
-            self.node._active_goal_handle = handle
+            if track_goal:
+                self.node._pending_goal_send_future = None
+                self.node._active_goal_handle = handle
             if guarded:
                 self.check()
             result_future = handle.get_result_async()
             self.wait_future(result_future, timeout + 2.0, guarded)
             result = result_future.result()
+            confirmed = result is not None
             if result is None or result.status != 4 or not result.result.success:
                 raise MotionTestError('motion', '动作失败：' + (result.result.message if result is not None else '无结果'))
         except Exception:
-            if handle is not None and handle.accepted:
-                handle.cancel_goal_async()
-            elif not send_future.done():
+            # Fresh cleanup budget; stale feedback must not prevent cancellation.
+            until = self.now()+2.0
+            while not send_future.done() and self.now() < until:
+                time.sleep(0.01)
+            if send_future.done():
+                handle = send_future.result()
+                if track_goal:
+                    self.node._pending_goal_send_future = None
+                    self.node._active_goal_handle = handle if handle is not None and handle.accepted else None
+                if handle is None or not handle.accepted:
+                    confirmed = handle is not None
+                else:
+                    result_future = handle.get_result_async()
+                    if not result_future.done():
+                        handle.cancel_goal_async()
+                    while not result_future.done() and self.now() < until:
+                        time.sleep(0.01)
+                    confirmed = result_future.done() and result_future.result() is not None
+            else:
                 send_future.add_done_callback(self.cancel_late_goal)
-            elif send_future.result() is not None and send_future.result().accepted:
-                send_future.result().cancel_goal_async()
             raise
         finally:
-            if self.node._active_goal_handle is handle:
+            self.node._last_motion_cleanup_confirmed = confirmed
+            if not confirmed:
+                self.node.stopped = True
+            if track_goal and confirmed and self.node._active_goal_handle is handle:
                 self.node._active_goal_handle = None
 
     def wait_future(self, future, timeout, guarded):

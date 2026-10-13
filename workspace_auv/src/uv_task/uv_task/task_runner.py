@@ -419,8 +419,10 @@ class TaskRunnerNode(Node):
         self.stopped = True
         self._cancel_task_light_animation(restore=False)
         goal_handle = self._active_goal_handle
-        self._active_goal_handle = None
+        # Keep the handle/future until the task thread or next handoff confirms
+        # its terminal result. Service callbacks must not block the executor.
         if goal_handle is not None:
+            self._last_motion_cleanup_confirmed = False
             try:
                 goal_handle.cancel_goal_async()
                 self.get_logger().warning(
@@ -428,6 +430,17 @@ class TaskRunnerNode(Node):
             except Exception as exc:
                 self.get_logger().warning(
                     f'任务执行器关闭：取消 BasicMotion 目标失败：{exc}')
+        pending = getattr(self, '_pending_goal_send_future', None)
+        if pending is not None:
+            self._last_motion_cleanup_confirmed = False
+            def cancel_late(future):
+                try:
+                    handle = future.result()
+                    if handle is not None and handle.accepted:
+                        handle.cancel_goal_async()
+                except Exception as exc:
+                    self.get_logger().warning(f'迟到目标取消失败：{exc}')
+            pending.add_done_callback(cancel_late)
         self.get_logger().warning(
             '任务执行器关闭：由 BasicMotion 负责速度租约超时和零速度保护')
 
@@ -735,10 +748,13 @@ class TaskRunnerNode(Node):
             for _ in range(n):
                 if self.stopped: return False
                 tx = self._cmd_x + sx; ty = self._cmd_y + sy
-                self._send_action_goal(BasicMotion.Goal.SET,
+                ok, _ = self._send_action_goal(getattr(BasicMotion.Goal, 'SETPOINT', 10),
                     [tx, ty, self._cmd_z, self._cmd_yaw],
-                    'xy', timeout=0.01, quiet=True)
+                    'xy', timeout=2.0, quiet=True)
+                if not ok:
+                    return False
                 self._cmd_x = tx; self._cmd_y = ty
+                time.sleep(0.05)
                 if self._best_down_detection(class_id):
                     self.get_logger().info(f'搜索 [{label}]：已找到目标！'); return True
             sd = (sd + 1) % 8
@@ -752,15 +768,27 @@ class TaskRunnerNode(Node):
             self.get_logger().info(f'对准 [{label}]：正在搜索……')
             if not self._search_for_class(class_id, label):
                 return False
+        have_target = False
         for i in range(200):
             if self.stopped: return False
             tgt = self._triangulate(class_id)
             if tgt is None: time.sleep(0.05); continue
-            self._send_action_goal(BasicMotion.Goal.SET,
+            ok, _ = self._send_action_goal(getattr(BasicMotion.Goal, 'SETPOINT', 10),
                 [tgt[0], tgt[1], self._cmd_z, self._cmd_yaw],
-                'xy', timeout=0.1, quiet=True)
+                'xy', timeout=2.0, quiet=True)
+            if not ok:
+                return False
             self._cmd_x = tgt[0]; self._cmd_y = tgt[1]
+            have_target = True
+            time.sleep(0.05)
             self.get_logger().info(f'对准 [{label}]：第 {i} 次接近，x={tgt[0]}，y={tgt[1]}')
+        if not have_target:
+            return False
+        ok, _ = self._send_action_goal(BasicMotion.Goal.SET,
+            [self._cmd_x, self._cmd_y, self._cmd_z, self._cmd_yaw],
+            'xy', timeout=15.0, quiet=True)
+        if not ok:
+            return False
         self.get_logger().info(f'对准 [{label}]：已完成')
         return True
 
@@ -1154,7 +1182,7 @@ class TaskRunnerNode(Node):
                           light_color=None, light_pattern=None,
                           light_interval=1.0, cruise_speed=0.0, wait_deadline=None,
                           cancel_wait_timeout=2.0, position_tolerance=0.0,
-                          cancel_predicate=None):
+                          cancel_predicate=None, yaw_tolerance=0.0):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -1166,7 +1194,11 @@ class TaskRunnerNode(Node):
             target: [x,y,z,yaw] (yaw in degrees); BODY_THRUST uses normalized
                 [Fx,Fy,Fz,Myaw], with no angular unit conversion
             axes: which axes to move (empty = all)
-            timeout: max time in seconds (0 = server default 60s)
+            timeout: controller execution budget (0 = controller auto/default).
+            wait_deadline: last time to submit/execute the command. Exclusive
+                actions get a separate 2s result delivery margin; velocity
+                acknowledgements use this deadline directly. Missing deadlines
+                are bounded too (auto-budget actions have a 300s watchdog).
             velocity_lease: BODY_VELOCITY short lease or BODY_THRUST pulse duration
             cancel_wait_timeout: independent cancellation/result confirmation budget;
                 exclusive motion goals always get at least 2 seconds
@@ -1208,6 +1240,8 @@ class TaskRunnerNode(Node):
         task_context = (str(task_context).strip() or self._format_motion_context(
             self._default_motion_purpose(cmd_type, axes)))
 
+        request_started = time.monotonic()
+
         # Debug mode timeout override
         effective_timeout = timeout
         if self._debug_timeout > 0:
@@ -1219,19 +1253,29 @@ class TaskRunnerNode(Node):
                 f'发送动作目标：{type_name}，axes={axes or "xyzrz"}，目标=[{", ".join(t)}]，'
                 f'超时={effective_timeout:.0f}s，任务上下文="{task_context}"')
 
-        server_wait = 2.0 if wait_deadline is None else max(0.0, min(2.0, wait_deadline-time.monotonic()))
-        if not self._action_client.wait_for_server(timeout_sec=server_wait):
+        # Acceptance and result delivery are separate from controller execution.
+        # Never submit a command after its phase has expired, including neutral
+        # calls whose caller accidentally supplied an expired budget.
+        acceptance_deadline = request_started+2.0
+        if wait_deadline is not None:
+            acceptance_deadline = min(acceptance_deadline, wait_deadline)
+        if time.monotonic() >= acceptance_deadline:
+            self._last_motion_failure_kind = 'timeout'
+            self._last_motion_failure_message = '动作等待截止时间已到（未发送目标）'
+            return False, self._last_motion_failure_message
+        if not self._action_client.wait_for_server(
+                timeout_sec=max(0.0, acceptance_deadline-time.monotonic())):
             self.get_logger().error('动作服务器不可用')
             self._last_motion_failure_kind = 'motion'
             self._last_motion_failure_message = '动作服务器不可用'
             return False, '动作服务器不可用'
 
+        if time.monotonic() >= acceptance_deadline:
+            self._last_motion_failure_kind = 'timeout'
+            self._last_motion_failure_message = '动作接受时限已到（未发送目标）'
+            return False, self._last_motion_failure_message
         if wait_deadline is not None:
             remaining = wait_deadline-time.monotonic()
-            if remaining <= 0:
-                self._last_motion_failure_kind = 'timeout'
-                self._last_motion_failure_message = '动作等待截止时间已到'
-                return False, self._last_motion_failure_message
             if effective_timeout > 0:
                 effective_timeout = min(effective_timeout, remaining)
 
@@ -1243,14 +1287,27 @@ class TaskRunnerNode(Node):
         goal.task_context = task_context
         goal.velocity_lease = float(velocity_lease)
         goal.cruise_speed = float(cruise_speed)
-        # Older installed uv_msgs builds may not expose this newer field yet.
+        # Explicit SET arrival overrides require the updated action schema.
+        # Refuse an old installed interface instead of silently using tight defaults.
+        if (cmd_type == BasicMotion.Goal.SET
+                and ((position_tolerance > 0 and not hasattr(goal, 'position_tolerance'))
+                     or (yaw_tolerance > 0 and not hasattr(goal, 'yaw_tolerance')))):
+            self._last_motion_failure_kind = 'motion'
+            self._last_motion_failure_message = 'SET到位容差字段缺失，请重新构建uv_msgs并重启相关节点'
+            return False, self._last_motion_failure_message
         if hasattr(goal, 'position_tolerance'):
             goal.position_tolerance = float(position_tolerance)
+        if hasattr(goal, 'yaw_tolerance'):
+            goal.yaw_tolerance = float(yaw_tolerance)
 
         # A zero-velocity cleanup must not overwrite an older unconfirmed
         # exclusive goal; retain that goal for the next handoff check.
         track_goal = (getattr(self, '_pending_goal_send_future', None) is None
                       and self._active_goal_handle is None)
+        if time.monotonic() >= acceptance_deadline:
+            self._last_motion_failure_kind = 'timeout'
+            self._last_motion_failure_message = '动作接受时限已到（未发送目标）'
+            return False, self._last_motion_failure_message
         send_future = self._action_client.send_goal_async(goal)
         if track_goal:
             self._pending_goal_send_future = send_future
@@ -1335,13 +1392,14 @@ class TaskRunnerNode(Node):
                 send_future.add_done_callback(cancel_late_goal)
                 cleanup_unconfirmed()
 
-        def within_deadline():
-            return wait_deadline is None or time.monotonic() < wait_deadline
+        def interrupted():
+            # A stopped task must still be able to acknowledge zero velocity.
+            return not rclpy.ok() or (self.stopped and not is_neutral_velocity)
 
-        while rclpy.ok() and not self.stopped and within_deadline() and not send_future.done():
+        while not interrupted() and time.monotonic() < acceptance_deadline and not send_future.done():
             update_blink_light()
             time.sleep(0.01)
-        if not rclpy.ok() or self.stopped:
+        if interrupted():
             abandon_send()
             if not quiet:
                 self.get_logger().warn(f'动作目标被中断（stopped={self.stopped}）')
@@ -1351,10 +1409,11 @@ class TaskRunnerNode(Node):
         if not send_future.done():
             # Cancel a late acceptance too; a timed-out goal must not start later.
             abandon_send()
-            self.get_logger().error('发送动作目标超时')
+            message = f'{type_name} 发送动作目标超时（接受等待上限2s）'
+            self.get_logger().error(message)
             self._last_motion_failure_kind = 'timeout'
-            self._last_motion_failure_message = '发送动作目标超时'
-            return False, '发送动作目标超时'
+            self._last_motion_failure_message = message
+            return False, message
 
         goal_handle = send_future.result()
         if track_goal:
@@ -1373,6 +1432,16 @@ class TaskRunnerNode(Node):
             self.get_logger().info('动作目标已接受，等待执行结果……')
 
         result_future = goal_handle.get_result_async()
+        accepted_at = time.monotonic()
+        if cmd_type == BasicMotion.Goal.BODY_VELOCITY:
+            result_deadline = (request_started+2.0 if wait_deadline is None
+                               else wait_deadline)
+        elif wait_deadline is not None:
+            # The controller keeps its original execution budget; this margin
+            # only lets its terminal result reach the task thread.
+            result_deadline = wait_deadline+2.0
+        else:
+            result_deadline = accepted_at+(effective_timeout if effective_timeout > 0 else 300.0)+2.0
         yaw_wait_started = time.monotonic()
         last_yaw_log = float('-inf')
 
@@ -1385,8 +1454,7 @@ class TaskRunnerNode(Node):
                 return
             last_yaw_log = now
             elapsed = now-yaw_wait_started
-            remaining = max(0.0, (wait_deadline-now if wait_deadline is not None
-                                  else effective_timeout-elapsed))
+            remaining = max(0.0, result_deadline-now)
             try:
                 pose = self._latest_robot_pose(require_measured=True)
             except (ValueError, TypeError):
@@ -1403,7 +1471,7 @@ class TaskRunnerNode(Node):
 
         cancel_requested_by_condition = False
         cancel_predicate_error = ''
-        while rclpy.ok() and not self.stopped and within_deadline() and not result_future.done():
+        while not interrupted() and time.monotonic() < result_deadline and not result_future.done():
             update_blink_light()
             log_yaw_wait()
             try:
@@ -1418,9 +1486,11 @@ class TaskRunnerNode(Node):
                     time.monotonic()+cancel_wait_timeout if cancel_wait_timeout > 0 else None)
                 break
             time.sleep(0.01)
-        completed_in_time = result_future.done() and (cancel_wait_timeout <= 0 or within_deadline())
-        interrupted = not rclpy.ok() or self.stopped
-        if not result_future.done():
+        # Check the future itself before cancellation: waking a few ms late
+        # must not turn an already completed goal into an artificial timeout.
+        completed_in_time = result_future.done() and result_future.result() is not None
+        was_interrupted = interrupted()
+        if not result_future.done() or result_future.result() is None:
             self._last_motion_cleanup_confirmed = cancel_and_confirm(
                 goal_handle, result_future,
                 time.monotonic()+cancel_wait_timeout if cancel_wait_timeout > 0 else None)
@@ -1428,17 +1498,23 @@ class TaskRunnerNode(Node):
             self._last_motion_cleanup_confirmed = True
         if track_goal and self._last_motion_cleanup_confirmed:
             self._active_goal_handle = None
-        if interrupted:
+        if was_interrupted:
             if not quiet:
                 self.get_logger().warn(f'动作结果等待被中断（stopped={self.stopped}）')
             self._last_motion_failure_kind = 'motion'
             self._last_motion_failure_message = '已停止'
             return False, '已停止'
         if not completed_in_time:
-            self.get_logger().error('等待动作结果超时')
+            detail = ''
+            if result_future.done() and result_future.result() is not None:
+                detail = f'；取消确认返回：{result_future.result().result.message}'
+            message = (f'{type_name} 等待动作结果超时：接受后等待'
+                       f'{result_deadline-accepted_at:.2f}s，'
+                       f'取消终态确认={self._last_motion_cleanup_confirmed}{detail}')
+            self.get_logger().error(message)
             self._last_motion_failure_kind = 'timeout'
-            self._last_motion_failure_message = '等待动作结果超时'
-            return False, '等待动作结果超时'
+            self._last_motion_failure_message = message
+            return False, message
 
         result = result_future.result().result
         if result.success:
@@ -2365,26 +2441,33 @@ class TaskRunnerNode(Node):
 
         self.get_logger().info(
             f'🧭 release_sampler：转向 rz={align_yaw:.1f}°')
-        self._send_action_goal(
+        success, _ = self._send_action_goal(
             BasicMotion.Goal.WMOVE,
             [self._cmd_x, self._cmd_y, self._cmd_z, align_yaw],
             'rz', timeout=15.0)
+        if not success:
+            return False
         self._cmd_yaw = align_yaw
 
         self.get_logger().info(
             f'🎯 release_sampler：对准 START 标记（class={start_cid}）')
-        self._align_to_class(start_cid, 'START 标记')
+        if not self._align_to_class(start_cid, 'START 标记'):
+            return False
 
         self.get_logger().info(
             f'🌊🏖️  release_sampler：执行 wmove，z={approach_z}，x={approach_x}')
-        self._send_action_goal(
+        success, _ = self._send_action_goal(
             BasicMotion.Goal.WMOVE,
             [approach_x, self._cmd_y, approach_z, self._cmd_yaw],
             'xz', timeout=approach_timeout)
-        self._send_action_goal(
+        if not success:
+            return False
+        success, _ = self._send_action_goal(
             BasicMotion.Goal.WMOVE,
             [approach_x, self._cmd_y - 1, approach_z, self._cmd_yaw],
             'xz', timeout=approach_timeout)
+        if not success:
+            return False
         self._cmd_x = approach_x; self._cmd_z = approach_z
 
         self.set_servo(release_angle, '释放取水器')

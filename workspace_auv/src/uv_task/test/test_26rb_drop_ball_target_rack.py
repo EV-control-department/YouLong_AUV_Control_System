@@ -391,3 +391,59 @@ def test_completed_visual_servo_retains_success_indication(rig, monkeypatch):
     assert rig.task.execute()
     assert not rig.task._visual_servo_timed_out
     assert indications == ['rack视觉伺服成功', '放球完成', '放环完成']
+
+
+def test_last_velocity_ack_can_finish_after_visual_deadline_and_continue_drop(rig, monkeypatch):
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=TaskOutcome.ok))
+    rig.task._servo_timeout = 1.
+    started = rig.clock[0]
+    visual_deadline = started+1.
+    original = rig.node._send_body_velocity
+    acknowledgements = []
+    def delayed_ack(*args, **kwargs):
+        sent_at = rig.clock[0]
+        reply_at = sent_at+.12
+        wait_deadline = kwargs['wait_deadline']
+        acknowledgements.append((sent_at, reply_at, wait_deadline))
+        if reply_at > wait_deadline:
+            rig.clock[0] = wait_deadline
+            return False, '等待动作结果超时'
+        rig.clock[0] = reply_at
+        return original(*args, **kwargs)
+    rig.node._send_body_velocity = delayed_ack
+    rig.task._flash_green = lambda *args, **kwargs: True
+    assert rig.task.execute()
+    assert rig.task._visual_servo_timed_out
+    assert acknowledgements[-1][0] < visual_deadline < acknowledgements[-1][1]
+    assert all(sent_at < visual_deadline for sent_at, _, _ in acknowledgements)
+    assert all(deadline-sent_at == pytest.approx(2.) for sent_at, _, deadline in acknowledgements)
+    assert [message.servo_id for message in rig.messages] == [1, 1, 1, 2, 2, 2]
+    assert not any('rack速度指令失败' in line for line in rig.logs)
+
+
+def test_acknowledgement_beyond_independent_budget_still_prevents_drop(rig, monkeypatch):
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=TaskOutcome.ok))
+    rig.task._flash_green = lambda *args, **kwargs: True
+    budgets = []
+    def missing_reply(*args, **kwargs):
+        budgets.append(kwargs['wait_deadline']-rig.clock[0])
+        rig.clock[0] = kwargs['wait_deadline']
+        return False, '等待动作结果超时'
+    rig.node._send_body_velocity = missing_reply
+    assert not rig.task.execute()
+    assert budgets == pytest.approx([2.])
+    assert rig.messages == []
+    assert any('rack速度指令失败' in line for line in rig.logs)
+    assert rig.calls[-1][0] == 'action'  # Attempt the normal SET hold cleanup.
+
+
+@pytest.mark.parametrize('expires_during_geometry', [False, True])
+def test_expired_visual_window_never_sends_another_velocity_goal(rig, expires_during_geometry):
+    deadline = rig.clock[0]+(.05 if expires_during_geometry else 0.)
+    if expires_during_geometry:
+        def slow_pose():
+            rig.clock[0] += .1
+            return tuple(rig.pose)
+        rig.task._servo_pose = slow_pose
+    assert not rig.task._send_rack_velocity(np.zeros(2), deadline)
+    assert rig.calls == []

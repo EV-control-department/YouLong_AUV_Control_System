@@ -106,6 +106,9 @@ def validate_combined_params(params, *, complete=True):
                          ('horizontal_servo_timeout', 30.0), ('loss_timeout', 5.0),
                          ('target_loss_timeout', 5.0), ('frame_loss_timeout', 5.0),
                          ('ring_yaw_tolerance_deg', 3.0), ('ring_yaw_gain', 1.2),
+                         ('claw_alignment_timeout', 30.0),
+                         ('claw_alignment_position_tolerance_m', 0.15),
+                         ('claw_alignment_yaw_tolerance_deg', 10.0),
                          ('ring_max_yaw_rate_deg_s', 10.0),
                          ('ring_orientation_spread_deg', 5.0), ('verification_timeout', 2.0),
                          ('return_timeout', 60.0), ('descent_timeout', 15.0),
@@ -117,6 +120,8 @@ def validate_combined_params(params, *, complete=True):
         value = params.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f'{key} 必须是有限正数')
+    if params.get('claw_alignment_yaw_tolerance_deg', 10.0) > 180.0:
+        raise ValueError('claw_alignment.yaw_tolerance_deg 不得超过180度')
     sticky_seconds = params.get('lost_observation_hold_seconds', 2.0)
     if (isinstance(sticky_seconds, bool) or not isinstance(sticky_seconds, (int, float))
             or not math.isfinite(sticky_seconds) or sticky_seconds < 0):
@@ -172,6 +177,9 @@ class RB26GrabBallRingTask:
         self.descent_yaw_gain = float(params.get('descent_yaw_hold_gain', 1.2))
         self.descent_yaw_max_rate = float(params.get('descent_yaw_hold_max_rate_deg_s', 10.0))
         self._descent_anchor = None
+        self.claw_alignment_timeout = float(params.get('claw_alignment_timeout', 30.0))
+        self.claw_alignment_position_tolerance = float(params.get('claw_alignment_position_tolerance_m', 0.15))
+        self.claw_alignment_yaw_tolerance = float(params.get('claw_alignment_yaw_tolerance_deg', 10.0))
         if not hasattr(node, 'state'):
             node.state = TaskState()
         self.state = node.state
@@ -263,13 +271,19 @@ class RB26GrabBallRingTask:
             self._check()
             time.sleep(min(.05, max(0.0, until-time.monotonic())))
 
-    def _set_pose(self, target, label, *, axes='xyzrz', timeout=None):
+    def _set_pose(self, target, label, *, axes='xyzrz', timeout=None,
+                  position_tolerance=0.0, yaw_tolerance=0.0):
         self._check()
         timeout = float(self.p.get('return_timeout', 60.0) if timeout is None else timeout)
+        arrival = {}
+        if position_tolerance > 0.0:
+            arrival['position_tolerance'] = position_tolerance
+        if yaw_tolerance > 0.0:
+            arrival['yaw_tolerance'] = yaw_tolerance
         ok, message = self.node._send_action_goal(
             BasicMotion.Goal.SET, list(target), axes, timeout=timeout,
             wait_deadline=time.monotonic()+timeout, cancel_wait_timeout=2.0,
-            light_color=self.node.LIGHT_OFF, task_context=label)
+            light_color=self.node.LIGHT_OFF, task_context=label, **arrival)
         if not ok:
             raise PickupFailure(f'{label}失败：{message}')
         self.node._cmd_x, self.node._cmd_y, self.node._cmd_z, self.node._cmd_yaw = target
@@ -852,8 +866,15 @@ class RB26GrabBallRingTask:
         offset = body_to_world_rotation(final_pose) @ claw
         if not np.all(np.isfinite(offset)):
             raise PickupFailure('夹爪外参无效')
+        self.log.info(
+            f'组合抓取：{kind}对爪到位容差：XY=±{self.claw_alignment_position_tolerance:.3f}m，'
+            f'yaw=±{self.claw_alignment_yaw_tolerance:.1f}deg，'
+            f'超时={self.claw_alignment_timeout:.1f}s')
         self._set_pose([target_xy[0]-offset[0], target_xy[1]-offset[1], self.work_depth, yaw],
-                       '组合抓取：'+kind+'转向与夹爪对准同时执行', timeout=controller._command_timeout)
+                       '组合抓取：'+kind+'转向与夹爪对准同时执行',
+                       timeout=self.claw_alignment_timeout,
+                       position_tolerance=self.claw_alignment_position_tolerance,
+                       yaw_tolerance=self.claw_alignment_yaw_tolerance)
 
     def _orient_and_align_ring(self):
         pose = self._pose()
@@ -960,20 +981,15 @@ class RB26GrabBallRingTask:
                         f'dx_m={anchor[0]-pose[0]:+8.3f} dy_m={anchor[1]-pose[1]:+8.3f} '
                         f'dyaw_deg={yaw_error:+8.2f} remain_s={deadline-now:7.2f}')
                     last_log = now
+                sent_at = time.monotonic()
+                if sent_at >= deadline:
+                    break
                 ok, message = self.node._send_body_velocity(
                     *body.tolist(), yaw_rate_deg_s=yaw_rate,
-                    lease_s=min(0.25, deadline-now), wait_deadline=min(deadline, now+2.0),
+                    lease_s=min(0.25, deadline-sent_at), wait_deadline=sent_at+2.0,
                     cancel_wait_timeout=2.0, light_color=self.node.LIGHT_OFF,
                     task_context=f'组合抓取：{kind} 保持XY/yaw定速下压')
                 confirmed = getattr(self.node, '_last_motion_cleanup_confirmed', True)
-                if (not ok and confirmed and time.monotonic() >= deadline
-                        and getattr(self.node, '_last_motion_failure_kind', '') == 'timeout'):
-                    # The last reply can race the descent deadline. Once that
-                    # goal has a confirmed terminal result it is a normal
-                    # descent timeout, not a reason to skip ring closure.
-                    self._check()
-                    self.log.warning(f'组合抓取：{kind} 下压时限已到，动作终态已确认，继续抓后流程')
-                    break
                 if not ok or not confirmed:
                     self._check()
                     raise PickupFailure(f'{kind} 下压速度指令失败：{message}')

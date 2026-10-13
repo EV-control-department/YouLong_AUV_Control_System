@@ -265,7 +265,7 @@ class ArrowSurfacer:
     def _search_for_class(self, class_id: int, label: str) -> bool:
         """非阻塞微步螺旋搜索指定 class_id。
 
-        8 方向方框螺旋，每步 0.01m SET + 0.01s timeout（非阻塞），
+        8 方向方框螺旋，每步 0.01m SETPOINT，下发后检查应答，
         步间检查检测结果，一旦发现目标立即返回 True。
         搜索范围耗尽返回 False。
         """
@@ -307,12 +307,13 @@ class ArrowSurfacer:
                 tx = self._node._cmd_x + step_dx
                 ty = self._node._cmd_y + step_dy
 
-                self._node._send_action_goal(
-                    BasicMotion.Goal.SET,
+                self._motion(
+                    getattr(BasicMotion.Goal, 'SETPOINT', 10),
                     [tx, ty, self._node._cmd_z, self._node._cmd_yaw],
-                    'xy', timeout=0.01, quiet=True)
+                    'xy', timeout=2.0, quiet=True)
                 self._node._cmd_x = tx
                 self._node._cmd_y = ty
+                time.sleep(0.05)
 
                 if self._best_detection([class_id]) is not None:
                     self._logger.info(
@@ -377,7 +378,7 @@ class ArrowSurfacer:
             self._logger.info(f'ArrowSurfacer：ArUco 搜索第 {rnd + 1}/2 轮')
 
             # 右转 15°
-            self._node._send_action_goal(
+            self._motion(
                 BasicMotion.Goal.SET,
                 [self._node._cmd_x, self._node._cmd_y,
                  self._node._cmd_z, self._view_yaw + 15.0],
@@ -397,7 +398,7 @@ class ArrowSurfacer:
                 'ArUco +15° 未发现标记', duration=1.0)
 
             # 左转 15°
-            self._node._send_action_goal(
+            self._motion(
                 BasicMotion.Goal.SET,
                 [self._node._cmd_x, self._node._cmd_y,
                  self._node._cmd_z, self._view_yaw - 15.0],
@@ -417,7 +418,7 @@ class ArrowSurfacer:
                 'ArUco -15° 未发现标记', duration=1.0)
 
             # 恢复朝向
-            self._node._send_action_goal(
+            self._motion(
                 BasicMotion.Goal.SET,
                 [self._node._cmd_x, self._node._cmd_y,
                  self._node._cmd_z, self._view_yaw],
@@ -425,7 +426,7 @@ class ArrowSurfacer:
             self._node._cmd_yaw = self._view_yaw
 
             # 下潜 0.5m
-            self._node._send_action_goal(
+            self._motion(
                 BasicMotion.Goal.BMOVE,
                 [0.0, 0.0, 0.5, 0.0], 'z', timeout=10.0, quiet=True)
             self._node._cmd_z += 0.5
@@ -443,7 +444,7 @@ class ArrowSurfacer:
                 '下潜观察未发现 ArUco', duration=1.0)
 
             # 上升 0.5m
-            self._node._send_action_goal(
+            self._motion(
                 BasicMotion.Goal.BMOVE,
                 [0.0, 0.0, -0.5, 0.0], 'z', timeout=10.0, quiet=True)
             self._node._cmd_z -= 0.5
@@ -464,6 +465,12 @@ class ArrowSurfacer:
 
     # ── 主执行 ────────────────────────────────────────────────────────
 
+    def _motion(self, *args, **kwargs):
+        success, message = self._node._send_action_goal(*args, **kwargs)
+        if not success:
+            raise RuntimeError('ArrowSurfacer 运动失败：'+str(message))
+        return success, message
+
     def execute(self) -> bool:
         """完整箭头对准 + ArUco 读数 + 出水 + 扇区投信标任务。"""
 
@@ -483,7 +490,7 @@ class ArrowSurfacer:
         self._logger.info(f'ArrowSurfacer：旋转到偏航角={self._view_yaw:.1f}°')
         self._node._set_task_phase_light(
             self._node.LIGHT_YELLOW, '箭头运动与搜索阶段')
-        success, msg = self._node._send_action_goal(
+        success, msg = self._motion(
             BasicMotion.Goal.SET,
             [self._node._cmd_x, self._node._cmd_y,
              self._node._cmd_z, self._view_yaw],
@@ -506,7 +513,7 @@ class ArrowSurfacer:
         self._logger.info(
             f'ArrowSurfacer：上浮（setz={self._surface_depth}）……'
             f'已收集 ArUco ID：{sorted(self._aruco_ids)}')
-        self._node._send_action_goal(
+        self._motion(
             BasicMotion.Goal.WMOVE,
             [self._node._cmd_x, self._node._cmd_y, self._surface_depth,
              self._node._cmd_yaw],
@@ -515,7 +522,7 @@ class ArrowSurfacer:
         # 4. 恢复深度
         self._logger.info(
             f'ArrowSurfacer：恢复到深度 {self._recover_depth}')
-        success, msg = self._node._send_action_goal(
+        success, msg = self._motion(
             BasicMotion.Goal.WMOVE,
             [self._node._cmd_x, self._node._cmd_y, self._recover_depth,
              self._node._cmd_yaw],
@@ -564,7 +571,7 @@ class ArrowSurfacer:
             f'ArrowSurfacer：移动到扇区 '
             f'({self._sector_x:.2f}, {self._sector_y:.2f}, '
             f'z={self._sector_travel_z:.2f})')
-        success, msg = self._node._send_action_goal(
+        success, msg = self._motion(
             BasicMotion.Goal.WTRAVEL,
             [self._sector_x, self._sector_y, self._sector_travel_z,
              self._view_yaw],
@@ -580,14 +587,15 @@ class ArrowSurfacer:
         self._logger.info(
             f'ArrowSurfacer：对准 {color_name} 扇区 '
             f'（class={sector_cid}）')
-        self._node._align_to_class(sector_cid, f'{color_name} 扇区')
+        if not self._node._align_to_class(sector_cid, f'{color_name} 扇区'):
+            return False
 
         # 9.5 对准后 BMOVE（机体系 x/y）：把信号弹撒放器挪到扇区中心正上方
         if self._drop_offset_x or self._drop_offset_y:
             self._logger.info(
                 f'ArrowSurfacer：使用 BMOVE 将投放器移动到扇区中心上方 '
                 f'（dx={self._drop_offset_x:.2f}，dy={self._drop_offset_y:.2f}）')
-            success, msg = self._node._send_action_goal(
+            success, msg = self._motion(
                 BasicMotion.Goal.BMOVE,
                 [self._drop_offset_x, self._drop_offset_y, 0.0, 0.0],
                 'xy', timeout=10.0, quiet=True)

@@ -56,6 +56,10 @@ class SearchFailure(RuntimeError):
     pass
 
 
+class SearchMotionFailure(SearchFailure):
+    """Communication, odom or action ownership failed; no vision fallback."""
+
+
 class FrameNotFound(SearchFailure):
     """The fallback scan completed without finding the collection frame."""
 
@@ -98,12 +102,12 @@ class FrontDownSearch:
 
     def _check(self):
         if self.node.stopped or not rclpy.ok():
-            raise SearchFailure(f'寻找{self.target_label}已取消')
+            raise SearchMotionFailure(f'寻找{self.target_label}已取消')
 
     def _pose(self):
         pose = tuple(float(x) for x in self.node._latest_robot_pose())
         if len(pose) != 6 or not all(math.isfinite(x) for x in pose):
-            raise SearchFailure(f'寻找{self.target_label}时实测位姿无效')
+            raise SearchMotionFailure(f'寻找{self.target_label}时实测位姿无效')
         return pose
 
     def _sync_pose(self):
@@ -133,7 +137,7 @@ class FrontDownSearch:
     def _action(self, target, axes, label, timeout=None):
         self._check()
         if self._bline_active:
-            raise SearchFailure('BLINE 未结束，禁止启动定点或对准运动')
+            raise SearchMotionFailure('BLINE 未结束，禁止启动定点或对准运动')
         seconds = self.p['search_move_timeout'] if timeout is None else timeout
         deadline = self._now()+seconds
         ok, message = self.node._send_action_goal(
@@ -142,7 +146,7 @@ class FrontDownSearch:
             light_color=self.node.LIGHT_OFF,
             task_context=self.node._format_motion_context(label))
         if not ok:
-            raise SearchFailure(f'{label}失败：{message}')
+            raise SearchMotionFailure(f'{label}失败：{message}')
         self._sync_pose()
 
     def _hold(self):
@@ -275,7 +279,7 @@ class FrontDownSearch:
             wait_deadline=self._now()+2.0)
         self._velocity_active = False
         if not ok:
-            raise SearchFailure(f'结束前视伺服失败：{message}')
+            raise SearchMotionFailure(f'结束前视伺服失败：{message}')
 
     def _align_front(self):
         """Try mono then stereo yaw within one three-second budget."""
@@ -321,16 +325,17 @@ class FrontDownSearch:
                 rate = 0.0 if error is None else float(np.clip(
                     error*self.p['search_yaw_gain'], -self.p['search_max_yaw_rate_deg_s'],
                     self.p['search_max_yaw_rate_deg_s']))
+                sent_at = self._now()
+                if sent_at >= deadline:
+                    break
                 self._velocity_active = True
                 ok, message = self.node._send_body_velocity(
                     *body.tolist(), yaw_rate_deg_s=rate,
-                    lease_s=max(0.25, 4*self.p['search_period']),
-                    wait_deadline=deadline, light_color=self.node.LIGHT_OFF,
+                    lease_s=min(max(0.25, 4*self.p['search_period']), deadline-sent_at),
+                    wait_deadline=sent_at+2.0, light_color=self.node.LIGHT_OFF,
                     task_context=f'寻找{self.target_label}：前视 yaw 伺服')
                 if not ok:
-                    if self._now() >= deadline:
-                        break
-                    raise SearchFailure(f'前视对准速度失败：{message}')
+                    raise SearchMotionFailure(f'前视对准速度失败：{message}')
                 self._sleep(min(self.p['search_period'], max(0.0, deadline-self._now())))
         finally:
             self._neutral()
@@ -348,22 +353,25 @@ class FrontDownSearch:
         until = self._now()+self.p['search_cancel_timeout']
         while not result_future.done() and rclpy.ok() and self._now() < until:
             self._sleep(self.p['search_period'])
-        if not result_future.done():
-            raise SearchFailure('BLINE 取消后未结束，禁止启动后续运动')
+        if not result_future.done() or result_future.result() is None:
+            raise SearchMotionFailure('BLINE 取消后未结束，禁止启动后续运动')
         completed = result_future.result()
         if completed.status == 6 and not (
                 allow_timeout and 'timeout' in completed.result.message.lower()):
-            raise SearchFailure(f'BLINE 中止：{completed.result.message}')
+            raise SearchMotionFailure(f'BLINE 中止：{completed.result.message}')
 
     def _bline(self, monitor):
         self._check()
         if self._bline_active or self._velocity_active:
-            raise SearchFailure('旧 BLINE 或伺服速度未结束')
+            raise SearchMotionFailure('旧 BLINE 或伺服速度未结束')
         if self._expired():
             return 'timeout'
         remaining = self._search_clock.remaining()
+        confirm = getattr(self.node, '_confirm_previous_motion', None)
+        if callable(confirm) and not confirm(self.p['search_cancel_timeout']):
+            raise SearchMotionFailure('上一条动作结束未确认，禁止启动 BLINE')
         if not self.node._action_client.wait_for_server(timeout_sec=min(2.0, remaining)):
-            raise SearchFailure(f'寻找{self.target_label}：BasicMotion 动作服务器不可用')
+            raise SearchMotionFailure(f'寻找{self.target_label}：BasicMotion 动作服务器不可用')
         goal = BasicMotion.Goal()
         goal.cmd_type = BasicMotion.Goal.BLINE
         goal.axes = 'xyz'
@@ -376,6 +384,8 @@ class FrontDownSearch:
         goal.task_context = self.node._format_motion_context(f'寻找{self.target_label}：前向 BLINE 巡游')
         self._light(self.node.LIGHT_OFF, f'BLINE 前向寻找{self.target_label}')
         future = self.node._action_client.send_goal_async(goal)
+        self.node._pending_goal_send_future = future
+        self.node._last_motion_cleanup_confirmed = False
         acceptance_deadline = self._now()+min(5.0, self.p['search_move_timeout'])
         while not future.done() and not self.node.stopped and rclpy.ok() and self._now() < acceptance_deadline:
             self._sleep(self.p['search_period'])
@@ -388,11 +398,14 @@ class FrontDownSearch:
                 except Exception:
                     pass
             future.add_done_callback(cancel_late)
-            self._check()
-            raise SearchFailure('BLINE 目标接受超时，已登记迟到取消；停止后续运动')
+            self.node.stopped = True
+            self.node._last_motion_cleanup_confirmed = False
+            raise SearchMotionFailure('BLINE 目标接受超时，已登记迟到取消；停止后续运动')
         handle = future.result()
+        self.node._pending_goal_send_future = None
         if not handle.accepted:
-            raise SearchFailure(f'寻找{self.target_label}：BLINE 被拒绝')
+            self.node._last_motion_cleanup_confirmed = True
+            raise SearchMotionFailure(f'寻找{self.target_label}：BLINE 被拒绝')
         self._bline_active = True
         self.node._active_goal_handle = handle
         result_future = handle.get_result_async()
@@ -405,13 +418,13 @@ class FrontDownSearch:
                     if not result.success:
                         if self._expired() and 'timeout' in result.message.lower():
                             return 'timeout'
-                        raise SearchFailure(f'寻找{self.target_label}：BLINE 失败：{result.message}')
+                        raise SearchMotionFailure(f'寻找{self.target_label}：BLINE 失败：{result.message}')
                     if monitor(finished=True) == 'down':
                         self._sync_pose()
                         return 'down'
                     target = list(result.final_target)
                     if len(target) != 4 or not all(math.isfinite(x) for x in target):
-                        raise SearchFailure('BLINE 返回无效 final_target')
+                        raise SearchMotionFailure('BLINE 返回无效 final_target')
                     (self.node._cmd_x, self.node._cmd_y, self.node._cmd_z,
                      self.node._cmd_yaw) = target
                     self.node._last_motion_final_target = target
@@ -427,11 +440,16 @@ class FrontDownSearch:
                 if not result_future.done():
                     self._cancel(handle, result_future)
             finally:
-                if result_future.done():
+                if result_future.done() and result_future.result() is not None:
+                    self.node._last_motion_cleanup_confirmed = True
                     self._search_clock.pause()
                     self._bline_active = False
                     if self.node._active_goal_handle is handle:
                         self.node._active_goal_handle = None
+
+                else:
+                    self.node._last_motion_cleanup_confirmed = False
+                    self.node.stopped = True
 
     def _observe(self, prefix, seconds, after=-1, full_window=False):
         until = self._now()+seconds
@@ -451,7 +469,7 @@ class FrontDownSearch:
     def _rotate_for_down_frame(self, after=-1):
         """Rotate in place at fixed depth while watching for the down-view frame."""
         if self._bline_active or self._velocity_active:
-            raise SearchFailure('旧 BLINE 或速度伺服未结束，不能启动旋转搜索')
+            raise SearchMotionFailure('旧 BLINE 或速度伺服未结束，不能启动旋转搜索')
         speed = self.p['search_fallback_rotate_speed_deg_s']
         degrees = self.p['search_fallback_rotate_degrees']
         deadline = self._now()+self.p['search_fallback_rotate_timeout']
@@ -477,14 +495,17 @@ class FrontDownSearch:
                       self.p['search_max_vertical_speed_mps']))
                       if self.correct_depth else 0.0)
                 body = _rotation(pose).T @ np.array([0.0, 0.0, vz])
+                sent_at = self._now()
+                if sent_at >= deadline:
+                    break
                 self._velocity_active = True
                 ok, message = self.node._send_body_velocity(
                     *body.tolist(), yaw_rate_deg_s=speed,
-                    lease_s=max(0.25, 4*self.p['search_period']),
-                    wait_deadline=deadline, light_color=self.node.LIGHT_OFF,
+                    lease_s=min(max(0.25, 4*self.p['search_period']), deadline-sent_at),
+                    wait_deadline=sent_at+2.0, light_color=self.node.LIGHT_OFF,
                     task_context=f'{self.task_name}：{self.target_label}原地旋转搜索')
                 if not ok:
-                    raise SearchFailure(f'原地旋转搜索速度指令失败：{message}')
+                    raise SearchMotionFailure(f'原地旋转搜索速度指令失败：{message}')
                 self._sleep(min(self.p['search_period'], max(0.0, deadline-self._now())))
         finally:
             self._neutral()
@@ -567,7 +588,7 @@ class FrontDownSearch:
                         try:
                             found = self._rotate_for_down_frame(after)
                         except SearchFailure as scan_error:
-                            if self.node.stopped or not rclpy.ok():
+                            if isinstance(scan_error, SearchMotionFailure) or self.node.stopped or not rclpy.ok():
                                 raise
                             raise FrameNotFound(
                                 f'{self.target_label}原地旋转搜索未完成：'
@@ -609,7 +630,7 @@ class FrontDownSearch:
                 try:
                     found = self._rotate_for_down_frame(after)
                 except SearchFailure as scan_error:
-                    if self.node.stopped or not rclpy.ok():
+                    if isinstance(scan_error, SearchMotionFailure) or self.node.stopped or not rclpy.ok():
                         raise
                     raise FrameNotFound(
                         f'{self.target_label}原地旋转搜索未完成：{scan_error}') from scan_error

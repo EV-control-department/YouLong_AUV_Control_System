@@ -243,19 +243,22 @@ class RB26GateTask:
                            -self.p['depth_max_speed_mps'], self.p['depth_max_speed_mps']))
         world = np.array([*horizontal, vz])
         body = rotation(pose).T @ world
+        deadline = min(self._deadline, self._phase_deadline if wait_deadline is None else wait_deadline)
+        sent_at = self._now()
+        self._check(deadline)
         self._velocity_active = True
         self._light_color = self.node.LIGHT_OFF if color is None else color
-        deadline = min(self._deadline, self._phase_deadline if wait_deadline is None else wait_deadline)
         ok, message = self.node._send_body_velocity(
             *body.tolist(), yaw_rate_deg_s=float(yaw_rate),
-            lease_s=max(0.25, 3*self.p['search_velocity_period']),
+            lease_s=min(max(0.25, 3*self.p['search_velocity_period']), deadline-sent_at),
             task_context='26rb_gate_task 定深视觉伺服',
             light_color=self._light_color,
-            wait_deadline=deadline, cancel_wait_timeout=2.0)
+            wait_deadline=sent_at+2.0, cancel_wait_timeout=2.0)
         if not getattr(self.node, '_last_motion_cleanup_confirmed', True):
             self._cleanup_unconfirmed = True
         if not ok:
-            self._check(deadline)
+            # ACK failure is a motion failure even if the optional yaw window
+            # elapsed while waiting. Never turn it into permission to pass.
             raise GateFailure('motion', message)
 
     def _position_hold_velocity(self, target_xy):
@@ -275,7 +278,7 @@ class RB26GateTask:
         if self._velocity_active:
             ok, message = self.node._send_body_velocity(
                 task_context='26rb_gate_task 结束速度输出', light_color=self.node.LIGHT_OFF,
-                wait_deadline=min(self._deadline, self._now()+2.0) if wait_deadline is None else wait_deadline,
+                wait_deadline=self._now()+2.0 if wait_deadline is None else wait_deadline,
                 cancel_wait_timeout=2.0)
             self._velocity_active = False
             self._light_color = self.node.LIGHT_OFF
@@ -294,7 +297,7 @@ class RB26GateTask:
             cancel_wait_timeout=2.0, **kwargs)
         if not getattr(self.node, '_last_motion_cleanup_confirmed', True):
             self._cleanup_unconfirmed = True
-        self._check(deadline)
+        self._check()
         if not ok:
             kind = 'timeout' if '超时' in message or 'timeout' in message.lower() else 'motion'
             raise GateFailure(kind, message)

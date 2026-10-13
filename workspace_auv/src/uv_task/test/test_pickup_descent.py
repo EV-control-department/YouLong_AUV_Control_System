@@ -95,7 +95,7 @@ def test_already_at_or_below_depth_never_commands_further_descent(rig, depth):
     assert len(node.calls) == 1 and np.allclose(node.calls[0][2], 0.)
 
 
-def test_final_reply_at_descent_deadline_with_confirmed_cleanup_is_normal_timeout(rig):
+def test_final_successful_reply_after_descent_deadline_is_normal_timeout(rig):
     node, task = rig
     task.descent_timeout = .15
     original = node._send_body_velocity
@@ -105,8 +105,8 @@ def test_final_reply_at_descent_deadline_with_confirmed_cleanup_is_normal_timeou
         if args:
             node.clock = kwargs['wait_deadline']
             node.pose_received_at = node.clock
-            node._last_motion_failure_kind = 'timeout'
-            return False, '等待动作结果超时'
+            # ACK succeeds on its own budget after the descent timer ended.
+            return True, ''
         return result
 
     node._send_body_velocity = final_reply

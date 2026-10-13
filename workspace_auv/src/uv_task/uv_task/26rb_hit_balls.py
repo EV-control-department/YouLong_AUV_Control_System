@@ -188,7 +188,7 @@ class RB26HitBallsTask:
         until = self._now()+self._params['motion_cancel_timeout']
         while not result_future.done() and rclpy.ok() and self._now() < until:
             self._sleep(self._params['search_period'])
-        if not result_future.done():
+        if not result_future.done() or result_future.result() is None:
             raise MotionFailure('BLINE 取消尚未确认结束，停止后续运动')
         completed = result_future.result()
         if completed.status == 6:  # ROS action STATUS_ABORTED, not our requested cancellation.
@@ -202,8 +202,13 @@ class RB26HitBallsTask:
             raise MotionFailure('旧速度或 BLINE 未结束，禁止启动新的 BLINE')
         deadline = self._now()+timeout
         client = self._node._action_client
+        confirm = getattr(self._node, '_confirm_previous_motion', None)
+        if callable(confirm) and not confirm(self._params['motion_cancel_timeout']):
+            raise MotionFailure('上一条动作结束未确认，禁止启动 BLINE')
         if not client.wait_for_server(timeout_sec=min(2.0, timeout)):
             raise MotionFailure('BasicMotion 动作服务器不可用')
+        if self._now() >= deadline:
+            raise MotionFailure('BLINE 阶段时限已到，未发送目标')
         goal = BasicMotion.Goal()
         goal.cmd_type = BasicMotion.Goal.BLINE
         goal.axes = 'xyz'
@@ -222,6 +227,8 @@ class RB26HitBallsTask:
         self._light(self._node.LIGHT_OFF, f'{label} 运动阶段')
         self._node._last_motion_final_target = None
         future = client.send_goal_async(goal, feedback_callback=feedback)
+        self._node._pending_goal_send_future = future
+        self._node._last_motion_cleanup_confirmed = False
         accept_until = min(deadline, self._now()+self._params['motion_accept_timeout'])
         while not future.done() and not self._node.stopped and rclpy.ok() and self._now() < accept_until:
             self._sleep(self._params['search_period'])
@@ -234,10 +241,13 @@ class RB26HitBallsTask:
                 except Exception:
                     pass
             future.add_done_callback(cancel_late)
-            self._check()
+            self._node.stopped = True
+            self._node._last_motion_cleanup_confirmed = False
             raise MotionFailure('BLINE 目标接受超时，已登记迟到取消')
         handle = future.result()
+        self._node._pending_goal_send_future = None
         if not handle.accepted:
+            self._node._last_motion_cleanup_confirmed = True
             raise MotionFailure('BLINE 被拒绝')
         self._bline_active = True
         self._node._active_goal_handle = handle
@@ -278,10 +288,15 @@ class RB26HitBallsTask:
                 if not result_future.done():
                     self._cancel_line(handle, result_future)
             finally:
-                if result_future.done():
+                if result_future.done() and result_future.result() is not None:
+                    self._node._last_motion_cleanup_confirmed = True
                     self._bline_active = False
                     if self._node._active_goal_handle is handle:
                         self._node._active_goal_handle = None
+
+                else:
+                    self._node._last_motion_cleanup_confirmed = False
+                    self._node.stopped = True
 
     def _cruise_to_radius(self, front_seen):
         p = self._params
