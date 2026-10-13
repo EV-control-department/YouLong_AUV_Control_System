@@ -319,7 +319,10 @@ class BasicMotionNode(Node):
         self.context.on_shutdown(self._on_context_shutdown)
 
         self.get_logger().info(
-            f'BasicMotion node started; state_timeout={self._state_timeout:.2f}s')
+            f'BasicMotion node started; state_timeout={self._state_timeout:.2f}s; '
+            f'line.position_tolerance={self._line_config.position_tolerance:.2f}m; '
+            f'line.stop_speed={self._line_config.stop_speed:.2f}m/s; '
+            f'line.stable_seconds={self._line_config.stable_seconds:.2f}s')
 
     def _on_context_shutdown(self):
         """Stop callbacks before the ROS context starts destroying handles.
@@ -1428,7 +1431,7 @@ class BasicMotionNode(Node):
         return position, attitude, rotate_body_to_world(
             body_velocity, *attitude), origin
 
-    def _line_report(self, guide, phase, sample, command, last_report):
+    def _line_report(self, guide, phase, sample, command, last_report, world_velocity):
         now = time.monotonic()
         previous_phase, previous_at = last_report
         self._line_feedback = (phase, sample.measured_speed, sample.cross_error)
@@ -1437,7 +1440,9 @@ class BasicMotionNode(Node):
                 f'LINE {phase}: progress={sample.progress:.3f}/{guide.length:.3f}m, '
                 f'remaining={sample.remaining:.3f}m, cross={sample.cross_error:.3f}m, '
                 f'target={guide.end}, yaw={guide.yaw:.1f}deg, '
-                f'along command={command:.3f}, measured={sample.measured_speed:.3f}m/s')
+                f'along command={command:.3f}, measured={sample.measured_speed:.3f}m/s, '
+                f'total measured={norm(world_velocity):.3f}m/s, '
+                f'endpoint_error_xyz={tuple(round(value, 3) for value in sample.endpoint_error)}m')
             return phase, now
         return last_report
 
@@ -1612,11 +1617,27 @@ class BasicMotionNode(Node):
                             <= self._line_config.yaw_tolerance
                             and norm(world_velocity) <= self._line_config.stop_speed)
                         last_report = self._line_report(
-                            guide, phase, sample, 0.0, last_report)
+                            guide, phase, sample, 0.0, last_report, world_velocity)
                         if aligned:
                             phase = 'CRUISE'
                         elif tick >= align_deadline:
                             raise RuntimeError('LINE alignment timeout')
+                    elif phase == 'STOPPING':
+                        # Position control brakes toward the fixed endpoint.
+                        # Stay in this mode if the vehicle drifts outside the
+                        # tolerance; do not alternate with low-speed tracking.
+                        if guide.reached(position, world_velocity, attitude[2],
+                                         position_tolerance=position_tolerance):
+                            stable_since = tick if stable_since is None else stable_since
+                            if tick - stable_since >= self._line_config.stable_seconds:
+                                self._send_setpoint(CK_POS, 0, *guide.end,
+                                                    math.radians(guide.final_yaw))
+                                phase = 'FINAL_TURN'
+                                stable_since = None
+                        else:
+                            stable_since = None
+                        last_report = self._line_report(
+                            guide, phase, sample, 0.0, last_report, world_velocity)
                     elif phase in ('FINAL_TURN', 'HOLD'):
                         if guide.reached(position, world_velocity, attitude[2],
                                          final=True,
@@ -1632,14 +1653,20 @@ class BasicMotionNode(Node):
                             phase = 'FINAL_TURN'
                             stable_since = None
                         last_report = self._line_report(
-                            guide, phase, sample, 0.0, last_report)
+                            guide, phase, sample, 0.0, last_report, world_velocity)
                     else:
-                        if guide.reached(position, world_velocity, attitude[2],
-                                         position_tolerance=position_tolerance):
+                        near_endpoint = (
+                            guide.position_reached(position,
+                                                   position_tolerance=position_tolerance)
+                            or norm(sample.endpoint_error) <= self._line_config.terminal_radius)
+                        if near_endpoint:
+                            # Begin braking before requiring a low measured
+                            # speed. Otherwise a moving vehicle can cross the
+                            # endpoint and remain in weak reverse correction.
                             self._publish_body_velocity()
                             self._send_setpoint(CK_POS, 0, *guide.end,
-                                                math.radians(guide.final_yaw))
-                            phase = 'FINAL_TURN'
+                                                math.radians(guide.yaw))
+                            phase = 'STOPPING'
                             stable_since = None
                         else:
                             velocity, phase, sample = guide.step(
@@ -1650,7 +1677,7 @@ class BasicMotionNode(Node):
                             along_command = sum(v * d for v, d in zip(
                                 velocity, guide.direction))
                         last_report = self._line_report(
-                            guide, phase, sample, along_command, last_report)
+                            guide, phase, sample, along_command, last_report, world_velocity)
                 time.sleep(max(0.0, 0.05 - (time.monotonic() - tick)))
         except Exception as exc:
             result.message = str(exc)

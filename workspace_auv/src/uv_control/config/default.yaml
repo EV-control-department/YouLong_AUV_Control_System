@@ -24,12 +24,12 @@
     line.capture_speed: 0.15
     line.reverse_speed: 0.08
     line.terminal_speed: 0.10 # 末端水平速度；Z使用独立伺服参数。
-    line.terminal_radius: 0.35
-    line.position_tolerance: 0.08 # XY到点容差m，可由动作position_tolerance覆盖。
+    line.terminal_radius: 0.35 # 距终点此半径内切位置保持制动，不等待先降到停车速度。
+    line.position_tolerance: 0.30 # XY每轴到点容差m，可由动作position_tolerance覆盖。
     line.z_tolerance: 0.15 # Z到点及起步对准容差m。
-    line.stop_speed: 0.04
+    line.stop_speed: 0.03 # 实测三维合速度需不超过此值，才能认定停稳。
     line.yaw_tolerance: 3.0
-    line.stable_seconds: 0.8
+    line.stable_seconds: 1.2 # 停车和最终转向后均需连续满足到点、低速和航向条件。
     line.align_timeout: 30.0
     line.yaw_gain: 0.8
     line.yaw_rate_limit: 15.0

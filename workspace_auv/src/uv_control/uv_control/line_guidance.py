@@ -62,11 +62,11 @@ class LineConfig:
     reverse_speed: float = 0.08
     terminal_speed: float = 0.10
     terminal_radius: float = 0.35
-    position_tolerance: float = 0.08
+    position_tolerance: float = 0.30
     z_tolerance: float = 0.15
-    stop_speed: float = 0.04
+    stop_speed: float = 0.03
     yaw_tolerance: float = 3.0
-    stable_seconds: float = 0.8
+    stable_seconds: float = 1.2
     align_timeout: float = 30.0
     yaw_gain: float = 0.8
     yaw_rate_limit: float = 15.0

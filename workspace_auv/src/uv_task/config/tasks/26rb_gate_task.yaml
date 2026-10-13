@@ -44,7 +44,7 @@ params:
   # 对正后单次向前 BLINE；所有当前有效观测中的最大框高超限时停车，丢框继续走到上限。
   fore_aft:
     height_limit_percent: 80.0 # 最大 bbox 高度 / 单目画面高度 > 80% 时停车。
-    speed_mps: 0.5 # 近距 BLINE 正向巡航速度。
+    speed_mps: 0.6 # 近距 BLINE 正向巡航速度。
     max_distance_m: 0.30 # 单次近距 BLINE 行程上限，单位米。
     position_tolerance_m: 0.05 # 此次 BLINE 到点容差。
     timeout: 30.0

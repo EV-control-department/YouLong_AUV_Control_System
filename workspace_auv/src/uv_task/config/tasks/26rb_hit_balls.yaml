@@ -39,7 +39,7 @@ params:
     rotate_timeout: 5.0 # 左、右扫视每次转向的动作超时。
   charge: # 近场航向矫正完成后直接执行撞击 BLINE。
     duration: 8.0 # 从 BLINE 正向速度反馈开始计时，到时取消并停车。
-    speed_mps: 0.49 # 请求撞击速度；uv_control 按配置限幅。
+    speed_mps: 0.79 # 请求撞击速度；uv_control 按配置限幅。
     timeout: 20.0 # BLINE 整体上限，包含接受目标、启动和 8 秒撞击时长。
   retreat:
     duration: 3.0 # 整个撞球流程（含兜底）结束前，只执行一次后退。

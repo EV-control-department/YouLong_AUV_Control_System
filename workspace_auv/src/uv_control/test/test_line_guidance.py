@@ -231,7 +231,7 @@ def test_gate_endpoint_accepts_depth_tolerance_without_accepting_large_drift():
                          LineConfig(), world=True, final_yaw=90)
     assert guide.reached((1.71, 4.25, .54), (0, 0, 0), 90, final=True)
     assert not guide.reached((1.71, 4.25, .67), (0, 0, 0), 90, final=True)
-    assert not guide.reached((1.79, 4.25, .54), (0, 0, 0), 90, final=True)
+    assert not guide.reached((2.01, 4.25, .54), (0, 0, 0), 90, final=True)
 
 
 def test_depth_tolerance_is_independent_of_goal_xy_override_and_applies_to_start():

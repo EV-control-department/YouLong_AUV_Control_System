@@ -11,16 +11,21 @@ Z 为深度变化；速度转换使用实时完整 RPY。巡航速度 `cruise_sp
 沿线加减速和整个速度向量的变化率限制仍生效。
 
 阶段：保持起点转向（ALIGN，最多 30 秒）→ 捕获/沿线跟踪
-（CAPTURE/CRUISE）→ 制动（BRAKE）→ 终点收敛/超调回退（TERMINAL）
-→ 零速度后保持终点并转向（FINAL_TURN）→ 稳定保持（HOLD）。默认 XYZ 各轴误差不超过 0.08 m、
-实测平移速度不超过 0.04 m/s、航向误差不超过 3°，在 HOLD 连续满足
-0.8 秒后成功。控制频率 20 Hz；阶段切换及每秒输出进度、偏差、
-固定终点、目标/实测沿线速度。
+（CAPTURE/CRUISE）→ 制动（BRAKE）→ 位置保持停车（STOPPING）
+→ 保持终点并转向（FINAL_TURN）→ 稳定保持（HOLD）。距固定终点的三维距离
+不超过 0.35 m，或已进入到点容差范围时，即结束速度租约、发送零速度，
+切换到固定终点的位置保持模式制动；此时保持行进航向。停车阶段不再切回速度回拉。
+默认 XY 每轴误差不超过 0.30 m、Z 误差不超过 0.15 m、
+实测三维合速度不超过 0.03 m/s、航向误差不超过 3°，连续满足 1.2 秒后
+才发送最终航向。转向后在 HOLD 再连续满足上述条件 1.2 秒才返回成功。
+速度始终不达标或位置持续超差时不会报成功，仍受全程超时限制。
+控制频率 20 Hz；阶段切换及每秒输出进度、偏差、固定终点、
+目标/实测沿线速度、实测三维合速度和终点 XYZ 误差。
 
 `timeout>0` 覆盖转向、跟踪和保持全过程；否则自动取
 `max(15, length/cruise_speed+10+终点转向预算)` 秒。
 `position_tolerance` 可为单个 BLINE/WLINE 目标覆盖到点位置容差（米）；0 使用
-`line.position_tolerance`。它只影响终点到达判断，不改变起点对准容差。
+`line.position_tolerance`。它影响停车入口和终点到达判断，不改变起点对准容差。
 速度反馈和定位、导航样本、MCU 状态都必须新鲜，并通过已有 START、
 原点代次、解锁检查。现有 real 模式临时 `force_nav_valid` 设置保持有效。
 
@@ -45,7 +50,7 @@ ros2 action send_goal /auv/basic_motion uv_msgs/action/BasicMotion \
 
 ## 稳定到点参数
 
-内置 `LineConfig` 与启动 YAML 使用相同的 22 项默认值。下表参数均带 `line.` 前缀；
+内置 `LineConfig` 与启动 YAML 使用相同的默认值。下表参数均带 `line.` 前缀；
 任务 YAML 显式指定的巡航速度仍优先，bline/wline 独立任务默认仍为 0.15 m/s。
 
 | 参数 | 默认值 | 单位 | 作用 |
@@ -63,18 +68,22 @@ ros2 action send_goal /auv/basic_motion uv_msgs/action/BasicMotion \
 | capture_exit | 0.10 | m | 偏差恢复到此值退出捕获 |
 | capture_speed | 0.15 | m/s | 捕获时沿线目标速度上限 |
 | reverse_speed | 0.08 | m/s | 终点超调回退速度上限 |
-| terminal_speed | 0.10 | m/s | 终点合速度目标上限 |
-| terminal_radius | 0.35 | m | 进入终点阶段的半径 |
-| position_tolerance | 0.08 | m | 默认各轴到点容差 |
-| stop_speed | 0.04 | m/s | 到点允许的最大实测合速度 |
+| terminal_speed | 0.10 | m/s | 速度跟踪终点阶段的水平速度目标上限 |
+| terminal_radius | 0.35 | m | 切换位置保持停车的三维距离 |
+| position_tolerance | 0.30 | m | 默认 XY 每轴到点容差 |
+| z_tolerance | 0.15 | m | Z 到点及起点对准容差 |
+| stop_speed | 0.03 | m/s | 到点允许的最大实测三维合速度 |
 | yaw_tolerance | 3.0 | ° | 对准和到点航向容差 |
-| stable_seconds | 0.80 | s | 到点条件连续保持时间 |
+| stable_seconds | 1.20 | s | 停车和最终转向后分别连续满足条件的时间 |
 | align_timeout | 30.0 | s | 起点对准阶段时限 |
 | yaw_gain | 0.80 | s⁻¹ | 巡航航向比例修正增益 |
 | yaw_rate_limit | 15.0 | °/s | 巡航转向指令上限 |
 
-进入 TERMINAL 后，指令按上述减速度及向量变化率逐步达到低速目标，
-不直接截断当前速度；从静止启动且长度不超过 0.35 m 的短段全程使用终点低速目标。
+进入停车范围前，速度跟踪按上述减速度及向量变化率制动。进入 STOPPING
+后由底层位置控制器保持固定终点并制动；长度不超过 0.35 m 的短段在起点
+对准后直接交给终点位置保持，仍需满足位置、实测低速和连续稳定时间。
+单次目标显式指定的 `position_tolerance` 仍优先于默认 0.30 m，
+但不会推迟 0.35 m 范围内的停车模式切换。
 起终点位置模式的转向由底层控制器执行，`yaw_rate_limit` 限制巡航速度模式转向，
 也用于估算终点转向预算。
 
@@ -85,7 +94,7 @@ ros2 action send_goal /auv/basic_motion uv_msgs/action/BasicMotion \
 
 ## 构建与验收
 
-本次仅修改 Action 字段注释，字段结构不变。已有包含 cruise_speed 和
+Action 字段结构不变。已有包含 cruise_speed 和
 position_tolerance 的客户端接口仍兼容；旧版缺字段的类型需要先统一构建。
 重新构建 uv_control 并重启节点后才会加载新的代码和默认配置。
 
