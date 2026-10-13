@@ -314,6 +314,14 @@ print('SET:', result.success, result.message)
   **没有**取消方法，取消只能在 goal handle 上 `cancel_goal_async()`；`AttributeError` 被
   服务回调吞掉，所以它一直是「停列表但不停船」)
 - **Status publisher** (`/task/status`, 1Hz): publishes current task index, total count, task name, status string
+- **状态指示灯（2026-10-13 实装基础设施，任务侧未实装）**：规范见
+  `docs/interfaces/indicator_light.md`。默认状态 **`OCCUPIED`（任务占用）** —— 状态机不碰灯，
+  任务经 `set_light()` **直通**，所以接入它**不改变任何现有行为**。其它状态（`TRANSIT` 黄绿交替 /
+  `SEARCHING` 黄慢闪 / `ALIGNING` 绿慢闪 / `WORKING` 绿常亮 / `SKIPPED` 红快闪 3 s / `OFF` 灭）
+  由 **20 Hz 定时器**按纯函数灯语表 `indicator_pattern()` 产生。**闪烁必须在主机侧生成** ——
+  固件把状态字节原样透传给 UART，硬件只认静态颜色。两个发射路径互斥：
+  `OCCUPIED` 直通 / 其它状态下 `set_light()` 被丢弃并**按调用点首次告警**。
+  **目前唯一接入点是** `_execute_task` 开头的 `set_indicator(OCCUPIED)`（保证每个任务都从兼容态开始）
 
 **ActionClient pattern (SingleThreadedExecutor + daemon thread):**
 
@@ -521,8 +529,11 @@ The `type_mask` bitmask controls which axes are active. **CRITICAL — inverse l
   `BasicMotion.action`, the `axes` target-fusion rule, the step constants vs their doc table, command
   serialisation + preemption + interrupt-to-position-hold, the velocity/force/STAY/duration/feedback
   behaviour added 2026-10-12, and the **non-zero-origin** coordinate checks that the zero-origin tests
-  could not make), and since 2026-10-12 `uv_task` (**13 cases**: `workspace_auv/src/uv_task/test/` —
-  task-list validation (typo'd names, malformed JSON/root/params) and the cancel-API shape).
+  could not make), and since 2026-10-12 `uv_task` (**48 cases**: `workspace_auv/src/uv_task/test/` —
+  task-list validation (typo'd names, malformed JSON/root/params), the cancel-API shape, and the
+  indicator state machine: the pure pattern table `indicator_pattern()`, the two mutually exclusive
+  emitter modes (`OCCUPIED` passthrough vs the 20 Hz timer), warn-once for dropped `set_light()`
+  calls, the 3 s `SKIPPED` hand-back, and the per-task `OCCUPIED` reset).
   The `uv_control` suite exists because that package had **no tests at all**, which is how a
   `STEP_Y`/`STEP_PERIOD` doc drift and a triplicated `cmd_type` name map went unnoticed.
   Run after sourcing both workspaces; keep them green:

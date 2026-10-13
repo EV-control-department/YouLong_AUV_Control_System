@@ -58,14 +58,97 @@ def _cmd_type_names() -> dict:
     }
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# 状态指示灯（规范：docs/interfaces/indicator_light.md）
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# 这一版只做**基础设施**：状态机 + 20 Hz 灯语定时器。**没有任何任务实装它** ——
+# 每个任务开头会先把状态置为 OCCUPIED（灯交给任务自己管），所以现有行为一字未变。
+#
+# 为什么默认是 OCCUPIED：不这样就必须一次性把所有任务处理器改完，否则会出现
+# 「状态机在闪 + 任务也在闪」的双写者。有了它，迁移可以停在任何中间点。
+
+#: 任务占用（**默认态**）：状态机不碰灯，任务处理器经 `set_light()` 直通点灯。
+INDICATOR_OCCUPIED = 'occupied'
+#: 未运行/已跑完/已停止 —— 状态机主动点「灭」。
+INDICATOR_OFF = 'off'
+#: 发车前的人员安全提示（灯语由 `_start_sequence` 自己跑，状态机不驱动）。
+INDICATOR_PRESTART = 'prestart'
+#: 正在转移到下一个任务地点。
+INDICATOR_TRANSIT = 'transit'
+#: 已在任务点，正在寻找目标。
+INDICATOR_SEARCHING = 'searching'
+#: 已找到目标，正在对准。
+INDICATOR_ALIGNING = 'aligning'
+#: 正在作业。
+INDICATOR_WORKING = 'working'
+#: 该任务超时/失败被跳过（红快闪 SKIPPED_DURATION 秒）。
+INDICATOR_SKIPPED = 'skipped'
+
+#: 定时器周期 [s]：20 Hz。快闪半周期 100 ms，即每个相位有 2 个采样点。
+INDICATOR_TICK = 0.05
+#: 慢闪半周期 [s]：500 ms 亮 / 500 ms 灭（1 Hz）。
+SLOW_HALF = 0.5
+#: 快闪半周期 [s]：100 ms 亮 / 100 ms 灭（5 Hz）。
+FAST_HALF = 0.1
+#: `SKIPPED` 红快闪持续时长 [s]（规范 §4.2）。
+SKIPPED_DURATION = 3.0
+#: “转移途中识别到目标”绿快闪的默认持续时长 [s]。
+DETECT_DURATION = 2.0
+
+
+def indicator_pattern(state: str, elapsed: float, detect_active: bool = False):
+    """给定状态与相位，返回该显示的颜色名；``None`` = **定时器不驱动这个状态**。
+
+    纯函数（无 ROS、无状态），因此灯语表可以直接离线测。返回颜色名而不是字节，
+    是为了让「灯语」与「协议取值」两件事分开：字节映射只在 `_COLOR_BYTE` 一处。
+
+    Args:
+        state: ``INDICATOR_*`` 之一。
+        elapsed: 进入该状态以来经过的秒数。
+        detect_active: ``TRANSIT`` 中「识别到目标物体」是否生效（规范 §4.3 子事件）。
+
+    Returns:
+        ``'off'`` / ``'red'`` / ``'green'`` / ``'yellow'``，或 ``None`` 表示
+        「此状态下灯归任务处理器管，状态机不要发」(``OCCUPIED`` / ``PRESTART``)。
+    """
+    if state == INDICATOR_TRANSIT:
+        if detect_active:
+            return 'green' if int(elapsed / FAST_HALF) % 2 == 0 else 'off'
+        # 黄绿交替慢闪：两个颜色各占一个半周期，中间不留灭的间隔
+        return 'yellow' if int(elapsed / SLOW_HALF) % 2 == 0 else 'green'
+    if state == INDICATOR_SEARCHING:
+        return 'yellow' if int(elapsed / SLOW_HALF) % 2 == 0 else 'off'
+    if state == INDICATOR_ALIGNING:
+        return 'green' if int(elapsed / SLOW_HALF) % 2 == 0 else 'off'
+    if state == INDICATOR_WORKING:
+        return 'green'
+    if state == INDICATOR_SKIPPED:
+        return 'red' if int(elapsed / FAST_HALF) % 2 == 0 else 'off'
+    if state == INDICATOR_OFF:
+        return 'off'
+    # OCCUPIED / PRESTART / 未知：不驱动
+    return None
+
+
 class TaskRunnerNode(Node):
     """Task runner: JSON task loader and sequential executor."""
 
     # ── 灯光常量 (/zit6/cmd/light) ─────────────────────────────────
+    # 值定义见 docs/interfaces/indicator_light.md §2：0 灭 / 1 红 / 2 绿 / 3 黄。
+    # ⚠️ 2=绿、3=黄（2026-10-13 实机确认；`mcu_sim` 与 `topic_contract.md` 曾把这两者写反）。
     LIGHT_OFF = 0
     LIGHT_YELLOW = 3
     LIGHT_GREEN = 2
     LIGHT_RED = 1
+
+    #: 颜色名 → 字节。`indicator_pattern()`（纯函数）只说颜色名，只有这一处翻成协议字节。
+    _COLOR_BYTE = {
+        'off': LIGHT_OFF,
+        'red': LIGHT_RED,
+        'green': LIGHT_GREEN,
+        'yellow': LIGHT_YELLOW,
+    }
 
     # ── 舵机角度 (/zit6/cmd/servo, rad) ────────────────────────────
     ANGLE_DROP_BEACON = 90       #   投信标
@@ -201,8 +284,20 @@ class TaskRunnerNode(Node):
         # Status timer
         self.create_timer(0.5, self._publish_status)
 
+        # ── 状态指示灯 ────────────────────────────────────────────
+        # 默认 OCCUPIED：状态机不发灯，任务经 set_light() 直通 —— 与改造前完全一致。
+        # 详见 docs/interfaces/indicator_light.md
+        self._indicator_lock = threading.Lock()
+        self._indicator_state = INDICATOR_OCCUPIED
+        self._indicator_since = time.monotonic()
+        self._indicator_detect_until = 0.0
+        self._indicator_last_byte = None       # 上次真正发出的字节（变化才发）
+        self._indicator_legacy_warned = set()  # 非 OCCUPIED 下被丢弃的 set_light 调用点
+        self.create_timer(INDICATOR_TICK, self._indicator_tick)
+
         self.get_logger().info('TaskRunner node started')
         self.get_logger().info(f'Debug mode: {self._debug_mode}')
+        self.get_logger().info(f'指示灯状态机初始: {self._indicator_state}')
 
     def _objects_cb(self, msg: ObjectPositionArray):
         self.objects = msg
@@ -258,17 +353,100 @@ class TaskRunnerNode(Node):
         self._mcu_status = msg
         self._mcu_status_rcvd = True
 
+    # ── 状态指示灯状态机 ───────────────────────────────────────────
+    # 规范：docs/interfaces/indicator_light.md
+    #
+    # 两个互斥的发射路径（§6.2）：OCCUPIED 下由任务处理器经 set_light() 直通；
+    # 其它状态下**只有** 20 Hz 定时器发，任务侧的 set_light() 被丢弃并首次告警。
+    # 任一时刻只有一个发射方，所以「单一写者」纪律没有被破坏 —— 它只是把
+    # 「谁能发」从代码位置改成了显式模式。
+
+    def _publish_light(self, color: int, label: str) -> None:
+        """真正发布灯光字节的**唯一**出口（直通路径与定时器都走这里）。"""
+        self.pub_light.publish(UInt8(data=int(color)))
+
+    def set_indicator(self, state: str) -> None:
+        """切换指示灯状态（幂等：重复设置同一状态不重启动画相位）。
+
+        `OCCUPIED` 表示把灯交还给当前任务处理器（默认态，见规范 §3）。
+        """
+        with self._indicator_lock:
+            if state == self._indicator_state:
+                return
+            previous = self._indicator_state
+            self._indicator_state = state
+            self._indicator_since = time.monotonic()
+            self._indicator_detect_until = 0.0
+            # 交接后第一拍必须发一次，否则可能停在上一模式留下的颜色上
+            self._indicator_last_byte = None
+        self.get_logger().info(f'指示灯: {previous} → {state}')
+
+    def indicate_detect(self, duration: float = DETECT_DURATION) -> bool:
+        """`TRANSIT` 途中「识别到目标物体」→ 绿快闪 duration 秒。
+
+        规范 §4.3：只在 `TRANSIT` 内生效（其它状态返回 False 并被忽略）。
+        """
+        with self._indicator_lock:
+            if self._indicator_state != INDICATOR_TRANSIT:
+                return False
+            self._indicator_detect_until = time.monotonic() + duration
+        return True
+
+    def _indicator_tick(self) -> None:
+        """20 Hz 灯语定时器。`OCCUPIED` / `PRESTART` 下不发任何东西。"""
+        now = time.monotonic()
+        with self._indicator_lock:
+            state = self._indicator_state
+            elapsed = now - self._indicator_since
+            detect_active = now < self._indicator_detect_until
+
+            # SKIPPED 到时：交还给 OCCUPIED（规范 §5）。现在没有任何任务会自己设
+            # 状态，所以 OCCUPIED 是唯一诚实的落点；将来任务迁移后会立刻覆盖它。
+            if state == INDICATOR_SKIPPED and elapsed >= SKIPPED_DURATION:
+                self._indicator_state = INDICATOR_OCCUPIED
+                self._indicator_since = now
+                self._indicator_last_byte = None
+                self.get_logger().info('指示灯: skipped → occupied（3 s 红快闪结束）')
+                return
+
+            color = indicator_pattern(state, elapsed, detect_active)
+            if color is None:
+                return          # 灯归任务管，定时器让开
+            byte = self._COLOR_BYTE[color]
+            if byte == self._indicator_last_byte:
+                return          # 只在颜色变化时发布：静态灯语（常亮/灭）只发一次
+            self._indicator_last_byte = byte
+        self.pub_light.publish(UInt8(data=int(byte)))
+
     # ── 灯光 / 舵机控制 ────────────────────────────────────────────
 
     def set_light(self, color: int, label: str):
-        msg = UInt8(data=color)
-        self.pub_light.publish(msg)
-        self.get_logger().info(f'💡 LIGHT ON: {label} (value={color})')
+        """旧接口：直通点灯。**只在 `OCCUPIED` 模式下生效**（规范 §6.2）。
+
+        Kept for compatibility: 未迁移的任务处理器继续这么用，行为与改造前一致。
+        一旦某任务迁到显式状态，这里的调用会被**丢弃并按调用点首次告警一次**
+        （只告警一次 —— 20 Hz 的闪烁会把日志刷爆）。
+        """
+        self._publish_legacy_light(int(color), label, f'LIGHT ON: {label} (value={color})')
 
     def light_off(self):
-        msg = UInt8(data=0)
-        self.pub_light.publish(msg)
-        self.get_logger().info('💡 LIGHT OFF')
+        self._publish_legacy_light(0, 'light_off', 'LIGHT OFF')
+
+    def _publish_legacy_light(self, color: int, label: str, log: str) -> None:
+        with self._indicator_lock:
+            state = self._indicator_state
+            if state != INDICATOR_OCCUPIED:
+                first = label not in self._indicator_legacy_warned
+                self._indicator_legacy_warned.add(label)
+        if state != INDICATOR_OCCUPIED:
+            if first:
+                self.get_logger().warn(
+                    f'set_light("{label}") 被忽略：当前指示灯状态为 {state}，'
+                    f'灯由状态机接管。该调用点应迁移到 set_indicator()；'
+                    f'若这个任务确实要自己管灯，先 set_indicator(OCCUPIED)')
+            return
+        self.pub_light.publish(UInt8(data=int(color)))
+        self.get_logger().info(f'💡 {log}')
 
     def set_servo(self, angle_rad: float, label: str):
         msg = Float32(data=float(angle_rad))
@@ -592,6 +770,12 @@ class TaskRunnerNode(Node):
         if handler is None:
             self.get_logger().warn(f'Unknown task: {name}')
             return False
+
+        # 每个任务都从 OCCUPIED 开始：把灯交还给本任务处理器。
+        # 这样**未迁移的任务行为与改造前完全一致**，而且任务可以假设"灯是我的"，
+        # 不受上一个任务或调试时手动设置的状态影响（规范 §3 的默认态）。
+        # 这是目前唯一一处状态机接入点 —— 任务内部一律还没实装。
+        self.set_indicator(INDICATOR_OCCUPIED)
 
         return handler(params)
 
@@ -1496,6 +1680,11 @@ class TaskRunnerNode(Node):
         # 清空 `_active_goal_handle`，先置位会让这里读到 None 而漏掉取消。
         goal_handle = self._active_goal_handle
         self.stopped = True
+
+        # 退出把灯关掉（规范 §6.3）—— 与 basic_motion 退出时发推力归零同理：
+        # 别把灯留在亮着。放在两个早退分支**之前**，保证每条路径都会关灯。
+        self.set_indicator(INDICATOR_OFF)
+        self.pub_light.publish(UInt8(data=self.LIGHT_OFF))
 
         if goal_handle is None:
             self.get_logger().info('退出收尾: 没有正在执行的 action goal')
