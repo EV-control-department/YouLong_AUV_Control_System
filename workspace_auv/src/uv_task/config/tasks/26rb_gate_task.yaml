@@ -15,7 +15,7 @@ params:
       - [1.9, 2.0, 0.18, 90.0] # 第 2 门
       - [1.48, 3.9, 0.18, 90.0] # 第 3 门
       - [1.70, 4.2, 0.4, 90.0] # 第 4 门
-      - [1.70, 0.3, 0.4, 90.0] # 第 5 门
+      - [1.70, 5.3, 0.4, 90.0] # 第 5 门
     xy_radius_m: [0.8, 0.8, 0.8, 0.8, 0.8] # 与位姿序号对应；进入终点的 XY 半径才停车调深。
     travel_timeout: 60.0 # 定点模式每段 BLINE 的时限；速度使用 pass.speed_mps。
     set_timeout: 20.0 # SET 到预设完整位姿的到点超时，单位秒。
@@ -44,9 +44,9 @@ params:
   # 对正后单次向前 BLINE；所有当前有效观测中的最大框高超限时停车，丢框继续走到上限。
   fore_aft:
     height_limit_percent: 80.0 # 最大 bbox 高度 / 单目画面高度 > 80% 时停车。
-    speed_mps: 0.25 # 近距 BLINE 正向巡航速度。
+    speed_mps: 0.5 # 近距 BLINE 正向巡航速度。
     max_distance_m: 0.30 # 单次近距 BLINE 行程上限，单位米。
-    position_tolerance_m: 0.01 # 此次 BLINE 到点容差。
+    position_tolerance_m: 0.05 # 此次 BLINE 到点容差。
     timeout: 30.0
   # 停车后对准当前最大框；无框或 yaw 未稳定就直接穿门，不再等待重获。
   pass:
@@ -57,7 +57,7 @@ params:
     yaw_kp: 1.2
     max_yaw_rate_deg_s: 12.0
     distance_m: 1.0
-    speed_mps: 0.2
+    speed_mps: 0.5
     timeout: 20.0
     next_observe_seconds: 2.0 # 过门后保持终点观察下一门；没看到才 SET 到下一条预设位姿。
     pause_seconds: 0.5 # 最后一门通过后的停顿；门间使用上面的原地观察。

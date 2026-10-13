@@ -848,17 +848,15 @@ class RB26GrabBallRingTask:
         if 'ring' in self._blind_targets:
             history = self._blind_targets['ring']
             if history is None:
-                self.log.warning('抓环：超时盲抓没有历史有效法向，保持当前航向对爪')
+                self.log.warning('抓环：超时盲抓没有历史有效方向，保持当前航向对爪')
             else:
                 received, axis = history
-                # The detector reports the projected ring-plane major axis.
-                # For an upright ring its horizontal normal is perpendicular
-                # to the world XY axis, not the image angle or the body yaw.
-                normal = (axis+90.0) % 180.0
-                yaw = choose_away_heading(normal, pose[:2], self.state.pickup.start_xy, pose[5])
+                # Apply the same world-axis heading convention as successful
+                # alignment, using the history frozen at the servo timeout.
+                yaw = choose_away_heading(axis, pose[:2], self.state.pickup.start_xy, pose[5])
                 self.log.warning(
-                    f'抓环：超时盲抓使用最后有效水平法向，世界轴={axis:8.2f}deg，'
-                    f'世界法向={normal:8.2f}deg，目标yaw={yaw:+8.2f}deg，'
+                    f'抓环：超时盲抓沿用最后有效世界轴方向，世界轴={axis:8.2f}deg，'
+                    f'目标yaw={yaw:+8.2f}deg，'
                     f'观测年龄={max(0.0, time.monotonic()-received):8.2f}s')
         else:
             # Successful visual alignment retains its fixed two-second window.

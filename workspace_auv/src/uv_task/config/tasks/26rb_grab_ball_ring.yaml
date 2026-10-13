@@ -11,8 +11,8 @@ params:
   collection_frame_class: collection_frame_down
   # 可配置组合抓取顺序： [golf, ring] 或 [ring, golf]。
   pickup:
-    # order: [golf, ring]
-    order: [ring, golf]
+    order: [golf, ring]
+    # order: [ring, golf]
 
   # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
   # 初始值需按实际场地填写；不会从定位器覆盖。

@@ -203,7 +203,7 @@ class BasicMotionNode(Node):
         self.declare_parameter('arm_mode', 1)
         self.declare_parameter('start_timeout', 10.0)
         self.declare_parameter('arm_confirmation_timeout', 20.0)
-        self.declare_parameter('state_timeout', 1.0)
+        self.declare_parameter('state_timeout', 5.0)
         self.declare_parameter('force_nav_valid', False)
         line_defaults = LineConfig()
         for field in fields(LineConfig):

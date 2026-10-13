@@ -110,7 +110,7 @@ def test_run_target_calls_mechanical_attempt_once_and_then_checks(rig, kind, cid
 
 @pytest.mark.parametrize('camera', ['down_left', 'down_right'])
 @pytest.mark.parametrize('attitude', [(0., 0., 0.), (5., -7., 25.)])
-def test_ring_blind_uses_frozen_world_normal_without_two_second_wait(rig, camera, attitude):
+def test_ring_blind_uses_frozen_world_axis_without_two_second_wait(rig, camera, attitude):
     node, task = rig
     node.pose[3:] = attitude
     ring = detection(node, 8, camera, error=(.15, -.1))
@@ -132,7 +132,7 @@ def test_ring_blind_uses_frozen_world_normal_without_two_second_wait(rig, camera
     assert node.clock == started
     axis = np.array([math.cos(math.radians(history[1])), math.sin(math.radians(history[1]))])
     heading = np.array([math.cos(math.radians(node.pose[5])), math.sin(math.radians(node.pose[5]))])
-    assert float(axis @ heading) == pytest.approx(0., abs=1e-8)
+    assert abs(float(axis @ heading)) == pytest.approx(1., abs=1e-8)
     assert float(heading @ (xy-np.asarray(task.state.pickup.start_xy))) >= -1e-9
     tf = node.camera_extrinsics_provider.lookup_transform('base_link', 'hairpin_claw_link').translation
     offset = mod.body_to_world_rotation(node.pose) @ [tf.x, tf.y, tf.z]
@@ -149,7 +149,7 @@ def test_ring_blind_without_any_history_keeps_yaw(rig):
     task._collect_ring_axis = lambda: pytest.fail('blind grab must not wait for yaw samples')
     assert task._orient_and_align_ring()
     assert node.pose[5] == pytest.approx(17.)
-    assert any('没有历史有效法向' in line for line in node.logs)
+    assert any('没有历史有效方向' in line for line in node.logs)
 
 
 def test_fixed_columns_cover_missing_data_eye_change_loss_and_blind(rig):
@@ -209,7 +209,7 @@ def test_blind_grab_runs_real_mechanical_sequence_on_virtual_actuators(rig, kind
     assert node.pose[:2]+offset[:2] == pytest.approx(target_xy)
     if kind == 'ring':
         assert history is not None
-        assert abs(math.cos(math.radians(node.pose[5]-history[1]))) < 1e-8
+        assert abs(math.cos(math.radians(node.pose[5]-history[1]))) == pytest.approx(1., abs=1e-8)
         angles = [angle for stamp, servo_id, angle in node.servos if servo_id == 2]
         assert angles == [0.]*3+[90.]*3
     else:
