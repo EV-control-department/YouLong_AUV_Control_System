@@ -360,6 +360,9 @@ class FrontDownSearch:
                 allow_timeout and 'timeout' in completed.result.message.lower()):
             raise SearchMotionFailure(f'BLINE 中止：{completed.result.message}')
 
+    def _cruise_speed(self):
+        return self.p['search_speed_mps']
+
     def _bline(self, monitor):
         self._check()
         if self._bline_active or self._velocity_active:
@@ -372,15 +375,21 @@ class FrontDownSearch:
             raise SearchMotionFailure('上一条动作结束未确认，禁止启动 BLINE')
         if not self.node._action_client.wait_for_server(timeout_sec=min(2.0, remaining)):
             raise SearchMotionFailure(f'寻找{self.target_label}：BasicMotion 动作服务器不可用')
+        # Discovery/handoff can take time; choose from the latest XY before
+        # submitting a new line, including starts already inside the radius.
+        if self._expired():
+            return 'timeout'
+        remaining = self._search_clock.remaining()
+        cruise_speed = self._cruise_speed()
         goal = BasicMotion.Goal()
         goal.cmd_type = BasicMotion.Goal.BLINE
         goal.axes = 'xyz'
         # Stop by our accumulated runtime budget before reaching this far endpoint.
         dz = self.depth-self._pose()[2] if self.correct_depth else 0.0
-        goal.target = [self.p['search_speed_mps']*remaining+1.0, 0.0, dz, 0.0]
+        goal.target = [cruise_speed*remaining+1.0, 0.0, dz, 0.0]
         # This is a server failsafe for one goal, not the accumulated cruise clock.
         goal.timeout = remaining+self.p['search_cancel_timeout']+1.0
-        goal.cruise_speed = self.p['search_speed_mps']
+        goal.cruise_speed = cruise_speed
         goal.task_context = self.node._format_motion_context(f'寻找{self.target_label}：前向 BLINE 巡游')
         self._light(self.node.LIGHT_OFF, f'BLINE 前向寻找{self.target_label}')
         future = self.node._action_client.send_goal_async(goal)
@@ -430,6 +439,13 @@ class FrontDownSearch:
                     self.node._last_motion_final_target = target
                     return 'endpoint'
                 reason = monitor()
+                if not reason:
+                    # Radius entry must still be checked during the down-view
+                    # stop delay. Finish this line before changing its speed.
+                    if self._expired():
+                        reason = 'timeout'
+                    elif not math.isclose(self._cruise_speed(), cruise_speed, abs_tol=1e-6):
+                        reason = 'near'
                 if reason:
                     self._cancel(handle, result_future, allow_timeout=reason == 'timeout')
                     self._sync_pose()
@@ -601,6 +617,12 @@ class FrontDownSearch:
                             f'{self.p["search_fallback_rotate_degrees"]:.0f}° 后，'
                             f'下视仍未检测到{self.target_label}')
                     return TaskOutcome.ok()
+                if reason == 'near':
+                    self.node.get_logger().info(
+                        f'{self.task_name}：已进入{self.target_label}近场半径，'
+                        f'旧 BLINE 已确认结束，切换巡游速度={self._cruise_speed():.2f}m/s；'
+                        '累计寻找时间不重置')
+                    continue
                 if reason == 'front':
                     front_attempted = True
                     self._align_front()
@@ -660,6 +682,13 @@ class FrontDownSearch:
 class CollectionFrameSearch(FrontDownSearch):
     """Golf pickup approach with depth compensation during visual servo."""
     rotate_fallback = True
+
+    def _cruise_speed(self):
+        # Near entry is latched by the search clock: do not accelerate again
+        # after drift, a calibration stop or a renewed BLINE.
+        if self._search_clock.near_entered_at is None:
+            return self.p['search_far_speed_mps']
+        return self.p['search_speed_mps']
 
 
 class TargetRackSearch(FrontDownSearch):

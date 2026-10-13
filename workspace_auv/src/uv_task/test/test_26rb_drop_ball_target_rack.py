@@ -213,13 +213,13 @@ def test_full_drop_sequence_holds_depth_through_release(rig, monkeypatch):
     assert rig.task.execute()
     assert rig.task._servo_depth == .2
     assert rig.pose[2] == .2 and rig.node._cmd_z == .2
-    assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 180.)]*3+[(2, 270.)]*3
+    assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 180.)]*3+[(2, 270.)]*3+[(1, 180.), (2, 210.)]
     holds = [call for call in rig.calls if call[0] == 'action']
     assert len(holds) == 3
     # Release the ball before moving to the hairpin target, then release the ring.
     events = [call[0] for call in rig.calls if call[0] in ('action', 'servo')]
     assert events == ['action', 'action', 'servo', 'servo', 'servo',
-                      'action', 'servo', 'servo', 'servo']
+                      'action', 'servo', 'servo', 'servo', 'servo', 'servo']
     assert all(call[3] == 'xyzrz' and call[2][2] == .2 for call in holds)
 
 
@@ -380,7 +380,7 @@ def test_timeout_drop_flow_does_not_announce_visual_servo_success(rig, monkeypat
     assert rig.task.execute()
     assert rig.task._visual_servo_timed_out
     assert indications == ['放球完成', '放环完成']
-    assert [msg.servo_id for msg in rig.messages] == [1, 1, 1, 2, 2, 2]
+    assert [msg.servo_id for msg in rig.messages] == [1, 1, 1, 2, 2, 2, 1, 2]
 
 
 def test_completed_visual_servo_retains_success_indication(rig, monkeypatch):
@@ -417,7 +417,7 @@ def test_last_velocity_ack_can_finish_after_visual_deadline_and_continue_drop(ri
     assert acknowledgements[-1][0] < visual_deadline < acknowledgements[-1][1]
     assert all(sent_at < visual_deadline for sent_at, _, _ in acknowledgements)
     assert all(deadline-sent_at == pytest.approx(2.) for sent_at, _, deadline in acknowledgements)
-    assert [message.servo_id for message in rig.messages] == [1, 1, 1, 2, 2, 2]
+    assert [message.servo_id for message in rig.messages] == [1, 1, 1, 2, 2, 2, 1, 2]
     assert not any('rack速度指令失败' in line for line in rig.logs)
 
 
@@ -447,3 +447,46 @@ def test_expired_visual_window_never_sends_another_velocity_goal(rig, expires_du
         rig.task._servo_pose = slow_pose
     assert not rig.task._send_rack_velocity(np.zeros(2), deadline)
     assert rig.calls == []
+
+
+
+def test_final_release_pair_precedes_completion_and_waits_for_mechanics(rig, monkeypatch):
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=TaskOutcome.ok))
+    monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: (0., 0.))
+    rig.task._release_angle_deg = 150.
+    rig.task._ring_release_angle_deg = 15.
+    rig.task._release_settle_seconds = .5
+    rig.task._ring_release_settle_seconds = 1.3
+    indications = []
+    rig.task._flash_green = lambda count, label, **kwargs: indications.append(
+        (label, rig.clock[0], len(rig.messages))) or True
+    assert rig.task.execute()
+    assert [(m.servo_id, m.angle) for m in rig.messages] == (
+        [(1, 150.)]*3+[(2, 15.)]*3+[(1, 180.), (2, 210.)])
+    final_sends = [call for call in rig.calls if call[0] == 'servo'][-2:]
+    assert final_sends[0][1] == final_sends[1][1]
+    assert rig.clock[0]-final_sends[-1][1] == pytest.approx(1.3)
+    assert indications[-1] == ('放环完成', rig.clock[0], 8)
+    assert rig.calls[-1] == final_sends[-1]  # No motion after the final release pair.
+
+
+@pytest.mark.parametrize('cancel_phase', ['first_servo', 'settle'])
+def test_cancel_during_final_release_does_not_report_completion(rig, monkeypatch, cancel_phase):
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=TaskOutcome.ok))
+    monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: (0., 0.))
+    indications = []
+    rig.task._flash_green = lambda count, label, **kwargs: indications.append(label) or True
+    if cancel_phase == 'first_servo':
+        original = rig.node.set_servo
+        def send(*args, **kwargs):
+            original(*args, **kwargs)
+            if len(rig.messages) == 7:
+                rig.node.stopped = True
+        rig.node.set_servo = send
+    else:
+        rig.state.hook = lambda: setattr(rig.node, 'stopped', True) if len(rig.messages) == 8 else None
+    outcome = rig.task.execute()
+    assert not outcome and outcome.failure_code == '26rb_drop_ball_target_rack.stopped'
+    assert '结束前补发' in outcome.message
+    assert '放环完成' not in indications
+    assert len(rig.messages) == (7 if cancel_phase == 'first_servo' else 8)

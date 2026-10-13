@@ -16,6 +16,7 @@ SEARCH_DEFAULTS = {
     'search_max_yaw_rate_deg_s': 10.0,
     'search_depth_gain': 0.8,
     'search_max_vertical_speed_mps': 0.08,
+    'search_far_speed_mps': 0.59,
     'search_speed_mps': 0.15,
     'search_detection_timeout': 0.8,
     'search_min_confidence': 0.02,

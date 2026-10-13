@@ -404,6 +404,18 @@ class RB26DropBallTargetRackTask:
                 return False
         return self._sleep(self._ring_release_settle_seconds)
 
+    def _final_release(self) -> bool:
+        """Reassert both fully open angles before reporting task completion."""
+        for servo_id, angle, label in ((1, 180.0, '球'), (2, 210.0, '环')):
+            if self._node.stopped:
+                return False
+            self._node.set_servo(
+                angle, f'rack任务结束前补发放{label}', servo_id=servo_id)
+        self._logger.info(
+            '26rb_drop_ball_target_rack：结束前已补发 servo 1=180°、servo 2=210°，等待机械释放')
+        return self._sleep(max(
+            self._release_settle_seconds, self._ring_release_settle_seconds))
+
     def execute(self) -> TaskOutcome:
         self._servo_depth = self._task_depth
         self._rack_camera_pose = None
@@ -455,6 +467,9 @@ class RB26DropBallTargetRackTask:
             if not self._release_ring():
                 return TaskOutcome.failed(
                     '26rb_drop_ball_target_rack.stopped', '发送释放环指令被中止')
+            if not self._final_release():
+                return TaskOutcome.failed(
+                    '26rb_drop_ball_target_rack.stopped', '结束前补发释放指令被中止')
             if not self._flash_green(1, '放环完成', restore_phase=False):
                 return TaskOutcome.failed(
                     '26rb_drop_ball_target_rack.stopped', '释放完成提示被中止')
