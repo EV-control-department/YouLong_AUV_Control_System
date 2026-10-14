@@ -18,7 +18,7 @@ import time
 
 import numpy as np
 import rclpy
-from rclpy.action import ActionClient
+from uv_task.action_client_compat import ReliableActionClient
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import (
@@ -300,7 +300,7 @@ class TaskRunnerNode(Node):
         }
 
         # Action client
-        self._action_client = ActionClient(self, BasicMotion, BASIC_MOTION)
+        self._action_client = ReliableActionClient(self, BasicMotion, BASIC_MOTION)
         if not self._action_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('BasicMotion 动作服务器不可用！')
 
