@@ -28,6 +28,20 @@ EXPECTED_TASKS = [
 ]
 
 
+@pytest.mark.parametrize('config', [None, [], 'bad', {'enabled': True, 'pose': []},
+    {'enabled': True, 'pose': {'x': None}},
+    {'enabled': 'true', 'pose': [1, 2, .1, 0]},
+    {'enabled': False, 'pose': '待填', 'timeout_seconds': None},
+    {'enabled': True, 'pose': [1, 2, .1, 0], 'timeout_seconds': 'bad'}])
+def test_optional_sea_waypoint_cannot_block_config_loading(tmp_path, config):
+    import yaml
+    from uv_task.config_loader import load_task
+    path = tmp_path/'sea.yaml'
+    path.write_text(yaml.safe_dump({'task': 'grab_sea_cucumber',
+                                  'params': {'transfer_waypoint': config}}))
+    assert load_task(path)[0]['params']['transfer_waypoint'] == config
+
+
 def test_disabled_runtime_does_not_validate_unused_motion_fields(tmp_path):
     from uv_task.config_loader import load_mission_runtime
     path = tmp_path/'mission.yaml'

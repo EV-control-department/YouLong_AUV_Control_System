@@ -258,6 +258,9 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "max_grab_retries": int,
     },
     "grab_sea_cucumber": {
+        # Optional route configuration is validated non-fatally by the task.
+        # Keep the group intact so empty/invalid field values cannot block loading.
+        "transfer_waypoint": object,
         "gripper_servo_id": int,
         "gripper_contact_body_xyz": (list, float),
         "gripper_close_wait_seconds": float,
@@ -501,7 +504,7 @@ def _flatten_params(
         if not isinstance(key, str) or not key.strip():
             raise ConfigError("参数键必须是非空字符串")
         current_path = path + (key,)
-        if isinstance(child, dict):
+        if isinstance(child, dict) and schema.get(key) is not object:
             if not child:
                 continue  # 空参数组表示沿用任务默认值，不是任务启动错误。
             nested = _flatten_params(
@@ -544,6 +547,8 @@ def _flatten_params(
 
 
 def _value_matches(value: Any, expected: Any) -> bool:
+    if expected is object:
+        return True  # Only explicitly declared non-fatal optional groups use this.
     if isinstance(expected, tuple) and expected[0] is list:
         return isinstance(value, list) and all(_value_matches(v, expected[1]) for v in value)
     if expected is float:

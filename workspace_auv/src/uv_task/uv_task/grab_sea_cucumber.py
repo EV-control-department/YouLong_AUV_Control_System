@@ -44,6 +44,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         if not math.isfinite(speed) or not math.isfinite(duration) or speed <= 0 or duration <= 0:
             raise ValueError('下压速度和时长必须是有限正数')
         super().__init__(node, params)
+        self._configure_transfer_waypoint(params.get('transfer_waypoint'))
         threshold = float(params.get('return_observation_confidence', .8))
         if not math.isfinite(threshold) or not 0 < threshold <= 1:
             raise ValueError('return_observation_confidence必须在(0,1]内')
@@ -675,7 +676,57 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         self._return_servo_handoff = True
         return True
 
+    def _configure_transfer_waypoint(self, config):
+        """可选绕行点：配置问题只告警，不阻止原海参任务启动。"""
+        self._transfer_waypoint = None
+        self._transfer_waypoint_timeout = 30.0
+        if config is None:
+            return
+        try:
+            if not isinstance(config, dict):
+                raise ValueError('须为 enabled/pose/timeout_seconds 参数组')
+            enabled = config.get('enabled', False)
+            if not isinstance(enabled, bool):
+                raise ValueError('enabled 须为 true 或 false')
+            if not enabled:
+                return  # 关闭时坐标和超时均不参与校验。
+            if set(config) - {'enabled', 'pose', 'timeout_seconds'}:
+                raise ValueError('存在未知航点字段')
+            pose = config.get('pose')
+            if (not isinstance(pose, (list, tuple)) or len(pose) != 4
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                               and math.isfinite(v) for v in pose)
+                    or pose[2] < 0):
+                raise ValueError('pose 待填有限 [x,y,z,yaw度]，START后odom系，z非负')
+            timeout = config.get('timeout_seconds', 30.0)
+            if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+                    or not math.isfinite(timeout) or timeout <= 0):
+                raise ValueError('timeout_seconds 须为有限正数')
+            self._transfer_waypoint = tuple(map(float, pose))
+            self._transfer_waypoint_timeout = float(timeout)
+        except (TypeError, ValueError, OverflowError) as error:
+            self._logger.warning(f'抓海参：可选运输航点无效：{error}；跳过航点，沿用原运输流程')
+
+    def _visit_transfer_waypoint(self, deadline, label):
+        """往返共用一处绕行点；失败/异常不作为海参任务失败条件。"""
+        point = getattr(self, '_transfer_waypoint', None)
+        if point is None or self._node.stopped or time.monotonic() >= deadline:
+            return
+        try:
+            timeout = min(self._transfer_waypoint_timeout, deadline-time.monotonic())
+            if timeout <= 0:
+                return
+            reached = self._node._follow_world_waypoints(
+                [point], label, timeout, mode='fixed_yaw', failure_is_warning=True)
+            if not reached and not self._node.stopped:
+                self._logger.warning(f'抓海参：{label}未到达，跳过航点并尝试原目的地')
+        except Exception as error:
+            self._logger.warning(f'抓海参：{label}异常：{error}；跳过航点并尝试原目的地')
+
     def _return_observing(self, search_pose, deadline):
+        # 绕过九宫格前不允许途中视觉接管；通过可选点后再恢复原返回观察。
+        self._return_watch_active = False
+        self._visit_transfer_waypoint(deadline, '收集区返回抓取区中间航点')
         self._return_observation_started = time.monotonic()
         self._return_capture_after_ns = self._node.get_clock().now().nanoseconds
         self._return_last_frame_ns = -1
@@ -914,6 +965,7 @@ class GrabSeaCucumberTask(RB26GrabBallTask):
         return True
 
     def _deliver(self, search_pose, deadline, return_to_search):
+        self._visit_transfer_waypoint(deadline, '抓取区前往收集区中间航点')
         if not self._travel(self._drop_pose, '海参运往收集区', deadline, self._drop_timeout):
             return False
         aligned = False

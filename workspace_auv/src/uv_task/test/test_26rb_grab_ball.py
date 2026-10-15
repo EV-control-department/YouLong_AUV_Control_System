@@ -234,6 +234,29 @@ def test_world_waypoints_aligns_then_translates_linearly_without_heading_switch(
     assert actions[-1][1] == [1.2,.8,.2,90.]
 
 
+@pytest.mark.parametrize('problem', ['pose', 'server', 'rejected', 'failed'])
+def test_optional_world_waypoint_action_failure_only_warns(problem):
+    from uv_task.task_runner import TaskRunnerNode
+    node, _, _ = _world_route_node()
+    warnings = []
+    log = SimpleNamespace(info=lambda m: None, warning=warnings.append,
+                          error=lambda m: pytest.fail(m))
+    node.get_logger = lambda: log
+    if problem == 'pose':
+        node._robot_pose = None
+    else:
+        node._debug_timeout = -1.
+        result = SimpleNamespace(result=SimpleNamespace(success=False, message='failed'))
+        handle = SimpleNamespace(accepted=problem != 'rejected',
+            get_result_async=lambda: SimpleNamespace(done=lambda: True, result=lambda: result))
+        node._action_client = SimpleNamespace(wait_for_server=lambda **kw: problem != 'server',
+            send_goal_async=lambda goal: SimpleNamespace(done=lambda: True, result=lambda: handle))
+        node._send_action_goal = lambda *a, **kw: TaskRunnerNode._send_action_goal(node, *a, **kw)
+    assert not TaskRunnerNode._follow_world_waypoints(
+        node, [[1., 2., .2, 0.]], '可选运输航点', 10., failure_is_warning=True)
+    assert warnings and not node.stopped
+
+
 def test_world_waypoints_reanchors_after_rotation_drift():
     node, actions, _ = _world_route_node()
     original = node._send_action_goal
@@ -1113,6 +1136,60 @@ def _sea_flow_fake():
     task._ascent_speed, task._ascent_period, task._ascent_tolerance = .08, .05, .05
     task._node._publish_body_velocity = lambda **kwargs: None
     return task
+
+
+@pytest.mark.parametrize('config', [None, [], 'bad', {'enabled': True, 'pose': []},
+    {'enabled': True, 'pose': [1, 2, float('nan'), 0]},
+    {'enabled': True, 'pose': [1, 2, -.1, 0]},
+    {'enabled': True, 'pose': [True, 2, .1, 0]},
+    {'enabled': 'false', 'pose': [1, 2, .1, 0]},
+    {'enabled': True, 'pose': [1, 2, .1, 0], 'timeout_seconds': 0},
+    {'enabled': True, 'pose': [1, 2, .1, 0], 'typo': 1},
+    {'enabled': False, 'pose': '待填', 'timeout_seconds': None}])
+def test_sea_optional_waypoint_invalid_or_disabled_never_sends_motion(config):
+    task = _sea_flow_fake()
+    task._logger.error = lambda m: pytest.fail(m)
+    task._node._follow_world_waypoints = lambda *a, **kw: pytest.fail('disabled waypoint')
+    task._configure_transfer_waypoint(config)
+    task._visit_transfer_waypoint(time.monotonic()+10., 'test')
+    assert task._transfer_waypoint is None and not task._node.stopped
+
+
+@pytest.mark.parametrize('outcome', ['success', 'failed', 'exception'])
+def test_sea_optional_waypoint_round_trip_continues_delivery_and_return(outcome):
+    task = _sea_flow_fake()
+    task._configure_transfer_waypoint({'enabled': True, 'pose': [3., -1., .2, 0.],
+                                       'timeout_seconds': 5.})
+    task._drop_pose, task._drop_timeout = (5., 0., .2, 0.), 10.
+    task._release_wait, task._release_angle = 0., 1.57
+    events = []
+    task._logger.error = lambda m: pytest.fail(m)
+    def follow(points, label, timeout, **kwargs):
+        assert points == [(3., -1., .2, 0.)] and 0 < timeout <= 5.
+        assert kwargs == {'mode': 'fixed_yaw', 'failure_is_warning': True}
+        assert not getattr(task, '_return_watch_active', False)
+        events.append('waypoint')
+        if outcome == 'exception':
+            raise RuntimeError('optional action failed')
+        return outcome == 'success'
+    task._node._follow_world_waypoints = follow
+    task._travel = lambda pose, *a: events.append(
+        'delivery' if pose == task._drop_pose else 'search') or True
+    task._move_collection_release_offset = lambda d: True
+    task._command_gripper = lambda *a: events.append('release')
+    assert task._deliver(task._search_pose, time.monotonic()+20., True)
+    assert events == ['waypoint', 'delivery', 'release', 'waypoint', 'search']
+    assert not task._node.stopped and not task._return_watch_active
+
+
+@pytest.mark.parametrize('stopped', [False, True])
+def test_sea_optional_waypoint_respects_stop_and_deadline(stopped):
+    task = _sea_flow_fake()
+    task._configure_transfer_waypoint({'enabled': True, 'pose': [1, 2, .1, 0]})
+    task._node.stopped = stopped
+    task._node._follow_world_waypoints = lambda *a, **kw: pytest.fail('must not move')
+    task._visit_transfer_waypoint(time.monotonic() + (10 if stopped else -1), 'test')
+    assert task._node.stopped is stopped
 
 
 @pytest.mark.parametrize('failure', ['horizontal', 'ascent', 'stopped', 'no_pose'])

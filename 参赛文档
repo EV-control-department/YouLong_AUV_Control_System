@@ -1,0 +1,16 @@
+数据集录制
+ros2 run uv_record record \
+  --profile dataset \
+  --video-fps 4 \
+
+skip_preparation
+
+重测九宫格中心相对 START 的位置
+
+floor_z	1.0米	重测建图区池底在当前深度坐标系中的值
+
+tag_id
+
+fallbacks
+
+move_timeout	30秒	单个目标移动预算，包含调深、归向和分段移动 如果失败会如何，应该要向下一个节点移动

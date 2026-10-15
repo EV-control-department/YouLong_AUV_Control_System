@@ -951,7 +951,8 @@ class TaskRunnerNode(Node):
         return f'{purpose}({axes or "all"})'
 
     def _send_action_goal(self, cmd_type, target, axes='', timeout=60.0,
-                          quiet=False, task_context='', interrupt_if=None):
+                          quiet=False, task_context='', interrupt_if=None,
+                          failure_is_warning=False):
         """Send a BasicMotion action goal and wait for completion (blocking).
 
         Polls the future in a loop since this runs in a daemon thread while
@@ -963,6 +964,7 @@ class TaskRunnerNode(Node):
             axes: which axes to move (empty = all)
             timeout: max time in seconds (0 = server default 60s)
             quiet: if True, suppress per-goal INFO logs (errors still logged)
+            failure_is_warning: optional waypoint failures use WARNING instead of ERROR.
             task_context: context shown by basic_motion; empty uses the standard
                 current-task/current-step/action context.
             interrupt_if: optional visual predicate polled while awaiting result;
@@ -971,6 +973,8 @@ class TaskRunnerNode(Node):
         Returns:
             (success: bool, message: str)
         """
+        log_failure = (self.get_logger().warning if failure_is_warning
+                       else self.get_logger().error)
         guard = getattr(self, '_mission_deadline', None)
         if guard is not None and guard.phase != 'idle':
             return False, '任务总计时已接管，禁止普通动作'
@@ -991,7 +995,7 @@ class TaskRunnerNode(Node):
                 f'超时={effective_timeout:.0f}s，任务上下文="{task_context}"')
 
         if not self._action_client.wait_for_server(timeout_sec=2.0):
-            self.get_logger().error('动作服务器不可用')
+            log_failure('动作服务器不可用')
             return False, '动作服务器不可用'
 
         goal = BasicMotion.Goal()
@@ -1011,14 +1015,14 @@ class TaskRunnerNode(Node):
                 self.get_logger().warn(f'动作目标被中断（stopped={self.stopped}）')
             return False, '已停止'
         if not send_future.done():
-            self.get_logger().error('发送动作目标超时')
+            log_failure('发送动作目标超时')
             return False, '发送动作目标超时'
 
         goal_handle = send_future.result()
         self._active_goal_handle = goal_handle
         if not goal_handle.accepted:
             self._active_goal_handle = None
-            self.get_logger().error('动作目标被服务器拒绝')
+            log_failure('动作目标被服务器拒绝')
             return False, '动作目标被服务器拒绝'
 
         if not quiet:
@@ -1043,7 +1047,7 @@ class TaskRunnerNode(Node):
                 self.get_logger().warn(f'动作结果等待被中断（stopped={self.stopped}）')
             return False, '已停止'
         if not result_future.done():
-            self.get_logger().error('等待动作结果超时')
+            log_failure('等待动作结果超时')
             return False, '等待动作结果超时'
 
         if interrupted:
@@ -1052,7 +1056,7 @@ class TaskRunnerNode(Node):
         result = result_future.result().result
         if not result.success:
             t_str = ', '.join(f'{v:.2f}' for v in target)
-            self.get_logger().error(
+            log_failure(
                 f'{type_name} 执行失败：{result.message}，'
                 f'目标=[{t_str}]')
         elif not quiet:
@@ -1191,7 +1195,8 @@ class TaskRunnerNode(Node):
             self._cmd_x = self._cmd_y = self._cmd_yaw = 0.0
         return success
 
-    def _follow_world_waypoints(self, waypoints, label, timeout, max_step_m=.4, mode='fixed_yaw'):
+    def _follow_world_waypoints(self, waypoints, label, timeout, max_step_m=.4, mode='fixed_yaw',
+                                failure_is_warning=False):
         """明确的odom折线路线，不计算绕障：中间航点必须由现场测量提供。
 
         fixed_yaw：每个折点先原地调整深度/航向，再用同一yaw线性分段SET平移。
@@ -1208,20 +1213,23 @@ class TaskRunnerNode(Node):
             x, y, z, yaw = map(float, point)
             points.append([x, y, z, (yaw+180.) % 360.-180.])
         end = time.monotonic()+timeout
+        log_failure = (self.get_logger().warning if failure_is_warning
+                       else self.get_logger().error)
         def measured_pose():
             with self._perception_lock:
                 pose, received = self._robot_pose, self._robot_pose_received
             if (pose is None or time.monotonic()-received > 1.
                     or not all(math.isfinite(float(v)) for v in pose)):
-                self.get_logger().error(f'{label}：定位缺失/过期，不用指令位姿代替反馈')
+                log_failure(f'{label}：定位缺失/过期，不用指令位姿代替反馈')
                 return None
             return pose
         def send(command, target, purpose):
             if self.stopped or time.monotonic() >= end:
                 return False
+            optional = {'failure_is_warning': True} if failure_is_warning else {}
             ok, message = self._send_action_goal(command, target, 'xyzrz',
                 timeout=end-time.monotonic(), quiet=True,
-                task_context=self._format_motion_context(f'{label}:{purpose}'))
+                task_context=self._format_motion_context(f'{label}:{purpose}'), **optional)
             if not ok:
                 self.get_logger().warning(f'{label}：{purpose}失败：{message}')
                 return False
