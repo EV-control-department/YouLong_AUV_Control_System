@@ -85,7 +85,12 @@ def rig(monkeypatch):
         calls.append(('action', command, list(target), axes))
         body_velocity[:] = 0.
         yaw_rate[0] = 0.
-        pose[:3], pose[5] = target[:3], target[3]
+        if command == mod.STOP_AND_HOLD_COMMAND:
+            sleep(kwargs['velocity_lease'])
+        else:
+            pose[:3], pose[5] = target[:3], target[3]
+        node._last_motion_final_target = [*pose[:3], pose[5]]
+        node._last_motion_cleanup_confirmed = True
         return True, ''
     node._send_action_goal = action
     task = mod.RB26DropBallTargetRackTask(node, {'depth_task_depth_m': .2, 'down_visual_servo_stable_seconds': .2})
@@ -215,12 +220,14 @@ def test_full_drop_sequence_holds_depth_through_release(rig, monkeypatch):
     assert rig.pose[2] == .2 and rig.node._cmd_z == .2
     assert [(msg.servo_id, msg.angle) for msg in rig.messages] == [(1, 180.)]*3+[(2, 270.)]*3+[(1, 180.), (2, 210.)]
     holds = [call for call in rig.calls if call[0] == 'action']
-    assert len(holds) == 3
+    assert len(holds) == 4
     # Release the ball before moving to the hairpin target, then release the ring.
     events = [call[0] for call in rig.calls if call[0] in ('action', 'servo')]
     assert events == ['action', 'action', 'servo', 'servo', 'servo',
-                      'action', 'servo', 'servo', 'servo', 'servo', 'servo']
-    assert all(call[3] == 'xyzrz' and call[2][2] == .2 for call in holds)
+                      'action', 'servo', 'servo', 'servo', 'servo', 'servo', 'action']
+    assert all(call[3] == 'xyzrz' and call[2][2] == .2 for call in holds[:-1])
+    assert holds[-1][1] == mod.STOP_AND_HOLD_COMMAND
+    assert rig.task._priority is rig.task._aligned_camera is rig.task._rack_camera_pose is None
 
 
 def test_velocity_and_depth_parameters_load_from_yaml():
@@ -465,9 +472,9 @@ def test_final_release_pair_precedes_completion_and_waits_for_mechanics(rig, mon
         [(1, 150.)]*3+[(2, 15.)]*3+[(1, 180.), (2, 210.)])
     final_sends = [call for call in rig.calls if call[0] == 'servo'][-2:]
     assert final_sends[0][1] == final_sends[1][1]
-    assert rig.clock[0]-final_sends[-1][1] == pytest.approx(1.3)
+    assert rig.clock[0]-final_sends[-1][1] == pytest.approx(1.3+2.0)
     assert indications[-1] == ('放环完成', rig.clock[0], 8)
-    assert rig.calls[-1] == final_sends[-1]  # No motion after the final release pair.
+    assert rig.calls[-1][1] == mod.STOP_AND_HOLD_COMMAND
 
 
 @pytest.mark.parametrize('cancel_phase', ['first_servo', 'settle'])
@@ -490,3 +497,39 @@ def test_cancel_during_final_release_does_not_report_completion(rig, monkeypatch
     assert '结束前补发' in outcome.message
     assert '放环完成' not in indications
     assert len(rig.messages) == (7 if cancel_phase == 'first_servo' else 8)
+
+
+@pytest.mark.parametrize('failure', ['rejected', 'timeout', 'invalid_target', 'unconfirmed', 'cancel'])
+def test_failed_completion_handoff_stops_scheduler_and_never_reports_done(rig, monkeypatch, failure):
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=TaskOutcome.ok))
+    monkeypatch.setattr(mod, 'normalized_image_error', lambda *args: (0., 0.))
+    indications = []
+    rig.task._flash_green = lambda count, label, **kwargs: indications.append(label) or True
+    original = rig.node._send_action_goal
+    def action(command, target, axes, **kwargs):
+        if command != mod.STOP_AND_HOLD_COMMAND:
+            return original(command, target, axes, **kwargs)
+        assert kwargs['velocity_lease'] == 2. and kwargs['timeout'] == 5.
+        if failure in ('rejected', 'timeout'):
+            return False, failure
+        rig.node._last_motion_final_target = ([float('nan')]*4 if failure == 'invalid_target'
+                                              else [*rig.pose[:3], rig.pose[5]])
+        rig.node._last_motion_cleanup_confirmed = failure != 'unconfirmed'
+        rig.node.stopped = failure == 'cancel'
+        return True, ''
+    rig.node._send_action_goal = action
+    outcome = rig.task.execute()
+    assert not outcome and outcome.failure_code == '26rb_drop_ball_target_rack.handoff'
+    assert rig.node.stopped and '放环完成' not in indications
+    assert len(rig.messages) == 8  # All releases preceded the failed handoff.
+
+
+@pytest.mark.parametrize('params', [
+    {'completion': {'wait_seconds': -1.}},
+    {'completion': {'wait_seconds': float('nan')}},
+    {'completion': {'wait_seconds': 2., 'timeout': 2.}},
+    {'completion': {'timeout': float('inf')}},
+])
+def test_invalid_completion_budget_rejected_during_config_load(params):
+    with pytest.raises(ConfigError, match='completion'):
+        _validate_params('26rb_drop_ball_target_rack', params)

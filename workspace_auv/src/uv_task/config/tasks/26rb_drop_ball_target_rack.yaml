@@ -3,9 +3,9 @@ task: 26rb_drop_ball_target_rack
 params:
   # 先定深、朝向预设 rack；前视观测与 yaw 对准后前向巡游。
   # 预设 odom [x,y,z]；z 仅描述 rack 位置，不参与 XY 半径或巡游深度。
-  rack_position: [0.47, 3.6, -1.0]
+  rack_position: [0.951, 5.199, -1.0]
   depth:
-    task_depth_m: 0.05 # 搜索、下视伺服、停车SET和两只爪子定位统一使用此目标深度。
+    task_depth_m: 0.15 # 搜索、下视伺服、停车SET和两只爪子定位统一使用此目标深度。
     timeout: 15.0 # 初始定深动作超时，秒。
 
   search:
@@ -72,7 +72,11 @@ params:
     angle_deg: 210.0 # 发夹爪servo 2释放角，直接发送angle=210.0。
     repeat_count: 3
     repeat_period: 0.1
-    settle_seconds: 1.0 # 放环后等待机械动作，再闪1次绿灯完成提示。
+    settle_seconds: 1.0 # 放环后等待机械动作，再补发最终释放角并进行收尾交接。
+
+  completion:
+    wait_seconds: 2.0 # 清零残留推力/速度、MCU确认位置保持后，完整等待这些秒再完成任务。
+    timeout: 5.0 # 模式确认+等待的总预算，须大于wait_seconds；交接失败则暂停任务列表。
 
   # 前视观察黄灯，看到目标后 yaw 对准完成闪1次绿灯；未看到前视目标闪1次红灯。
   # BLINE和外参SET定位不亮灯；下视看到rack、伺服成功、放球、放环各闪1次绿灯。

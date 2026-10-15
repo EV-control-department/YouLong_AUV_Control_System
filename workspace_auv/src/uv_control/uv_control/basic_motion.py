@@ -113,6 +113,7 @@ from uv_control.line_guidance import (
 # request fields and can still carry its numeric command ID.
 SETPOINT_COMMAND = getattr(BasicMotion.Goal, 'SETPOINT', 10)
 BODY_THRUST_COMMAND = getattr(BasicMotion.Goal, 'BODY_THRUST', 11)
+STOP_AND_HOLD_COMMAND = getattr(BasicMotion.Goal, 'STOP_AND_HOLD', 12)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ZIT6 control_key 常量
@@ -124,6 +125,9 @@ CK_VEL_BODY = 0x11  # body-frame velocity mode (VEL | BODY)
 CK_THRUST_BODY = 0x12  # body-frame actuator mode (ACTUATOR | BODY)
 DEFAULT_VELOCITY_LEASE = 0.25
 VELOCITY_WATCHDOG_PERIOD = 0.05
+# Keep completed goals briefly; this does not limit active motion duration.
+# At 20 Hz, 30 seconds retains about 600 goals instead of Foxy's default 18000.
+ACTION_RESULT_RETENTION_SECONDS = 30
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 轴掩码
@@ -187,6 +191,8 @@ class BasicMotionNode(Node):
         self._line_feedback = None
         self._thrust_reserved = False
         self._thrust_stop_requested = threading.Event()
+        self._handoff_reserved = False
+        self._handoff_stop_requested = threading.Event()
         self._body_thrust_active = False
         self._body_thrust_mask = 0
         self._thrust_ends_at = 0.0
@@ -277,6 +283,7 @@ class BasicMotionNode(Node):
             cancel_callback=self._action_cancel_cb,
             execute_callback=self._action_execute_cb,
             callback_group=self._action_group,
+            result_timeout=ACTION_RESULT_RETENTION_SECONDS,
         )
         self._legacy_action_server = ActionServer(
             self, BasicMotion, LEGACY_BASIC_MOTION,
@@ -284,6 +291,7 @@ class BasicMotionNode(Node):
             cancel_callback=self._action_cancel_cb,
             execute_callback=self._action_execute_cb,
             callback_group=self._action_group,
+            result_timeout=ACTION_RESULT_RETENTION_SECONDS,
         )
         self._action_goal_handle = None
         self._action_target = None       # 绝对目标 {x, y, z, yaw}，用于反馈
@@ -472,18 +480,18 @@ class BasicMotionNode(Node):
                     raise RuntimeError(f'motion inhibited: {"; ".join(blockers)}')
             self._publish_while_running(self.pub_setpoint, msg)
 
-    def _clear_body_thrust_locked(self):
+    def _clear_body_thrust_locked(self, *, force=False):
         """Clear the MCU's persistent thrust trim before switching modes.
 
         A zero velocity/position command alone leaves thrust_body additive in
         ZIT6. Send an explicit zero ACTUATOR command first, including on abort.
         Caller holds _line_output_lock.
         """
-        if not self._body_thrust_active:
+        if not force and not self._body_thrust_active:
             return
         msg = ZitSetpoint()
         msg.control_key = CK_THRUST_BODY
-        msg.type_mask = self._body_thrust_mask
+        msg.type_mask = 0 if force else self._body_thrust_mask
         msg.x = msg.y = msg.z = msg.roll = msg.pitch = msg.yaw = 0.0
         msg.seq = 0
         self._publish_while_running(self.pub_setpoint, msg)
@@ -1468,6 +1476,99 @@ class BasicMotionNode(Node):
             return None
 
     @staticmethod
+    def _validate_stop_and_hold(req):
+        duration = float(req.velocity_lease)
+        timeout = float(req.timeout)
+        if not math.isfinite(duration) or duration <= 0.0:
+            raise ValueError('STOP_AND_HOLD velocity_lease must be a positive hold duration')
+        if not math.isfinite(timeout) or timeout <= duration:
+            raise ValueError('STOP_AND_HOLD timeout must exceed the hold duration')
+        if (len(req.target) != 4 or any(
+                not math.isfinite(float(value)) or abs(value) > 1e-6
+                for value in req.target) or req.axes not in ('', 'xyzrz')):
+            raise ValueError('STOP_AND_HOLD uses all axes and a zero placeholder target')
+        return duration, timeout
+
+    def _neutralize_motion_locked(self):
+        # Force an all-axis ACTUATOR zero even if the host no longer remembers
+        # the old output. Unlike POSITION/VELOCITY, ZIT6 accepts this with bad
+        # navigation. The following mode changes also reset its PID integrals.
+        self._clear_body_thrust_locked(force=True)
+        self._publish_body_velocity_locked()
+        self._line_feedback = None
+
+    def _execute_stop_and_hold(self, goal_handle):
+        """Clear persistent outputs, confirm native POSITION, then dwell."""
+        duration, timeout = self._validate_stop_and_hold(goal_handle.request)
+        deadline = time.monotonic() + timeout
+        confirm_deadline = deadline - duration
+        result = BasicMotion.Result()
+        result.success = False
+        result.message = ''
+        result.final_target = []
+        target = None
+        try:
+            with self._line_output_lock:
+                self._neutralize_motion_locked()
+                with self._state_lock:
+                    generation = self._origin_generation
+                    pose = self.pose
+                    target = (pose.x, pose.y, pose.z, pose.rz)
+            if not all(math.isfinite(value) for value in target):
+                raise RuntimeError('STOP_AND_HOLD current pose is invalid')
+            hold_started = None
+            sent_at = None
+            while True:
+                with self._line_output_lock:
+                    if (goal_handle.is_cancel_requested or self._handoff_stop_requested.is_set()
+                            or self._is_cancelled()):
+                        raise RuntimeError(self._action_abort_reason or 'STOP_AND_HOLD interrupted')
+                    with self._state_lock:
+                        if self._origin_generation != generation:
+                            raise RuntimeError('STOP_AND_HOLD origin changed')
+                        native_ready = bool(self.status.navigation_ready)
+                        position_mode = self.status.control_level == 1
+                        status_at = self._status_received_at
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise RuntimeError('STOP_AND_HOLD total timeout')
+                    # force_nav_valid and derived odom freshness cannot prove
+                    # that the MCU accepts a position command.
+                    if hold_started is not None:
+                        if not native_ready or not position_mode:
+                            raise RuntimeError('STOP_AND_HOLD lost MCU POSITION/navigation readiness')
+                        if now - hold_started >= duration:
+                            result.success = True
+                            result.final_target = list(target)
+                            break
+                    elif sent_at is not None and status_at > sent_at and native_ready and position_mode:
+                        hold_started = now
+                        self.get_logger().info(
+                            f'STOP_AND_HOLD：MCU已进入位置保持，清理后等待{duration:.2f}s')
+                    elif now >= confirm_deadline:
+                        raise RuntimeError('STOP_AND_HOLD MCU POSITION confirmation timed out')
+                    elif native_ready and (sent_at is None or now - sent_at >= .25):
+                        self._send_setpoint_locked(CK_POS, 0, *target[:3], math.radians(target[3]))
+                        sent_at = now
+                time.sleep(.05)
+        except Exception as exc:
+            result.message = str(exc)
+        finally:
+            if not result.success:
+                try:
+                    with self._line_output_lock:
+                        self._neutralize_motion_locked()
+                except Exception as exc:
+                    result.message += f'; STOP_AND_HOLD cleanup failed: {exc}'
+        if result.success:
+            goal_handle.succeed()
+        elif goal_handle.is_cancel_requested:
+            goal_handle.canceled()
+        else:
+            goal_handle.abort()
+        return result
+
+    @staticmethod
     def _validate_body_thrust(req):
         if len(req.target) != 4:
             raise ValueError('BODY_THRUST target needs [Fx,Fy,Fz,Myaw]')
@@ -1721,6 +1822,12 @@ class BasicMotionNode(Node):
             except (ValueError, TypeError) as exc:
                 self.get_logger().warning(f'BODY_THRUST goal rejected: {exc}')
                 return GoalResponse.REJECT
+        if goal_request.cmd_type == STOP_AND_HOLD_COMMAND:
+            try:
+                self._validate_stop_and_hold(goal_request)
+            except (ValueError, TypeError) as exc:
+                self.get_logger().warning(f'STOP_AND_HOLD goal rejected: {exc}')
+                return GoalResponse.REJECT
         with self._line_output_lock, self._state_lock:
             if goal_request.cmd_type == BasicMotion.Goal.START:
                 if self._start_in_progress:
@@ -1738,7 +1845,10 @@ class BasicMotionNode(Node):
                 elif goal_request.cmd_type == BODY_THRUST_COMMAND:
                     self._thrust_reserved = True
                     self._thrust_stop_requested.clear()
-            elif (self._line_reserved or self._thrust_reserved) and any(
+                elif goal_request.cmd_type == STOP_AND_HOLD_COMMAND:
+                    self._handoff_reserved = True
+                    self._handoff_stop_requested.clear()
+            elif (self._line_reserved or self._thrust_reserved or self._handoff_reserved) and any(
                     not math.isfinite(float(value)) or abs(value) > 1e-6
                     for value in goal_request.target):
                 return GoalResponse.REJECT
@@ -1758,6 +1868,8 @@ class BasicMotionNode(Node):
                     self._line_stop_requested.set()
                 if self._thrust_reserved:
                     self._thrust_stop_requested.set()
+                if self._handoff_reserved:
+                    self._handoff_stop_requested.set()
                 self._publish_body_velocity()
         except Exception:
             if not self._shutdown_requested:
@@ -1795,6 +1907,8 @@ class BasicMotionNode(Node):
                         self._line_feedback = None
                     elif req.cmd_type == BODY_THRUST_COMMAND:
                         self._thrust_reserved = False
+                    elif req.cmd_type == STOP_AND_HOLD_COMMAND:
+                        self._handoff_reserved = False
 
     def _position_action_timeout(self, requested, start, x, y, z):
         """SET/TRAVEL: explicit total budget or max(10, 3D distance/0.18+5)."""
@@ -1809,6 +1923,8 @@ class BasicMotionNode(Node):
 
     def _execute_motion(self, goal_handle):
         req = goal_handle.request
+        if req.cmd_type == STOP_AND_HOLD_COMMAND:
+            return self._execute_stop_and_hold(goal_handle)
         if req.cmd_type == BODY_THRUST_COMMAND:
             return self._execute_body_thrust(goal_handle)
         if req.cmd_type in (BasicMotion.Goal.BLINE, BasicMotion.Goal.WLINE):
@@ -1823,6 +1939,8 @@ class BasicMotionNode(Node):
                     self._line_stop_requested.set()
                 if self._thrust_reserved:
                     self._thrust_stop_requested.set()
+                if self._handoff_reserved:
+                    self._handoff_stop_requested.set()
                 self._publish_body_velocity()
             result = BasicMotion.Result()
             result.success = True
@@ -1854,8 +1972,8 @@ class BasicMotionNode(Node):
                 return result
             vx, vy, vz, yaw_rate_deg_s = req.target[:4]
             with self._line_output_lock:
-                if self._line_reserved or self._thrust_reserved:
-                    raise RuntimeError('LINE or BODY_THRUST owns motion output')
+                if self._line_reserved or self._thrust_reserved or self._handoff_reserved:
+                    raise RuntimeError('LINE, BODY_THRUST or STOP_AND_HOLD owns motion output')
                 self._publish_body_velocity(
                     vx, vy, vz, yaw_rate_deg_s,
                     lease_s=(req.velocity_lease

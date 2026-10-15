@@ -20,10 +20,11 @@ void ControllerHost::applyConfig(const auv::config::ChassisConfig &cfg) {
 void ControllerHost::updateSetpoint(auv::motion::ControlLevel level,
                                     const float val[6], uint32_t mask,
                                     bool is_body, bool is_inc) {
-  // 与固件 ChassisManager 一致：按轴保留现有控制层级，路由返回更新后的层级。
-  auto levels = router_.route(cascade_.getAxisControlLevels(), level, val, mask,
-                              is_body, is_inc);
-  cascade_.setAxisControlLevels(levels);
+  // SetpointRouter 与 CascadeController 使用同一个全局控制层级。
+  const auto current_level = cascade_.getControlLevel();
+  const auto next_level = router_.route(current_level, level, val, mask,
+                                        is_body, is_inc);
+  cascade_.setControlLevel(next_level);
 }
 
 void ControllerHost::updateNav(const auv::motion::NavState &nav,

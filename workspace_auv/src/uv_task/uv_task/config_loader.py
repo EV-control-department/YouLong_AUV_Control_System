@@ -234,6 +234,8 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "ring_release_repeat_count": int,
         "ring_release_repeat_period": float,
         "ring_release_settle_seconds": float,
+        "completion_wait_seconds": float,
+        "completion_timeout": float,
         "light_pulse_seconds": float,
         "light_gap_seconds": float,
         # Retain parsing compatibility for old task files. The drop task no
@@ -364,6 +366,8 @@ PARAMETER_ALIASES = {
         "ring_release.repeat_count": "ring_release_repeat_count",
         "ring_release.repeat_period": "ring_release_repeat_period",
         "ring_release.settle_seconds": "ring_release_settle_seconds",
+        "completion.wait_seconds": "completion_wait_seconds",
+        "completion.timeout": "completion_timeout",
         "light.pulse_seconds": "light_pulse_seconds",
         "light.gap_seconds": "light_gap_seconds",
         "target.timeout": "target_timeout",

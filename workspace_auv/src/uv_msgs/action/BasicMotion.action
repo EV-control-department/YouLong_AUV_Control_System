@@ -10,12 +10,13 @@ uint8 BLINE=8        # 机体系相对直线, target=[dx,dy,dz,dyaw_deg]; 到点
 uint8 WLINE=9        # 世界系绝对直线, target=[x,y,z,yaw_deg]; 到点后转绝对航向
 uint8 SETPOINT=10    # 下发一次 odom 绝对位置目标即完成，不等待到点；target=[x,y,z,yaw_deg]
 uint8 BODY_THRUST=11 # 定时机体系开环推力，target=[Fx,Fy,Fz,Myaw]，各项 [-1,1]；axes 选择控制轴；结束后清零并保持当前位置
+uint8 STOP_AND_HOLD=12 # 清零速度/残留推力，确认MCU位置保持后等待；target=[0,0,0,0]，保持实测当前位置，不重置原点
 uint8 cmd_type
 string axes         # 要动的轴: "x","y","z","rz" 任意组合, 空=全部
 float32[] target    # 位置/速度为 [x,y,z,yaw]；BODY_THRUST 为归一化 [Fx,Fy,Fz,Myaw]
-float32 timeout     # 总超时秒; ≤0: SET/TRAVEL max(10,L/0.18+5), START 10s, BLINE/WLINE max(15,L/speed+10+终点转向预算), 其余60s
+float32 timeout     # 总超时秒; STOP_AND_HOLD须>velocity_lease; 其余≤0: SET/TRAVEL max(10,L/0.18+5), START 10s, BLINE/WLINE max(15,L/speed+10+终点转向预算), 其余60s
 string task_context # 任务上下文，例如：hit_balls task:5步骤-前往红球前1米
-float32 velocity_lease  # BODY_VELOCITY 短租约（秒）, ≤0=0.25s；BODY_THRUST 持续秒数，必须 >0
+float32 velocity_lease  # BODY_VELOCITY 短租约（秒）, ≤0=0.25s；BODY_THRUST 持续秒数或STOP_AND_HOLD确认后等待秒数，必须 >0
 float32 cruise_speed  # BLINE/WLINE 沿线巡航速度 m/s; 0=使用line.default_speed（默认0.30）; 有限正请求限幅至<0.80, 合速度<0.80
 float32 position_tolerance  # SET/BLINE/WLINE XY到点容差m; 0=默认; SET默认0.1m; LINE使用line.position_tolerance; Z保持各自默认容差
 float32 yaw_tolerance  # SET航向到位容差deg; 0=默认5deg; 其他动作忽略
@@ -23,7 +24,7 @@ float32 yaw_tolerance  # SET航向到位容差deg; 0=默认5deg; 其他动作忽
 # Result
 bool success
 string message
-float32[] final_target  # BLINE/WLINE 固定终点、SETPOINT 下发目标或 BODY_THRUST 结束保持位置 [odom_x,odom_y,odom_z,yaw_deg]
+float32[] final_target  # BLINE/WLINE 固定终点、SETPOINT 下发目标或 BODY_THRUST/STOP_AND_HOLD 保持位置 [odom_x,odom_y,odom_z,yaw_deg]
 ---
 # Feedback
 float32 distance_remaining

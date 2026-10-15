@@ -5,10 +5,10 @@ params:
   targets:
     # 世界 odom 坐标 [x,y,z]。按用户要求两球暂用同一位置，实际场地分别修改。
     # z 只描述球的位置，不用于中途深度修正；靠近半径只检查 XY。
-    blue_position: [2.8, 1.6, 0.4]
-    red_position: [2.8, 1.05, 0.4]
+    blue_position: [4.553, -1.043, 0.17]
+    red_position: [4.556, -0.392, 0.17]
   depth:
-    task_depth_m: 0.35 # 任务入场定深一次，之后不再发送 z 定位或垂向修正速度。
+    task_depth_m: 0.17 # 任务入场定深一次，之后不再发送 z 定位或垂向修正速度。
     timeout: 30.0
   search:
     initial_observe_seconds: 2.0 # 朝向预设位置后完整观察两秒。
@@ -53,4 +53,3 @@ params:
     start_timeout: 30.0 # 等待首次正向速度反馈的最长时间。
     accept_timeout: 5.0
   between_balls_pause: 0.5
-

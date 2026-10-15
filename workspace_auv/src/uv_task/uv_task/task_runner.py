@@ -1136,6 +1136,7 @@ class TaskRunnerNode(Node):
             BasicMotion.Goal.BTRAVEL: '执行机体坐标直线移动',
             BasicMotion.Goal.BODY_VELOCITY: '执行机体速度租约',
             getattr(BasicMotion.Goal, 'BODY_THRUST', 11): '执行定时机体开环推力',
+            getattr(BasicMotion.Goal, 'STOP_AND_HOLD', 12): '清理运动状态并定点等待',
         }
         purpose = purposes.get(cmd_type, '执行运动指令')
         return f'{purpose}({axes or "all"})'
@@ -1190,7 +1191,7 @@ class TaskRunnerNode(Node):
 
         Args:
             cmd_type: BasicMotion.Goal.{START,SET,WMOVE,BMOVE,WTRAVEL,BTRAVEL,
-                BODY_VELOCITY,SETPOINT,BODY_THRUST}
+                BODY_VELOCITY,SETPOINT,BODY_THRUST,STOP_AND_HOLD}
             target: [x,y,z,yaw] (yaw in degrees); BODY_THRUST uses normalized
                 [Fx,Fy,Fz,Myaw], with no angular unit conversion
             axes: which axes to move (empty = all)
@@ -1199,7 +1200,8 @@ class TaskRunnerNode(Node):
                 actions get a separate 2s result delivery margin; velocity
                 acknowledgements use this deadline directly. Missing deadlines
                 are bounded too (auto-budget actions have a 300s watchdog).
-            velocity_lease: BODY_VELOCITY short lease or BODY_THRUST pulse duration
+            velocity_lease: BODY_VELOCITY lease, BODY_THRUST pulse duration,
+                or STOP_AND_HOLD dwell duration after MCU POSITION confirmation
             cancel_wait_timeout: independent cancellation/result confirmation budget;
                 exclusive motion goals always get at least 2 seconds
             quiet: if True, suppress per-goal INFO logs (errors still logged)
@@ -1223,7 +1225,7 @@ class TaskRunnerNode(Node):
         type_names = {
             1: 'WMOVE', 2: 'BMOVE', 3: 'SET', 4: 'WTRAVEL',
             5: 'BTRAVEL', 6: 'START', 7: 'BODY_VELOCITY', 8: 'BLINE', 9: 'WLINE',
-            10: 'SETPOINT', 11: 'BODY_THRUST',
+            10: 'SETPOINT', 11: 'BODY_THRUST', 12: 'STOP_AND_HOLD',
         }
         type_name = type_names.get(cmd_type, f'UNKNOWN({cmd_type})')
         if cmd_type != BasicMotion.Goal.START and not light_pattern:

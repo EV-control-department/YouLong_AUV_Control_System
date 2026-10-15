@@ -19,6 +19,7 @@ from uv_task.down_camera_servo import (
 
 # SET waits for the requested position to be reached before reporting success.
 SET_COMMAND = BasicMotion.Goal.SET
+STOP_AND_HOLD_COMMAND = getattr(BasicMotion.Goal, 'STOP_AND_HOLD', 12)
 
 
 def validate_ring_release_params(params):
@@ -35,6 +36,14 @@ def validate_ring_release_params(params):
         if (isinstance(value, bool) or not isinstance(value, (int, float))
                 or not math.isfinite(value) or value < 0):
             raise ValueError(key+' 必须为有限非负数')
+    wait = params.get('completion_wait_seconds', 2.0)
+    timeout = params.get('completion_timeout', 5.0)
+    for label, value in (('completion.wait_seconds', wait), ('completion.timeout', timeout)):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            raise ValueError(label+' 必须为有限正数')
+    if timeout <= wait:
+        raise ValueError('completion.timeout 必须大于 completion.wait_seconds，以预留模式确认时间')
 
 
 class RB26DropBallTargetRackTask:
@@ -94,6 +103,8 @@ class RB26DropBallTargetRackTask:
         self._ring_release_repeat_count = int(params.get('ring_release_repeat_count', 3))
         self._ring_release_repeat_period = float(params.get('ring_release_repeat_period', .1))
         self._ring_release_settle_seconds = float(params.get('ring_release_settle_seconds', 1.0))
+        self._completion_wait_seconds = float(params.get('completion_wait_seconds', 2.0))
+        self._completion_timeout = float(params.get('completion_timeout', 5.0))
         self._rack_camera_pose = None
         self._light_pulse_seconds = max(
             0.05, float(params.get('light_pulse_seconds', 0.35)))
@@ -470,6 +481,11 @@ class RB26DropBallTargetRackTask:
             if not self._final_release():
                 return TaskOutcome.failed(
                     '26rb_drop_ball_target_rack.stopped', '结束前补发释放指令被中止')
+            if not self._finish_motion_handoff():
+                return TaskOutcome.failed(
+                    '26rb_drop_ball_target_rack.handoff',
+                    '放环后运动状态交接失败，已停止任务列表：'
+                    +getattr(node, '_last_motion_failure_message', '未确认位置保持'))
             if not self._flash_green(1, '放环完成', restore_phase=False):
                 return TaskOutcome.failed(
                     '26rb_drop_ball_target_rack.stopped', '释放完成提示被中止')
@@ -482,3 +498,36 @@ class RB26DropBallTargetRackTask:
             # never cancel it from task cleanup.
             if not completion_flash_pending and node._light_state != node.LIGHT_OFF:
                 node.light_off()
+
+    def _finish_motion_handoff(self) -> bool:
+        """Let BasicMotion clear persistent output and own the whole dwell."""
+        node = self._node
+        self._priority = None
+        self._aligned_camera = None
+        self._rack_camera_pose = None
+        self._logger.info(
+            '26rb_drop_ball_target_rack：放环后清理速度租约、推力和旧目标；'
+            f'确认位置保持后等待{self._completion_wait_seconds:.2f}s')
+        try:
+            success, message = node._send_action_goal(
+                STOP_AND_HOLD_COMMAND, [0.0]*4, 'xyzrz',
+                velocity_lease=self._completion_wait_seconds,
+                timeout=self._completion_timeout,
+                wait_deadline=time.monotonic()+self._completion_timeout,
+                cancel_wait_timeout=2.0, light_color=node.LIGHT_OFF,
+                task_context='26rb_drop_ball_target_rack：放环后清理并保持，交接下一任务initial')
+            target = getattr(node, '_last_motion_final_target', None)
+            if (not success or node.stopped
+                    or not getattr(node, '_last_motion_cleanup_confirmed', False)
+                    or target is None or len(target) != 4
+                    or not all(math.isfinite(value) for value in target)):
+                raise RuntimeError(message or '未收到有效的收尾位置保持结果')
+            node._cmd_x, node._cmd_y, node._cmd_z, node._cmd_yaw = target
+            self._logger.info('26rb_drop_ball_target_rack：放环收尾完成，可以交接下一任务initial')
+            return True
+        except Exception as exc:
+            # The scheduler otherwise continues after an ordinary task failure.
+            node.stopped = True
+            node._last_motion_failure_message = str(exc)
+            self._logger.error(f'放环后状态交接失败，暂停任务列表：{exc}')
+            return False

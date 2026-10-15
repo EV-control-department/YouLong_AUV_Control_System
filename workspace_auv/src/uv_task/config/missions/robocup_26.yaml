@@ -18,7 +18,7 @@ mission:
         poses:
           - command: SET
             axes: xyz
-            target: [0.5, 0.5, 0.2, 0.0] # 下潜0.2m
+            target: [2.387, -0.535, 0.17, 0.0] # 下潜0.2m
             on_failure: continue
           # - command: WTRAVEL
           #   axes: xyz
@@ -34,8 +34,9 @@ mission:
       initial:
         poses:
           - command: SET
-            axes: x
-            target: [0.5, 0.0, 0.0, 0.0]
+            axes: xyz
+            target: [1.0, 2.5, 0.17, 0.0]
+            on_failure: continue
           # - command: BMOVE
           #   axes: y
           #   target: [0.0, 1.0, 0.0, 0.0]
@@ -73,8 +74,8 @@ mission:
       initial:
         poses:
           - command: SET
-            axes: xy
-            target: [0.5, 0.5, 0.0, 0.0]
+            axes: xyz
+            target: [0.0, 3.0, 0.1, 0.0]
             on_failure: continue
           # - command: WTRAVEL
           #   axes: xyz
@@ -102,11 +103,15 @@ mission:
     - name: return_origin
       config: ../tasks/return_origin.yaml
       initial:
-        pose:
-          command: SET
-          axes: xyz
-          target: [0.5, 0.0, 0.5, 0.0]
-          on_failure: continue
+        poses:
+          # - command: SET
+          #   axes: xyzrz
+          #   target: [5.0, 2.0, 0.2, -110.0]
+          #   on_failure: continue
+          - command: SET
+            axes: xyzrz
+            target: [-0.5, 0.5, 0.2, -110.0]
+            on_failure: continue
       # WTRAVEL 失败时继续执行西南满推3秒、上浮满推10秒。
       on_failure:
         "return_origin.timeout": {}
