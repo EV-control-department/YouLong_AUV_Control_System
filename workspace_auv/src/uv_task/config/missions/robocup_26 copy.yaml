@@ -112,6 +112,6 @@ mission:
             axes: xyzrz
             target: [-0.5, 0.5, 0.2, -110.0]
             on_failure: continue
-      # WTRAVEL 失败时继续执行西南满推3秒、上浮满推10秒。
+      # SET 入场普通失败时继续执行西南满推5秒、上浮满推10秒。
       on_failure:
         "return_origin.timeout": {}

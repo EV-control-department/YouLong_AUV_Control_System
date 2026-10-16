@@ -9,7 +9,7 @@ params:
     timeout: 15.0 # 初始定深动作超时，秒。
 
   search:
-    timeout: 30.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时。
+    timeout: 40.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时。
     near_radius_m: 0.3 # 到 rack 预设 XY 的二维水平半径，米。
     near_timeout: 20.0 # 首次进入后累计 BLINE 时间；停车暂停，离开不重置。
     front_observe_seconds: 2.0

@@ -152,7 +152,9 @@ def rig(monkeypatch):
     monkeypatch.setattr(mod, 'CollectionFrameSearch', lambda *args: NS(execute=TaskOutcome.ok))
     config = Path(__file__).parents[1]/'config/tasks/26rb_grab_ball_ring.yaml'
     params = load_task(config)[0]['params']
-    params.update(golf_max_attempts=2, ring_max_attempts=3,
+    # Existing cases exercise the legacy two-target route independently of field YAML.
+    params.update(pickup_order=['ring', 'golf'], claw_prepare_angle_rad=0.0,
+                  golf_max_attempts=2, ring_max_attempts=3,
                   golf_grab_depth_m=.44, ring_grab_depth_m=.44,
                   ring_open_angle_deg=0., ring_close_angle_deg=90.)
     return node, mod.RB26GrabBallRingTask(node, params)

@@ -123,7 +123,8 @@ class TaskState:
             self._pickup = PickupProgress(start_xy=origin)
 
     def update_pickup(self, **values) -> None:
-        for key in ('frame_pose', 'golf_camera_pose', 'ring_camera_pose', 'last_servo_pose'):
+        for key in ('frame_pose', 'golf_camera_pose', 'ring_camera_pose',
+                    'yellow_camera_pose', 'red_camera_pose', 'last_servo_pose'):
             if key in values and values[key] is not None:
                 values[key] = _finite_values(values[key], (4,), key)
         if 'first_frame_seen_at' in values and values['first_frame_seen_at'] is not None:
@@ -132,10 +133,10 @@ class TaskState:
                 raise ValueError('first_frame_seen_at必须是有限单调时间')
         if 'depth' in values:
             values['depth'] = _finite_values((values['depth'], 0.0, 0.0), (3,), '抓取深度')[0]
-        for key in ('golf_attempts', 'ring_attempts'):
+        for key in ('golf_attempts', 'ring_attempts', 'yellow_attempts', 'red_attempts'):
             if key in values and (isinstance(values[key], bool) or not isinstance(values[key], int) or values[key] < 0):
                 raise ValueError(key+'必须是非负整数')
-        for key in ('golf_status', 'ring_status'):
+        for key in ('golf_status', 'ring_status', 'yellow_status', 'red_status'):
             if key in values and values[key] not in ('pending', 'success', 'failed'):
                 raise ValueError(key+'状态无效')
         with self._lock:

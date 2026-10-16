@@ -7,18 +7,17 @@ params:
   depth:
     timeout: 30.0 # 进入作业深度的SET动作超时，单位：秒。
   # 使用 robotcup20260901.yaml 中的 canonical detector class name。
-  golf_color: pink_golf # 可选 pink_golf / yellow_golf。
+  golf_color: pink_golf # 旧 pickup.order 包含 golf 时使用；三目标按各自类别抓取。
   collection_frame_class: collection_frame_down
-  # 可配置组合抓取顺序： [golf, ring] 或 [ring, golf]。
+  # 三目标按 ring / yellow_golf / pink_golf 顺序；兼容旧 [golf, ring] / [ring, golf]。
   pickup:
-    # order: [golf, ring]
-    order: [ring, golf]
+    order: [ring, yellow, red]
 
   # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
   # 初始值需按实际场地填写；不会从定位器覆盖。
   collection_frame_position: [1.302, 6.937, 0.120]
   search:
-    timeout: 60.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时，重新发线不清零。
+    timeout: 80.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时，重新发线不清零。
     near_radius_m: 0.5 # 到预设 [x,y] 的二维水平距离，不考虑深度差。
     near_timeout: 40.0 # 首次进入半径后累计 BLINE 运行时间；停车校准暂停，离开半径不重置。
     front_observe_seconds: 2.0
@@ -62,7 +61,8 @@ params:
   servo:
     timeout: 30.0 # 与find/check同起点，到期停止发新修正；停车确认后按条件盲抓。
     # 最后一条速度指令仍有独立2秒应答时限，避免伺服到期被误判为通信超时。
-    # 球/环各最多盲抓一次，计入各自max_attempts；未进入微调区或没有有效世界位置则跳过。
+    # 环/黄球/红球各最多盲抓一次，与正常抓取共用各自max_attempts。
+    # 未进入微调区或没有有效世界位置则跳过。
     # 首次进入当前目标的micro_servo区时平分剩余时间；前半保持原容差，后半线性放宽。
     final_tolerance_fraction: 0.10 # 球/环最终归一化容差10%；换眼、丢失、重入不重置进度。
     period: 0.15 # 水平伺服周期，单位：秒。
@@ -78,7 +78,7 @@ params:
 
   # 仅抓取前的转向/对爪SET使用这些到位条件；Z沿用SET默认容差。
   claw_alignment:
-    timeout: 60.0 # 球、环各自的对爪SET执行上限60秒，到位后立即继续。
+    timeout: 30.0 # 环/黄球/红球各自的对爪SET执行上限30秒，到位后立即继续。
     position_tolerance_m: 0.15 # 世界X/Y每轴到位容差，米。
     yaw_tolerance_deg: 10.0 # 对爪航向到位容差，度。
 
@@ -88,9 +88,9 @@ params:
       gain: 0.5 # frame偏航比例增益，保守设置。
       max_rate_deg_s: 3.0 # 机头对准bbox中心时的偏航速率上限。
 
-  # 夹爪舵机 1 先重复发送到 0 rad，降低单次消息丢失的影响。
+  # 两种球每次抓取前，圆盘爪舵机1重复发送准备角65°；数值原样下发。
   claw:
-    prepare_angle_rad: 0.0
+    prepare_angle_deg: 65.0
     prepare_repeat_count: 3
     prepare_repeat_period: 0.1
   light:
@@ -101,7 +101,7 @@ params:
   settle_seconds: 3.0 # 外参平移到点后，继续定点保持3秒再下潜；组合抓取的球/环共用。
 
   # 保持夹爪对准后的XY/yaw，用世界Z速度下压；到深度或超时后球上浮、环先合爪再上浮。
-  # 第n次目标 = 对应grab_depth_m + (n-1)*retry_depth_step_m，球/环分别计数。
+  # 第n次目标 = 对应grab_depth_m + (n-1)*retry_depth_step_m，环/黄球/红球分别计数。
   descent:
     speed_mps: 0.05 # 下沉速度，NED 正值向下，单位：米/秒。
     timeout: 20.0 # 最长下潜时间；到达目标深度立即停止，不等待满15秒。
@@ -113,9 +113,10 @@ params:
   # 恢复使用完整SET：保持本次夹爪对准XY/yaw，上浮到work_depth_m。
   # 定深动作超时沿用servo.position_command_timeout（当前30秒）。
   vertical_publish_period: 0.05 # 速度指令周期，单位：秒。
-  return_timeout: 120.0 # 抓后返回该目标原本下视对齐位姿的运动超时。
+  return_timeout: 30.0 # 抓后返回该目标原本下视对齐位姿的运动超时。
 
-  # 最多尝试次数包含首次，球失败用尽后仍继续抓环。
+  # 各目标次数包含首次与盲抓，普通失败后继续下一个目标。
+  # 两种球分别使用本组参数，各有max_attempts次机会，不共用计数。
   golf:
     max_attempts: 3
     grab_depth_m: 0.75 # 机器人目标Z，暂按旧0.2+0.03*8的深度；不是球自身深度。

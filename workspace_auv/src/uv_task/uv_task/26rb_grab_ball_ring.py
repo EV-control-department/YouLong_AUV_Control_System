@@ -17,6 +17,11 @@ from uv_task.task_state import TaskState
 from uv_task.pickup_alignment import PickupWindow, target_world_xy, bounded_velocity
 
 PickupController = import_module('uv_task.26rb_grab_golf').RB26GrabGolfTask
+BALL_CLASSES = {'yellow': 'yellow_golf', 'red': 'pink_golf'}
+
+
+def parameter_kind(kind):
+    return 'ring' if kind == 'ring' else 'golf'
 
 
 class PickupFailure(RuntimeError):
@@ -25,11 +30,11 @@ class PickupFailure(RuntimeError):
 
 def validate_combined_params(params, *, complete=True):
     pickup_order = params.get('pickup_order', ('golf', 'ring'))
-    if (not isinstance(pickup_order, (list, tuple)) or len(pickup_order) != 2
-            or any(not isinstance(kind, str) or kind not in ('golf', 'ring')
-                   for kind in pickup_order)
-            or len(set(pickup_order)) != 2):
-        raise ValueError('pickup.order 必须恰好包含 golf 和 ring 各一次')
+    if (not isinstance(pickup_order, (list, tuple))
+            or any(not isinstance(kind, str) for kind in pickup_order)
+            or len(set(pickup_order)) != len(pickup_order)
+            or set(pickup_order) not in ({'golf', 'ring'}, {'ring', 'yellow', 'red'})):
+        raise ValueError('pickup.order 必须包含 golf/ring 或 ring/yellow/red 各一次，不能混用')
     final_tolerance = params.get('target_final_tolerance_fraction', 0.10)
     if (isinstance(final_tolerance, bool) or not isinstance(final_tolerance, (int, float))
             or not math.isfinite(final_tolerance) or not 0 < final_tolerance <= 0.25):
@@ -165,9 +170,10 @@ class RB26GrabBallRingTask:
         validate_combined_params(params)
         self.node, self.p = node, params
         self.pickup_order = tuple(params.get('pickup_order', ('golf', 'ring')))
+        self.colored_pickup = 'golf' not in self.pickup_order
         self.work_depth = float(params.get('work_depth_m', 0.2))
-        self.grab_depths = {kind: float(params.get(kind+'_grab_depth_m', 0.44))
-                           for kind in ('golf', 'ring')}
+        self.grab_depths = {kind: float(params.get(parameter_kind(kind)+'_grab_depth_m', 0.44))
+                           for kind in self.pickup_order}
         self.retry_depth_step = float(params.get('retry_depth_step_m', 0.05))
         self.descent_timeout = float(params.get('descent_timeout', 15.0))
         self.descent_speed = float(params.get('descent_speed_mps', 0.03))
@@ -199,12 +205,25 @@ class RB26GrabBallRingTask:
                     target_params['target_servo_pid_'+suffix] = params[key]
             return target_params
 
-        self.ball = PickupController(node, target_servo_params('golf'))
         self.ring = PickupController(
             node, target_servo_params('ring'), target_name=params.get('ring_class', 'red_ring'),
             target_class_id=node._model_mapping.model_class_id('red_ring', required=False),
             gripper_frame='hairpin_claw_link', task_name='26rb_grab_ball_ring.ring')
-        self.max_attempts = {kind: int(params.get(kind+'_max_attempts', 3)) for kind in ('golf', 'ring')}
+        self.controllers = {'ring': self.ring}
+        if self.colored_pickup:
+            for kind, name in BALL_CLASSES.items():
+                self.controllers[kind] = PickupController(
+                    node, target_servo_params('golf'), target_name=name,
+                    target_class_id=node._model_mapping.model_class_id(name, required=False),
+                    task_name='26rb_grab_ball_ring.'+kind)
+            # Shared depth recovery still uses the existing ball controller API.
+            self.ball = self.controllers['yellow']
+        else:
+            self.ball = PickupController(node, target_servo_params('golf'))
+            self.controllers['golf'] = self.ball
+        self.max_attempts = {
+            kind: int(params.get(parameter_kind(kind)+'_max_attempts', 3))
+            for kind in self.pickup_order}
         self.samples = deque()
         self._last_ring_axis = None
         self.ring_orientation_seconds = float(params.get('ring_orientation_timeout', 2.0))
@@ -229,15 +248,31 @@ class RB26GrabBallRingTask:
         self.frame_yaw_gain = float(params.get('frame_yaw_gain', 0.2))
         self.frame_yaw_max_rate = float(params.get('frame_yaw_max_rate_deg_s', 3.0))
         self.target_servo_gains = {
-            kind: float(params.get(kind+'_servo_gain', shared_gain))
-            for kind in ('golf', 'ring')}
+            kind: float(params.get(parameter_kind(kind)+'_servo_gain', shared_gain))
+            for kind in self.pickup_order}
         self.micro_servo_gains = {
-            kind: float(params.get(kind+'_micro_servo_gain',
+            kind: float(params.get(parameter_kind(kind)+'_micro_servo_gain',
                                    self.target_servo_gains[kind]*0.35))
-            for kind in ('golf', 'ring')}
+            for kind in self.pickup_order}
         self.micro_servo_zones = {
-            kind: float(params.get(kind+'_micro_servo_zone_fraction', 0.30))
-            for kind in ('golf', 'ring')}
+            kind: float(params.get(parameter_kind(kind)+'_micro_servo_zone_fraction', 0.30))
+            for kind in self.pickup_order}
+
+    def _update_target_progress(self, kind, **values):
+        updates = {kind+'_'+key: value for key, value in values.items()}
+        if self.colored_pickup and kind in BALL_CLASSES:
+            snapshot = self.state.pickup
+            updates['golf_attempts'] = sum(
+                updates.get(color+'_attempts', getattr(snapshot, color+'_attempts'))
+                for color in BALL_CLASSES)
+            statuses = [updates.get(color+'_status', getattr(snapshot, color+'_status'))
+                        for color in BALL_CLASSES]
+            updates['golf_status'] = (
+                'pending' if 'pending' in statuses else
+                'success' if all(status == 'success' for status in statuses) else 'failed')
+            if 'camera_pose' in values:
+                updates['golf_camera_pose'] = values['camera_pose']
+        self.state.update_pickup(**updates)
 
     def _target_servo_gain(self, kind, du, dv):
         """Use the low gain inside the configured circular image-center zone."""
@@ -316,7 +351,10 @@ class RB26GrabBallRingTask:
 
     def _return_frame(self, controller):
         """Restore depth, then return to this attempt's best target observation."""
-        kind = 'golf' if controller is self.ball else 'ring'
+        kind = next((kind for kind, current in self.controllers.items()
+                     if current is controller), None)
+        if kind is None:
+            raise PickupFailure('未知目标控制器，禁止复用其他目标回位点')
         anchor = getattr(self.state.pickup, kind+'_camera_pose')
         if anchor is None:
             raise PickupFailure('缺少本次目标下视对齐位姿')
@@ -368,7 +406,8 @@ class RB26GrabBallRingTask:
         self._targets[kind] = (target, pose, camera)
         controller._aligned_camera = camera
         return_pose = self._target_return_poses.get(kind, anchor)
-        self.state.update_pickup(**{kind+'_camera_pose': return_pose, 'last_servo_pose': anchor})
+        self._update_target_progress(kind, camera_pose=return_pose)
+        self.state.update_pickup(last_servo_pose=anchor)
         if timed_out:
             self.log.warning(
                 f'组合抓取：{kind} 进入过微调区后伺服超时，使用历史最靠近图像中心的有效世界位置'
@@ -391,6 +430,8 @@ class RB26GrabBallRingTask:
         controller._servo_depth = self.work_depth
         controller._servo_yaw_target = None
         controller._aligned_camera = None
+        controller._pending_golf_priority = None
+        controller._reset_target_servo_pid()
         controller._servo_gain = self.target_servo_gains[kind]
         self._blind_targets.pop(kind, None)
         self._target_return_poses.pop(kind, None)
@@ -1019,7 +1060,7 @@ class RB26GrabBallRingTask:
 
     def _mechanical_attempt(self, kind, controller):
         self._descent_anchor = None
-        if kind == 'golf':
+        if kind != 'ring':
             if not controller._prepare_claw():
                 raise PickupFailure('准备圆盘爪失败')
             self._align_claw(kind, controller, self._pose()[5])
@@ -1043,7 +1084,7 @@ class RB26GrabBallRingTask:
 
     def _run_target(self, kind, controller, *, started=None):
         if controller._golf_class_id is None:
-            self.state.update_pickup(**{kind+'_status': 'failed'})
+            self._update_target_progress(kind, status='failed')
             return
         if started is None:
             started = self._first_find_started if kind == 'golf' else time.monotonic()
@@ -1057,15 +1098,15 @@ class RB26GrabBallRingTask:
             exhausted = attempt >= self.max_attempts[kind]
             result = self._align_target(kind, controller, started, checking=checking, exhausted=exhausted)
             if result == 'absent' and checking and performed:
-                self.state.update_pickup(**{kind+'_status': 'success'})
-                if kind == 'golf':
-                    controller._flash_green(1, '球抓取确认完成，开始搜环')
+                self._update_target_progress(kind, status='success')
+                if kind != 'ring':
+                    controller._flash_green(1, kind+'球抓取确认完成')
                 return
             if result != 'ready' or exhausted:
-                self.state.update_pickup(**{kind+'_status': 'failed'})
+                self._update_target_progress(kind, status='failed')
                 return
             attempt += 1
-            self.state.update_pickup(**{kind+'_attempts': attempt})
+            self._update_target_progress(kind, attempts=attempt)
             self.log.info(f'组合抓取：{kind} 第{attempt}/{self.max_attempts[kind]}次抓取')
             performed = self._mechanical_attempt(kind, controller)
             self._return_frame(controller)
@@ -1074,6 +1115,7 @@ class RB26GrabBallRingTask:
 
     def execute(self):
         self.state.reset_pickup()
+        self._targets.clear()
         self._target_return_poses.clear()
         self._blind_targets.clear()
         self._blind_grabs_used.clear()
@@ -1099,24 +1141,24 @@ class RB26GrabBallRingTask:
             pose = self._pose()
             anchor = (pose[0], pose[1], self.work_depth, pose[5])
             self.state.update_pickup(frame_pose=anchor, depth=self.work_depth)
-            for controller in (self.ball, self.ring):
+            for controller in self.controllers.values():
                 controller._servo_depth = self.work_depth
                 controller._servo_yaw_gain = float(self.p.get('ring_yaw_gain', 1.2))
                 controller._servo_max_yaw_rate = float(self.p.get('ring_max_yaw_rate_deg_s', 10.0))
                 controller._servo_yaw_tolerance = self.yaw_tolerance
-            controllers = {'golf': self.ball, 'ring': self.ring}
             for index, kind in enumerate(self.pickup_order):
                 # The first golf stage can use the BLINE frame timestamp.
                 # Every later target gets a fresh find/check/servo window.
                 started = (self._first_find_started
                            if index == 0 and kind == 'golf'
                            else time.monotonic())
-                self._run_target(kind, controllers[kind], started=started)
+                self._run_target(kind, self.controllers[kind], started=started)
             result = self.state.pickup
-            if result.golf_status == result.ring_status == 'success':
-                return TaskOutcome.ok('球和环均抓取成功')
             failed = [kind for kind in self.pickup_order if getattr(result, kind+'_status') != 'success']
-            code = failed[0]+'_exhausted' if len(failed) == 1 else 'both_exhausted'
+            if not failed:
+                return TaskOutcome.ok('抓取确认完成：'+','.join(self.pickup_order))
+            # Keep mission failure-profile keys stable; the message identifies colors.
+            code = parameter_kind(failed[0])+'_exhausted' if len(failed) == 1 else 'both_exhausted'
             return TaskOutcome.failed('26rb_grab_ball_ring.'+code, '未确认抓取成功：'+','.join(failed))
         except (ValueError, KeyError, RuntimeError) as error:
             code = 'cancelled' if self.node.stopped else 'recovery'

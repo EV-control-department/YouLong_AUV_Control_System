@@ -16,3 +16,9 @@ class PickupProgress:
     ring_attempts: int = 0
     golf_status: str = 'pending'
     ring_status: str = 'pending'
+    yellow_camera_pose: Optional[Tuple[float, float, float, float]] = None
+    red_camera_pose: Optional[Tuple[float, float, float, float]] = None
+    yellow_attempts: int = 0
+    red_attempts: int = 0
+    yellow_status: str = 'pending'
+    red_status: str = 'pending'

@@ -490,7 +490,7 @@ class RB26GrabGolfTask:
         """Repeatedly command servo 1 to the requested open/pre-grab angle."""
         self._logger.info(
             f'{self._task_name}：夹爪进入准备状态；舵机 ID=1，'
-            f'角度={self._claw_prepare_angle:.3f}rad，'
+            f'角度目标值={self._claw_prepare_angle:.3f}°（原样下发），'
             f'重复发送 {self._claw_prepare_repeat_count} 次')
         for index in range(self._claw_prepare_repeat_count):
             if self._node.stopped:

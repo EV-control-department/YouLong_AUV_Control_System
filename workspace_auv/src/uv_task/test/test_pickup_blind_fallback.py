@@ -351,13 +351,15 @@ def test_best_history_is_reset_between_servo_attempts(rig, kind, cid):
 
 
 @pytest.mark.parametrize('kind,cid', [('golf', 7), ('ring', 8)])
-def test_relaxed_claw_alignment_budget_and_tolerances_do_not_change_other_set_steps(rig, kind, cid):
+@pytest.mark.parametrize('claw_timeout', [30., 60.])
+def test_relaxed_claw_alignment_budget_and_tolerances_do_not_change_other_set_steps(rig, kind, cid, claw_timeout):
     node, task = rig
+    task = mod.RB26GrabBallRingTask(node, dict(task.p, claw_alignment_timeout=claw_timeout))
     controller = task.ball if kind == 'golf' else task.ring
     task._targets[kind] = ((1., 2.), tuple(node.pose), 'down_left')
     task._align_claw(kind, controller, 90.)
     action = [call for call in node.calls if call[0] == 'action'][-1]
-    assert action[4]['timeout'] == 60.
+    assert action[4]['timeout'] == claw_timeout
     assert action[4]['position_tolerance'] == .15
     assert action[4]['yaw_tolerance'] == 10.
     assert action[2][2] == task.work_depth

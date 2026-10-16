@@ -326,6 +326,8 @@ PARAMETER_ALIASES = {
         "servo.camera_priority_seconds": "camera_priority_seconds",
         "loss.sticky_seconds": "lost_observation_hold_seconds",
         "claw.prepare_angle_rad": "claw_prepare_angle_rad",
+        "claw.prepare_angle_deg": "claw_prepare_angle_rad",
+        "claw_prepare_angle_deg": "claw_prepare_angle_rad",
         "claw.prepare_repeat_count": "claw_prepare_repeat_count",
         "claw.prepare_repeat_period": "claw_prepare_repeat_period",
         "collection_frame.observe_seconds": "collection_frame_observe_seconds",
@@ -629,6 +631,11 @@ def _validate_params(task_name: str, params: dict[str, Any],
             import_module('uv_task.26rb_grab_ball_ring').validate_combined_params(flattened, complete=complete)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
+        if class_registry is not None and 'yellow' in flattened.get('pickup_order', ()):
+            available = {entry.name for entry in getattr(class_registry, 'entries', ())}
+            missing = {'red_ring', 'yellow_golf', 'pink_golf'} - available
+            if missing:
+                raise ConfigError('三目标抓取缺少模型类别：'+', '.join(sorted(missing)))
     return flattened
 
 
