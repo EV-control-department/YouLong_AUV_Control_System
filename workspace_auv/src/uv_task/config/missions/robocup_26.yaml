@@ -18,7 +18,7 @@ mission:
         poses:
           - command: SET
             axes: xyz
-            target: [2.387, -0.535, 0.17, 0.0] # 下潜0.2m
+            target: [2.10, -0.28, 0.17, -6.0] # 下潜0.2m
             on_failure: continue
           # - command: WTRAVEL
           #   axes: xyz
@@ -31,11 +31,16 @@ mission:
 
     - name: 26rb_grab_ball_ring
       config: ../tasks/26rb_grab_ball_ring.yaml
+      # 第一趟：环只尝试一次，保持合爪，再收两球。
+      params:
+        ring:
+          max_attempts: 1
+          confirmation: deferred
       initial:
         poses:
           - command: SET
-            axes: xyz
-            target: [1.0, 2.5, 0.17, 0.0]
+            axes: xyzrz
+            target: [3.8, 5.0, 0.17, 90.0]
             on_failure: continue
           # - command: BMOVE
           #   axes: y
@@ -54,8 +59,7 @@ mission:
           #   axes: rz
           #   target: [0.0, 0.0, 0.0, 89.9544] # 到点后设置 1.57 rad 航向。
       on_failure:
-        "26rb_grab_ball_ring.no_frame":
-          skip_next: true
+        "26rb_grab_ball_ring.no_frame": {} # 固定三趟，普通未发现仍去投放。
         "26rb_grab_ball_ring.both_exhausted": {}
 
     - name: 26rb_drop_ball_target_rack
@@ -69,20 +73,69 @@ mission:
       on_failure:
         "26rb_drop_ball_target_rack.timeout": {}
 
+    # 第二趟：从rack返回frame，只抓一个环；无环超时也继续投放。
+    - name: 26rb_grab_ball_ring
+      config: ../tasks/26rb_grab_ball_ring.yaml
+      params:
+        pickup:
+          order: [ring]
+        ring:
+          max_attempts: 3
+          confirmation: count_decrease
+      on_failure:
+        "26rb_grab_ball_ring.no_frame": {}
+        "26rb_grab_ball_ring.ring_exhausted": {}
+
+    - name: 26rb_drop_ball_target_rack
+      config: ../tasks/26rb_drop_ball_target_rack.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+          on_failure: continue
+      on_failure:
+        "26rb_drop_ball_target_rack.timeout": {}
+
+    # 第三趟（强制补跑）：从rack返回frame，只抓一个环；无环超时也继续投放。
+    - name: 26rb_grab_ball_ring
+      config: ../tasks/26rb_grab_ball_ring.yaml
+      params:
+        pickup:
+          order: [ring]
+        ring:
+          max_attempts: 3
+          confirmation: count_decrease
+      on_failure:
+        "26rb_grab_ball_ring.no_frame": {}
+        "26rb_grab_ball_ring.ring_exhausted": {}
+
+    - name: 26rb_drop_ball_target_rack
+      config: ../tasks/26rb_drop_ball_target_rack.yaml
+      initial:
+        pose:
+          command: BMOVE
+          axes: xyzrz
+          target: [0.0, 0.0, 0.0, 0.0]
+          on_failure: continue
+      on_failure:
+        "26rb_drop_ball_target_rack.timeout": {}
+
+    # 第三趟投放收尾完成后直接过门，不再返回frame。
     - name: 26rb_gate_task
       config: ../tasks/26rb_gate_task.yaml
       initial:
         poses:
           - command: SET
             axes: xyz
-            target: [0.0, 3.0, 0.1, 0.0]
+            target: [1.625, 5.47, 0.2, 0.0]
             on_failure: continue
           # - command: WTRAVEL
           #   axes: xyz
           #   target: [1.5, -2.0, 0.2, 0.0] # 世界系绝对位置；航向先沿行进方向。
-          # - command: SET
-          #   axes: rz
-          #   target: [0.0, 0.0, 0.0, 0.0]
+          - command: SET
+            axes: xyz
+            target: [4.23, 2.0, 0.2, 0.0]
       # on_failure:
       #   default:
       #     # 失败覆盖只传给下一项任务 26rb_grab_ball_ring，作为其初始路线。
@@ -110,7 +163,7 @@ mission:
           #   on_failure: continue
           - command: SET
             axes: xyzrz
-            target: [-0.5, 0.5, 0.2, -110.0]
+            target: [0.5, 0.5, 0.2, -90.0]
             on_failure: continue
       # SET 入场普通失败时继续执行西南满推5秒、上浮满推10秒。
       on_failure:

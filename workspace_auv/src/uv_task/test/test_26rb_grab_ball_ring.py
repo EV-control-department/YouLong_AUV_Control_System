@@ -154,6 +154,7 @@ def rig(monkeypatch):
     params = load_task(config)[0]['params']
     # Existing cases exercise the legacy two-target route independently of field YAML.
     params.update(pickup_order=['ring', 'golf'], claw_prepare_angle_rad=0.0,
+                  ring_target_lock_enabled=False, ring_confirmation='class_absence',
                   golf_max_attempts=2, ring_max_attempts=3,
                   golf_grab_depth_m=.44, ring_grab_depth_m=.44,
                   ring_open_angle_deg=0., ring_close_angle_deg=90.)

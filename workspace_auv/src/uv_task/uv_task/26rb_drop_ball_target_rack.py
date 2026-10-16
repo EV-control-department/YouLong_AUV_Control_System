@@ -12,6 +12,7 @@ from uv_msgs.action import BasicMotion
 from uv_task.task_outcome import TaskOutcome
 from uv_task.drop_search_config import validate_drop_search_params
 from uv_task.collection_frame_search import TargetRackSearch
+from uv_task.down_target_memory import task_state, poll_down_targets
 from uv_task.down_camera_servo import (
     DownCameraPriority, body_image_step, normalized_image_error, body_to_world_rotation,
 )
@@ -23,6 +24,8 @@ STOP_AND_HOLD_COMMAND = getattr(BasicMotion.Goal, 'STOP_AND_HOLD', 12)
 
 
 def validate_ring_release_params(params):
+    if not isinstance(params.get('release_at_preset_on_no_frame', False), bool):
+        raise ValueError('search.release_at_preset_on_no_frame 必须是布尔值')
     for key, default in (('release_angle_deg', 180.0), ('ring_release_angle_deg', 270.0)):
         angle = params.get(key, default)
         if (isinstance(angle, bool) or not isinstance(angle, (int, float))
@@ -54,7 +57,9 @@ class RB26DropBallTargetRackTask:
         self._node = node
         self._params = params
         self._logger = node.get_logger()
-        self._task_depth = validate_drop_search_params(params)['search_cruise_depth_m']
+        search_params = validate_drop_search_params(params)
+        self._task_depth = search_params['search_cruise_depth_m']
+        self._configured_rack_position = tuple(search_params['rack_position'])
         self._detection_timeout = max(
             0.1, float(params.get('down_detection_timeout', 0.8)))
         self._priority_seconds = max(
@@ -70,6 +75,10 @@ class RB26DropBallTargetRackTask:
         # This is a constant pixel-servo scale, not a measured target range.
         self._projection_depth = max(
             0.1, float(params.get('down_projection_depth_m', 0.8)))
+        self._state = task_state(node)
+        self._state.configure_down_target('rack', self._projection_depth, self._detection_timeout,
+                                          float(params.get('search_min_confidence', .02)))
+        self._rack_position = self._state.down_target_position('rack', self._configured_rack_position)
         self._gain = max(
             0.05, float(params.get('down_visual_servo_gain', 0.8)))
         self._max_speed = min(0.15, max(
@@ -106,6 +115,7 @@ class RB26DropBallTargetRackTask:
         self._completion_wait_seconds = float(params.get('completion_wait_seconds', 2.0))
         self._completion_timeout = float(params.get('completion_timeout', 5.0))
         self._rack_camera_pose = None
+        self._preset_drop_xy = None
         self._light_pulse_seconds = max(
             0.05, float(params.get('light_pulse_seconds', 0.35)))
         self._light_gap_seconds = max(
@@ -203,6 +213,7 @@ class RB26DropBallTargetRackTask:
                 f'中心容差=±{self._pixel_tolerance:.4f}，深度容差=±{self._depth_tolerance:.3f}m，'
                 f'稳定保持={self._stable_seconds:.2f}s，超时={self._servo_timeout:.1f}s')
             while not node.stopped and time.monotonic() < deadline:
+                poll_down_targets(node)
                 camera_name, detection = self._priority.update()
                 now = time.monotonic()
                 if stable_generation != self._priority.generation:
@@ -318,7 +329,7 @@ class RB26DropBallTargetRackTask:
         self._alignment_timed_out = False
         node = self._node
         camera = node.camera_extrinsics.get(self._aligned_camera)
-        if camera is None:
+        if camera is None and self._preset_drop_xy is None:
             self._logger.error(f'{label}平移失败：没有单目伺服成功的相机')
             return False
         provider = node.camera_extrinsics_provider
@@ -342,26 +353,34 @@ class RB26DropBallTargetRackTask:
 
         # Preserve the selected eye's baseline offset; do not substitute the
         # stereo midpoint or use detections again after successful centering.
-        body_dx = float(camera.translation[0] - claw_body[0])
-        body_dy = float(camera.translation[1] - claw_body[1])
+        preset = self._preset_drop_xy is not None
+        body_dx = float(-claw_body[0] if preset else camera.translation[0]-claw_body[0])
+        body_dy = float(-claw_body[1] if preset else camera.translation[1]-claw_body[1])
         pose = camera_pose
         yaw = math.radians(pose[5])
         world_dx = math.cos(yaw) * body_dx - math.sin(yaw) * body_dy
         world_dy = math.sin(yaw) * body_dx + math.cos(yaw) * body_dy
-        target = [pose[0] + world_dx, pose[1] + world_dy,
+        anchor_xy = self._preset_drop_xy if preset else pose[:2]
+        target = [anchor_xy[0] + world_dx, anchor_xy[1] + world_dy,
                   self._servo_depth,
                   float(pose[5])]
-        self._logger.info(
-            f'26rb_drop_ball_target_rack：按 {self._aligned_camera} '
-            f'和{label}固定外参平移；'
-            f'相机机体系=({camera.translation[0]:+.3f},'
-            f'{camera.translation[1]:+.3f},{camera.translation[2]:+.3f})m，'
-            f'{label}机体系=({claw_body[0]:+.3f},{claw_body[1]:+.3f},'
-            f'{claw_body[2]:+.3f})m，'
-            f'机体平移=({body_dx:+.3f},{body_dy:+.3f})m，'
-            f'世界平移=({world_dx:+.3f},{world_dy:+.3f})m，'
-            f'定位目标=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f},{target[3]:.1f})；'
-            f'等待到点超时={self._alignment_timeout:.2f}s')
+        if preset:
+            self._logger.warning(
+                f'26rb_drop_ball_target_rack：找框失败，按预设rack世界XY={anchor_xy}和{label}外参投放；'
+                f'艇体目标=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f},{target[3]:.1f})，'
+                '不叠加相机偏移')
+        else:
+            self._logger.info(
+                f'26rb_drop_ball_target_rack：按 {self._aligned_camera} '
+                f'和{label}固定外参平移；'
+                f'相机机体系=({camera.translation[0]:+.3f},'
+                f'{camera.translation[1]:+.3f},{camera.translation[2]:+.3f})m，'
+                f'{label}机体系=({claw_body[0]:+.3f},{claw_body[1]:+.3f},'
+                f'{claw_body[2]:+.3f})m，'
+                f'机体平移=({body_dx:+.3f},{body_dy:+.3f})m，'
+                f'世界平移=({world_dx:+.3f},{world_dy:+.3f})m，'
+                f'定位目标=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f},{target[3]:.1f})；'
+                f'等待到点超时={self._alignment_timeout:.2f}s')
         success, message = node._send_action_goal(
             SET_COMMAND, target, 'xyzrz',
             timeout=self._alignment_timeout,
@@ -371,7 +390,8 @@ class RB26DropBallTargetRackTask:
             task_context=f'26rb_drop_ball_target_rack：{label}外参定位并等待到点')
         if not success:
             if (getattr(node, '_last_motion_failure_kind', '') == 'timeout'
-                    and not node.stopped):
+                    and not node.stopped
+                    and (not preset or getattr(node, '_last_motion_cleanup_confirmed', False))):
                 self._alignment_timed_out = True
                 self._logger.warning(
                     f'{label}到点等待超时；仍继续发送该爪子的释放指令')
@@ -428,8 +448,11 @@ class RB26DropBallTargetRackTask:
             self._release_settle_seconds, self._ring_release_settle_seconds))
 
     def execute(self) -> TaskOutcome:
+        poll_down_targets(self._node)
+        self._rack_position = self._state.down_target_position('rack', self._configured_rack_position)
         self._servo_depth = self._task_depth
         self._rack_camera_pose = None
+        self._preset_drop_xy = None
         self._alignment_timed_out = False
         completion_flash_pending = False
         node = self._node
@@ -444,14 +467,22 @@ class RB26DropBallTargetRackTask:
                     '共享类别映射中没有 target_rack_down')
             approach = TargetRackSearch(node, self._params).execute()
             if not approach:
-                return approach
-            node._set_task_phase_light(node.LIGHT_YELLOW, 'rack下视伺服')
+                if (self._params.get('release_at_preset_on_no_frame', False)
+                        and approach.failure_code == '26rb_drop_ball_target_rack.no_frame'
+                        and not node.stopped
+                        and getattr(node, '_last_motion_cleanup_confirmed', False)):
+                    self._preset_drop_xy = self._state.down_target_position('rack', self._rack_position)[:2]
+                    node._set_task_phase_light(node.LIGHT_YELLOW, 'rack预设点兜底投放')
+                else:
+                    return approach
+            else:
+                node._set_task_phase_light(node.LIGHT_YELLOW, 'rack下视伺服')
             # Search already observed the rack. Reuse its fresh detections and
             # keep the configured depth through servo, SET hold and both claws.
-            if not self._servo_rack():
+            if self._preset_drop_xy is None and not self._servo_rack():
                 return node._fallback_failure_outcome(
                     '26rb_drop_ball_target_rack', 'visual_servo')
-            if not self._visual_servo_timed_out:
+            if self._preset_drop_xy is None and not self._visual_servo_timed_out:
                 if not self._flash_green(1, 'rack视觉伺服成功'):
                     return TaskOutcome.failed(
                         '26rb_drop_ball_target_rack.stopped', '伺服成功提示被中止')
@@ -494,6 +525,11 @@ class RB26DropBallTargetRackTask:
                 '26rb_drop_ball_target_rack：圆盘爪放球、发夹爪放环指令流程完成')
             return TaskOutcome.ok()
         finally:
+            # A final failure in the fixed multi-trip route must not let the
+            # next pickup open a claw whose previous release did not finish.
+            if (not completion_flash_pending
+                    and self._params.get('release_at_preset_on_no_frame', False)):
+                node.stopped = True
             # Leave the final asynchronous green indication in the queue;
             # never cancel it from task cleanup.
             if not completion_flash_pending and node._light_state != node.LIGHT_OFF:

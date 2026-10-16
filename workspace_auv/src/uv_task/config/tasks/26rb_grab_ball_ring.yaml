@@ -15,7 +15,7 @@ params:
 
   # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
   # 初始值需按实际场地填写；不会从定位器覆盖。
-  collection_frame_position: [1.302, 6.937, 0.120]
+  collection_frame_position: [2.67, 7.60, 0.120]
   search:
     timeout: 80.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时，重新发线不清零。
     near_radius_m: 0.5 # 到预设 [x,y] 的二维水平距离，不考虑深度差。
@@ -133,6 +133,10 @@ params:
       gain: 0.6 # 球进入微伺服区后的水平伺服增益。
   ring:
     class: red_ring
+    confirmation: class_absence # 旧行为；mission第一趟覆盖deferred，后两趟count_decrease。
+    target_lock:
+      enabled: true # 每目按离上一次bbox最近选择，不要求重叠。
+      relock_timeout: 2.0 # 当前目最后有效环观测满2秒后，两目用新帧重锁；不延长30秒。
     max_attempts: 3
     grab_depth_m: 0.71 # 机器人目标Z，可与球分别设置；不是环自身深度。
     pixel_tolerance_fraction: 0.04 # 环中心初始归一化容差；细调后半段放宽到servo.final_tolerance_fraction。

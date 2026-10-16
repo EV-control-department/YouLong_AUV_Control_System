@@ -222,6 +222,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "26rb_drop_ball_target_rack": {
         **DROP_SEARCH_SCHEMA,
+        "release_at_preset_on_no_frame": bool,
         "observation_seconds": float,
         "alignment_timeout": float,
         "alignment_observation_timeout": float,
@@ -317,6 +318,9 @@ TASK_SCHEMAS["26rb_grab_ball_ring"] = {
     "ring_open_angle_deg": float, "ring_close_angle_deg": float,
     "ring_servo_repeat_count": int, "ring_servo_repeat_period": float,
     "ring_servo_settle_seconds": float,
+    "ring_confirmation": str,
+    "ring_target_lock_enabled": bool,
+    "ring_relock_timeout": float,
 }
 
 PARAMETER_ALIASES = {
@@ -356,6 +360,7 @@ PARAMETER_ALIASES = {
         "verification.max_retries": "max_grab_retries",
     },
     "26rb_drop_ball_target_rack": {
+        "search.release_at_preset_on_no_frame": "release_at_preset_on_no_frame",
         "observation.seconds": "observation_seconds",
         "alignment.timeout": "alignment_timeout",
         "alignment.observation_timeout": "alignment_observation_timeout",
@@ -449,6 +454,9 @@ PARAMETER_ALIASES["26rb_grab_ball_ring"] = {
     "descent_duration_seconds": "descent_timeout",
     "golf.max_attempts": "golf_max_attempts", "ring.max_attempts": "ring_max_attempts",
     "ring.class": "ring_class", "ring.observe_seconds": "ring_observe_seconds",
+    "ring.confirmation": "ring_confirmation",
+    "ring.target_lock.enabled": "ring_target_lock_enabled",
+    "ring.target_lock.relock_timeout": "ring_relock_timeout",
     "ring.orientation_timeout": "ring_orientation_timeout",
     "ring.orientation_min_quality": "ring_orientation_min_quality",
     "ring.orientation_min_samples": "ring_orientation_min_samples",

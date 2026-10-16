@@ -59,6 +59,7 @@ from uv_task.gate_config import gate_uses_vision
 from uv_task.return_origin_config import validate_return_origin_params
 from uv_task.task_outcome import TaskOutcome
 from uv_task.task_state import TaskState
+from uv_task.down_target_memory import observe_down_targets
 from uv_task.basic_motion_test import RosMotionTest
 
 from uv_task.arrow_surfacer import (
@@ -400,12 +401,18 @@ class TaskRunnerNode(Node):
             self._down_detection_sequence += 1
             self._down_detection_events.append((
                 self._down_detection_sequence, received_at, camera_name, msg))
+        observe_down_targets(self, received_at, msg)
 
     def _pose_cb(self, msg: PoseInfo):
         with self._perception_lock:
             self._robot_pose = (msg.robot_x, msg.robot_y, msg.robot_z,
                                 msg.robot_roll, msg.robot_pitch, msg.robot_yaw)
             self._robot_pose_received_at = time.monotonic()
+            self._down_target_pose_valid = (getattr(msg, 'nav_valid', True)
+                                           and getattr(msg, 'origin_initialized', True))
+            state = getattr(self, 'state', None)
+            if state is not None and hasattr(msg, 'origin_generation'):
+                state.note_odom_generation(msg.origin_generation, self._robot_pose_received_at)
 
     def _mcu_status_cb(self, msg: ZitStatus):
         self._mcu_status = msg
@@ -1653,6 +1660,7 @@ class TaskRunnerNode(Node):
         if success:
             self._cmd_x = self._cmd_y = self._cmd_z = self._cmd_yaw = 0.0
             self.state.reset_pickup(start_xy=(0.0, 0.0))
+            self.state.reset_down_targets(received_after=time.monotonic())
         else:
             self.get_logger().error(f'START 执行失败：{msg}')
         return success

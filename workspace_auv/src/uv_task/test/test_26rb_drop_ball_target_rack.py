@@ -533,3 +533,65 @@ def test_failed_completion_handoff_stops_scheduler_and_never_reports_done(rig, m
 def test_invalid_completion_budget_rejected_during_config_load(params):
     with pytest.raises(ConfigError, match='completion'):
         _validate_params('26rb_drop_ball_target_rack', params)
+
+
+@pytest.mark.parametrize('yaw', [0., 90., -90., 179.])
+def test_no_frame_preset_drop_uses_each_claw_tf_without_camera_offset(rig, monkeypatch, yaw):
+    rig.pose[5] = yaw
+    rig.task._params.update(release_at_preset_on_no_frame=True, rack_position=[1.5, 6., -1.])
+    rig.task._configured_rack_position = (1.5, 6., -1.)
+    rig.task._ring_release_angle_deg = 210.
+    rig.node._last_motion_cleanup_confirmed = True
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=lambda:
+        TaskOutcome.failed('26rb_drop_ball_target_rack.no_frame', '搜索耗尽')))
+    rig.task._servo_rack = lambda: pytest.fail('预设点投放不应进入像素伺服')
+    rig.task._flash_green = lambda *a, **kw: True
+    start = rig.clock[0]
+    outcome = rig.task.execute()
+    assert outcome, outcome.message
+    actions = [c for c in rig.calls if c[0] == 'action']
+    assert len(actions) == 3 and actions[-1][1] == mod.STOP_AND_HOLD_COMMAND
+    theta = np.deg2rad(yaw)
+    rotation = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    for action, claw in zip(actions[:2], ([-.38, 0.], [.08, 0.])):
+        assert action[2][:2] == pytest.approx(np.array([1.5, 6.])-rotation @ claw)
+        assert action[2][2:] == pytest.approx([.2, yaw])
+    assert [(m.servo_id, m.angle) for m in rig.messages] == [(1, 180.)]*3+[(2, 210.)]*3+[(1, 180.), (2, 210.)]
+    assert rig.clock[0]-start >= 2.
+    assert rig.task._preset_drop_xy == (1.5, 6.)
+
+
+@pytest.mark.parametrize('code,enabled,cleanup,stopped', [
+    ('no_frame', False, True, False), ('no_frame', True, False, False),
+    ('no_frame', True, True, True), ('search', True, True, False),
+    ('camera_tf', True, True, False)])
+def test_preset_drop_requires_enabled_normal_search_failure_and_confirmed_cleanup(rig, monkeypatch, code, enabled, cleanup, stopped):
+    rig.task._params.update(release_at_preset_on_no_frame=enabled, rack_position=[1., 2., -1.])
+    rig.node._last_motion_cleanup_confirmed = cleanup
+    rig.node.stopped = stopped
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=lambda:
+        TaskOutcome.failed('26rb_drop_ball_target_rack.'+code, '模拟失败')))
+    rig.task._servo_rack = lambda: pytest.fail('失败不应继续伺服')
+    assert not rig.task.execute()
+    assert rig.messages == [] and rig.calls == []
+
+
+def test_preset_drop_bad_claw_tf_does_not_release(rig, monkeypatch):
+    rig.task._params.update(release_at_preset_on_no_frame=True, rack_position=[1., 2., -1.])
+    rig.node._last_motion_cleanup_confirmed = True
+    rig.node.camera_extrinsics_provider.lookup_transform = lambda *a: NS(translation=NS(x=float('nan'), y=0., z=0.))
+    monkeypatch.setattr(mod, 'TargetRackSearch', lambda *args: NS(execute=lambda:
+        TaskOutcome.failed('26rb_drop_ball_target_rack.no_frame', '模拟失败')))
+    assert not rig.task.execute()
+    assert rig.messages == []
+    assert rig.node.stopped
+
+
+@pytest.mark.parametrize('confirmed', [False, True])
+def test_preset_alignment_timeout_only_releases_after_confirmed_motion_cleanup(rig, confirmed):
+    rig.task._preset_drop_xy = (1., 2.)
+    rig.node._last_motion_failure_kind = 'timeout'
+    rig.node._last_motion_cleanup_confirmed = confirmed
+    rig.node._send_action_goal = lambda *a, **kw: (False, '到点超时')
+    assert rig.task._align_disc_claw() is confirmed
+    assert rig.task._alignment_timed_out is confirmed

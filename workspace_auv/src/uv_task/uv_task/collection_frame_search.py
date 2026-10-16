@@ -25,6 +25,7 @@ from uv_task.golf_search_config import validate_search_params
 from uv_task.task_outcome import TaskOutcome
 from uv_task.drop_search_config import validate_drop_search_params
 from uv_task.search_clock import BlineSearchClock
+from uv_task.down_target_memory import task_state
 
 
 def _rotation(pose):
@@ -72,9 +73,16 @@ class FrontDownSearch:
                  correct_depth=True):
         self.node = node
         self.p = validator(params)
-        self.position = np.asarray(self.p[position_key])
+        landmark = 'rack' if position_key == 'rack_position' else 'frame'
+        state = task_state(node)
+        self.position = np.asarray(state.down_target_position(landmark, self.p[position_key]))
         self.task_name = task_name
         self.target_label = target_label
+        observation = state.down_target(landmark)
+        if observation is not None:
+            node.get_logger().info(
+                f'{target_label}预设点采用最居中下视观测：XY={observation.xy}，'
+                f'相机={observation.camera}，中心距离={observation.center_distance:.6f}')
         self.correct_depth = correct_depth
         self.depth = self.p['search_cruise_depth_m']
         self._now = time.monotonic

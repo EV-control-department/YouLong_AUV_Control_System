@@ -96,14 +96,17 @@ class PickupWindow:
         return previous != self.mode
 
 
-def target_world_xy(node, camera_name, detection, pose, projection_depth):
+def target_world_xy(node, camera_name, detection, pose, projection_depth, *, reference=None):
     """Estimate an off-centre target on the existing fixed-depth servo plane.
 
     This is the configured pixel-to-metre scale, not a measured target range.
     A timeout must retain the image residual rather than pretend it is centred.
     """
     camera = node.camera_extrinsics[camera_name]
-    du, dv = normalized_image_error(node, camera_name, detection)
+    if reference is None:
+        du, dv = normalized_image_error(node, camera_name, detection)
+    else:
+        du, dv = normalized_image_error(node, camera_name, detection, reference=reference)
     rotation = body_to_world_rotation(pose)
     ray = rotation @ camera.optical_to_body @ np.array([du, dv, 1.0])
     if not np.all(np.isfinite(ray)) or ray[2] <= 1e-6:

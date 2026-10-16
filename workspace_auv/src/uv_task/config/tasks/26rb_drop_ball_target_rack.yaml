@@ -3,12 +3,13 @@ task: 26rb_drop_ball_target_rack
 params:
   # 先定深、朝向预设 rack；前视观测与 yaw 对准后前向巡游。
   # 预设 odom [x,y,z]；z 仅描述 rack 位置，不参与 XY 半径或巡游深度。
-  rack_position: [0.951, 5.199, -1.0]
+  rack_position: [0.75, 7.60, -1.0]
   depth:
     task_depth_m: 0.15 # 搜索、下视伺服、停车SET和两只爪子定位统一使用此目标深度。
     timeout: 15.0 # 初始定深动作超时，秒。
 
   search:
+    release_at_preset_on_no_frame: true # 正常找框耗尽后按rack预设XY和两爪外参投放。
     timeout: 40.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时。
     near_radius_m: 0.3 # 到 rack 预设 XY 的二维水平半径，米。
     near_timeout: 20.0 # 首次进入后累计 BLINE 时间；停车暂停，离开不重置。

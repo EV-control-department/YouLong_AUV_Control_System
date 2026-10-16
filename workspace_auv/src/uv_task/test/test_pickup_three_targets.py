@@ -21,7 +21,8 @@ def three(monkeypatch):
     monkeypatch.setattr(mod.time, 'sleep', node.sleep)
     monkeypatch.setattr(mod, 'CollectionFrameSearch', lambda *args: NS(execute=TaskOutcome.ok))
     params = load_task(Path(__file__).parents[1]/'config/tasks/26rb_grab_ball_ring.yaml')[0]['params']
-    params.update(work_depth_m=.2, golf_grab_depth_m=.44, ring_grab_depth_m=.44)
+    params.update(work_depth_m=.2, golf_grab_depth_m=.44, ring_grab_depth_m=.44,
+                  ring_target_lock_enabled=False, ring_confirmation='class_absence')
     task = mod.RB26GrabBallRingTask(node, params)
     node.hook = lambda: stream(node, tuple(cid for cid in (0, 7, 8, 11) if cid not in node.removed))
     return node, task
@@ -32,7 +33,7 @@ def test_three_orders_validate(order):
     assert _validate_params('26rb_grab_ball_ring', {'pickup': {'order': list(order)}})['pickup_order'] == list(order)
 
 
-@pytest.mark.parametrize('order', [[], ['ring'], ['ring', 'yellow'], ['ring', 'golf', 'red'],
+@pytest.mark.parametrize('order', [[], ['ring', 'ring'], ['ring', 'yellow'], ['ring', 'golf', 'red'],
                                   ['ring', 'yellow', 'yellow'], ['ring', 'yellow', 'pink_golf'],
                                   ['ring', 'yellow', 'red', 'golf'], ['ring', 'yellow', {}]])
 def test_bad_orders_rejected_at_load_and_runtime(order):

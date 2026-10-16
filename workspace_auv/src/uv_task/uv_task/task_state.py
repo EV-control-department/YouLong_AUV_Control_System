@@ -18,7 +18,7 @@ messages, estimate drift, or change an already running controller goal.
 from __future__ import annotations
 
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from threading import RLock
 from uv_task.pickup_progress import PickupProgress
 from typing import Iterable
@@ -41,6 +41,17 @@ def _wrap_degrees(angle: float) -> float:
     return (angle + 180.0) % 360.0 - 180.0
 
 
+@dataclass(frozen=True)
+class DownTargetObservation:
+    xy: tuple[float, float]
+    center_distance: float
+    observed_at: float
+    camera: str
+
+
+DOWN_TARGET_DEFAULTS = {'frame': (.7, .8, .02), 'rack': (.8, .8, .02)}
+
+
 class TaskState:
     """One bias shared by all tasks in the same runner process.
 
@@ -54,7 +65,91 @@ class TaskState:
         self._lock = RLock()
         self._bias = (0.0, 0.0, 0.0, 0.0)
         self._pickup = PickupProgress()
+        self._down_targets = {}
+        self._down_target_keys = {}
+        self._down_target_settings = dict(DOWN_TARGET_DEFAULTS)
+        self._down_target_epoch = 0
+        self._down_target_after = float('-inf')
+        self._odom_generation = None
         self.set_bias(bias)
+
+    def configure_down_target(self, kind, projection_depth, freshness, min_confidence=.02):
+        if kind not in DOWN_TARGET_DEFAULTS:
+            raise ValueError('下视预设点仅支持 frame/rack')
+        depth, age, confidence = _finite_values(
+            (projection_depth, freshness, min_confidence), (3,), '下视观测参数')
+        if depth <= 0 or age <= 0 or not 0 <= confidence <= 1:
+            raise ValueError('投影尺度和检测有效期须为正，置信度须在[0,1]')
+        with self._lock:
+            if depth != self._down_target_settings[kind][0]:
+                self._down_targets.pop(kind, None)
+            self._down_target_settings[kind] = (depth, age, confidence)
+
+    def down_target_settings(self, kind):
+        with self._lock:
+            return self._down_target_settings[kind]
+
+    @property
+    def down_target_epoch(self):
+        with self._lock:
+            return self._down_target_epoch
+
+    def claim_down_target_frame(self, kind, camera, key, received, observed_at, epoch):
+        """Consume a source frame once, including frames with no valid target."""
+        with self._lock:
+            if (epoch != self._down_target_epoch or received <= self._down_target_after
+                    or observed_at <= self._down_target_after):
+                return False
+            previous = self._down_target_keys.get((kind, camera))
+            if previous is not None and key[0] == previous[0] and key[1] <= previous[1]:
+                return False
+            self._down_target_keys[(kind, camera)] = key
+            return True
+
+    def remember_down_target(self, kind, xy, center_distance, observed_at, camera, *, epoch=None):
+        if kind not in DOWN_TARGET_DEFAULTS or camera not in ('down_left', 'down_right'):
+            raise ValueError('无效下视目标或相机')
+        point = _finite_values(xy, (2,), '下视目标世界XY')
+        distance, stamp = _finite_values((center_distance, observed_at), (2,), '下视观测指标')
+        if distance < 0:
+            raise ValueError('中心距离不能为负')
+        with self._lock:
+            if (epoch is not None and epoch != self._down_target_epoch) or stamp <= self._down_target_after:
+                return False
+            previous = self._down_targets.get(kind)
+            if previous is not None:
+                better = distance < previous.center_distance-1e-9
+                tied_newer = (abs(distance-previous.center_distance) <= 1e-9
+                              and stamp > previous.observed_at)
+                if not better and not tied_newer:
+                    return False
+            self._down_targets[kind] = DownTargetObservation(point, distance, stamp, camera)
+            return True
+
+    def down_target(self, kind):
+        with self._lock:
+            return self._down_targets.get(kind)
+
+    def down_target_position(self, kind, configured):
+        """Replace world XY only; configured Z remains a depth/sentinel value."""
+        position = _finite_values(configured, (3,), '预设目标位置')
+        observation = self.down_target(kind)
+        return position if observation is None else (*observation.xy, position[2])
+
+    def reset_down_targets(self, *, received_after):
+        cutoff = _finite_values((received_after,), (1,), '观测清理时间')[0]
+        with self._lock:
+            self._down_targets.clear()
+            self._down_target_epoch += 1
+            self._down_target_after = cutoff
+            # Keep source identities across setorigin: replaying an old camera
+            # frame must not project it with the new origin's robot pose.
+
+    def note_odom_generation(self, generation, received_at):
+        with self._lock:
+            if self._odom_generation is not None and generation != self._odom_generation:
+                self.reset_down_targets(received_after=received_at)
+            self._odom_generation = generation
 
     @property
     def bias(self) -> tuple[float, float, float, float]:

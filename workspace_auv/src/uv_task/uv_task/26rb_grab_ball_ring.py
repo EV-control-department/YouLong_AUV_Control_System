@@ -14,7 +14,11 @@ from uv_task.collection_frame_search import CollectionFrameSearch
 from uv_task.down_camera_servo import best_detection, normalized_image_error, body_to_world_rotation
 from uv_task.task_outcome import TaskOutcome
 from uv_task.task_state import TaskState
+from uv_task.down_target_memory import poll_down_targets
 from uv_task.pickup_alignment import PickupWindow, target_world_xy, bounded_velocity
+from uv_task.ring_observation import (
+    EYES, RingTargetLock, StableRingCounts, compare_ring_counts, ring_detections,
+)
 
 PickupController = import_module('uv_task.26rb_grab_golf').RB26GrabGolfTask
 BALL_CLASSES = {'yellow': 'yellow_golf', 'red': 'pink_golf'}
@@ -33,8 +37,20 @@ def validate_combined_params(params, *, complete=True):
     if (not isinstance(pickup_order, (list, tuple))
             or any(not isinstance(kind, str) for kind in pickup_order)
             or len(set(pickup_order)) != len(pickup_order)
-            or set(pickup_order) not in ({'golf', 'ring'}, {'ring', 'yellow', 'red'})):
-        raise ValueError('pickup.order 必须包含 golf/ring 或 ring/yellow/red 各一次，不能混用')
+            or set(pickup_order) not in ({'ring'}, {'golf', 'ring'}, {'ring', 'yellow', 'red'})):
+        raise ValueError('pickup.order 必须为 [ring]、golf/ring 或 ring/yellow/red 各一次，不能混用')
+    confirmation = params.get('ring_confirmation', 'class_absence')
+    if confirmation not in ('class_absence', 'deferred', 'count_decrease'):
+        raise ValueError('ring.confirmation 必须为 class_absence/deferred/count_decrease')
+    if (confirmation == 'deferred' and (complete or 'ring_max_attempts' in params)
+            and params.get('ring_max_attempts', 3) != 1):
+        raise ValueError('ring.confirmation=deferred 时 ring.max_attempts 必须为1')
+    if not isinstance(params.get('ring_target_lock_enabled', False), bool):
+        raise ValueError('ring.target_lock.enabled 必须是布尔值')
+    relock = params.get('ring_relock_timeout', 2.0)
+    if (isinstance(relock, bool) or not isinstance(relock, (int, float))
+            or not math.isfinite(relock) or relock <= 0):
+        raise ValueError('ring.target_lock.relock_timeout 必须为有限正数')
     final_tolerance = params.get('target_final_tolerance_fraction', 0.10)
     if (isinstance(final_tolerance, bool) or not isinstance(final_tolerance, (int, float))
             or not math.isfinite(final_tolerance) or not 0 < final_tolerance <= 0.25):
@@ -170,7 +186,12 @@ class RB26GrabBallRingTask:
         validate_combined_params(params)
         self.node, self.p = node, params
         self.pickup_order = tuple(params.get('pickup_order', ('golf', 'ring')))
-        self.colored_pickup = 'golf' not in self.pickup_order
+        self.colored_pickup = any(kind in BALL_CLASSES for kind in self.pickup_order)
+        self.ring_confirmation = params.get('ring_confirmation', 'class_absence')
+        self.ring_target_lock_enabled = params.get('ring_target_lock_enabled', False)
+        self.ring_relock_timeout = float(params.get('ring_relock_timeout', 2.0))
+        self._ring_lock = None
+        self._unconfirmed_targets = set()
         self.work_depth = float(params.get('work_depth_m', 0.2))
         self.grab_depths = {kind: float(params.get(parameter_kind(kind)+'_grab_depth_m', 0.44))
                            for kind in self.pickup_order}
@@ -189,9 +210,14 @@ class RB26GrabBallRingTask:
         if not hasattr(node, 'state'):
             node.state = TaskState()
         self.state = node.state
+        self.state.configure_down_target('frame', float(params.get('projection_depth_m', .8)),
+                                         float(params.get('detection_timeout', .8)),
+                                         float(params.get('search_min_confidence', .02)))
         self.log = node.get_logger()
         def target_servo_params(kind):
             target_params = dict(params)
+            if kind == 'ring' and self.ring_target_lock_enabled:
+                target_params['detection_timeout'] = self.ring_relock_timeout
             if kind+'_pixel_tolerance_fraction' in params:
                 target_params['pixel_tolerance_fraction'] = params[
                     kind+'_pixel_tolerance_fraction']
@@ -218,9 +244,13 @@ class RB26GrabBallRingTask:
                     task_name='26rb_grab_ball_ring.'+kind)
             # Shared depth recovery still uses the existing ball controller API.
             self.ball = self.controllers['yellow']
-        else:
+        elif 'golf' in self.pickup_order:
             self.ball = PickupController(node, target_servo_params('golf'))
             self.controllers['golf'] = self.ball
+        else:
+            # Retain the shared recovery API without constructing a ball or
+            # requiring either ball class in a ring-only model mapping.
+            self.ball = self.ring
         self.max_attempts = {
             kind: int(params.get(parameter_kind(kind)+'_max_attempts', 3))
             for kind in self.pickup_order}
@@ -367,11 +397,20 @@ class RB26GrabBallRingTask:
     def _fresh_detection(self, class_id, controller, *, active_camera=None):
         with self.node._perception_lock:
             entries = dict(self.node._down_detections)
+        if (self.ring_target_lock_enabled and controller is self.ring
+                and class_id == self.ring._golf_class_id and self._ring_lock is not None):
+            observation = self._ring_lock.update(entries, time.monotonic())
+            if observation is None:
+                return None, None, None
+            return observation.camera, observation.detection, observation.received
         candidates = []
         now = time.monotonic()
+        freshness = controller._detection_timeout
+        if self.ring_target_lock_enabled and class_id == self.ring._collection_class_id:
+            freshness = float(self.p.get('detection_timeout', .8))
         for camera in ('down_left', 'down_right'):
             entry = entries.get(camera)
-            if entry is not None and 0 <= now-entry[0] <= controller._detection_timeout:
+            if entry is not None and 0 <= now-entry[0] <= freshness:
                 detection = best_detection(entry[1], class_id)
                 if detection is not None:
                     candidates.append((entry[0], camera, detection))
@@ -384,6 +423,78 @@ class RB26GrabBallRingTask:
             max(candidates, key=lambda x: x[0]))
         return selected[1], selected[2], selected[0]
 
+    def _ring_observation(self, camera, received, detection, message):
+        pose = self._pose(max_age=1.0)
+        error = normalized_image_error(self.node, camera, detection)
+        try:
+            world = target_world_xy(self.node, camera, detection, pose,
+                                    self.ring._projection_depth)
+        except (AttributeError, KeyError, ValueError, np.linalg.LinAlgError):
+            world = None
+        return SimpleNamespace(camera=camera, received=received, detection=detection,
+                               pose=pose, world=world, error=error,
+                               axis=self._ring_world_axis(camera, detection, pose))
+
+    def _ring_count(self, camera, message):
+        """Count rings inside a fully visible collection frame, per eye."""
+        frame = best_detection(message, self.ring._collection_class_id)
+        if frame is None:
+            return None
+        try:
+            x1, y1, x2, y2 = (float(getattr(frame, key))
+                              for key in ('bbox_x1', 'bbox_y1', 'bbox_x2', 'bbox_y2'))
+            config = self.node.camera_configs['down']
+            if (not all(math.isfinite(v) for v in (x1, y1, x2, y2))
+                    or not 0 < x1 < x2 < config.width-1
+                    or not 0 < y1 < y2 < config.height-1):
+                return None
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return None
+        return sum(x1 <= float(det.pixel_x) <= x2 and y1 <= float(det.pixel_y) <= y2
+                   for det in ring_detections(message, self.ring._golf_class_id))
+
+    def _at_ring_observation_pose(self, anchor):
+        if anchor is None:
+            return False
+        pose = self._pose()
+        return (np.linalg.norm(np.asarray(pose[:2])-anchor[:2]) <= self.claw_alignment_position_tolerance
+                and abs(pose[2]-anchor[2]) <= self.ring._depth_hold_tolerance
+                and abs(wrap(pose[5]-anchor[3])) <= self.claw_alignment_yaw_tolerance)
+
+    def _observe_ring_counts(self, seconds, anchor, *, before=None):
+        """Hold at one observation pose; only post-entry unique frames count."""
+        started = time.monotonic()
+        counts = StableRingCounts(max(.0, self.ring._hold_seconds), self.ring._detection_timeout)
+        result = None
+        while True:
+            self._check()
+            now = time.monotonic()
+            at_anchor = self._at_ring_observation_pose(anchor)
+            with self.node._perception_lock:
+                entries = dict(self.node._down_detections)
+            for camera in EYES:
+                entry = entries.get(camera)
+                if entry is None:
+                    continue
+                received, message = entry
+                if not started <= received <= now:
+                    continue
+                value = self._ring_count(camera, message) if at_anchor else None
+                counts.observe(camera, received, message, value)
+            result = counts.result(now) if at_anchor else None
+            if result is not None:
+                if before is None or compare_ring_counts(before, result) == 'success':
+                    return result
+            if now >= started+seconds:
+                return result
+            self._wait(min(.05, started+seconds-now))
+
+    def _check_ring_grab(self, baseline, anchor):
+        after = self._observe_ring_counts(self.check_timeout, anchor, before=baseline)
+        result = compare_ring_counts(baseline, after)
+        self.log.info(f'抓环数量复检：抓前={baseline}，抓后={after}，结果={result}')
+        return result
+
     def _fallback_pose(self, kind=None):
         # Return to where this target was best seen, rather than letting a
         # later frame correction overwrite its observation point.
@@ -393,7 +504,7 @@ class RB26GrabBallRingTask:
         recorded = self.state.pickup.last_servo_pose
         if recorded is not None:
             return recorded
-        position = self.p['collection_frame_position']
+        position = self.state.down_target_position('frame', self.p['collection_frame_position'])
         return (float(position[0]), float(position[1]), self.work_depth, self._pose()[5])
 
     def _record_target(self, kind, controller, camera, detection, *, timed_out,
@@ -406,6 +517,10 @@ class RB26GrabBallRingTask:
         self._targets[kind] = (target, pose, camera)
         controller._aligned_camera = camera
         return_pose = self._target_return_poses.get(kind, anchor)
+        if kind == 'ring' and self.ring_confirmation == 'count_decrease' and not timed_out:
+            # Counts must be compared from the actual pre-grasp pose, rather
+            # than from a more centred image taken earlier in a moving servo.
+            return_pose = anchor
         self._update_target_progress(kind, camera_pose=return_pose)
         self.state.update_pickup(last_servo_pose=anchor)
         if timed_out:
@@ -435,6 +550,11 @@ class RB26GrabBallRingTask:
         controller._servo_gain = self.target_servo_gains[kind]
         self._blind_targets.pop(kind, None)
         self._target_return_poses.pop(kind, None)
+        tracking_ring = kind == 'ring' and self.ring_target_lock_enabled
+        if tracking_ring:
+            self._ring_lock = RingTargetLock(controller._golf_class_id, self.ring_relock_timeout,
+                                             self._ring_observation)
+        ring_generation = 0
         base_tolerance = controller._pixel_tolerance
         tolerance_change_at = None
         tolerance_change_label = ('线性放宽' if self.final_target_tolerance >= base_tolerance
@@ -521,6 +641,7 @@ class RB26GrabBallRingTask:
             while True:
                 self._check()
                 now = time.monotonic()
+                poll_down_targets(self.node)
                 with self.node._perception_lock:
                     events = tuple(event for event in self.node._down_detection_events if event[0] > cursor)
                 if events and events[0][0] != cursor+1:
@@ -529,13 +650,49 @@ class RB26GrabBallRingTask:
                     cursor = sequence
                     window.observe(received, camera, message, controller._golf_class_id,
                                    controller._detection_timeout)
-                    if kind == 'ring' and received <= now:
+                    if kind == 'ring' and not tracking_ring and received <= now:
                         self._sample_axis(camera, received, message, collect=False)
                 camera, detection, target_received = self._fresh_detection(
                     controller._golf_class_id, controller,
                     active_camera=(controller._aligned_camera
                                    if window.mode == 'target' else None))
-                if detection is not None:
+                if tracking_ring:
+                    if self._ring_lock.generation != ring_generation:
+                        ring_generation = self._ring_lock.generation
+                        # A successful new lock starts a new observation pool,
+                        # but does not extend the hard deadline or attempt pool.
+                        best_target_observation = last_target_observation = None
+                        best_center_error = math.inf
+                        last_target_world = None
+                        tolerance_change_at = None
+                        stable_since = None
+                        self._last_ring_axis = None
+                        self.samples.clear()
+                        self._target_return_poses.pop(kind, None)
+                        controller._reset_target_servo_pid()
+                    for observation in self._ring_lock.new_observations:
+                        if observation.world is None:
+                            continue
+                        center_error = math.hypot(*observation.error)
+                        if (best_target_observation is None or center_error < best_center_error-1e-9
+                                or (abs(center_error-best_center_error) <= 1e-9
+                                    and observation.received >= best_target_observation.received)):
+                            best_target_observation = observation
+                            best_center_error = center_error
+                            self._target_return_poses[kind] = (
+                                *observation.pose[:2], self.work_depth, observation.pose[5])
+                    if detection is not None:
+                        observation = self._ring_lock._eyes[camera]['visible']
+                        last_target_camera = camera
+                        last_target_error = observation.error
+                        last_target_observation = observation
+                        last_target_world = observation.world
+                        last_target_world_camera = camera
+                        last_target_received = observation.received
+                        self._last_ring_axis = observation.axis_sample
+                    else:
+                        stable_since = None
+                if detection is not None and not tracking_ring:
                     # A fresh cached detection may precede this stage's event
                     # cursor. Remember it as well, using the measured attitude.
                     if kind == 'ring':
@@ -648,6 +805,7 @@ class RB26GrabBallRingTask:
                         # Reprojecting an old pixel from the timeout pose would
                         # move the blind target when the vehicle has drifted.
                         self._blind_targets[kind] = (
+                            observation.axis_sample if tracking_ring else
                             self._last_ring_axis if kind == 'ring' else None)
                         self._blind_grabs_used.add(kind)
                         log_status('blind', observation.camera, 'best', observation.error,
@@ -727,7 +885,7 @@ class RB26GrabBallRingTask:
                             self.state.update_pickup(last_servo_pose=(*pose[:2], self.work_depth, pose[5]))
                     else:
                         frame_stable_since = None
-                elif window.mode == 'target' and last_target_world is not None:
+                elif window.mode == 'target' and last_target_world is not None and not tracking_ring:
                     age = now-last_target_received
                     if 0.0 <= age <= controller._lost_observation_hold_seconds:
                         pose = self._pose()
@@ -815,12 +973,8 @@ class RB26GrabBallRingTask:
                 raise PickupFailure('组合抓取：视觉修正结束停车保持失败')
         return result
 
-    def _sample_axis(self, camera, received, message, *, collect=True):
-        """Convert a valid image axis and retain the last world-frame direction."""
-        if (not collect and self._last_ring_axis is not None
-                and received <= self._last_ring_axis[0]):
-            return
-        det = best_detection(message, self.ring._golf_class_id)
+    def _ring_world_axis(self, camera, det, pose):
+        """Convert this selected detection's axis with its observation attitude."""
         if (det is None or not getattr(det, 'orientation_valid', False)
                 or not math.isfinite(float(getattr(det, 'orientation_quality', 0.0)))
                 or float(det.orientation_quality) < self.p.get('ring_orientation_min_quality', .8)):
@@ -833,7 +987,7 @@ class RB26GrabBallRingTask:
         points = [SimpleNamespace(pixel_x=det.pixel_x+sign*delta[0], pixel_y=det.pixel_y+sign*delta[1])
                   for sign in (-1, 1)]
         rays = [np.array([*normalized_image_error(self.node, camera, point, reference=det), 1.0]) for point in points]
-        rotation = body_to_world_rotation(self._pose()) @ self.node.camera_extrinsics[camera].optical_to_body
+        rotation = body_to_world_rotation(pose) @ self.node.camera_extrinsics[camera].optical_to_body
         rays = [rotation @ ray for ray in rays]
         # Intersect both rays with the same horizontal plane; its unknown depth
         # scales the difference, but does not change this undirected XY axis.
@@ -842,7 +996,20 @@ class RB26GrabBallRingTask:
         axis = rays[1][:2]/rays[1][2]-rays[0][:2]/rays[0][2]
         if np.linalg.norm(axis) < 1e-8:
             return
-        sample = (received, math.degrees(math.atan2(axis[1], axis[0])) % 180.0)
+        return math.degrees(math.atan2(axis[1], axis[0])) % 180.0
+
+    def _sample_axis(self, camera, received, message, *, collect=True):
+        """Legacy selection; tracked rings supply their selected observation instead."""
+        if (not collect and self._last_ring_axis is not None
+                and received <= self._last_ring_axis[0]):
+            return
+        det = best_detection(message, self.ring._golf_class_id)
+        if det is None:
+            return
+        axis = self._ring_world_axis(camera, det, self._pose())
+        if axis is None:
+            return
+        sample = (received, axis)
         if self._last_ring_axis is None or received >= self._last_ring_axis[0]:
             self._last_ring_axis = sample
         if collect:
@@ -855,6 +1022,7 @@ class RB26GrabBallRingTask:
             started = time.monotonic()
             cursor = self.node._down_detection_sequence
         deadline = started+self.ring_orientation_seconds
+        locked_generation = self._ring_lock.generation if self._ring_lock is not None else None
         self.log.info(
             f'抓环：水平伺服完成，定点采集方向{self.ring_orientation_seconds:.2f}s，'
             '优先本窗口新样本，无新样本沿用最后有效方向，采集结束立即转向')
@@ -864,6 +1032,15 @@ class RB26GrabBallRingTask:
                 now = time.monotonic()
                 events = tuple(event for event in self.node._down_detection_events
                                if event[0] > cursor)
+            if self.ring_target_lock_enabled and self._ring_lock is not None:
+                self._fresh_detection(self.ring._golf_class_id, self.ring)
+                for observation in self._ring_lock.new_observations:
+                    if (self._ring_lock.generation == locked_generation
+                            and observation.camera == self._ring_lock.active and observation.axis is not None
+                            and started <= observation.received <= min(now, deadline)):
+                        self._last_ring_axis = (observation.received, observation.axis)
+                        self.samples.append(self._last_ring_axis)
+                events = ()
             for sequence, received, camera, message in events:
                 cursor = sequence
                 if (camera in ('down_left', 'down_right')
@@ -1103,13 +1280,47 @@ class RB26GrabBallRingTask:
                     controller._flash_green(1, kind+'球抓取确认完成')
                 return
             if result != 'ready' or exhausted:
+                if kind == 'ring' and self.ring_confirmation == 'count_decrease' and not performed:
+                    pose = self._pose()
+                    empty = self._observe_ring_counts(
+                        self.ring_relock_timeout, (*pose[:2], self.work_depth, pose[5]))
+                    if empty is not None and all(value == 0 for value in empty.values()):
+                        self.log.info('抓环：双目稳定确认收集盘无环，跳过抓取并继续固定投放路线')
+                        self._unconfirmed_targets.add(kind)
+                        return
                 self._update_target_progress(kind, status='failed')
                 return
+            baseline = None
+            anchor = getattr(self.state.pickup, kind+'_camera_pose')
+            if kind == 'ring' and self.ring_confirmation == 'count_decrease':
+                baseline = self._observe_ring_counts(self.ring_relock_timeout, anchor)
+                self.log.info(f'抓环前稳定数量（两目独立，不相加）：{baseline}')
             attempt += 1
             self._update_target_progress(kind, attempts=attempt)
             self.log.info(f'组合抓取：{kind} 第{attempt}/{self.max_attempts[kind]}次抓取')
             performed = self._mechanical_attempt(kind, controller)
             self._return_frame(controller)
+            if kind == 'ring' and self.ring_confirmation == 'deferred':
+                self.log.info('抓环：已执行一次抓取，结果暂未确认，保持合爪继续后续目标')
+                self._unconfirmed_targets.add(kind)
+                return
+            if kind == 'ring' and self.ring_confirmation == 'count_decrease':
+                confirmation = self._check_ring_grab(baseline, anchor)
+                if confirmation == 'success':
+                    self._update_target_progress(kind, status='success')
+                    return
+                if confirmation == 'unknown':
+                    self.log.warning('抓环：数量无法可靠比较，保持合爪去投放，不再开爪重试')
+                    self._unconfirmed_targets.add(kind)
+                    return
+                if attempt >= self.max_attempts[kind]:
+                    self._update_target_progress(kind, status='failed')
+                    return
+                # Count comparison replaces class-wide absence CHECK: another
+                # remaining ring must not trigger a second grab after success.
+                started = time.monotonic()
+                checking = False
+                continue
             started = time.monotonic()
             checking = True
 
@@ -1119,6 +1330,10 @@ class RB26GrabBallRingTask:
         self._target_return_poses.clear()
         self._blind_targets.clear()
         self._blind_grabs_used.clear()
+        self._unconfirmed_targets.clear()
+        self._ring_lock = None
+        self._last_ring_axis = None
+        self.samples.clear()
         try:
             if self.ball._collection_class_id is None:
                 raise PickupFailure('模型映射没有collection_frame_down')
@@ -1136,6 +1351,9 @@ class RB26GrabBallRingTask:
                 self._first_find_started = time.monotonic()
             self.state.update_pickup(first_frame_seen_at=self._first_find_started)
             if not approach:
+                if (self.ring_confirmation != 'class_absence'
+                        and approach.failure_code != '26rb_grab_ball_ring.no_frame'):
+                    self.node.stopped = True
                 return approach
             self._restore_work_depth('组合抓取：搜索结束恢复作业深度')
             pose = self._pose()
@@ -1154,12 +1372,18 @@ class RB26GrabBallRingTask:
                            else time.monotonic())
                 self._run_target(kind, self.controllers[kind], started=started)
             result = self.state.pickup
-            failed = [kind for kind in self.pickup_order if getattr(result, kind+'_status') != 'success']
+            failed = [kind for kind in self.pickup_order
+                      if getattr(result, kind+'_status') != 'success'
+                      and kind not in self._unconfirmed_targets]
             if not failed:
-                return TaskOutcome.ok('抓取确认完成：'+','.join(self.pickup_order))
+                confirmed = [kind for kind in self.pickup_order if getattr(result, kind+'_status') == 'success']
+                return TaskOutcome.ok('抓取流程完成；已确认='+','.join(confirmed)
+                                      +('；环未确认/无环，继续投放' if self._unconfirmed_targets else ''))
             # Keep mission failure-profile keys stable; the message identifies colors.
             code = parameter_kind(failed[0])+'_exhausted' if len(failed) == 1 else 'both_exhausted'
             return TaskOutcome.failed('26rb_grab_ball_ring.'+code, '未确认抓取成功：'+','.join(failed))
         except (ValueError, KeyError, RuntimeError) as error:
             code = 'cancelled' if self.node.stopped else 'recovery'
+            if self.ring_confirmation != 'class_absence':
+                self.node.stopped = True
             return TaskOutcome.failed('26rb_grab_ball_ring.'+code, str(error))
