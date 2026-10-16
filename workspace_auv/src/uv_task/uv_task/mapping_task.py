@@ -845,7 +845,8 @@ class MappingTask:
                 self.observation_start_stamp = self.node.get_clock().now().nanoseconds * 1e-9
         timeout = min(float(self.params['move_timeout']),
                       max(1.0, self.deadline - time.monotonic()))
-        target = [float(position[0]), float(position[1]), float(self.params['survey_z']),
+        target = [float(position[0]), float(position[1]),
+                  float(getattr(self, '_travel_z', self.params['survey_z'])),
                   float(self.params['survey_yaw_deg'])]
         mode = self.params.get('travel_mode', 'face_path')
         if mode == 'fixed_yaw':
@@ -871,7 +872,7 @@ class MappingTask:
           3. WTRAVEL 到池底标记附近并确认标记（触发器）；
           4. 按 visit_order 逐格：WTRAVEL 到理论格点中心 -> 等待观察时间 ->
              记录该格点观测统计。单格点观测不足只记警告并继续（空格是允许的）；
-          5. 九格走完冻结地图；启用遍历时沿实际巡检路线反向走一圈回标签；
+          5. 九格走完冻结地图；上浮后沿实际巡检路线反向走一圈回标签；
           6. 视觉不足只补缺失目标；单航点失败继续，定位断流闪红等待，急停生效；
           7. finally 中再发布一次最终地图。
         """
@@ -980,6 +981,21 @@ class MappingTask:
         if (len(route) != len(self.grid_centers)
                 or set(route) != set(self.grid_centers)):
             raise RuntimeError('巡检路线未完整走完，不能开始反向遍历')
+        # 巡检前只发一次定时开环上浮脉冲，不调用SET、不等待深度到位。
+        # 后续巡检及回标签仍用traversal_z，避免又下潜回survey_z。
+        self._continue_navigation()
+        self._travel_z = float(self.params.get('traversal_z', 0.0))
+        self.state = 'surface_before_traversal'
+        self.node.get_logger().info('建图完成：向上开环推力=-0.5，维持0.5秒后清零并继续巡检；不等待深度到位')
+        pulse_end = time.monotonic() + .5
+        try:
+            while self._ready() and time.monotonic() < pulse_end:
+                self.node._publish_body_thrust(vertical_thrust=-.5)  # z向下为正。
+                time.sleep(min(.05, max(0., pulse_end-time.monotonic())))
+        finally:
+            self.node._publish_body_thrust()  # 全轴零推力；人工停止/总计时仍优先。
+        self._emit('surface_before_traversal', vertical_thrust=-.5,
+                   duration_seconds=.5, target_z=self._travel_z)
         tag_position = [float(self.params['tag_x']), float(self.params['tag_y'])]
         self.traversal_path = [self.grid_centers[cell][:2].tolist() for cell in route]
         self.traversal_path.append(tag_position)

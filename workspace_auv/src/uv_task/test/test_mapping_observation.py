@@ -64,6 +64,15 @@ class _Publisher:
 class _Node:
     stopped = False
 
+    def _send_action_goal(self, *_args, **_kwargs):
+        return True, 'ok'
+
+    def _format_motion_context(self, label):
+        return label
+
+    def _publish_body_thrust(self, **_kwargs):
+        pass
+
     def create_publisher(self, *_args):
         return _Publisher()
 
@@ -401,6 +410,43 @@ def test_reverse_traversal_continues_after_failed_waypoint(monkeypatch):
     assert len(task.travel_failures) == 9
     assert task.attempted_traversal_order == list(reversed(task.visit_order))
     assert task.traversal_order == [task.visit_order[-1]]
+
+
+@pytest.mark.parametrize('interrupted', [False, True])
+def test_surface_pulse_before_traversal_clears_and_never_uses_set(monkeypatch, interrupted):
+    from uv_task import mapping_task as module
+    clock = [0.]
+    monkeypatch.setattr(module, 'time', SimpleNamespace(monotonic=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0]+seconds)))
+    params = load_task(Path(__file__).parents[1]/'config/tasks/mapping_grid.json')[0]['params']
+    task = MappingTask(_Node(), dict(params, survey_z=.5, traversal_z=0.))
+    task.visit_order = list(task.params['visit_order'])
+    task.node.stopped = False
+    monkeypatch.setattr(task, '_ready', lambda: not task.node.stopped)
+    monkeypatch.setattr(task, '_position_ready', lambda: True)
+    events = []
+    task.node._send_action_goal = lambda *args, **kw: pytest.fail('巡检前上浮不应发送SET')
+    def thrust(**kwargs):
+        events.append(('thrust', clock[0], kwargs))
+        if interrupted and kwargs and clock[0] >= .2:
+            task.node.stopped = True
+    task.node._publish_body_thrust = thrust
+    task.node._follow_world_waypoints = lambda points, *args: events.append(('route', points)) or True
+    task.params['travel_mode'] = 'fixed_yaw'
+    if interrupted:
+        with pytest.raises(RuntimeError, match='停止'):
+            task._traverse_cones()
+    else:
+        task._traverse_cones()
+        assert len(task.traversal_order) == 9 and not task.node.stopped
+    pulses = [event for event in events if event[0] == 'thrust']
+    assert all(event[2] == {'vertical_thrust': -.5} for event in pulses[:-1])
+    assert pulses[-1][2] == {}
+    assert pulses[-1][1] == pytest.approx(.25 if interrupted else .5)
+    routes = [event for event in events if event[0] == 'route']
+    assert bool(routes) is (not interrupted)
+    assert all(event[1][0][2] == 0. for event in routes)
+    assert task.params['survey_z'] == .5  # 原始建图参数不被篡改。
 
 
 def test_reverse_traversal_requires_completed_first_lap():

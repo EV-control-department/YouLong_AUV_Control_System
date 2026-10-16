@@ -132,6 +132,7 @@ TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "grid_yaw_deg": float,
         "floor_z": float,
         "survey_z": float,
+        "traversal_z": float,
         "survey_yaw_deg": float,
         "tag_x": float,
         "tag_y": float,
