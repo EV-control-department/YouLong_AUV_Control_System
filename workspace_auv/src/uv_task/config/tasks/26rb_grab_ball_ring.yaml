@@ -15,7 +15,7 @@ params:
 
   # 世界 odom 坐标 [x,y,z]，z 是 frame 平面深度，NED 向下为正。
   # 初始值需按实际场地填写；不会从定位器覆盖。
-  collection_frame_position: [2.67, 7.60, 0.120]
+  collection_frame_position: [3.3, 7.60, 0.120]
   search:
     timeout: 80.0 # 累计 BLINE 运行时间；停车校准、闪灯不计时，重新发线不清零。
     near_radius_m: 0.5 # 到预设 [x,y] 的二维水平距离，不考虑深度差。
@@ -119,7 +119,7 @@ params:
   # 两种球分别使用本组参数，各有max_attempts次机会，不共用计数。
   golf:
     max_attempts: 3
-    grab_depth_m: 0.75 # 机器人目标Z，暂按旧0.2+0.03*8的深度；不是球自身深度。
+    grab_depth_m: 0.78 # 机器人目标Z，暂按旧0.2+0.03*8的深度；不是球自身深度。
     pixel_tolerance_fraction: 0.04 # 球心初始归一化容差；细调后半段放宽到servo.final_tolerance_fraction。
     hold_seconds: 0.5 # 球心进入容差后的保持时间，单位：秒。
     servo_gain: 2.5 # 球 target 伺服 Kp；微伺服区使用 micro_servo.gain。

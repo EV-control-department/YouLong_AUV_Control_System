@@ -40,7 +40,7 @@ mission:
         poses:
           - command: SET
             axes: xyzrz
-            target: [3.8, 5.0, 0.17, 90.0]
+            target: [3.7. , 5.0, 0.17, 90.0]
             on_failure: continue
           # - command: BMOVE
           #   axes: y
