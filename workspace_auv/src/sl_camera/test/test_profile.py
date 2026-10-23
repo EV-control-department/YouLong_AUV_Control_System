@@ -1,11 +1,13 @@
-"""Profiles control acquisition independently of available-frame recording."""
+"""Configurable camera lists and independent metadata semantics."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
 
-from sl_camera.profile import camera_node_specs, load_profile
+from sl_camera.catalog import descriptor
+from sl_camera.profile import load_profile, load_settings
 
 
 def default_document():
@@ -13,78 +15,79 @@ def default_document():
     return yaml.safe_load(path.read_text())
 
 
-def test_default_devices_and_reused_down_camera_defaults(tmp_path):
-    from uv_camera.camera_config import load_camera_config
-
-    path = tmp_path / 'profile.yaml'
-    path.write_text(yaml.safe_dump(default_document()))
-    profile = load_profile(str(path))
-    sl, down = camera_node_specs(profile)
-    assert sl['parameters'][0]['device'] == '/dev/video0'
-    assert sl['parameters'][0]['width'] == 1280
-    assert sl['parameters'][0]['height'] == 720
-    params = down['parameters'][0]
-    assert down['package'] == 'uv_camera'
-    assert not params['enable_front'] and params['enable_down']
-    assert not params['sim_mode'] and params['camera_mode'] == 'real'
-    assert params['down_camera_device'] == '/dev/video3'
-    config = load_camera_config('down', mode='real')
-    assert config.capture_resolution == (2560, 960)
-    assert config.eye_resolution == (1280, 960)
+def write_profile(tmp_path, document):
+    path = tmp_path / 'collection.yaml'
+    path.write_text(yaml.safe_dump(document))
+    return path
 
 
-@pytest.mark.parametrize('enable_sl,enable_down,packages', [
-    (True, True, ['sl_camera', 'uv_camera']),
-    (True, False, ['sl_camera']),
-    (False, True, ['uv_camera']),
-    (False, False, []),
+def test_defaults_are_fully_explicit_and_uncalibrated(tmp_path):
+    profile = load_profile(str(write_profile(tmp_path, default_document())))
+    assert [(x.id, x.name, x.device, x.width, x.height) for x in profile.cameras] == [
+        (1, 'sl', '/dev/video0', 1280, 720), (2, 'down', '/dev/video3', 2560, 960)]
+    for spec in profile.cameras:
+        message = descriptor(spec)
+        assert not message.calibrated
+        assert message.calibrations == []
+        assert message.actual_fps == 0
+        assert message.encoding == 'JPEG'
+    assert descriptor(profile.cameras[1]).eye_width == 1280
+
+
+@pytest.mark.parametrize('count', [0, 1, 2, 3])
+def test_any_number_of_cameras(tmp_path, count):
+    document = default_document()
+    template = document['cameras'][0]
+    document['cameras'] = [
+        dict(template, id=10 + index, name=f'camera_{index}', device=f'/dev/test{index}',
+             ice_service=f'collection/camera_{index}', frame_id=f'camera_{index}_frame')
+        for index in range(count)]
+    assert len(load_profile(str(write_profile(tmp_path, document))).cameras) == count
+
+
+@pytest.mark.parametrize('field', ['id', 'name', 'ice_service', 'device'])
+def test_duplicate_identity_or_enabled_device_rejected(tmp_path, field):
+    document = default_document()
+    document['cameras'][1][field] = document['cameras'][0][field]
+    with pytest.raises(ValueError, match='duplicate'):
+        load_profile(str(write_profile(tmp_path, document)))
+
+
+@pytest.mark.parametrize('key,value', [
+    ('name', '../unsafe'), ('id', 0), ('enabled', 'false'), ('width', 0),
+    ('fps', float('nan')), ('pixel_format', 'YUYV'), ('layout', 'unknown'),
+    ('calibrations', {}), ('ice_service', '../unsafe'),
 ])
-def test_startup_switches(tmp_path, enable_sl, enable_down, packages):
+def test_bad_camera_definitions_rejected(tmp_path, key, value):
     document = default_document()
-    document['cameras']['sl']['enabled'] = enable_sl
-    document['cameras']['down']['enabled'] = enable_down
-    path = tmp_path / 'switches.yaml'
-    path.write_text(yaml.safe_dump(document))
-    assert [spec['package'] for spec in camera_node_specs(load_profile(str(path)))] == packages
+    document['cameras'][0][key] = value
+    with pytest.raises(ValueError):
+        load_profile(str(write_profile(tmp_path, document)))
 
 
-def test_recorder_cli_uses_profile_defaults_and_cli_overrides(tmp_path):
+def test_populated_calibration_can_be_carried_without_pixel_processing(tmp_path):
+    profile = load_profile(str(write_profile(tmp_path, default_document())))
+    spec = replace(profile.cameras[0], calibrations=[{
+        'eye': 'mono', 'camera_info': {
+            'width': 1280, 'height': 720,
+            'k': [1000., 0., 640., 0., 1000., 360., 0., 0., 1.],
+            'd': [0., 0., 0., 0., 0.], 'distortion_model': 'plumb_bob'}}])
+    result = descriptor(spec)
+    assert result.calibrated
+    assert result.calibrations[0].camera_info.k[0] == 1000
+
+
+def test_recording_settings_do_not_read_camera_definitions(tmp_path):
     from sl_record.recorder import _parse_args
 
     document = default_document()
-    document['recording'].update(video_fps=12, bag_duration=7,
-                                 bag_storage='sqlite3', output_root='/data/example')
-    path = tmp_path / 'custom.yaml'
-    path.write_text(yaml.safe_dump(document))
-    args = _parse_args(['--profile', str(path)])
-    assert (args.video_fps, args.bag_duration, args.bag_storage, args.output_root) == (
-        12, 7, 'sqlite3', '/data/example')
-    assert args.raw_cameras == ('sl', 'down')
-    override = _parse_args(['--profile', str(path), '--video-fps', '20'])
-    assert override.video_fps == 20
-
-
-def test_disabling_capture_does_not_disable_external_recording(tmp_path):
-    from sl_record.recorder import _parse_args
-
-    document = default_document()
-    document['cameras']['sl']['enabled'] = False
-    document['cameras']['down']['enabled'] = False
-    path = tmp_path / 'external.yaml'
-    path.write_text(yaml.safe_dump(document))
-    assert camera_node_specs(load_profile(str(path))) == []
-    assert _parse_args(['--profile', str(path)]).raw_cameras == ('sl', 'down')
-
-
-def test_profile_rejects_bad_enable_and_missing_device(tmp_path):
-    document = default_document()
-    path = tmp_path / 'bad.yaml'
-    document['cameras']['sl']['enabled'] = 'false'
-    path.write_text(yaml.safe_dump(document))
-    with pytest.raises(ValueError, match='enabled'):
-        load_profile(str(path))
-    document['cameras']['sl']['enabled'] = False
-    document['cameras']['down']['device'] = ''
-    path.write_text(yaml.safe_dump(document))
-    with pytest.raises(ValueError, match='device'):
+    document['cameras'] = 'not a camera list; the recorder must rely on DDS'
+    document['recording'].update(video_fps=12, bag_duration=7, bag_storage='sqlite3')
+    path = write_profile(tmp_path, document)
+    assert load_settings(str(path))[2]['video_fps'] == 12
+    args = _parse_args(['--profile', str(path), '--video-fps', '20'])
+    assert args.video_fps == 20
+    assert args.bag_duration == 7
+    assert args.bag_storage == 'sqlite3'
+    with pytest.raises(ValueError):
         load_profile(str(path))

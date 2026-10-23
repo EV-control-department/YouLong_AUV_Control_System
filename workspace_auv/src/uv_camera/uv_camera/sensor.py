@@ -158,7 +158,9 @@ class Sensor:
             f'uv_camera capture workers started: {summary or "none"}; '
             f'reconnect_interval={self._reconnect_interval_s:.1f}s')
         self.node.get_logger().info(
-            f'uv_camera started (real mode: {summary or "none"})')
+            'uv_camera started (real mode: '
+            f"front={self._camera_configs['front'].device}, "
+            f"down={self._camera_configs['down'].device})")
 
     def _create_real_sensor_publishers(self):
         # Real camera pixels stay in this process. Only calibration metadata is
@@ -205,11 +207,6 @@ class Sensor:
     @staticmethod
     def _open_cap(path, res):
         cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            cap.release()
-            raise RuntimeError(
-                f'cannot open camera {path}; check device permissions, '
-                'capture capability, and whether another process owns it')
         # These properties are honored by V4L2/GStreamer builds that expose
         # them. Unsupported backends simply ignore the setting.
         for property_name in ('CAP_PROP_OPEN_TIMEOUT_MSEC',

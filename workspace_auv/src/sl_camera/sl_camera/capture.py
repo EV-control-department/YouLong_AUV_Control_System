@@ -70,12 +70,13 @@ def jpeg_payload(frame, width, height):
 class MjpegCapture:
     """Own the capture handle on one worker, including reconnect and release."""
 
-    def __init__(self, config, clock_ns, on_frame, on_status):
+    def __init__(self, config, clock_ns, on_frame, on_status, on_fps=None):
         config.validate()
         self.config = config
         self.clock_ns = clock_ns
         self.on_frame = on_frame
         self.on_status = on_status
+        self.on_fps = on_fps or (lambda value: None)
         self.stop_event = threading.Event()
         self.thread = threading.Thread(
             target=self._run, name='sl-camera-capture', daemon=True)
@@ -101,6 +102,7 @@ class MjpegCapture:
             if int(cap.get(cv2.CAP_PROP_FOURCC)) != cv2.VideoWriter_fourcc(*'MJPG'):
                 raise RuntimeError('camera negotiated a format other than MJPG')
             actual_fps = cap.get(cv2.CAP_PROP_FPS)
+            self.on_fps(actual_fps if math.isfinite(actual_fps) and actual_fps > 0 else 0.0)
             if math.isfinite(actual_fps) and actual_fps > 0:
                 if abs(actual_fps - config.fps) > 0.1:
                     self.on_status(

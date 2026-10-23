@@ -2,15 +2,16 @@
 <package format="3">
   <name>sl_camera</name>
   <version>0.1.0</version>
-  <description>Structured-light monocular camera and iceoryx2 JPEG publisher</description>
+  <description>Configurable multi-camera capture and DDS camera catalog</description>
   <maintainer email="origin@example.com">origin</maintainer>
   <license>GPL-3.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
-  <exec_depend>auv_protocol</exec_depend>
   <exec_depend>uv_image_transport</exec_depend>
-  <exec_depend>uv_camera</exec_depend>
+  <exec_depend>sl_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

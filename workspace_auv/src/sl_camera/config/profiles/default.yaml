@@ -1,28 +1,40 @@
-# Shared by: ros2 launch sl_camera camera.launch.py
-#            ros2 launch sl_record record.launch.py
-schema_version: 1
+schema_version: 2
+catalog_topic: /auv/sl_camera/cameras
 
+# Each enabled item creates one capture worker and one Iceoryx2 publisher.
+# Images remain in the device's original orientation, including stereo images.
 cameras:
-  sl:
+  - id: 1
+    name: sl
     enabled: true
     device: /dev/video0
+    ice_service: youlong/sl_camera/sl
+    frame_id: sl_camera_optical_frame
     width: 1280
     height: 720
     fps: 30.0
+    pixel_format: MJPG
+    layout: mono
     startup_timeout_sec: 5.0
     reconnect_interval_sec: 1.0
+    calibrations: []
 
-  down:
+  - id: 2
+    name: down
     enabled: true
     device: /dev/video3
-    # Empty selects uv_camera/stereos/down.yaml: 2560x960 stitched stereo,
-    # 1280x960 per eye, existing calibration and lossless 180-degree rotation.
-    camera_config_dir: ""
+    ice_service: youlong/sl_camera/down
+    frame_id: down_camera_frame
+    width: 2560
+    height: 960
+    fps: 30.0
+    pixel_format: MJPG
+    layout: stereo_sbs
     startup_timeout_sec: 5.0
     reconnect_interval_sec: 1.0
+    calibrations: []
 
 recording:
-  # Empty selects <repository>/records/sl_sessions.
   output_root: ""
   video_fps: 30.0
   bag_duration: 10.0

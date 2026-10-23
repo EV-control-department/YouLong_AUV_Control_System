@@ -1,19 +1,21 @@
-# sl_camera 结构光与下视双目采集
+# sl_camera 可配置多摄像头采集
 
-`camera.launch.py` 按共享 profile 分别启动结构光单目和下视双目，默认两路都启用。
-结构光由 `sl_camera` 节点采集，下视直接复用 `uv_camera`（仅启用 down）。
-两路各自发布 Iceoryx2 JPEG，设备打不开时各自重试。
+一个 `sl_camera` 进程管理 profile 中全部启用的摄像头，每路使用独立采集线程和 Iceoryx2 发布器。
+DDS 发布完整摄像头清单，`sl_record` 据此发现图像源。此链路不启动或读取 `uv_camera`。
 
-| 相机 | 默认设备 | 默认图像 | Iceoryx2 服务 |
-|---|---|---|---|
-| 结构光 | `/dev/video0` | 1280×720，请求 30 fps，保留原方向 | `youlong/camera/sl` |
-| 下视双目 | `/dev/video3` | 2560×960 左右拼接，每眼 1280×960 | `youlong/camera/down` |
+默认 profile：`config/profiles/default.yaml`。
 
-下视尺寸、标定、CameraInfo 和 JPEG 无损旋转 180° 全部沿用
-`uv_camera/stereos/down.yaml` 与现有驱动，设备路径在本 profile 中覆盖。
-相机需要支持配置的 MJPG 尺寸；实际采集帧率由设备能力决定。
+| ID | 名称 | 设备 | 完整图像尺寸 | 布局 | Iceoryx2 服务 |
+|---|---|---|---|---|---|
+| 1 | sl | /dev/video0 | 1280×720 | mono | youlong/sl_camera/sl |
+| 2 | down | /dev/video3 | 2560×960 | stereo_sbs | youlong/sl_camera/down |
 
-在仓库根目录构建并加载环境（按实际 ROS 版本选择 Foxy 或 Jazzy）：
+两路默认请求 30 fps。下视双目仍是一张完整的左右拼接图像，**保留设备原始方向**。
+不旋转、不拆分、不去畸变、不重新编码。设备必须支持配置的 MJPG 分辨率和帧率。
+
+## 构建与启动
+
+在仓库根目录执行，ROS 发行版按目标机选择：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -24,69 +26,85 @@ cd ..
 source scripts/source_workspace.sh
 ```
 
-运行环境需按仓库 README 准备 iceoryx2 Python binding；`source_workspace.sh` 会将
-工作区 venv 中的 binding 加入当前 Python 路径。无需为结构光采集启动 go2rtc。
-
-所有启动开关、设备路径、结构光采集参数和录制参数统一放在：
-`workspace_auv/src/sl_camera/config/profiles/default.yaml`。
-可直接编辑，也可复制为外部文件后传入绝对路径。主要配置为：
-
-```yaml
-cameras:
-  sl:
-    enabled: true
-    device: /dev/video0
-    width: 1280
-    height: 720
-    fps: 30.0
-    startup_timeout_sec: 5.0
-    reconnect_interval_sec: 1.0
-  down:
-    enabled: true
-    device: /dev/video3
-    camera_config_dir: ""
-    startup_timeout_sec: 5.0
-    reconnect_interval_sec: 1.0
-```
-
-外部文件还应保留原 profile 的 `schema_version: 1` 和 `recording` 配置。
-`enabled: false` 只控制是否在这次 launch 中启动对应采集节点；
-已由其他进程发布的 Iceoryx2 帧仍可被 `sl_record` 录制。
-推荐在设备枚举不稳定时将路径改为 `/dev/v4l/by-id/...-video-index0`。
-
-只启动采集、不录制：
+运行环境需要兼容当前 Python 的 iceoryx2 binding，参见仓库环境准备说明。
+单独启动采集：
 
 ```bash
 ros2 launch sl_camera camera.launch.py
 ros2 launch sl_camera camera.launch.py profile:=/absolute/path/collection.yaml
+# 同一个节点的直接入口：
+ros2 run sl_camera sl_camera --ros-args -p profile:=/absolute/path/collection.yaml
 ```
 
-只启动结构光节点的旧 ROS 参数 YAML 用法仍然支持：
+`profile` 可以是安装的 profile 名称（默认 `default`）或 YAML 路径。
+修改配置后重启管理进程生效。旧版 `config:=`、固定 `cameras.sl/down` 配置不再使用。
+同时启动采集与录制见 [sl_record](../sl_record/README.md)。
+
+## 增删摄像头
+
+复制默认 profile，按需增删 `cameras` 列表。每项的分辨率都在本文件中直接设置：
+
+```yaml
+schema_version: 2
+catalog_topic: /auv/sl_camera/cameras
+cameras:
+  - id: 1
+    name: sl
+    enabled: true
+    device: /dev/video0
+    ice_service: youlong/sl_camera/sl
+    frame_id: sl_camera_optical_frame
+    width: 1280
+    height: 720
+    fps: 30.0
+    pixel_format: MJPG
+    layout: mono
+    startup_timeout_sec: 5.0
+    reconnect_interval_sec: 1.0
+    calibrations: []
+recording:
+  output_root: ""
+  video_fps: 30.0
+  bag_duration: 10.0
+  bag_storage: auto
+```
+
+ID 必须是非零 uint32；名称只用字母、数字、下划线。ID、名称、Ice 服务名必须唯一，
+启用的设备也必须唯一。可用 `/dev/v4l/by-id/...` 稳定设备选择。
+`enabled: false` 的项仍在 DDS 清单中，但不打开设备，也不会被录制器订阅。
+空列表合法；无需修改代码即可配置第三台或更多摄像头。
+
+`layout` 支持 `mono` 和 `stereo_sbs`。后者 width 为整幅拼接图像宽度且须为偶数。
+`frame_id` 只提供坐标系标识；本次不进行 TF 变换。
+`calibrations: []` 表示未标定，不生成单位矩阵，也不读取 UV 标定。
+将来可填 `eye: mono/left/right` 和标准 `sensor_msgs/CameraInfo` 字段的 `camera_info`；
+这些字段只随清单传递，不改变图像。
+
+## DDS 与 Ice 帧的关联
+
+默认清单话题：`/auv/sl_camera/cameras`，类型 `sl_msgs/msg/CameraCatalog`。
+QoS 为 Reliable、Transient Local、深度 1；启动立即发布，之后每秒及状态变化时更新。
+清单包含禁用、启动中、在线和离线的全部配置项，以及数量、状态、错误描述和标定数组。
+
+`requested_fps` 是请求值；`negotiated_fps` 是设备报告的协商值；
+`actual_fps` 是最近最多 31 帧的成功发布速率，尚不能测量或离线时为 0（未知）。
+它不会用请求值冒充实测速率。每次启动生成新的 `source_instance_id` 和非零 `config_version`。
 
 ```bash
-ros2 run sl_camera sl_camera --ros-args --params-file /absolute/path/sl_camera.yaml
+ros2 topic echo /auv/sl_camera/cameras sl_msgs/msg/CameraCatalog \
+  --qos-reliability reliable --qos-durability transient_local
 ```
 
-`config/default.yaml` 是上述单节点入口的旧参数模板，不是共享 profile。
-launch 的 `config:=...` 也保留为结构光节点参数覆盖；建议新配置统一使用 `profile:=...`。
+沿用通用 Ice 帧头：`camera_group` 为配置 ID，`camera_info_version` 为本次配置版本；
+后者与“是否标定”无关。成功读取后立即从 ROS 时钟取纳秒时间，
+这是主机软件采集时间，不是硬件曝光时间。每路源帧号独立递增。
 
-每次成功读取后立即从 ROS 时钟取纳秒时间，写入 `FrameHeader.timestamp_ns`；
-这是主机软件采集时间，不是相机硬件曝光时间。`capture_id` 在节点生命周期内递增，
-`camera_group=3`、`stereo_pair_id=0`、`camera_info_version=0`。
+打开失败时报告具体路径、权限或 errno；连续无有效帧达到默认 5 秒后重开，
+默认重试间隔 1 秒。一台离线不影响其他台。Ctrl+C 等待各采集线程退出；
+设备驱动阻塞导致退出超时会明确报错。
 
-状态发布在 `/auv/camera/sl/status`，包含帧数和距最后一帧的时长。打开失败会重试；
-连续无有效帧达到默认 5 秒后重新打开，默认重试间隔 1 秒。Ctrl+C 关闭采集和发布器。
-如果驱动阻塞在不可中断的读取中，节点在关闭等待超时后报告错误。
-
-采集与录制一起启动的用法见 `sl_record/README.md`。若某路已由其他程序启动，
-将本 profile 中该路的 enabled 设为 false，避免重复打开设备。
-
-## V4L2 打开失败排查
-
-`No config file was loaded` 是 Iceoryx 默认配置提示，不代表相机 profile 没有加载；
-启动日志会打印实际 profile 路径和两路开关。`cannot open camera /dev/video0` 才是采集错误。
-新日志会区分路径不存在、非字符设备、读写权限和系统 errno；设备存在但 OpenCV 仍打不开时，
-需在目标 NVIDIA 主机检查：
+`No config file was loaded` 是 Iceoryx 默认配置提示，不代表摄像头 profile 没有加载。
+V4L2 打开失败时在目标机检查：
 
 ```bash
 ls -l /dev/video0 /dev/video3
@@ -96,7 +114,5 @@ v4l2-ctl -d /dev/video0 --all --list-formats-ext
 v4l2-ctl -d /dev/video3 --all --list-formats-ext
 ```
 
-确认是 Video Capture 节点、支持目标 MJPG 模式、当前用户有读写权限，且没有旧采集程序占用。
-原 `uv_camera` 下视 registry 的 device 是 `/dev/video0`，本采集 profile 已将其覆盖为
-`/dev/video3`；单独启动其他旧配置时仍需检查该配置的设备路径。
-容器中还必须显式映射这两个实际设备；profile 只能选择设备，不能替代 Docker 的设备映射。
+确认设备支持 Video Capture 和目标 MJPG 模式、用户有读写权限、设备未被其他进程占用。
+容器还需要映射实际设备。不要让其他 UV 采集进程同时打开同一设备。

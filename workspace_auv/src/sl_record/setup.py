@@ -18,5 +18,7 @@ setup(
     description='Structured-light JPEG, rosbag and log session recorder',
     license='GPL-3.0',
     tests_require=['pytest'],
-    entry_points={'console_scripts': ['record = sl_record.recorder:main']},
+    entry_points={'console_scripts': [
+        'record = sl_record.recorder:main', 'recover = sl_record.recover:main',
+    ]},
 )
