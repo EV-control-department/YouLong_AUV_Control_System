@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal
 import threading
 import time
 from dataclasses import replace
@@ -89,9 +90,10 @@ class CameraDriver(Node):
             for publisher in self._ice_publishers.values():
                 publisher.close()
             raise
+        services = {'front': ICEORYX_CAMERA_FRONT, 'down': ICEORYX_CAMERA_DOWN}
         self.get_logger().info(
             'uv_camera started: stitched JPEG services '
-            'youlong/camera/front and youlong/camera/down')
+            + (', '.join(services[camera] for camera in self._ice_publishers) or 'none'))
         self._publish_camera_status()
 
     def _on_frame(self, camera, frame, stamp, right_stamp=None,
@@ -127,6 +129,8 @@ class CameraDriver(Node):
             self.get_logger().error(f'{camera} iceoryx2 publish failed: {error}')
 
     def _publish_status(self, value):
+        if not rclpy.ok(context=self.context):
+            return
         message = String()
         message.data = str(value)
         self._status.publish(message)
@@ -197,7 +201,11 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        if node is not None:
-            node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            if node is not None:
+                node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+        finally:
+            signal.signal(signal.SIGINT, previous)

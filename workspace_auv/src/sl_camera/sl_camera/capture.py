@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 import math
+import os
+import stat
 import threading
 import time
 
@@ -9,6 +11,26 @@ import cv2
 import numpy as np
 
 from uv_image_transport.jpeg import jpeg_dimensions
+
+
+def describe_open_failure(device):
+    """Preserve actionable OS errors instead of only OpenCV's generic warning."""
+    prefix = f'cannot open camera {device}'
+    try:
+        info = os.stat(device)
+        if not stat.S_ISCHR(info.st_mode):
+            return f'{prefix}: not a character device'
+        if not os.access(device, os.R_OK | os.W_OK):
+            return (f'{prefix}: current user lacks read/write permission; '
+                    'check the video group and container device mapping')
+        descriptor = os.open(device, os.O_RDWR | os.O_NONBLOCK)
+        os.close(descriptor)
+    except OSError as error:
+        return f'{prefix}: [errno {error.errno}] {error.strerror}'
+    return (
+        f'{prefix}: device exists and is readable/writable, but V4L2 open failed; '
+        f'check capture capability/formats with v4l2-ctl -d {device} --all '
+        f'--list-formats-ext, and check other owners with fuser -v {device}')
 
 
 @dataclass(frozen=True)
@@ -63,7 +85,7 @@ class MjpegCapture:
         cap = cv2.VideoCapture(config.device, cv2.CAP_V4L2)
         try:
             if not cap.isOpened():
-                raise RuntimeError(f'cannot open camera {config.device}')
+                raise RuntimeError(describe_open_failure(config.device))
             for name in ('CAP_PROP_OPEN_TIMEOUT_MSEC', 'CAP_PROP_READ_TIMEOUT_MSEC'):
                 prop = getattr(cv2, name, None)
                 if prop is not None:

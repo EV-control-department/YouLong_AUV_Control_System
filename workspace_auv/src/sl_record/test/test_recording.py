@@ -23,7 +23,8 @@ def payload():
 
 def test_defaults_and_raw_only():
     sl, uv = _parse_args([]), uv_parse_args([])
-    assert sl.raw_cameras == ('sl',)
+    assert sl.raw_cameras == ('sl', 'down')
+    assert sl.optional_cameras
     assert sl.video_fps == 30.0
     assert Path(sl.output_root).parts[-2:] == ('records', 'sl_sessions')
     assert sl.record_mode == uv.record_mode == 'raw'
@@ -36,15 +37,20 @@ def test_defaults_and_raw_only():
             _parse_args(['--video-fps', fps])
 
 
-def record_frames(root, timestamps, monkeypatch, capture_ids=None):
+def record_frames(root, timestamps, monkeypatch, capture_ids=None, down_timestamps=()):
     jpeg = payload()
     ids = capture_ids if capture_ids is not None else range(len(timestamps))
     packets = [FramePacket(FrameHeader(
         capture_id, timestamp, 0, CAMERA_SL, 64, 32, 0, encoding=ENCODING_JPEG), jpeg)
         for capture_id, timestamp in zip(ids, timestamps)]
-    # All camera sources exist, but sl_record must only open the sl service.
-    sources = {ICEORYX_CAMERA_FRONT: [packets[0], None],
-               ICEORYX_CAMERA_DOWN: [packets[0], None],
+    down_packets = [FramePacket(FrameHeader(
+        index, timestamp, index, 2, 64, 32, 0, encoding=ENCODING_JPEG), jpeg)
+        for index, timestamp in enumerate(down_timestamps)]
+    # Front is present but excluded; down may appear independently of sl.
+    front = FramePacket(FrameHeader(1, 1_000_000_000, 1, 1, 64, 32, 0,
+                                    encoding=ENCODING_JPEG), jpeg)
+    sources = {ICEORYX_CAMERA_FRONT: [front, None],
+               ICEORYX_CAMERA_DOWN: down_packets + [None],
                ICEORYX_CAMERA_SL: packets + [None]}
     opened = []
 
@@ -62,8 +68,8 @@ def record_frames(root, timestamps, monkeypatch, capture_ids=None):
         thread.join(2)
     assert recorder.raw_recorder.stop()
     assert recorder.raw_recorder.error is None
-    assert opened == [ICEORYX_CAMERA_SL]
-    assert {path.name for path in (root / 'camera/raw').iterdir()} == {'sl'}
+    assert set(opened) == {ICEORYX_CAMERA_SL, ICEORYX_CAMERA_DOWN}
+    assert {path.name for path in (root / 'camera/raw').iterdir()} == {'sl', 'down'}
     index = root / 'camera/raw/sl/frames.jsonl'
     entries = [json.loads(line) for line in index.read_text().splitlines()]
     assert all((index.parent / entry['path']).read_bytes() == jpeg for entry in entries)
@@ -71,7 +77,7 @@ def record_frames(root, timestamps, monkeypatch, capture_ids=None):
 
 
 @pytest.mark.parametrize('source_fps,expected_count', [(15, 15), (30, 30), (60, 30)])
-def test_sl_only_fps_and_source_timestamps(tmp_path, monkeypatch, source_fps, expected_count):
+def test_available_sl_fps_and_source_timestamps(tmp_path, monkeypatch, source_fps, expected_count):
     # Round to nanoseconds, just as a source clock does at fractional frame periods.
     timestamps = [1_000_000_000 + round(index * 1_000_000_000 / source_fps)
                   for index in range(source_fps)]
@@ -81,6 +87,33 @@ def test_sl_only_fps_and_source_timestamps(tmp_path, monkeypatch, source_fps, ex
     assert [entry['frame_sequence'] for entry in entries] == list(range(expected_count))
     assert recorder.snapshot()['fps_limit'] == 30.0
     assert recorder.snapshot()['fps_skipped_frames']['sl'] == source_fps - expected_count
+    assert recorder.snapshot()['frames']['down'] == 0
+    assert recorder.snapshot()['alignment_status'] == 'aligned'
+
+
+def test_both_cameras_saved_independently(tmp_path, monkeypatch):
+    timestamps = [1_000_000_000, 1_100_000_000]
+    down_timestamps = [2_000_000_000, 2_050_000_000, 2_100_000_000]
+    recorder, _ = record_frames(tmp_path, timestamps, monkeypatch,
+                                down_timestamps=down_timestamps)
+    down_dir = tmp_path / 'camera/raw/down'
+    records = [json.loads(line) for line in (down_dir / 'frames.jsonl').read_text().splitlines()]
+    assert [record['timestamp_ns'] for record in records] == down_timestamps
+    assert all(record['camera_group'] == 'down' for record in records)
+    assert all((down_dir / record['path']).read_bytes() == payload() for record in records)
+    assert recorder.snapshot()['frames'] == {'sl': 2, 'down': 3}
+    assert recorder.snapshot()['available_cameras'] == ['sl', 'down']
+    assert recorder.snapshot()['alignment_status'] == 'aligned'
+
+
+def test_only_down_available(tmp_path, monkeypatch):
+    recorder, sl_entries = record_frames(
+        tmp_path, [], monkeypatch, down_timestamps=[2_000_000_000, 2_050_000_000])
+    assert sl_entries == []
+    assert recorder.snapshot()['frames'] == {'sl': 0, 'down': 2}
+    assert recorder.snapshot()['available_cameras'] == ['down']
+    assert recorder.snapshot()['waiting_for_cameras'] == ['sl']
+    assert recorder.snapshot()['alignment_status'] == 'aligned'
 
 
 def test_restart_and_clock_reset_keep_unique_images(tmp_path, monkeypatch):
@@ -170,7 +203,7 @@ def test_stop_without_any_camera_frames(tmp_path, monkeypatch):
 
     pytest.importorskip('iceoryx2')
     monkeypatch.setitem(raw_recorder.SERVICES, 'sl', 'youlong/test/empty/' + uuid.uuid4().hex)
-    recorder = RawFrameRecorder(tmp_path, cameras=('sl',), fps=30)
+    recorder = RawFrameRecorder(tmp_path, cameras=('sl',), fps=30, optional_cameras=True)
     recorder.start()
     try:
         deadline = time.monotonic() + 3
@@ -182,4 +215,4 @@ def test_stop_without_any_camera_frames(tmp_path, monkeypatch):
     assert stopped
     assert recorder.error is None
     assert recorder.snapshot()['frames'] == {'sl': 0}
-    assert recorder.snapshot()['alignment_status'] == 'degraded'
+    assert recorder.snapshot()['alignment_status'] == 'waiting'

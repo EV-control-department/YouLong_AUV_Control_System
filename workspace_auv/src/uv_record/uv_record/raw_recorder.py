@@ -33,7 +33,8 @@ SERVICES = {
 class RawFrameRecorder:
     """Own one Iceoryx2 reader thread per selected camera."""
 
-    def __init__(self, session_dir: str | Path, cameras=('front', 'down'), fps=5.0):
+    def __init__(self, session_dir: str | Path, cameras=('front', 'down'), fps=5.0,
+                 optional_cameras=False):
         self.session_dir = Path(session_dir)
         self.root = self.session_dir / 'camera' / 'raw'
         self.fps = float(fps) if fps is not None else None
@@ -42,6 +43,7 @@ class RawFrameRecorder:
         self.frame_interval_ns = (
             max(1, int(round(1_000_000_000 / self.fps))) if self.fps else 0)
         self.cameras = tuple(cameras)
+        self.optional_cameras = bool(optional_cameras)
         invalid = set(self.cameras) - set(SERVICES)
         if invalid:
             raise ValueError(f'unknown camera(s): {", ".join(sorted(invalid))}')
@@ -380,6 +382,13 @@ class RawFrameRecorder:
                         - probe['active']['started_monotonic_ns']) / 1e6, 3),
                 } if probe['active'] else None),
             }
+        available = [camera for camera in self.cameras if counts[camera]]
+        waiting = [camera for camera in self.cameras if not counts[camera]]
+        alignment = 'aligned'
+        if any(unaligned.values()) or (waiting and not self.optional_cameras):
+            alignment = 'degraded'
+        elif not available:
+            alignment = 'waiting'
         return {
             'directory': 'camera/raw',
             'frames': counts,
@@ -390,9 +399,9 @@ class RawFrameRecorder:
             'diagnostics': diagnostics,
             'error_detail': error_detail,
             'timestamp_source': 'iceoryx2_frame_header',
-            'alignment_status': (
-                'degraded' if (any(unaligned.values()) or any(
-                    not counts[camera] for camera in self.cameras)) else 'aligned'),
+            'available_cameras': available,
+            'waiting_for_cameras': waiting,
+            'alignment_status': alignment,
         }
 
     def stop(self, timeout: float = 5.0):

@@ -152,6 +152,8 @@ def test_node_uses_yaml_and_publishes_sl_headers(tmp_path, monkeypatch):
     node = None
     try:
         node = module.SlCamera()
+        node._on_status('error: synthetic camera unplugged')
+        node._on_status('running')
         payload, _ = source_frame()
         node._on_frame(payload, 5_123_456_789)
         node._on_frame(payload, 5_223_456_789)
@@ -170,3 +172,29 @@ def test_node_uses_yaml_and_publishes_sl_headers(tmp_path, monkeypatch):
         if rclpy.ok():
             rclpy.shutdown()
     assert closed == [True]
+
+
+def test_open_failure_reports_missing_path_and_non_device(tmp_path):
+    from sl_camera.capture import describe_open_failure
+
+    assert '[errno 2]' in describe_open_failure(str(tmp_path / 'missing'))
+    regular = tmp_path / 'regular_file'
+    regular.write_text('not a camera')
+    assert 'not a character device' in describe_open_failure(str(regular))
+
+
+def test_open_failure_reports_permissions_and_busy_device(monkeypatch):
+    import errno
+    import stat
+    import sl_camera.capture as module
+
+    monkeypatch.setattr(module.os, 'stat', lambda _: SimpleNamespace(st_mode=stat.S_IFCHR))
+    monkeypatch.setattr(module.os, 'access', lambda *_: False)
+    assert 'permission' in module.describe_open_failure('/dev/test')
+    monkeypatch.setattr(module.os, 'access', lambda *_: True)
+
+    def busy(*_):
+        raise OSError(errno.EBUSY, 'Device or resource busy')
+
+    monkeypatch.setattr(module.os, 'open', busy)
+    assert '[errno 16]' in module.describe_open_failure('/dev/test')

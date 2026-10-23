@@ -90,7 +90,8 @@ def test_v4l2_setup_requires_compressed_mjpg(monkeypatch):
     values = {}
     opened = []
     released = []
-    cap = NS(set=lambda key, value: values.update({key: value}) or True,
+    cap = NS(isOpened=lambda: True,
+             set=lambda key, value: values.update({key: value}) or True,
              get=lambda key: values[key], release=lambda: released.append(True))
     monkeypatch.setattr(cv2, 'VideoCapture', lambda *args: opened.append(args) or cap)
     assert Sensor._open_cap('/dev/test', (64, 32)) is cap
@@ -151,3 +152,21 @@ def test_simulator_encodes_once_without_rotation(monkeypatch):
     assert qualities == [[cv2.IMWRITE_JPEG_QUALITY, 95]]
     assert received[0][0][1] == encode(pattern())
     assert received[0][1]['stereo_pair_id'] == 9
+
+
+def test_unopened_v4l2_device_reports_open_failure_and_releases(monkeypatch):
+    released = []
+    cap = NS(isOpened=lambda: False, release=lambda: released.append(True))
+    monkeypatch.setattr(cv2, 'VideoCapture', lambda *_: cap)
+    with pytest.raises(RuntimeError, match='cannot open camera /dev/missing'):
+        Sensor._open_cap('/dev/missing', (2560, 960))
+    assert released == [True]
+
+
+def test_shutdown_status_does_not_publish_after_context_closes(monkeypatch):
+    import uv_camera.driver as module
+
+    node = NS(context=object(), _status=NS(
+        publish=lambda _: pytest.fail('published after ROS shutdown')))
+    monkeypatch.setattr(module.rclpy, 'ok', lambda **_: False)
+    module.CameraDriver._publish_status(node, 'stopped')

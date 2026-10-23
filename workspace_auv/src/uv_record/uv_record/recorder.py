@@ -608,6 +608,8 @@ class Recorder:
         camera_options = {}
         if hasattr(self.args, 'raw_cameras'):
             camera_options['cameras'] = self.args.raw_cameras
+        if hasattr(self.args, 'optional_cameras'):
+            camera_options['optional_cameras'] = self.args.optional_cameras
         self.raw_recorder = RawFrameRecorder(
             self.paths.root, fps=self.args.video_fps, **camera_options)
         self.raw_recorder.start()
@@ -652,9 +654,15 @@ class Recorder:
                         append_event(self.paths.root, {
                             'event': 'recorder_child_state', 'name': name, **state})
                 previous_children = snapshots
+                raw_status = (self.raw_recorder.snapshot()
+                              if self.raw_recorder is not None else None)
+                camera_heartbeat = ({'camera_raw': {
+                    key: raw_status[key] for key in (
+                        'frames', 'available_cameras', 'waiting_for_cameras', 'alignment_status')
+                }} if raw_status is not None else {})
                 update_heartbeat(self.paths.root, children=snapshots,
                                  sync_errors=self.syncer.errors,
-                                 health_errors=self.health_errors)
+                                 health_errors=self.health_errors, **camera_heartbeat)
                 if time.monotonic() < next_sample:
                     continue
                 next_sample = time.monotonic() + 5.0
@@ -677,7 +685,7 @@ class Recorder:
                 sample['children'] = snapshots
                 sample['video'] = {}
                 if self.raw_recorder is not None:
-                    sample['camera_raw'] = self.raw_recorder.snapshot()
+                    sample['camera_raw'] = raw_status
                     if self.raw_recorder.error is not None:
                         self.health_errors += 1
                 for directory in self.video_directories:
@@ -728,6 +736,7 @@ class Recorder:
             camera_raw=({
                 'directory': 'camera/raw',
                 'cameras': list(getattr(self.args, 'raw_cameras', ('front', 'down'))),
+                'optional_cameras': bool(getattr(self.args, 'optional_cameras', False)),
                 'format': 'jpeg',
                 'frame_index': 'frames.jsonl',
                 'fps_limit': float(self.args.video_fps),
@@ -742,6 +751,7 @@ class Recorder:
             },
             recorder={
                 'pid': os.getpid(),
+                'profile': getattr(self.args, 'profile', None),
                 'topic_regex': self._bag_topic_regex(),
                 # Kept for manifest compatibility.  The legacy switch cannot
                 # override the type-level image exclusion.
@@ -863,8 +873,7 @@ class Recorder:
                 key: value for key, value in raw_status.items()
                 if key not in ('diagnostics', 'error_detail')
             })
-            if raw_status['alignment_status'] != 'aligned':
-                alignment['status'] = 'degraded'
+            alignment['status'] = raw_status['alignment_status']
         if self.record_mode == 'go2rtc':
             video_statuses = []
             for directory in self.video_directories:
@@ -917,7 +926,8 @@ class Recorder:
 
 
 def _parse_args(argv=None, *, output_root=None, video_fps=5.0,
-                record_modes=('raw', 'go2rtc'), prog=None):
+                record_modes=('raw', 'go2rtc'), prog=None, defaults=None,
+                configure_parser=None):
     """Parse shared session options with entry-point-specific defaults."""
     parser = argparse.ArgumentParser(description=__doc__, prog=prog)
     parser.add_argument('--session-dir')
@@ -958,6 +968,10 @@ def _parse_args(argv=None, *, output_root=None, video_fps=5.0,
     parser.add_argument('--use-sim-time', default='false')
     parser.add_argument('--video-codec', default='libx264')
     parser.add_argument('--ffmpeg', default='ffmpeg')
+    if configure_parser is not None:
+        configure_parser(parser)
+    if defaults:
+        parser.set_defaults(**defaults)
     # launch_ros appends ``--ros-args -r __node:=...`` to every Node
     # executable.  This recorder is a supervised process rather than an
     # rclpy Node, so those arguments are intentionally not consumed here.

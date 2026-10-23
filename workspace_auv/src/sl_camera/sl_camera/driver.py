@@ -1,5 +1,6 @@
 """Publish one structured-light camera's source JPEG frames over iceoryx2."""
 
+import signal
 import threading
 import time
 
@@ -62,9 +63,13 @@ class SlCamera(Node):
                 return
             changed = self._state != value
             self._state = value
-            if changed:
+            if changed and rclpy.ok(context=self.context):
                 logger = self.get_logger()
-                (logger.error if value.startswith('error:') else logger.info)(value)
+                # rclpy associates one severity with each logging call site.
+                if value.startswith('error:'):
+                    logger.error(value)
+                else:
+                    logger.info(value)
         self._publish_status()
 
     def _publish_status(self):
@@ -101,7 +106,13 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        if node is not None:
-            node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        # The terminal and launch can both deliver SIGINT. Let cleanup finish
+        # even when the second signal arrives while native handles are closing.
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            if node is not None:
+                node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+        finally:
+            signal.signal(signal.SIGINT, previous)

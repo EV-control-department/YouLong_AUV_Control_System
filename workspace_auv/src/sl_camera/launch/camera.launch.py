@@ -1,17 +1,30 @@
-"""Launch the independent structured-light camera using a ROS parameter YAML."""
+"""Launch profile-selected structured-light and downward stereo cameras."""
 
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+from sl_camera.profile import camera_node_specs, load_profile
+
+
+def _start_cameras(context):
+    profile = load_profile(LaunchConfiguration('profile').perform(context))
+    config = LaunchConfiguration('config').perform(context)
+    return [
+        LogInfo(msg=f'Camera profile: {profile.path}; '
+                f'sl={profile.sl["enabled"]}, down={profile.down["enabled"]}'),
+        *[Node(**spec) for spec in camera_node_specs(profile, config)],
+    ]
 
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
-            'config', default_value=get_package_share_directory('sl_camera')
-            + '/config/default.yaml'),
-        Node(package='sl_camera', executable='sl_camera', name='sl_camera',
-             parameters=[LaunchConfiguration('config')], output='both'),
+            'profile', default_value='default',
+            description='Shared collection profile name or YAML path'),
+        DeclareLaunchArgument(
+            'config', default_value='',
+            description='Optional legacy ROS parameter YAML override for sl_camera'),
+        OpaqueFunction(function=_start_cameras),
     ])

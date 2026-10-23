@@ -1,0 +1,29 @@
+# Shared by: ros2 launch sl_camera camera.launch.py
+#            ros2 launch sl_record record.launch.py
+schema_version: 1
+
+cameras:
+  sl:
+    enabled: true
+    device: /dev/video0
+    width: 1280
+    height: 720
+    fps: 30.0
+    startup_timeout_sec: 5.0
+    reconnect_interval_sec: 1.0
+
+  down:
+    enabled: true
+    device: /dev/video3
+    # Empty selects uv_camera/stereos/down.yaml: 2560x960 stitched stereo,
+    # 1280x960 per eye, existing calibration and lossless 180-degree rotation.
+    camera_config_dir: ""
+    startup_timeout_sec: 5.0
+    reconnect_interval_sec: 1.0
+
+recording:
+  # Empty selects <repository>/records/sl_sessions.
+  output_root: ""
+  video_fps: 30.0
+  bag_duration: 10.0
+  bag_storage: auto
