@@ -1,0 +1,9 @@
+/sl_camera:
+  ros__parameters:
+    # Set the structured-light camera, preferably /dev/v4l/by-id/...-video-index0.
+    device: ""
+    width: 1280
+    height: 720
+    fps: 30.0
+    startup_timeout_sec: 5.0
+    reconnect_interval_sec: 1.0

@@ -605,7 +605,11 @@ class Recorder:
             'check stream names, HTTP port, and uv_stream status')
 
     def _start_raw_recorder(self):
-        self.raw_recorder = RawFrameRecorder(self.paths.root, fps=self.args.video_fps)
+        camera_options = {}
+        if hasattr(self.args, 'raw_cameras'):
+            camera_options['cameras'] = self.args.raw_cameras
+        self.raw_recorder = RawFrameRecorder(
+            self.paths.root, fps=self.args.video_fps, **camera_options)
         self.raw_recorder.start()
 
     def _raw_camera_health(self):
@@ -723,6 +727,7 @@ class Recorder:
                  self._bag_record_help},
             camera_raw=({
                 'directory': 'camera/raw',
+                'cameras': list(getattr(self.args, 'raw_cameras', ('front', 'down'))),
                 'format': 'jpeg',
                 'frame_index': 'frames.jsonl',
                 'fps_limit': float(self.args.video_fps),
@@ -911,15 +916,18 @@ class Recorder:
         append_event(self.paths.root, {'event': 'recorder_stopped'})
 
 
-def _parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
+def _parse_args(argv=None, *, output_root=None, video_fps=5.0,
+                record_modes=('raw', 'go2rtc'), prog=None):
+    """Parse shared session options with entry-point-specific defaults."""
+    parser = argparse.ArgumentParser(description=__doc__, prog=prog)
     parser.add_argument('--session-dir')
-    parser.add_argument('--output-root', default=str(default_output_root()))
+    parser.add_argument('--output-root', default=str(
+        output_root if output_root is not None else default_output_root()))
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=1984)
     parser.add_argument(
-        '--record-mode', choices=('raw', 'go2rtc'), default='raw',
-        help='exclusive image recording path: source BGR8 frames or go2rtc video')
+        '--record-mode', choices=record_modes, default='raw',
+        help='exclusive image recording path: source JPEG frames or go2rtc video')
     parser.add_argument('--segment-duration', type=float, default=2.0)
     parser.add_argument('--bag-duration', type=float, default=10.0)
     parser.add_argument(
@@ -933,10 +941,10 @@ def _parse_args():
             'jpeg stores source JPEG frames and decodes on playback; '
             'ts keeps the legacy H.264 transcode path'))
     parser.add_argument(
-        '--video-fps', type=float, default=5.0,
+        '--video-fps', type=float, default=video_fps,
         help=(
             'Maximum recorded camera FPS per stream in raw and go2rtc modes '
-            '(default: 5). Extra frames are skipped without changing source timestamps'))
+            f'(default: {video_fps:g}). Extra frames are skipped without changing source timestamps'))
     parser.add_argument(
         '--go2rtc-stream-mode', choices=('unannotated', 'annotated', 'both'),
         default='unannotated',
@@ -953,7 +961,7 @@ def _parse_args():
     # launch_ros appends ``--ros-args -r __node:=...`` to every Node
     # executable.  This recorder is a supervised process rather than an
     # rclpy Node, so those arguments are intentionally not consumed here.
-    args, _ros_args = parser.parse_known_args()
+    args, _ros_args = parser.parse_known_args(argv)
     if not math.isfinite(args.video_fps) or args.video_fps <= 0:
         parser.error('--video-fps must be finite and positive')
     return args
@@ -965,8 +973,8 @@ def _session_from_args(args) -> SessionPaths:
     return create_session(args.output_root)
 
 
-def main():
-    args = _parse_args()
+def run_recorder(args):
+    """Run the shared session lifecycle for an already configured entry point."""
     paths = None
     recorder = None
     stop_requested = threading.Event()
@@ -1021,6 +1029,10 @@ def main():
         if paths is not None:
             finish_session(paths.root, 'FAILED', error=str(error))
         return 1
+
+
+def main():
+    return run_recorder(_parse_args())
 
 
 if __name__ == '__main__':

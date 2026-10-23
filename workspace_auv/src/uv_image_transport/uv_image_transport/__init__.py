@@ -3,6 +3,7 @@
 from .iceoryx2 import (
     CAMERA_DOWN,
     CAMERA_FRONT,
+    CAMERA_SL,
     ENCODING_BGR8,
     ENCODING_JPEG,
     FrameHeader,
@@ -16,6 +17,7 @@ from .iceoryx2 import (
 __all__ = [
     'CAMERA_DOWN',
     'CAMERA_FRONT',
+    'CAMERA_SL',
     'ENCODING_BGR8',
     'ENCODING_JPEG',
     'FrameHeader',

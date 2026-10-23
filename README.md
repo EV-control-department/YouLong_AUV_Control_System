@@ -14,6 +14,7 @@
 | 硬件管理 | `uv_hm` | ZIT6 adapter、heartbeat、状态监控与 watchdog |
 | 运动控制 | `uv_control` | BasicMotion：SET / WMOVE / BMOVE / TRAVEL / BODY_VELOCITY |
 | 相机/感知/视频 | `uv_camera`, `uv_image_transport`, `uv_perception`, `uv_stream`, `uv_record` | 相机采集、iceoryx2 图像传输、YOLO、H.264 推流及统一 raw/go2rtc 会话录制 |
+| 结构光采集 | `sl_camera`, `sl_record` | 独立单目 MJPG 采集、30 fps 逐帧图像及 rosbag 会话录制 |
 | 定位 | `uv_localization` | `/auv/state/*` 估计状态边界（当前 bootstrap） |
 | 规划/导航 | `uv_planning`, `uv_nav` | planning 边界与 A* 兼容后端 |
 | 任务 | `uv_task` | YAML mission 与竞赛任务顺序执行 |
@@ -38,6 +39,8 @@ YouLong_AUV_Control_System/
 │       ├── uv_perception/  # 检测、定位、跟踪和模型资源
 │       ├── uv_stream/      # iceoryx2 到 go2rtc 的 H.264 显示流
 │       ├── uv_record/     # raw/go2rtc、rosbag、日志统一会话录制
+│       ├── sl_camera/      # 结构光单目摄像头，设备及采集参数由 YAML 指定
+│       ├── sl_record/      # 只保存结构光图像，复用 uv_record 的 rosbag 与会话逻辑
 │       ├── uv_localization/# 状态估计边界
 │       ├── uv_planning/    # 规划接口边界
 │       ├── uv_nav/         # A* 过渡后端
@@ -212,6 +215,15 @@ YOULONG_NOCUDA=false INSTALL_WORKSPACE_AI=true ./scripts/compose_nocuda_up.sh up
 ```
 
 `YOULONG_MESA=0` 可强制不映射 `/dev/dri`，`YOULONG_JOYSTICK=0` 可禁用手柄设备映射。
+
+## 结构光单目采集与录制
+
+结构光单目采集与录制可单独启动：先填写
+`workspace_auv/src/sl_camera/config/default.yaml` 的 `device`，再运行
+`ros2 launch sl_record record.launch.py`。默认采集 1280×720、请求 30 fps，
+录制上限 30 fps，图片和逐帧采集时间戳保存在 `records/sl_sessions/`。
+构建、独立相机启动及恢复方式见 [sl_camera](workspace_auv/src/sl_camera/README.md)
+和 [sl_record](workspace_auv/src/sl_record/README.md)。
 
 ## 一键部署到 AUV 电脑
 

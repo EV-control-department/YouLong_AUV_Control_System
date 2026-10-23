@@ -68,6 +68,8 @@ VIZ_ROBOT_DESCRIPTION = f'{ROOT}/visualization/robot_description'
 # iceoryx2 service names are deliberately kept outside the ROS graph.
 ICEORYX_CAMERA_FRONT = 'youlong/camera/front'
 ICEORYX_CAMERA_DOWN = 'youlong/camera/down'
+ICEORYX_CAMERA_SL = 'youlong/camera/sl'
+SL_CAMERA_STATUS = f'{ROOT}/camera/sl/status'
 
 
 def LINES(camera_channel):

@@ -22,6 +22,7 @@ from .jpeg import jpeg_dimensions
 
 CAMERA_FRONT = 1
 CAMERA_DOWN = 2
+CAMERA_SL = 3
 ENCODING_BGR8 = 1
 ENCODING_JPEG = 2
 _POLL_INTERVAL = 0.002
@@ -92,6 +93,8 @@ class FrameHeader:
             return 'front'
         if self.camera_group == CAMERA_DOWN:
             return 'down'
+        if self.camera_group == CAMERA_SL:
+            return 'sl'
         return f'camera_{self.camera_group}'
 
 
@@ -154,7 +157,11 @@ class FramePacket:
 
 def _new_node(iox2: Any) -> Any:
     iox2.set_log_level_from_env_or(iox2.LogLevel.Warn)
-    return iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
+    # ROS and the recorder own SIGINT/SIGTERM. Native termination handling
+    # otherwise replaces their handlers and turns a clean stop into a read error.
+    return (iox2.NodeBuilder.new()
+            .signal_handling_mode(iox2.SignalHandlingMode.Disabled)
+            .create(iox2.ServiceType.Ipc))
 
 
 def _new_service(node: Any, service: str, iox2: Any) -> Any:
@@ -220,8 +227,12 @@ class Iceoryx2Reader:
                     f'iceoryx2 wait failed for {self.service}: {error}') from error
         return None
 
-    def close(self) -> None:
+    def request_stop(self) -> None:
+        """Wake the polling read loop without touching its native handles."""
         self._closed.set()
+
+    def close(self) -> None:
+        self.request_stop()
         self._subscriber = None
         self._service = None
         self._node = None

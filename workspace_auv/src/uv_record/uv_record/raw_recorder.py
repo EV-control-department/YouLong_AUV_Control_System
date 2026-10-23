@@ -12,7 +12,9 @@ import time
 from collections import deque
 from pathlib import Path
 
-from auv_protocol.topics import ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT
+from auv_protocol.topics import (
+    ICEORYX_CAMERA_DOWN, ICEORYX_CAMERA_FRONT, ICEORYX_CAMERA_SL,
+)
 from uv_image_transport.iceoryx2 import (
     ENCODING_JPEG, Iceoryx2Error, Iceoryx2Reader, InvalidFrameError,
     warn_invalid_frame,
@@ -24,6 +26,7 @@ from .session import append_event
 SERVICES = {
     'front': ICEORYX_CAMERA_FRONT,
     'down': ICEORYX_CAMERA_DOWN,
+    'sl': ICEORYX_CAMERA_SL,
 }
 
 
@@ -397,6 +400,10 @@ class RawFrameRecorder:
         # leave read() and close its own native subscriber; mutating the binding
         # from this thread can deadlock while receive() is in progress.
         self.stop_event.set()
+        for reader in tuple(self.readers.values()):
+            request_stop = getattr(reader, 'request_stop', None)
+            if request_stop is not None:
+                request_stop()
         deadline = time.monotonic() + max(0.0, float(timeout))
         for thread in self.threads:
             if thread.is_alive():
