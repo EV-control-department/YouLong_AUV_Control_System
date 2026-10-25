@@ -22,7 +22,9 @@ cameras:
   - id: 2
     name: down
     enabled: true
-    device: /dev/video3
+    # Verified on the AUV: index0 is /dev/video2 (Video Capture).
+    # /dev/video3 is index1, a metadata-only interface, and cannot output images.
+    device: /dev/v4l/by-id/usb-3D_USB_Camera_3D_USB_Camera-video-index0
     ice_service: youlong/sl_camera/down
     frame_id: down_camera_frame
     width: 2560

@@ -14,7 +14,7 @@
 | 硬件管理 | `uv_hm` | ZIT6 adapter、heartbeat、状态监控与 watchdog |
 | 运动控制 | `uv_control` | BasicMotion：SET / WMOVE / BMOVE / TRAVEL / BODY_VELOCITY |
 | 相机/感知/视频 | `uv_camera`, `uv_image_transport`, `uv_perception`, `uv_stream`, `uv_record` | 相机采集、iceoryx2 图像传输、YOLO、H.264 推流及统一 raw/go2rtc 会话录制 |
-| SL 多相机采集 | `sl_msgs`, `sl_camera`, `sl_record` | profile 配置任意数量摄像头，DDS 自动发现，原始图像与 rosbag 录制 |
+| SL 多相机采集 / 推流 | `sl_msgs`, `sl_camera`, `sl_stream`, `sl_record` | profile 配置任意数量摄像头，DDS 自动发现，原始图像、按需 H.265 推流与 rosbag 录制 |
 | 定位 | `uv_localization` | `/auv/state/*` 估计状态边界（当前 bootstrap） |
 | 规划/导航 | `uv_planning`, `uv_nav` | planning 边界与 A* 兼容后端 |
 | 任务 | `uv_task` | YAML mission 与竞赛任务顺序执行 |
@@ -41,6 +41,7 @@ YouLong_AUV_Control_System/
 │       ├── uv_record/     # raw/go2rtc、rosbag、日志统一会话录制
 │       ├── sl_msgs/        # 独立摄像头清单 DDS 消息
 │       ├── sl_camera/      # 独立多摄像头管理，DDS 清单与 Iceoryx2 原始 JPEG
+│       ├── sl_stream/      # 根据摄像头清单动态提供按需 H.265 go2rtc 流
 │       ├── sl_record/      # 根据 DDS 清单发现相机，调用通用 rosbag 与会话工具
 │       ├── uv_localization/# 状态估计边界
 │       ├── uv_planning/    # 规划接口边界
@@ -221,7 +222,7 @@ YOULONG_NOCUDA=false INSTALL_WORKSPACE_AI=true ./scripts/compose_nocuda_up.sh up
 
 共享配置 `workspace_auv/src/sl_camera/config/profiles/default.yaml` 的 `cameras` 列表
 可自由增删相机，每项直接规定 ID、名称、设备、分辨率、帧率、布局和 Ice 服务。
-默认结构光 `/dev/video0`（1280×720）与下视双目 `/dev/video3`（2560×960 完整拼接图像），
+默认结构光 `/dev/video0`（1280×720）与下视双目（by-id `video-index0`，当前 `/dev/video2`，2560×960 完整拼接图像），
 均请求 30 fps。一个 `sl_camera` 独立管理全部相机，保留设备原始 JPEG 和方向。
 
 `ros2 launch sl_record record.launch.py` 同时启动管理器和录制器。
@@ -245,6 +246,8 @@ chmod +x scripts/deploy.sh
 编码 H.264 后交给 go2rtc；采集、感知和视频流由独立包运行。
 go2rtc 网页播放器、WebRTC 信令和 HTTP MP4 编码流使用 1984，WebRTC 媒体使用
 8555；当前 H.264 源不提供 MJPEG，RTSP 输出 8554 在应用配置中关闭。
+
+SL 相机推流由 `sl_stream` 独立提供：它从 `/auv/sl_camera/cameras` 发现已启用相机，按需输出原分辨率 H.265。上位机的 `upper_examples image_viewer` 按同一清单选择预览，使用本机 FFmpeg 解码；启动方式与编码参数见 [sl_stream 文档](workspace_auv/src/sl_stream/README.md)。`sl_stream` 和 `uv_stream` 默认使用相同 HTTP 端口，不能同时启动，或为其中一个设置不同的 `api_port`。
 
 为了真正做到一键执行，建议先配置 SSH 公钥登录；部署脚本不会保存 SSH 密码：
 

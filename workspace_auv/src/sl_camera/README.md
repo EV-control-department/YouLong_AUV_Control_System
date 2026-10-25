@@ -8,8 +8,10 @@ DDS 发布完整摄像头清单，`sl_record` 据此发现图像源。此链路�
 | ID | 名称 | 设备 | 完整图像尺寸 | 布局 | Iceoryx2 服务 |
 |---|---|---|---|---|---|
 | 1 | sl | /dev/video0 | 1280×720 | mono | youlong/sl_camera/sl |
-| 2 | down | /dev/video3 | 2560×960 | stereo_sbs | youlong/sl_camera/down |
+| 2 | down | /dev/video2（通过 by-id index0） | 2560×960 | stereo_sbs | youlong/sl_camera/down |
 
+下视默认设备路径使用 `/dev/v4l/by-id/usb-3D_USB_Camera_3D_USB_Camera-video-index0`，
+在当前 AUV 上对应 `/dev/video2`。`/dev/video3` 是同一相机的元数据接口，不能采图。
 两路默认请求 30 fps。下视双目仍是一张完整的左右拼接图像，**保留设备原始方向**。
 不旋转、不拆分、不去畸变、不重新编码。设备必须支持配置的 MJPG 分辨率和帧率。
 
@@ -107,12 +109,16 @@ ros2 topic echo /auv/sl_camera/cameras sl_msgs/msg/CameraCatalog \
 V4L2 打开失败时在目标机检查：
 
 ```bash
-ls -l /dev/video0 /dev/video3
+ls -l /dev/video0 /dev/video2
 id
-fuser -v /dev/video0 /dev/video3
+fuser -v /dev/video0 /dev/video2
 v4l2-ctl -d /dev/video0 --all --list-formats-ext
-v4l2-ctl -d /dev/video3 --all --list-formats-ext
+v4l2-ctl -d /dev/video2 --all --list-formats-ext
 ```
 
+查看 `Device Caps`（当前节点），不要仅依据 `Capabilities`（整台设备）判断。
 确认设备支持 Video Capture 和目标 MJPG 模式、用户有读写权限、设备未被其他进程占用。
 容器还需要映射实际设备。不要让其他 UV 采集进程同时打开同一设备。
+
+独立采集已运行时只启动 `ros2 run sl_record record`；需要同时启动则只运行
+`ros2 launch sl_record record.launch.py`。同时启动两个管理器会争用设备和清单话题。

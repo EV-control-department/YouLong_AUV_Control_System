@@ -1,9 +1,11 @@
 """V4L2 MJPEG acquisition without decoding, resizing, or rotating pixels."""
 
 from dataclasses import dataclass
+import fcntl
 import math
 import os
 import stat
+import struct
 import threading
 import time
 
@@ -11,6 +13,22 @@ import cv2
 import numpy as np
 
 from uv_image_transport.jpeg import jpeg_dimensions
+
+
+def _capture_node_error(descriptor):
+    # Linux videodev2.h: VIDIOC_QUERYCAP and struct v4l2_capability (104 bytes).
+    capability = bytearray(104)
+    try:
+        fcntl.ioctl(descriptor, 0x80685600, capability, True)
+    except OSError:
+        return None  # Keep the original OpenCV diagnostic for non-V4L2 devices.
+    capabilities, device_caps = struct.unpack_from('=II', capability, 84)
+    caps = device_caps if capabilities & 0x80000000 else capabilities
+    if not caps & (0x00000001 | 0x00001000):
+        kind = 'a UVC metadata-only interface' if caps & 0x00800000 else 'not a video capture interface'
+        return (f'this device is {kind}; select the Video Capture node '
+                '(usually /dev/v4l/by-id/...-video-index0), not the metadata node')
+    return None
 
 
 def describe_open_failure(device):
@@ -24,7 +42,12 @@ def describe_open_failure(device):
             return (f'{prefix}: current user lacks read/write permission; '
                     'check the video group and container device mapping')
         descriptor = os.open(device, os.O_RDWR | os.O_NONBLOCK)
-        os.close(descriptor)
+        try:
+            detail = _capture_node_error(descriptor)
+            if detail:
+                return f'{prefix}: {detail}'
+        finally:
+            os.close(descriptor)
     except OSError as error:
         return f'{prefix}: [errno {error.errno}] {error.strerror}'
     return (

@@ -24,7 +24,8 @@ def write_profile(tmp_path, document):
 def test_defaults_are_fully_explicit_and_uncalibrated(tmp_path):
     profile = load_profile(str(write_profile(tmp_path, default_document())))
     assert [(x.id, x.name, x.device, x.width, x.height) for x in profile.cameras] == [
-        (1, 'sl', '/dev/video0', 1280, 720), (2, 'down', '/dev/video3', 2560, 960)]
+        (1, 'sl', '/dev/video0', 1280, 720),
+        (2, 'down', '/dev/v4l/by-id/usb-3D_USB_Camera_3D_USB_Camera-video-index0', 2560, 960)]
     for spec in profile.cameras:
         message = descriptor(spec)
         assert not message.calibrated

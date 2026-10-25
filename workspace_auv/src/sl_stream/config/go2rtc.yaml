@@ -1,0 +1,9 @@
+# The service copies this template into a private temporary directory before
+# starting go2rtc. Camera routes are registered through the HTTP API.
+api:
+  listen: ":1984"
+rtsp:
+  listen: ""
+webrtc:
+  listen: ""
+streams: {}

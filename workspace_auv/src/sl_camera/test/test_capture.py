@@ -217,3 +217,26 @@ def test_open_failure_reports_permissions_and_busy_device(monkeypatch):
 
     monkeypatch.setattr(module.os, 'open', busy)
     assert '[errno 16]' in module.describe_open_failure('/dev/test')
+
+
+@pytest.mark.parametrize('device_caps,expected', [
+    (0x04a00000, 'metadata-only'), (0x04200001, 'check capture capability/formats')])
+def test_open_failure_uses_per_node_capabilities(monkeypatch, device_caps, expected):
+    import stat
+    import struct
+    import sl_camera.capture as module
+
+    closed = []
+    monkeypatch.setattr(module.os, 'stat', lambda _: SimpleNamespace(st_mode=stat.S_IFCHR))
+    monkeypatch.setattr(module.os, 'access', lambda *_: True)
+    monkeypatch.setattr(module.os, 'open', lambda *_: 42)
+    monkeypatch.setattr(module.os, 'close', closed.append)
+
+    def query(descriptor, request, buffer, mutate):
+        assert descriptor == 42 and request == 0x80685600 and mutate
+        # The physical device advertises both capabilities; this node may only expose metadata.
+        struct.pack_into('=II', buffer, 84, 0x84a00001, device_caps)
+
+    monkeypatch.setattr(module.fcntl, 'ioctl', query)
+    assert expected in module.describe_open_failure('/dev/test')
+    assert closed == [42]
